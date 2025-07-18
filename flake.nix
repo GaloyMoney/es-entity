@@ -39,6 +39,7 @@
           cargo-deny
           bacon
           postgresql
+          docker-compose
         ]
         ++ lib.optionals pkgs.stdenv.isDarwin [
           darwin.apple_sdk.frameworks.SystemConfiguration
