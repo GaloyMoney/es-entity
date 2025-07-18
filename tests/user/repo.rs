@@ -14,8 +14,3 @@ impl UserRepo {
         Self { pool }
     }
 }
-
-#[tokio::test]
-async fn test() -> Result<(), UserError> {
-    Ok(())
-}
