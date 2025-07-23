@@ -18,15 +18,21 @@ $ cargo sqlx migrate add users
 
 cat migrations/*_users.sql
 ```sql
+-- The 'index' table that holds the latest values of some selected attributes.
 CREATE TABLE users (
-  id UUID PRIMARY KEY,                   -- Mandatory id column
-  created_at TIMESTAMPTZ NOT NULL,       -- Mandatory created_at column
+  -- Mandatory id column
+  id UUID PRIMARY KEY,
+  -- Mandatory created_at column
+  created_at TIMESTAMPTZ NOT NULL,
 
-  name VARCHAR UNIQUE NULL               -- Any other columns you want a quick 'index-based' lookup
+  -- Any other columns you want a quick 'index-based' lookup
+  name VARCHAR UNIQUE NULL
 );
 
-CREATE TABLE user_events (               -- The table that actually stores the events sequenced per entity
-  id UUID NOT NULL REFERENCES users(id), -- This table has the same columns for every entity you create (by convention named `<entity>_events`).
+-- The table that actually stores the events sequenced per entity
+-- This table has the same columns for every entity you create (by convention named `<entity>_events`).
+CREATE TABLE user_events (
+  id UUID NOT NULL REFERENCES users(id),
   sequence INT NOT NULL,
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
