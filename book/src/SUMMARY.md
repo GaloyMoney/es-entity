@@ -1,10 +1,10 @@
-# Summary
+# Es Entity
 
-[Introduction](./introduction.md)
+- [Introduction](./introduction.md)
+- [Quickstart](./quickstart.md)
 
 # User Guide
 
-- [Getting Started](./getting-started.md)
 - [Basic Usage](./basic-usage.md)
 
 # Reference Guide

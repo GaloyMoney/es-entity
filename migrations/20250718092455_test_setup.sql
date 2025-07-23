@@ -1,12 +1,12 @@
 CREATE TABLE users (
-  id UUID PRIMARY KEY,
-  name VARCHAR NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL
-);
-CREATE INDEX idx_users_name ON users (name);
+  id UUID PRIMARY KEY,                   -- Mandatory id column
+  created_at TIMESTAMPTZ NOT NULL,       -- Mandatory created_at column
 
-CREATE TABLE user_events (
-  id UUID NOT NULL REFERENCES users(id),
+  name VARCHAR UNIQUE NULL               -- Any other columns you want a quick 'index-based' lookup
+);
+
+CREATE TABLE user_events (               -- The table that actually stores the events sequenced per entity
+  id UUID NOT NULL REFERENCES users(id), -- This table has the same columns for every entity you create (by convention named `<entity>_events`).
   sequence INT NOT NULL,
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,

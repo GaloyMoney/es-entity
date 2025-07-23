@@ -6,10 +6,13 @@ src = "src"
 title = "ES Entity Framework"
 
 [build]
-build-dir = "book"
+build-dir = "build"
 
 [output.html]
 default-theme = "rust"
 preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/galoymoney/es-entity"
 edit-url-template = "https://github.com/galoymoney/es-entity/edit/main/{path}"
+
+[rust]
+edition = "2024"

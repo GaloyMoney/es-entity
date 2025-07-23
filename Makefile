@@ -9,10 +9,14 @@ setup-db:
 
 reset-deps: clean-deps start-deps setup-db
 
-test-in-ci: start-deps setup-db
+test-in-ci: start-deps setup-db test-book
 	cargo nextest run --verbose --locked
 	cargo test --doc
 	cargo doc --no-deps
+
+test-book:
+	cargo build --profile mdbook-test --features mdbook-test --lib
+	mdbook test book -L ./target/mdbook-test,./target/mdbook-test/deps
 
 check-code:
 	SQLX_OFFLINE=true cargo fmt --check --all
