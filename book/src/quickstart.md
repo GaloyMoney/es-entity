@@ -58,9 +58,82 @@ sqlx = "0.8.3" # Needs to be in scope for entity_id! macro
 ```rust
 # extern crate es_entity;
 # extern crate sqlx;
+# extern crate serde;
 # extern crate tokio;
 # extern crate anyhow;
-es_entity::entity_id!{ UserId }         // Will create a uuid::Uuid wrapper type. 
+# extern crate derive_builder;
+use derive_builder::Builder;
+use serde::{Deserialize, Serialize};
+
+use es_entity::*;
+
+// Will create a uuid::Uuid wrapper type. 
+// But any type can act as the ID that fulfills:
+//
+//   Clone + PartialEq + Eq + std::hash::Hash + Send + Sync
+//         + sqlx::Type<sqlx::Postgres>
+es_entity::entity_id!{ UserId }
+
+// The `EsEvent` must have `serde(tag = "type")` annotation.
+#[derive(EsEvent, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+// Tell the macro what the `id` type is
+#[es_event(id = "UserId")]
+pub enum UserEvent {
+    Initialized { id: UserId, name: String },
+}
+
+// The `EsEntity` - using derive_builder is optional
+// but useful for projecting in the `TryFromEvents` trait.
+#[derive(EsEntity, Builder)]
+#[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
+pub struct User {
+    pub id: UserId,
+    pub name: String,
+
+    // The `events` container - mandatory field.
+    // Basically its a `Vec` wrapper with some ES specific augmentation.
+    events: EntityEvents<UserEvent>,
+}
+
+// Any EsEntity must implement `TryFromEvents`.
+// This trait is what hydrates entities after loading the events from the database
+impl TryFromEvents<UserEvent> for User {
+    fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+        let mut builder = UserBuilder::default();
+        for event in events.iter_all() {
+            match event {
+                UserEvent::Initialized { id, name } => {
+                    builder = builder.id(*id).name(name.clone());
+                }
+            }
+        }
+        builder.events(events).build()
+    }
+}
+
+// The `New` entity - this represents the data of an entity in a pre-persisted state.
+// Using derive_builder is not mandatory - any type can be used for the `New` state.
+#[derive(Debug, Builder)]
+pub struct NewUser {
+    #[builder(setter(into))]
+    pub id: UserId,
+    #[builder(setter(into))]
+    pub name: String,
+}
+
+// The `New` type must implement `IntoEvents` to get the initial events that require persisting.
+impl IntoEvents<UserEvent> for NewUser {
+    fn into_events(self) -> EntityEvents<UserEvent> {
+        EntityEvents::init(
+            self.id,
+            [UserEvent::Initialized {
+                id: self.id,
+                name: self.name,
+            }],
+        )
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
