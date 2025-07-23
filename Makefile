@@ -10,9 +10,9 @@ setup-db:
 reset-deps: clean-deps start-deps setup-db
 
 test-in-ci: start-deps setup-db test-book
-	cargo nextest run --verbose --locked
-	cargo test --doc
-	cargo doc --no-deps
+	cargo nextest run --workspace --verbose --locked
+	cargo test --doc --workspace
+	cargo doc --no-deps --workspace
 
 test-book:
 	cargo build --profile mdbook-test --features mdbook-test --lib
@@ -20,7 +20,7 @@ test-book:
 
 check-code:
 	SQLX_OFFLINE=true cargo fmt --check --all
-	SQLX_OFFLINE=true cargo check
+	SQLX_OFFLINE=true cargo check --workspace
 	SQLX_OFFLINE=true cargo clippy --workspace 
 	SQLX_OFFLINE=true cargo audit
 	SQLX_OFFLINE=true cargo deny check
