@@ -1,0 +1,15 @@
+[book]
+authors = ["ES Entity Contributors"]
+language = "en"
+multilingual = false
+src = "src"
+title = "ES Entity Framework"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/galoymoney/es-entity"
+edit-url-template = "https://github.com/galoymoney/es-entity/edit/main/{path}"

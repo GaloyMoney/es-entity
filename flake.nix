@@ -37,6 +37,7 @@
           cargo-nextest
           cargo-audit
           cargo-deny
+          mdbook
           bacon
           postgresql
           docker-compose
