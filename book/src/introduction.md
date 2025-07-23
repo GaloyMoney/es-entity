@@ -1,33 +1,12 @@
 # Introduction
 
-Welcome to the ES Entity Framework documentation!
+Welcome to the ES Entity documentation!
 
-ES Entity is an Event Sourcing Entity Framework for Rust that provides a powerful and flexible way to build event-sourced applications.
+ES Entity is an opinionated rust library for persisting Event Sourced entities to PostgreSQL.
 
-## Features
+It promotes decoupling your domain code from persistence details by putting all the mapping logic onto `Repository` structs.
+Almost all the generated queries are verified at compile time by [`sqlx`](https://crates.io/crates/sqlx) under the hood to give strong type-safe guarantees.
 
-- **Event Sourcing**: Store all changes to application state as a sequence of events
-- **Entity Pattern**: Build entities from event streams
-- **Type Safety**: Leverage Rust's type system for compile-time guarantees
-- **PostgreSQL Storage**: Reliable persistence with JSONB support
-- **Proc Macros**: Reduce boilerplate with derive macros
+The main traits that must to be derived are `EsEvent` and `EsEntity` so that they can be used by the `EsRepo` macro that generates all the persistence and query fns.
 
-## Quick Example
-
-```rust
-use es_entity::*;
-
-#[derive(EsEvent)]
-enum UserEvent {
-    Created { name: String },
-    NameChanged { new_name: String },
-}
-
-#[derive(EsEntity)]
-struct User {
-    id: UserId,
-    name: String,
-}
-```
-
-This book will guide you through everything you need to know to use ES Entity effectively.
+This book will explain how to use this library effectively as well as provide a general introduction on how to use Event Sourcing to persist the state of your domain entities.

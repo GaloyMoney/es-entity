@@ -193,12 +193,7 @@ mod tests {
                 entity_ty: None,
                 id_ty: None,
             };
-            assert_eq!(
-                input.order_by_columns(),
-                expected,
-                "Failed for SQL: {}",
-                sql
-            );
+            assert_eq!(input.order_by_columns(), expected, "Failed for SQL: {sql}",);
         }
     }
 }
