@@ -10,6 +10,7 @@ es_entity::entity_id! { UserId }
 #[es_event(id = "UserId")]
 pub enum UserEvent {
     Initialized { id: UserId, name: String },
+    NameUpdated { name: String },
 }
 
 #[derive(EsEntity, Builder)]
@@ -21,6 +22,22 @@ pub struct User {
     events: EntityEvents<UserEvent>,
 }
 
+impl User {
+    pub fn update_name(&mut self, new_name: impl Into<String>) -> Idempotent<()> {
+        let new_name = new_name.into();
+        idempotency_guard!(
+            self.events.iter_all().rev(),
+            UserEvent::NameUpdated { name } if name == &new_name,
+            => UserEvent::NameUpdated { .. }
+        );
+
+        self.name = new_name.clone();
+        self.events.push(UserEvent::NameUpdated { name: new_name });
+
+        Idempotent::Executed(())
+    }
+}
+
 impl TryFromEvents<UserEvent> for User {
     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
         let mut builder = UserBuilder::default();
@@ -28,6 +45,9 @@ impl TryFromEvents<UserEvent> for User {
             match event {
                 UserEvent::Initialized { id, name } => {
                     builder = builder.id(*id).name(name.clone());
+                }
+                UserEvent::NameUpdated { name } => {
+                    builder = builder.name(name.clone());
                 }
             }
         }

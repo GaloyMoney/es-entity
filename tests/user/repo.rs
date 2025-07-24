@@ -5,11 +5,11 @@ use super::{entity::*, error::*};
 
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "User", err = "UserError", columns(name(ty = "String")))]
-pub struct UserRepo {
+pub struct Users {
     pool: PgPool,
 }
 
-impl UserRepo {
+impl Users {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }

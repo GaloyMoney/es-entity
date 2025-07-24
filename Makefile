@@ -16,7 +16,7 @@ test-in-ci: start-deps setup-db test-book
 
 test-book:
 	cargo build --profile mdbook-test --features mdbook-test --lib
-	mdbook test book -L ./target/mdbook-test,./target/mdbook-test/deps
+	CARGO_MANIFEST_DIR=$(shell pwd) mdbook test book -L ./target/mdbook-test,./target/mdbook-test/deps
 
 check-code:
 	SQLX_OFFLINE=true cargo fmt --check --all

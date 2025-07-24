@@ -3,8 +3,6 @@
 In this section we will get up and running in a quick-and-dirty way.
 More detailed explanations will follow.
 
-## Complete Example
-
 Let's assume there is a `User` entity in your domain that you wish to persist using `EsEntity`.
 
 The first thing you will need is 2 tables in postgres.
@@ -14,9 +12,8 @@ By convention they look like this:
 
 ```bash
 $ cargo sqlx migrate add users
+$ cat migrations/*_users.sql
 ```
-
-cat migrations/*_users.sql
 ```sql
 -- The 'index' table that holds the latest values of some selected attributes.
 CREATE TABLE users (
@@ -29,8 +26,9 @@ CREATE TABLE users (
   name VARCHAR UNIQUE NULL
 );
 
--- The table that actually stores the events sequenced per entity
--- This table has the same columns for every entity you create (by convention named `<entity>_events`).
+-- The table that actually stores the events sequenced per entity.
+-- This table has the same columns for every entity you create
+-- by convention named `<entity>_events`.
 CREATE TABLE user_events (
   id UUID NOT NULL REFERENCES users(id),
   sequence INT NOT NULL,
@@ -41,7 +39,7 @@ CREATE TABLE user_events (
 );
 ```
 
-To persist the entity we need to setup a pattern with 5 parts:
+To persist the entity we need to setup a pattern with 5 components:
 - The `EntityId`
 - The `EntityEvent`
 - The `NewEntity`
@@ -53,6 +51,8 @@ Here's a complete working example:
 [dependencies]
 es-entity = "0.6.10"
 sqlx = "0.8.3" # Needs to be in scope for entity_id! macro
+serde = { version = "1.0.219", features = ["derive"] } # To serialize the `EntityEvent`
+derive_builder = "0.20.1" # For hydrating and building the entity state (optional)
 ```
 
 ```rust
@@ -69,7 +69,6 @@ use es_entity::*;
 
 // Will create a uuid::Uuid wrapper type. 
 // But any type can act as the ID that fulfills:
-//
 //   Clone + PartialEq + Eq + std::hash::Hash + Send + Sync
 //         + sqlx::Type<sqlx::Postgres>
 es_entity::entity_id!{ UserId }
@@ -81,10 +80,11 @@ es_entity::entity_id!{ UserId }
 #[es_event(id = "UserId")]
 pub enum UserEvent {
     Initialized { id: UserId, name: String },
+    NameUpdated { name: String },
 }
 
 // The `EsEntity` - using derive_builder is optional
-// but useful for projecting in the `TryFromEvents` trait.
+// but useful for hydrating in the `TryFromEvents` trait.
 #[derive(EsEntity, Builder)]
 #[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
 pub struct User {
@@ -94,6 +94,29 @@ pub struct User {
     // The `events` container - mandatory field.
     // Basically its a `Vec` wrapper with some ES specific augmentation.
     events: EntityEvents<UserEvent>,
+}
+
+impl User {
+    // Mutation to update the name of a user.
+    pub fn update_name(&mut self, new_name: impl Into<String>) -> Idempotent<()> {
+        let new_name = new_name.into();
+        // The idempotency_guard macro is a helper to return quickly
+        // if a mutation has already been applied.
+        // It is not mandatory but very useful in the context of distributed / multi-thread
+        // systems to protect against replays.
+        idempotency_guard!(
+            self.events.iter_all().rev(),
+            // If this pattern matches return Idempotent::Ignored
+            UserEvent::NameUpdated { name } if name == &new_name,
+            // Stop searching here
+            => UserEvent::NameUpdated { .. }
+        );
+
+        self.name = new_name.clone();
+        self.events.push(UserEvent::NameUpdated { name: new_name });
+
+        Idempotent::Executed(())
+    }
 }
 
 // Any EsEntity must implement `TryFromEvents`.
@@ -106,6 +129,9 @@ impl TryFromEvents<UserEvent> for User {
                 UserEvent::Initialized { id, name } => {
                     builder = builder.id(*id).name(name.clone());
                 }
+                UserEvent::NameUpdated { name } => {
+                    builder = builder.name(name.clone());
+                }
             }
         }
         builder.events(events).build()
@@ -113,7 +139,7 @@ impl TryFromEvents<UserEvent> for User {
 }
 
 // The `New` entity - this represents the data of an entity in a pre-persisted state.
-// Using derive_builder is not mandatory - any type can be used for the `New` state.
+// Using derive_builder is not mandatory - any type can be used for the `NewEntity` state.
 #[derive(Debug, Builder)]
 pub struct NewUser {
     #[builder(setter(into))]
@@ -122,7 +148,13 @@ pub struct NewUser {
     pub name: String,
 }
 
-// The `New` type must implement `IntoEvents` to get the initial events that require persisting.
+impl NewUser {
+    pub fn builder() -> NewUserBuilder {
+        NewUserBuilder::default()
+    }
+}
+
+// The `NewEntity` type must implement `IntoEvents` to get the initial events that require persisting.
 impl IntoEvents<UserEvent> for NewUser {
     fn into_events(self) -> EntityEvents<UserEvent> {
         EntityEvents::init(
@@ -135,9 +167,48 @@ impl IntoEvents<UserEvent> for NewUser {
     }
 }
 
+// The `EsRepo` that will host all the persistence operations.
+#[derive(EsRepo, Debug)]
+#[es_repo(
+    entity = "User",
+    // Configure the columns that need populating in the index table
+    columns(
+        // The 'name' column
+        name(
+            // The rust type of the name attribute
+            ty = "String"
+)))]
+pub struct Users {
+    // Mandatory field so that the Repository can begin transactions
+    pool: sqlx::PgPool,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("This is a library example - use the async functions in your application");
+    // Connect to postgres
+    let pg_con = format!("postgres://user:password@localhost:5432/pg");
+    let pool = sqlx::PgPool::connect(&pg_con).await?;
+
+    let users = Users { pool };
+
+    let new_user = NewUser::builder()
+        .id(UserId::new())
+        .name("Frank")
+        .build()
+        .unwrap();
+
+    // The returned type is the hydrated Entity
+    let mut user = users.create(new_user).await?;
+    
+    // Using the Idempotency::did_execute() to check if we need a DB roundtrip
+    if user.update_name("Dweezil").did_execute() {
+        users.update(&mut user).await?;
+    }
+
+    let loaded_user = users.find_by_id(user.id).await?;
+
+    assert_eq!(user.name, loaded_user.name);
+
     Ok(())
 }
 ```
