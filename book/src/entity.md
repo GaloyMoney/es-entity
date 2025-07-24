@@ -13,7 +13,7 @@ In DDD entities serve the following purpose:
 - supply queries that expose some of the entities state
 
 They often host the most critical code in your application where correctness is of upmost importance.
-Ideally they are unit-testable and thus should not be overly coupled to the persistence layer (as they generally are when using just about any ORM library).
+Ideally they are unit-testable and thus should not be overly coupled to the persistence layer (as they generally are when using just about any ORM library / framework).
 The design of `es-entity` is very deliberate in not getting in the way of testability of your `Entities`.
 
 ```rust

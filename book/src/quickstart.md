@@ -138,7 +138,7 @@ impl TryFromEvents<UserEvent> for User {
     }
 }
 
-// The `New` entity - this represents the data of an entity in a pre-persisted state.
+// The `NewEntity` - this represents the data of an entity in a pre-persisted state.
 // Using derive_builder is not mandatory - any type can be used for the `NewEntity` state.
 #[derive(Debug, Builder)]
 pub struct NewUser {

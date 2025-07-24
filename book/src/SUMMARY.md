@@ -5,5 +5,6 @@
 
 - [Event Sourcing](./event-sourcing.md)
 - [Entity](./entity.md)
-  - [EntityEvent](./entity-event.md)
+  - [Entity Event](./entity-event.md)
+  - [New Entity](./new-entity.md)
 - [Repository](./repository.md)
