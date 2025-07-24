@@ -3,6 +3,9 @@
 The `NewEntity` type represents the data of the `Entity` in a pre-persisted state.
 It gets passed to the `Repository::create` function where the `IntoEvents` trait emits the initial `EntityEvent`s which are then persisted and used to hydrate the actual `Entity`.
 
+It is also recommended that any validation of the initial attributes is performed on this type to ensure that the `Entity` will be in a legal state once it gets hydrated for the first time.
+Using the [derive_builder](https://docs.rs/derive_builder/latest/derive_builder/) crate is recommended for this purpose.
+
 ```rust
 # extern crate es_entity;
 # extern crate sqlx;
@@ -20,9 +23,8 @@ It gets passed to the `Repository::create` function where the `IntoEvents` trait
 # }
 const MAX_NAME_LENGTH: usize = 100;
 
-// Using the `builder` pattern to create the `NewEntity` is not mandatory but is a simple way to add some validation to the creation process.
-// See the [derive_builder docs](https://docs.rs/derive_builder/latest/derive_builder/) for more information.
 #[derive(Debug, Builder)]
+// Specify the `validation` fn
 #[builder(build_fn(validate = "Self::validate"))]
 pub struct NewUser {
     #[builder(setter(into))]
@@ -37,6 +39,7 @@ impl NewUser {
     }
 }
 impl NewUserBuilder {
+    // Execute some validation that ensures the initial `Entity` is legal
     fn validate(&self) -> Result<(), String> {
         if self.name.as_ref().expect("name wasn't set").len() > MAX_NAME_LENGTH {
             return Err("Name length exceeded".to_string());
@@ -45,8 +48,8 @@ impl NewUserBuilder {
     }
 }
 
-// The `NewEntity` type must implement `IntoEvents` to get the initial events that require persisting.
 impl IntoEvents<UserEvent> for NewUser {
+    // This `fn` returns the first `Events` of the `Entity`
     fn into_events(self) -> EntityEvents<UserEvent> {
         EntityEvents::init(
             self.id,
@@ -58,9 +61,12 @@ impl IntoEvents<UserEvent> for NewUser {
     }
 }
 
-#[test]
-fn user_creation() {
-    let new_user = NewUser::builder().id("user-id").name("Steven").build();
-    assert!(new_user.is_ok());
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn user_creation() {
+        let new_user = NewUser::builder().id("user-id").name("Steven").build();
+        assert!(new_user.is_ok());
+    }
 }
 ```

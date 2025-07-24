@@ -1,7 +1,7 @@
 # Entity Event
 
-In `es-entity` it is assumed that an `Entity` has an associated `EntityEvent` `enum` that represents all of the state changes (ie. types of `events`) that can originate from mutations of said `entity`.
-This `enum` must be serializable and is stores as a `JSON`-blob in the associated `events` table.
+In `es-entity` it is assumed that an `Entity` has an associated `EntityEvent` `enum` that represents all of the state changes (ie. types of `events`) that can originate from mutations of said `Entity`.
+This `enum` must be serializable and is stored as a `JSON`-blob in the associated `events` table.
 
 ```rust
 # extern crate es_entity;
