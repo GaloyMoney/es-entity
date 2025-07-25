@@ -23,7 +23,7 @@ CREATE TABLE users (
   created_at TIMESTAMPTZ NOT NULL,
 
   -- Any other columns you want a quick 'index-based' lookup
-  name VARCHAR UNIQUE NULL
+  name VARCHAR UNIQUE
 );
 
 -- The table that actually stores the events sequenced per entity.

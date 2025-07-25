@@ -9,3 +9,4 @@
   - [New Entity](./new-entity.md)
   - [Entity Type](./entity-type.md)
 - [Repository](./repository.md)
+  - [Database Tables](./database-tables.md)
