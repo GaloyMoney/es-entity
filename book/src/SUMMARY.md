@@ -10,3 +10,4 @@
   - [Entity Type](./entity-type.md)
 - [Repository](./repository.md)
   - [Database Tables](./database-tables.md)
+  - [es_query](./es_query.md)
