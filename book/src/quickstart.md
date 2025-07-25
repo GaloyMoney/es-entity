@@ -1,7 +1,10 @@
 # Quickstart
 
-In this section we will get up and running in a quick-and-dirty way.
-More detailed explanations will follow.
+This is the - just show me the damn code - section.
+Its an end to end working example without any background.
+Don't worry if you do not understand all the pieces on first reading - more detailed explanations will follow.
+
+## Example
 
 Let's assume there is a `User` entity in your domain that you wish to persist using `EsEntity`.
 
