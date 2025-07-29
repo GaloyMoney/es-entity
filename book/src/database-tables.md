@@ -54,7 +54,7 @@ WHERE id = (
 )
 ORDER BY sequence;
 ```
-This also doesn't work becaues perhaps the event that was found wasn't the latest `EmailUpdated` event in the `User`s history.
+This also doesn't work because perhaps the event that was found wasn't the latest `EmailUpdated` event in the `User`s history.
 But we want to get the user who's email is _currently_ `$1`.
 So it could find some false positives.
 
@@ -67,11 +67,11 @@ WITH latest_email_updates AS (
   GROUP BY id
 ),
 latest_emails AS (
-  SELECT ue.id, ue.event->>'email' AS email
-  FROM user_events ue
+  SELECT e.id, e.event->>'email' AS email
+  FROM user_events e
   JOIN latest_email_updates leu
-    ON ue.id = leu.id AND ue.sequence = leu.max_sequence
-  WHERE ue.event_type = 'email_updated'
+    ON e.id = leu.id AND e.sequence = leu.max_sequence
+  WHERE e.event_type = 'email_updated'
 ),
 target_user AS (
   SELECT id
@@ -99,7 +99,7 @@ Enter the `index` table.
 The `index`-table is a table that hosts 1 row per `Entity` with the columns populated by the latest values.
 In that sense it looks very similar to a table that might hold the entire state of the `Entity` in a typical `update-in-place` persistence strategy.
 The difference is that we _only_ include columns that we want to `index` for fast lookup or some kind of constraint like `UNIQUE` or `REFERENCES`.
-In that sense it is purely an optimzation and does not represent the entire state of the `Entity` - for that you must load all the events.
+In that sense it is purely an optimization and does not represent the entire state of the `Entity` - for that you must load all the events.
 
 ```sql
 CREATE TABLE users (
@@ -117,10 +117,10 @@ WITH target_entity AS (
   FROM users
   WHERE email = $1
 )
-SELECT ue.*
-FROM user_events ue
-JOIN target_entity te ON ue.id = te.id
-ORDER BY ue.sequence;
+SELECT e.*
+FROM user_events e
+JOIN target_entity te ON e.id = te.id
+ORDER BY e.sequence;
 ```
 
 As a result the query is much simpler and we are no longer leaking any domain information.
