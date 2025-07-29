@@ -1,7 +1,22 @@
 mod helpers;
 mod user;
 
+use es_entity::*;
+use sqlx::PgPool;
+
 use user::*;
+
+#[derive(EsRepo, Debug)]
+#[es_repo(entity = "User", err = "EsRepoError", columns(name(ty = "String")))]
+pub struct Users {
+    pool: PgPool,
+}
+
+impl Users {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
 
 #[tokio::test]
 async fn create() -> anyhow::Result<()> {
