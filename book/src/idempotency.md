@@ -4,7 +4,7 @@ Idempotency means that performing the same operation multiple times has the same
 It’s used to ensure that retrying a request doesn’t cause unintended side effects, such as duplicated `Event`s being persisted.
 
 It is particularly useful in the context of a distributed system where operations could be triggered from an asynchronous event queue (ie pub-sub).
-Whenever you would like to have an `exactly-once` processing garuantee - you can easily achieve an `effectively-once` processing by ensuring your mutations are all idempotent.
+Whenever you would like to have an `exactly-once` processing guarantee - you can easily achieve an `effectively-once` processing by ensuring your mutations are all idempotent.
 
 Making your `Entity` mutations idempotent is very simple when doing Event Sourcing as you can easily check if the event you are about to append already exists in the history.
 
@@ -95,7 +95,7 @@ fn main() {
 ```
 
 But now we just silently ignore the operation.
-Better would be to signal back to the caller wether or not the operation was applied.
+Better would be to signal back to the caller whether or not the operation was applied.
 For that we use the `Idempotent` type:
 ```rust
 # extern crate es_entity;
@@ -155,7 +155,7 @@ impl User {
         idempotency_guard!(
             // The iterator of events
             self.events.iter().rev(),
-            // The pattern match to check wether an operation was already applied
+            // The pattern match to check whether an operation was already applied
             UserEvent::NameUpdated { name: existing_name } if existing_name == &name 
         );
         self.events.push(UserEvent::NameUpdated { name });

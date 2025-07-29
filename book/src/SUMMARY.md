@@ -13,3 +13,4 @@
 - [Repository](./repository.md)
   - [Database Tables](./database-tables.md)
   - [es_query](./es_query.md)
+  - [EsRepo trait](./es-repo.md)

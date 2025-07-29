@@ -47,10 +47,10 @@ impl Users {
               FROM users
               WHERE name = $1
             )
-            SELECT ue.id as entity_id, ue.sequence, ue.event, ue.recorded_at
-            FROM user_events ue
-            JOIN target_entity te ON ue.id = te.id
-            ORDER BY ue.sequence;
+            SELECT e.id as entity_id, e.sequence, e.event, e.recorded_at
+            FROM user_events e
+            JOIN target_entity te ON e.id = te.id
+            ORDER BY e.sequence;
         "#,
             name,
         )
