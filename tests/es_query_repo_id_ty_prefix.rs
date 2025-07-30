@@ -6,13 +6,12 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use user_with_id_ty::*;
-// crud on user entities(not using UserId) in test_users
+// crud on user entities(not using UserId) in ignore_prefix_users
 #[derive(EsRepo, Debug)]
 #[es_repo(
     id = Uuid,
-    tbl_prefix = "test",
+    tbl_prefix = "ignore_prefix",
     entity = "User",
-    err = "EsRepoError",
     columns(name(ty = "String"))
 )]
 pub struct Users {
@@ -26,9 +25,9 @@ impl Users {
     pub async fn query_with_args(&self, id: Uuid) -> Result<User, EsRepoError> {
         es_query!(
             id_ty = Uuid,
-            "test",
+            "ignore_prefix",
             self.pool(),
-            "SELECT * FROM test_users WHERE id = $1",
+            "SELECT * FROM ignore_prefix_users WHERE id = $1",
             id
         )
         .fetch_one()
@@ -38,9 +37,9 @@ impl Users {
     pub async fn query_without_args(&self) -> Result<(Vec<User>, bool), EsRepoError> {
         es_query!(
             id_ty = Uuid,
-            "test",
+            "ignore_prefix",
             self.pool(),
-            "SELECT * FROM test_users"
+            "SELECT * FROM ignore_prefix_users"
         )
         .fetch_n(2)
         .await
@@ -48,7 +47,7 @@ impl Users {
 }
 
 #[tokio::test]
-async fn test_es_query_with_id_ty_and_prefix_and_args() -> anyhow::Result<()> {
+async fn test_es_query_with_id_ty_and_prefix_with_args() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
 
     let users = Users::new(pool);
@@ -63,7 +62,7 @@ async fn test_es_query_with_id_ty_and_prefix_and_args() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_es_query_with_id_ty_and_prefix() -> anyhow::Result<()> {
+async fn test_es_query_with_id_ty_and_prefix_without_args() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let users = Users::new(pool);
 

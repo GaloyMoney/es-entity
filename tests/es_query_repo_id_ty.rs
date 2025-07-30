@@ -6,12 +6,11 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use user_with_id_ty::*;
-// crud on user entities(not using UserId) in user table
+// crud on user entities(not using UserId) in users
 #[derive(EsRepo, Debug)]
 #[es_repo(
     id = Uuid,
     entity = "User",
-    err = "EsRepoError",
     columns(name(ty = "String"))
 )]
 pub struct Users {
@@ -41,7 +40,7 @@ impl Users {
 }
 
 #[tokio::test]
-async fn test_es_query_with_id_ty_and_args() -> anyhow::Result<()> {
+async fn test_es_query_with_id_ty_with_args() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
 
     let users = Users::new(pool);
@@ -56,7 +55,7 @@ async fn test_es_query_with_id_ty_and_args() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_es_query_with_id_ty() -> anyhow::Result<()> {
+async fn test_es_query_with_id_ty_without() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let users = Users::new(pool);
 

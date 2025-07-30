@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use user::*;
 // crud on User entities stored in users
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "User", err = "EsRepoError", columns(name(ty = "String")))]
+#[es_repo(entity = "User", columns(name(ty = "String")))]
 pub struct Users {
     pool: PgPool,
 }
@@ -50,7 +50,7 @@ async fn test_es_query_with_args() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_es_query() -> anyhow::Result<()> {
+async fn test_es_query_without_args() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let users = Users::new(pool);
 

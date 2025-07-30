@@ -6,14 +6,13 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use user_with_id_ty::*;
-// crud on user entities(not using UserId) stored in customers
+// crud on user entities(not using UserId) stored in custom_name_for_users
 #[derive(EsRepo, Debug)]
 #[es_repo(
     id = Uuid,
-    tbl = "customers",
-    events_tbl = "customer_events",
+    tbl = "custom_name_for_users",
+    events_tbl = "custom_name_for_user_events",
     entity = "User",
-    err = "EsRepoError",
     columns(name(ty = "String"))
 )]
 pub struct Users {
@@ -29,7 +28,7 @@ impl Users {
             entity_ty = User,
             id_ty = Uuid,
             self.pool(),
-            "SELECT * FROM customers WHERE id = $1",
+            "SELECT * FROM custom_name_for_users WHERE id = $1",
             id
         )
         .fetch_one()
@@ -41,7 +40,7 @@ impl Users {
             entity_ty = User,
             id_ty = Uuid,
             self.pool(),
-            "SELECT * FROM customers"
+            "SELECT * FROM custom_name_for_users"
         )
         .fetch_n(2)
         .await
@@ -49,7 +48,7 @@ impl Users {
 }
 
 #[tokio::test]
-async fn test_es_query_with_entity_ty_and_id_ty_and_args() -> anyhow::Result<()> {
+async fn test_es_query_with_entity_ty_and_id_ty_with_args() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
 
     let users = Users::new(pool);
@@ -64,7 +63,7 @@ async fn test_es_query_with_entity_ty_and_id_ty_and_args() -> anyhow::Result<()>
 }
 
 #[tokio::test]
-async fn test_es_query_with_entity_ty_and_id_ty() -> anyhow::Result<()> {
+async fn test_es_query_with_entity_ty_and_id_ty_without_args() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let users = Users::new(pool);
 
