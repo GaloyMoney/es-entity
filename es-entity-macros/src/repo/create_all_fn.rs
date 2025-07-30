@@ -1,6 +1,6 @@
 use darling::ToTokens;
 use proc_macro2::TokenStream;
-use quote::{quote, TokenStreamExt};
+use quote::{TokenStreamExt, quote};
 
 use super::options::*;
 

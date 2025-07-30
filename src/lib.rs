@@ -23,11 +23,11 @@ pub mod prelude {
 }
 
 pub use error::*;
-pub use es_entity_macros::expand_es_query;
-pub use es_entity_macros::retry_on_concurrent_modification;
 pub use es_entity_macros::EsEntity;
 pub use es_entity_macros::EsEvent;
 pub use es_entity_macros::EsRepo;
+pub use es_entity_macros::expand_es_query;
+pub use es_entity_macros::retry_on_concurrent_modification;
 pub use events::*;
 pub use idempotent::*;
 pub use nested::*;

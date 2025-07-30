@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 pub use config::*;
 use std::{
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, OnceLock,
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };

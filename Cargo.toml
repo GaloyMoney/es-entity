@@ -4,7 +4,7 @@ description = "Event Sourcing Entity Framework"
 repository = "https://github.com/GaloyMoney/es-entity"
 documentation = "https://docs.rs/es-entity"
 version = "0.6.10"
-edition = "2021"
+edition = "2024"
 license = "Apache-2.0"
 categories = ["data-structures", "database", "event-sourcing"]
 
