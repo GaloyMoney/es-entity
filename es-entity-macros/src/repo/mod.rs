@@ -18,7 +18,7 @@ mod update_fn;
 
 use darling::{FromDeriveInput, ToTokens};
 use proc_macro2::TokenStream;
-use quote::{quote, TokenStreamExt};
+use quote::{TokenStreamExt, quote};
 
 use options::RepositoryOptions;
 
@@ -169,6 +169,7 @@ impl ToTokens for EsRepo<'_> {
             mod #types_mod {
 
                 use super::*;
+                use es_entity::prelude::sqlx;
 
                 #[allow(non_camel_case_types)]
                 pub(super) type Repo__Id = #id;
@@ -181,24 +182,49 @@ impl ToTokens for EsRepo<'_> {
                 #[allow(non_camel_case_types)]
                 pub(super) type Repo__DbEvent = es_entity::GenericEvent<#id>;
 
-                pub(super) struct QueryRes {
-                    pub(super) rows: Vec<Repo__DbEvent>,
+                pub(super) struct EsQuery<'q, DB, F, A>
+                where
+                    DB: sqlx::Database,
+                {
+                    pub(super) query: sqlx::query::Map<'q, DB, F, A>
                 }
 
-                impl QueryRes {
+                impl<'q, DB, F, A> EsQuery<'q, DB, F, A>
+                where
+                    DB: sqlx::Database,
+                    F: FnMut(<DB as sqlx::Database>::Row) -> Result<Repo__DbEvent, sqlx::Error> + Send,
+                    A: 'q + Send + sqlx::IntoArguments<'q, DB>,
+                {
+                    pub(super) async fn fetch_optional(
+                        self,
+                        executor: impl sqlx::Executor<'_, Database = DB>,
+                    ) -> Result<Option<Repo__Entity>, Repo__Error>
+                    {
+                        let rows = self.query.fetch_all(executor).await?;
+                        if rows.is_empty() {
+                            return Ok(None)
+                        }
+
+                        Ok(Some(es_entity::EntityEvents::load_first(rows.into_iter())?))
+                    }
+
                     pub(super) async fn fetch_one(
                         self,
+                        executor: impl sqlx::Executor<'_, Database = DB>,
                     ) -> Result<Repo__Entity, Repo__Error>
                     {
-                        Ok(es_entity::EntityEvents::load_first(self.rows.into_iter())?)
+                        let rows = self.query.fetch_all(executor).await?;
+                        Ok(es_entity::EntityEvents::load_first(rows.into_iter())?)
                     }
 
                     pub(super) async fn fetch_n(
                         self,
+                        executor: impl sqlx::Executor<'_, Database = DB>,
                         first: usize,
                     ) -> Result<(Vec<Repo__Entity>, bool), Repo__Error>
                     {
-                        Ok(es_entity::EntityEvents::load_n(self.rows.into_iter(), first)?)
+                        let rows = self.query.fetch_all(executor).await?;
+                        Ok(es_entity::EntityEvents::load_n(rows.into_iter(), first)?)
                     }
                 }
             }

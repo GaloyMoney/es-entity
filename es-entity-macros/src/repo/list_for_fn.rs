@@ -1,6 +1,6 @@
 use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, TokenStreamExt};
+use quote::{TokenStreamExt, quote};
 
 use super::{list_by_fn::CursorStruct, options::*};
 
@@ -172,22 +172,22 @@ impl ToTokens for ListForFn<'_> {
                     let #maybe_mut_entities = match direction {
                         es_entity::ListDirection::Ascending => {
                             es_entity::es_query!(
-                                [entity = #entity, #prefix_arg db = executor,],
+                                [entity = #entity, #prefix_arg],
                                 #asc_query,
                                 #filter_arg_name as #for_column_type,
                                 #arg_tokens
                             )
-                                .fetch_n(first)
+                                .fetch_n(executor, first)
                                 .await?
                         },
                         es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
-                                [entity = #entity, #prefix_arg db = executor,],
+                                [entity = #entity, #prefix_arg],
                                 #desc_query,
                                 #filter_arg_name as #for_column_type,
                                 #arg_tokens
                             )
-                                .fetch_n(first)
+                                .fetch_n(executor, first)
                                 .await?
                         }
                     };
@@ -281,24 +281,24 @@ mod tests {
                 let (entities, has_next_page) = match direction {
                     es_entity::ListDirection::Ascending => {
                         es_entity::es_query!(
-                            [entity = Entity, db = executor,],
+                            [entity = Entity,],
                             "SELECT customer_id, id FROM entities WHERE ((customer_id = $1) AND (COALESCE(id > $3, true))) ORDER BY id ASC LIMIT $2",
                             filter_customer_id as Uuid,
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
                         es_entity::es_query!(
-                            [entity = Entity, db = executor,],
+                            [entity = Entity,],
                             "SELECT customer_id, id FROM entities WHERE ((customer_id = $1) AND (COALESCE(id < $3, true))) ORDER BY id DESC LIMIT $2",
                             filter_customer_id as Uuid,
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(first)
+                            .fetch_n(executor, first)
                             .await?
                     }
                 };
@@ -378,26 +378,26 @@ mod tests {
                 let (entities, has_next_page) = match direction {
                     es_entity::ListDirection::Ascending => {
                         es_entity::es_query!(
-                            [entity = Entity, db = executor,],
+                            [entity = Entity,],
                             "SELECT email, id FROM entities WHERE ((email = $1) AND (COALESCE((email, id) > ($4, $3), $3 IS NULL))) ORDER BY email ASC, id ASC LIMIT $2",
                             filter_email as String,
                             (first + 1) as i64,
                             id as Option<EntityId>,
                             email as Option<String>,
                         )
-                            .fetch_n(first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
                         es_entity::es_query!(
-                            [entity = Entity, db = executor,],
+                            [entity = Entity,],
                             "SELECT email, id FROM entities WHERE ((email = $1) AND (COALESCE((email, id) < ($4, $3), $3 IS NULL))) ORDER BY email DESC, id DESC LIMIT $2",
                             filter_email as String,
                             (first + 1) as i64,
                             id as Option<EntityId>,
                             email as Option<String>,
                         )
-                            .fetch_n(first)
+                            .fetch_n(executor, first)
                             .await?
                     }
                 };
