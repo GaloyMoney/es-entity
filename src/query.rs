@@ -1,3 +1,8 @@
+use crate::{
+    events::{EntityEvents, GenericEvent},
+    traits::*,
+};
+
 #[derive(Default, std::fmt::Debug, Clone, Copy)]
 pub enum ListDirection {
     #[default]
@@ -57,5 +62,72 @@ impl<T, C> PaginatedQueryRet<T, C> {
         } else {
             None
         }
+    }
+}
+
+pub struct EsQuery<'q, Entity, DB, F, A>
+where
+    DB: sqlx::Database,
+{
+    inner: sqlx::query::Map<'q, DB, F, A>,
+    _phantom: std::marker::PhantomData<Entity>,
+}
+
+impl<'q, Entity, DB, F, A> EsQuery<'q, Entity, DB, F, A>
+where
+    Entity: EsEntity,
+    <<Entity as EsEntity>::Event as EsEvent>::EntityId: Unpin,
+    DB: sqlx::Database,
+    F: FnMut(
+            <DB as sqlx::Database>::Row,
+        ) -> Result<
+            GenericEvent<<<Entity as EsEntity>::Event as EsEvent>::EntityId>,
+            sqlx::Error,
+        > + Send,
+    A: 'q + Send + sqlx::IntoArguments<'q, DB>,
+{
+    pub fn new(query: sqlx::query::Map<'q, DB, F, A>) -> Self {
+        Self {
+            inner: query,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    pub async fn fetch_optional<Err>(
+        self,
+        executor: impl sqlx::Executor<'_, Database = DB>,
+    ) -> Result<Option<Entity>, Err>
+    where
+        Err: From<sqlx::Error> + From<crate::error::EsEntityError>,
+    {
+        let rows = self.inner.fetch_all(executor).await?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(EntityEvents::load_first(rows.into_iter())?))
+    }
+
+    pub async fn fetch_one<Err>(
+        self,
+        executor: impl sqlx::Executor<'_, Database = DB>,
+    ) -> Result<Entity, Err>
+    where
+        Err: From<sqlx::Error> + From<crate::error::EsEntityError>,
+    {
+        let rows = self.inner.fetch_all(executor).await?;
+        Ok(EntityEvents::load_first(rows.into_iter())?)
+    }
+
+    pub async fn fetch_n<Err>(
+        self,
+        executor: impl sqlx::Executor<'_, Database = DB>,
+        first: usize,
+    ) -> Result<(Vec<Entity>, bool), Err>
+    where
+        Err: From<sqlx::Error> + From<crate::error::EsEntityError>,
+    {
+        let rows = self.inner.fetch_all(executor).await?;
+        Ok(EntityEvents::load_n(rows.into_iter(), first)?)
     }
 }
