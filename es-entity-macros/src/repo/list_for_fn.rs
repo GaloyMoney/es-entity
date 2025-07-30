@@ -1,6 +1,6 @@
 use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
-use quote::{TokenStreamExt, quote};
+use quote::{quote, TokenStreamExt};
 
 use super::{list_by_fn::CursorStruct, options::*};
 

@@ -3,7 +3,7 @@ mod input;
 use convert_case::{Case, Casing};
 use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
-use quote::{TokenStreamExt, quote};
+use quote::{quote, TokenStreamExt};
 
 pub use input::QueryInput;
 
