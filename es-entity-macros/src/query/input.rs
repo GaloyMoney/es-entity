@@ -6,7 +6,6 @@ use syn::{
 
 pub struct QueryInput {
     pub(super) tbl_prefix: Option<String>,
-    pub(super) db: syn::Expr,
     pub(super) sql: String,
     pub(super) sql_span: Span,
     pub(super) arg_exprs: Vec<syn::Expr>,
@@ -70,7 +69,6 @@ impl Parse for QueryInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut sql: Option<(String, Span)> = None;
         let mut args: Option<Vec<syn::Expr>> = None;
-        let mut db: Option<syn::Expr> = None;
         let mut expect_comma = false;
         let mut tbl_prefix = None;
         let mut entity = None;
@@ -83,9 +81,7 @@ impl Parse for QueryInput {
 
             let _ = input.parse::<syn::token::Eq>()?;
 
-            if key == "db" {
-                db = Some(input.parse::<syn::Expr>()?);
-            } else if key == "tbl_prefix" {
+            if key == "tbl_prefix" {
                 tbl_prefix = Some(input.parse::<syn::LitStr>()?.value());
             } else if key == "sql" {
                 sql = Some((
@@ -109,11 +105,9 @@ impl Parse for QueryInput {
         }
 
         let (sql, sql_span) = sql.ok_or_else(|| input.error("expected `sql` key"))?;
-        let db = db.ok_or_else(|| input.error("expected `db` key"))?;
 
         Ok(QueryInput {
             tbl_prefix,
-            db,
             sql,
             sql_span,
             arg_exprs: args.unwrap_or_default(),
@@ -132,7 +126,6 @@ mod tests {
     fn parse_input() {
         let input: QueryInput = parse_quote!(
             tbl_prefix = "ignore_prefix",
-            db = &mut **tx,
             sql = "SELECT * FROM ignore_prefix_users WHERE name = $1",
             args = [id]
         );
@@ -141,7 +134,6 @@ mod tests {
             input.sql,
             "SELECT * FROM ignore_prefix_users WHERE name = $1"
         );
-        assert_eq!(input.db, parse_quote!(&mut **tx));
         assert_eq!(input.arg_exprs[0], parse_quote!(id));
         assert_eq!(input.table_name_without_prefix().unwrap(), "users");
     }
@@ -181,7 +173,6 @@ mod tests {
         for (sql, expected) in test_cases {
             let input = QueryInput {
                 tbl_prefix: None,
-                db: parse_quote!(&mut **tx),
                 sql: sql.to_string(),
                 sql_span: Span::call_site(),
                 arg_exprs: vec![],

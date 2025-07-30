@@ -14,18 +14,14 @@ impl Users {
     }
 
     pub async fn query_with_args(&self, id: UserId) -> Result<User, EsRepoError> {
-        es_query!(
-            [db = self.pool()],
-            "SELECT * FROM users WHERE id = $1",
-            id as UserId
-        )
-        .fetch_one()
-        .await
+        es_query!("SELECT * FROM users WHERE id = $1", id as UserId)
+            .fetch_one(self.pool())
+            .await
     }
 
     pub async fn query_without_args(&self) -> Result<(Vec<User>, bool), EsRepoError> {
-        es_query!([db = self.pool()], "SELECT * FROM users")
-            .fetch_n(2)
+        es_query!("SELECT * FROM users")
+            .fetch_n(self.pool(), 2)
             .await
     }
 }

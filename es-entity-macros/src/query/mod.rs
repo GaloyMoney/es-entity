@@ -3,7 +3,7 @@ mod input;
 use convert_case::{Case, Casing};
 use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, TokenStreamExt};
+use quote::{TokenStreamExt, quote};
 
 pub use input::QueryInput;
 
@@ -54,31 +54,25 @@ impl ToTokens for EsQuery {
             syn::Ident::new(&format!("{entity_snake}_repo_types"), Span::call_site());
         let order_by = self.input.order_by();
 
-        let db = &self.input.db;
-        let id = syn::Ident::new("Repo__Id", Span::call_site());
         let events_table = syn::Ident::new(&format!("{singular}_events"), Span::call_site());
         let args = &self.input.arg_exprs;
 
         let query = format!(
-            r#"WITH entities AS ({}) SELECT i.id AS "entity_id: {}", e.sequence, e.event, e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY {} e.sequence"#,
-            self.input.sql, id, events_table, order_by
+            r#"WITH entities AS ({}) SELECT i.id AS "entity_id: Repo__Id", e.sequence, e.event, e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY {} e.sequence"#,
+            self.input.sql, events_table, order_by
         );
 
         tokens.append_all(quote! {
             {
-                use #repo_types_mod::#id;
+                use #repo_types_mod::*;
 
-                let rows = sqlx::query_as!(
-                    #repo_types_mod::Repo__DbEvent,
-                    #query,
-                    #(#args),*
+                es_entity::EsQuery::<Repo__Entity, Repo__Error, _, _, _>::new(
+                    sqlx::query_as!(
+                        Repo__DbEvent,
+                        #query,
+                        #(#args),*
+                    )
                 )
-                    .fetch_all(#db)
-                    .await?;
-
-                #repo_types_mod::QueryRes {
-                    rows,
-                }
             }
         });
     }
@@ -93,7 +87,6 @@ mod tests {
     #[test]
     fn query() {
         let input: QueryInput = parse_quote!(
-            db = self.pool(),
             sql = "SELECT * FROM users WHERE id = $1",
             args = [id as UserId]
         );
@@ -104,18 +97,15 @@ mod tests {
 
         let expected = quote! {
             {
-                use user_repo_types::Repo__Id;
+                use user_repo_types::*;
 
-                let rows = sqlx::query_as!(
-                    user_repo_types::Repo__DbEvent,
-                    "WITH entities AS (SELECT * FROM users WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN user_events e ON i.id = e.id ORDER BY i.id, e.sequence",
-                    id as UserId
+                es_entity::EsQuery::<Repo__Entity, Repo__Error, _, _, _>::new(
+                    sqlx::query_as!(
+                        Repo__DbEvent,
+                        "WITH entities AS (SELECT * FROM users WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN user_events e ON i.id = e.id ORDER BY i.id, e.sequence",
+                        id as UserId
+                    )
                 )
-                    .fetch_all(self.pool())
-                    .await?;
-                user_repo_types::QueryRes {
-                    rows,
-                }
             }
         };
 
@@ -126,7 +116,6 @@ mod tests {
     fn query_with_entity_ty() {
         let input: QueryInput = parse_quote!(
             entity = MyCustomEntity,
-            db = self.pool(),
             sql = "SELECT * FROM my_custom_table WHERE id = $1",
             args = [id as MyCustomEntityId]
         );
@@ -137,18 +126,15 @@ mod tests {
 
         let expected = quote! {
             {
-                use my_custom_entity_repo_types::Repo__Id;
+                use my_custom_entity_repo_types::*;
 
-                let rows = sqlx::query_as!(
-                    my_custom_entity_repo_types::Repo__DbEvent,
-                    "WITH entities AS (SELECT * FROM my_custom_table WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN my_custom_table_events e ON i.id = e.id ORDER BY i.id, e.sequence",
-                    id as MyCustomEntityId
+                es_entity::EsQuery::<Repo__Entity, Repo__Error, _, _, _>::new(
+                    sqlx::query_as!(
+                        Repo__DbEvent,
+                        "WITH entities AS (SELECT * FROM my_custom_table WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN my_custom_table_events e ON i.id = e.id ORDER BY i.id, e.sequence",
+                        id as MyCustomEntityId
+                    )
                 )
-                    .fetch_all(self.pool())
-                    .await?;
-                my_custom_entity_repo_types::QueryRes {
-                    rows,
-                }
             }
         };
 
@@ -158,7 +144,6 @@ mod tests {
     #[test]
     fn query_with_order() {
         let input: QueryInput = parse_quote!(
-            db = self.pool(),
             sql = "SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1",
             args = [
                 (first + 1) as i64,
@@ -173,20 +158,17 @@ mod tests {
 
         let expected = quote! {
             {
-                use entity_repo_types::Repo__Id;
+                use entity_repo_types::*;
 
-                let rows = sqlx::query_as!(
-                    entity_repo_types::Repo__DbEvent,
-                    "WITH entities AS (SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN entity_events e ON i.id = e.id ORDER BY i.name, i.id, i.id, e.sequence",
-                    (first + 1) as i64,
-                    id as Option<MyCustomEntityId>,
-                    name as Option<String>
+                es_entity::EsQuery::<Repo__Entity, Repo__Error, _, _, _>::new(
+                    sqlx::query_as!(
+                        Repo__DbEvent,
+                        "WITH entities AS (SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN entity_events e ON i.id = e.id ORDER BY i.name, i.id, i.id, e.sequence",
+                        (first + 1) as i64,
+                        id as Option<MyCustomEntityId>,
+                        name as Option<String>
+                    )
                 )
-                    .fetch_all(self.pool())
-                    .await?;
-                entity_repo_types::QueryRes {
-                    rows,
-                }
             }
         };
 

@@ -1,7 +1,7 @@
 use convert_case::{Case, Casing};
 use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, TokenStreamExt};
+use quote::{TokenStreamExt, quote};
 
 use super::options::*;
 
@@ -244,7 +244,6 @@ impl<'a> ListByFn<'a> {
 
 impl ToTokens for ListByFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let prefix_arg = self.ignore_prefix.map(|p| quote! { tbl_prefix = #p, });
         let entity = self.entity;
         let column_name = self.column.name();
         let cursor = self.cursor();
@@ -326,6 +325,42 @@ impl ToTokens for ListByFn<'_> {
                 cursor.order_by(false),
             );
 
+            let es_query_asc_call = if let Some(prefix) = self.ignore_prefix {
+                quote! {
+                    es_entity::es_query!(
+                        tbl_prefix = #prefix,
+                        #asc_query,
+                        #arg_tokens
+                    )
+                }
+            } else {
+                quote! {
+                    es_entity::es_query!(
+                        entity = #entity,
+                        #asc_query,
+                        #arg_tokens
+                    )
+                }
+            };
+
+            let es_query_desc_call = if let Some(prefix) = self.ignore_prefix {
+                quote! {
+                    es_entity::es_query!(
+                        tbl_prefix = #prefix,
+                        #desc_query,
+                        #arg_tokens
+                    )
+                }
+            } else {
+                quote! {
+                    es_entity::es_query!(
+                        entity = #entity,
+                        #desc_query,
+                        #arg_tokens
+                    )
+                }
+            };
+
             tokens.append_all(quote! {
                 pub async fn #fn_name(
                     &self,
@@ -354,21 +389,13 @@ impl ToTokens for ListByFn<'_> {
 
                     let #maybe_mut_entities = match direction {
                         es_entity::ListDirection::Ascending => {
-                            es_entity::es_query!(
-                                [entity = #entity, #prefix_arg db = executor,],
-                                #asc_query,
-                                #arg_tokens
-                            )
-                                .fetch_n(first)
+                            #es_query_asc_call
+                                .fetch_n(executor, first)
                                 .await?
                         },
                         es_entity::ListDirection::Descending => {
-                            es_entity::es_query!(
-                                [entity = #entity, #prefix_arg db = executor,],
-                                #desc_query,
-                                #arg_tokens
-                            )
-                                .fetch_n(first)
+                            #es_query_desc_call
+                                .fetch_n(executor, first)
                                 .await?
                         },
                     };
@@ -530,22 +557,22 @@ mod tests {
                 let (entities, has_next_page) = match direction {
                     es_entity::ListDirection::Ascending => {
                         es_entity::es_query!(
-                            [entity = Entity, db = executor,],
+                            entity = Entity,
                             "SELECT id FROM entities WHERE (COALESCE(id > $2, true)) AND deleted = FALSE ORDER BY id ASC LIMIT $1",
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
                         es_entity::es_query!(
-                            [entity = Entity, db = executor,],
+                            entity = Entity,
                             "SELECT id FROM entities WHERE (COALESCE(id < $2, true)) AND deleted = FALSE ORDER BY id DESC LIMIT $1",
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                 };
@@ -590,22 +617,22 @@ mod tests {
                 let (entities, has_next_page) = match direction {
                     es_entity::ListDirection::Ascending => {
                         es_entity::es_query!(
-                            [entity = Entity, db = executor,],
+                            entity = Entity,
                             "SELECT id FROM entities WHERE (COALESCE(id > $2, true)) ORDER BY id ASC LIMIT $1",
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
                         es_entity::es_query!(
-                            [entity = Entity, db = executor,],
+                            entity = Entity,
                             "SELECT id FROM entities WHERE (COALESCE(id < $2, true)) ORDER BY id DESC LIMIT $1",
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                 };
@@ -681,24 +708,24 @@ mod tests {
                 let (entities, has_next_page) = match direction {
                     es_entity::ListDirection::Ascending => {
                         es_entity::es_query!(
-                            [entity = Entity, db = executor,],
+                            entity = Entity,
                             "SELECT name, id FROM entities WHERE (COALESCE((name, id) > ($3, $2), $2 IS NULL)) ORDER BY name ASC, id ASC LIMIT $1",
                             (first + 1) as i64,
                             id as Option<EntityId>,
                             name as Option<String>,
                         )
-                            .fetch_n(first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
                         es_entity::es_query!(
-                            [entity = Entity, db = executor,],
+                            entity = Entity,
                             "SELECT name, id FROM entities WHERE (COALESCE((name, id) < ($3, $2), $2 IS NULL)) ORDER BY name DESC, id DESC LIMIT $1",
                             (first + 1) as i64,
                             id as Option<EntityId>,
                             name as Option<String>,
                         )
-                            .fetch_n(first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                 };
@@ -776,24 +803,24 @@ mod tests {
                 let (entities, has_next_page) = match direction {
                     es_entity::ListDirection::Ascending => {
                         es_entity::es_query!(
-                            [entity = Entity, db = executor,],
+                            entity = Entity,
                             "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id > $2, true) OR COALESCE(value > $3, value IS NOT NULL)) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
                             (first + 1) as i64,
                             id as Option<EntityId>,
                             value as Option<rust_decimal::Decimal>,
                         )
-                            .fetch_n(first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
                         es_entity::es_query!(
-                            [entity = Entity, db = executor,],
+                            entity = Entity,
                             "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id < $2, true) OR COALESCE(value < $3, value IS NOT NULL)) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
                             (first + 1) as i64,
                             id as Option<EntityId>,
                             value as Option<rust_decimal::Decimal>,
                         )
-                            .fetch_n(first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                 };

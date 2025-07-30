@@ -22,67 +22,96 @@ macro_rules! idempotency_guard {
     };
 }
 
-/// Execute an event-sourced query with automatic entity reconstruction.
-///
-/// This macro requires query options to be specified in square brackets, followed by the SQL query
-/// and optional arguments.
+/// Execute an event-sourced query with automatic entity hydration.
 ///
 /// # Parameters
 ///
-/// Required in brackets:
-/// - `db`: The database executor (e.g., `self.pool()`, `&mut tx`)
-///
-/// Optional in brackets:
-/// - `entity`: Override the entity type (useful when table name doesn't match entity name)
 /// - `tbl_prefix`: Table prefix to ignore when deriving entity names from table names
-///
-/// After brackets:
+/// - `entity`: Override the entity type (useful when table name doesn't match entity name)
 /// - SQL query string
 /// - Additional arguments for the SQL query (optional)
 ///
 /// # Examples
 /// ```ignore
-/// // Basic usage with mandatory db
-/// es_query!([db = self.pool()], "SELECT id FROM users WHERE id = $1", id)
-///
-/// // With custom entity type
-/// es_query!(
-///     [entity = User, db = self.pool()],
-///     "SELECT id FROM custom_users_table WHERE id = $1",
-///     id as UserId
-/// )
+/// // Basic usage
+/// es_query!("SELECT id FROM users WHERE id = $1", id)
 ///
 /// // With table prefix
 /// es_query!(
-///     [tbl_prefix = "app", db = self.pool()],
+///     tbl_prefix = "app",
 ///     "SELECT id FROM app_users WHERE active = true"
 /// )
 ///
-/// // Transaction usage
-/// es_query!([db = &mut tx], "SELECT id FROM users")
+/// // With custom entity type
+/// es_query!(
+///     entity = User,
+///     "SELECT id FROM custom_users_table WHERE id = $1",
+///     id as UserId
+/// )
 /// ```
 #[macro_export]
 macro_rules! es_query {
-    // With options and args
+    // With entity override
     (
-        [$($key:ident = $value:expr),* $(,)?],
+        entity = $entity:ident,
         $query:expr,
         $($args:tt)*
     ) => ({
         $crate::expand_es_query!(
-            $($key = $value,)*
+            entity = $entity,
             sql = $query,
             args = [$($args)*]
         )
     });
-
-    // With options, no args
+    // With entity override - no args
     (
-        [$($key:ident = $value:expr),* $(,)?],
+        entity = $entity:ident,
         $query:expr
     ) => ({
         $crate::expand_es_query!(
-            $($key = $value,)*
+            entity = $entity,
+            sql = $query
+        )
+    });
+
+    // With tbl_prefix
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // With tbl_prefix - no args
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            sql = $query
+        )
+    });
+
+    // Basic form
+    (
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // Basic form - no args
+    (
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
             sql = $query
         )
     });

@@ -1,6 +1,6 @@
 use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, TokenStreamExt};
+use quote::{TokenStreamExt, quote};
 
 use super::options::*;
 
@@ -48,8 +48,6 @@ impl ToTokens for FindByFn<'_> {
                 let entity = entities.pop().unwrap();
             }
         };
-        let prefix_arg = self.prefix.map(|p| quote! { tbl_prefix = #p, });
-
         for delete in [DeleteOption::No, DeleteOption::Soft] {
             let fn_name = syn::Ident::new(
                 &format!(
@@ -87,6 +85,24 @@ impl ToTokens for FindByFn<'_> {
                 }
             );
 
+            let es_query_call = if let Some(prefix) = self.prefix {
+                quote! {
+                    es_entity::es_query!(
+                        tbl_prefix = #prefix,
+                        #query,
+                        #column_name as &#column_type,
+                    )
+                }
+            } else {
+                quote! {
+                    es_entity::es_query!(
+                        entity = #entity,
+                        #query,
+                        #column_name as &#column_type,
+                    )
+                }
+            };
+
             tokens.append_all(quote! {
                 pub async fn #fn_name(
                     &self,
@@ -109,12 +125,8 @@ impl ToTokens for FindByFn<'_> {
                     #column_name: impl std::borrow::Borrow<#column_type>
                 ) -> Result<#entity, #error> {
                     let #column_name = #column_name.borrow();
-                    let entity = es_entity::es_query!(
-                        [entity = #entity, db = executor, #prefix_arg],
-                        #query,
-                        #column_name as &#column_type,
-                    )
-                        .fetch_one()
+                    let entity = #es_query_call
+                        .fetch_one(executor)
                         .await?;
                     #maybe_lookup_nested
                     Ok(entity)
@@ -176,11 +188,11 @@ mod tests {
             ) -> Result<Entity, es_entity::EsRepoError> {
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
-                        [entity = Entity, db = executor,],
+                        entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                 )
-                    .fetch_one()
+                    .fetch_one(executor)
                     .await?;
                 Ok(entity)
             }
@@ -231,11 +243,11 @@ mod tests {
             ) -> Result<Entity, es_entity::EsRepoError> {
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
-                        [entity = Entity, db = executor,],
+                        entity = Entity,
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
                 )
-                    .fetch_one()
+                    .fetch_one(executor)
                     .await?;
                 Ok(entity)
             }
@@ -262,11 +274,11 @@ mod tests {
             ) -> Result<Entity, es_entity::EsRepoError> {
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
-                        [entity = Entity, db = executor,],
+                        entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                 )
-                    .fetch_one()
+                    .fetch_one(executor)
                     .await?;
                 Ok(entity)
             }

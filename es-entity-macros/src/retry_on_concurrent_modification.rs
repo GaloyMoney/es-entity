@@ -1,4 +1,4 @@
-use darling::{ast::NestedMeta, FromMeta};
+use darling::{FromMeta, ast::NestedMeta};
 use syn::ItemFn;
 
 #[derive(FromMeta)]

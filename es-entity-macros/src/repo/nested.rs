@@ -1,6 +1,6 @@
 use darling::ToTokens;
 use proc_macro2::TokenStream;
-use quote::{quote, TokenStreamExt};
+use quote::{TokenStreamExt, quote};
 
 use super::options::{RepoField, RepositoryOptions};
 
@@ -77,7 +77,7 @@ impl ToTokens for Nested<'_> {
 mod tests {
     use super::*;
     use proc_macro2::Span;
-    use syn::{parse_quote, Ident};
+    use syn::{Ident, parse_quote};
 
     #[test]
     fn nested() {

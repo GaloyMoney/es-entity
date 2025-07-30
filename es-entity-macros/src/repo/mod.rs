@@ -18,7 +18,7 @@ mod update_fn;
 
 use darling::{FromDeriveInput, ToTokens};
 use proc_macro2::TokenStream;
-use quote::{quote, TokenStreamExt};
+use quote::{TokenStreamExt, quote};
 
 use options::RepositoryOptions;
 
@@ -180,27 +180,6 @@ impl ToTokens for EsRepo<'_> {
                 pub(super) type Repo__Error = #error;
                 #[allow(non_camel_case_types)]
                 pub(super) type Repo__DbEvent = es_entity::GenericEvent<#id>;
-
-                pub(super) struct QueryRes {
-                    pub(super) rows: Vec<Repo__DbEvent>,
-                }
-
-                impl QueryRes {
-                    pub(super) async fn fetch_one(
-                        self,
-                    ) -> Result<Repo__Entity, Repo__Error>
-                    {
-                        Ok(es_entity::EntityEvents::load_first(self.rows.into_iter())?)
-                    }
-
-                    pub(super) async fn fetch_n(
-                        self,
-                        first: usize,
-                    ) -> Result<(Vec<Repo__Entity>, bool), Repo__Error>
-                    {
-                        Ok(es_entity::EntityEvents::load_n(self.rows.into_iter(), first)?)
-                    }
-                }
             }
 
             #find_many_filter

@@ -1,7 +1,7 @@
 use convert_case::{Case, Casing};
 use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, TokenStreamExt};
+use quote::{TokenStreamExt, quote};
 
 use super::{combo_cursor::ComboCursor, list_for_fn::ListForFn, options::*};
 

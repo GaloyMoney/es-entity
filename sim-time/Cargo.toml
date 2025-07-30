@@ -4,7 +4,7 @@ description = "Helper crate to simulate time in es-entity"
 repository = "https://github.com/GaloyMoney/cala"
 documentation = "https://docs.rs/cala-ledger"
 version = "0.6.10"
-edition = "2021"
+edition = "2024"
 license = "Apache-2.0"
 categories = ["simulation"]
 

@@ -187,7 +187,7 @@ impl FromMeta for Column {
                 meta @ syn::Meta::NameValue(syn::MetaNameValue {
                     value:
                         syn::Expr::Lit(syn::ExprLit {
-                            lit: syn::Lit::Str(ref lit_str),
+                            lit: syn::Lit::Str(lit_str),
                             ..
                         }),
                     ..
@@ -264,9 +264,11 @@ impl Column {
                 }),
                 update_opts: Some(UpdateOpts {
                     persist: Some(false),
-                    accessor: Some(syn::parse_quote!(events()
-                        .entity_first_persisted_at()
-                        .expect("entity not persisted"))),
+                    accessor: Some(syn::parse_quote!(
+                        events()
+                            .entity_first_persisted_at()
+                            .expect("entity not persisted")
+                    )),
                 }),
             },
         }

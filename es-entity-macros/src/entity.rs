@@ -1,6 +1,6 @@
 use darling::{FromDeriveInput, FromField, ToTokens};
 use proc_macro2::TokenStream;
-use quote::{quote, TokenStreamExt};
+use quote::{TokenStreamExt, quote};
 use syn::Type;
 
 #[derive(Debug, FromField)]
