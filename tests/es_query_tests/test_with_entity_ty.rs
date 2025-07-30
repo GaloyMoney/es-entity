@@ -1,7 +1,7 @@
 use crate::{helpers::init_pool, user::*};
 use es_entity::*;
 use sqlx::PgPool;
-// crud on user entities stored in custom_name_for_users
+
 #[derive(EsRepo, Debug)]
 #[es_repo(
     tbl = "custom_name_for_users",

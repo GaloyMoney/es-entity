@@ -3,7 +3,7 @@ use crate::helpers::init_pool;
 use es_entity::*;
 use sqlx::PgPool;
 use uuid::Uuid;
-// crud on user entities(not using UserId) in users
+
 #[derive(EsRepo, Debug)]
 #[es_repo(
     id = Uuid,

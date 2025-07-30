@@ -1,7 +1,7 @@
 use crate::{helpers::init_pool, user::*};
 use es_entity::*;
 use sqlx::PgPool;
-// crud on User entities stored in users
+
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "User", columns(name(ty = "String")))]
 pub struct Users {

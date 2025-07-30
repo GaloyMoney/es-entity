@@ -1,7 +1,7 @@
 use crate::{helpers::init_pool, user::*};
 use es_entity::*;
 use sqlx::PgPool;
-// crud on user entities stored in ignore_prefix_users
+
 #[derive(EsRepo, Debug)]
 #[es_repo(
     tbl_prefix = "ignore_prefix",
