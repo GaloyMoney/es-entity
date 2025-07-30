@@ -48,43 +48,6 @@ macro_rules! idempotency_guard {
 /// ```
 #[macro_export]
 macro_rules! es_query {
-    // With entity_ty and id_ty
-    (entity_ty = $entity_ty:ident, id_ty = $id_ty:ident, $prefix:literal, $db:expr, $query:expr) => ({
-        $crate::expand_es_query!(
-            entity_ty = $entity_ty,
-            id_ty = $id_ty,
-            ignore_prefix = $prefix,
-            executor = $db,
-            sql = $query
-        )
-    });
-    (entity_ty = $entity_ty:ident, id_ty = $id_ty:ident, $prefix:literal, $db:expr, $query:expr, $($args:tt)*) => ({
-        $crate::expand_es_query!(
-            entity_ty = $entity_ty,
-            id_ty = $id_ty,
-            ignore_prefix = $prefix,
-            executor = $db,
-            sql = $query,
-            args = [$($args)*]
-        )
-    });
-    (entity_ty = $entity_ty:ident, id_ty = $id_ty:ident, $db:expr, $query:expr) => ({
-        $crate::expand_es_query!(
-            entity_ty = $entity_ty,
-            id_ty = $id_ty,
-            executor = $db,
-            sql = $query
-        )
-    });
-    (entity_ty = $entity_ty:ident, id_ty = $id_ty:ident, $db:expr, $query:expr, $($args:tt)*) => ({
-        $crate::expand_es_query!(
-            entity_ty = $entity_ty,
-            id_ty = $id_ty,
-            executor = $db,
-            sql = $query,
-            args = [$($args)*]
-        )
-    });
     // With only entity_ty
     (entity_ty = $entity_ty:ident, $prefix:literal, $db:expr, $query:expr) => ({
         $crate::expand_es_query!(
@@ -113,39 +76,6 @@ macro_rules! es_query {
     (entity_ty = $entity_ty:ident, $db:expr, $query:expr, $($args:tt)*) => ({
         $crate::expand_es_query!(
             entity_ty = $entity_ty,
-            executor = $db,
-            sql = $query,
-            args = [$($args)*]
-        )
-    });
-    // With only id_ty (existing patterns)
-    (id_ty = $id_ty:ident, $prefix:literal, $db:expr, $query:expr) => ({
-        $crate::expand_es_query!(
-            id_ty = $id_ty,
-            ignore_prefix = $prefix,
-            executor = $db,
-            sql = $query
-        )
-    });
-    (id_ty = $id_ty:ident, $prefix:literal, $db:expr, $query:expr, $($args:tt)*) => ({
-        $crate::expand_es_query!(
-            id_ty = $id_ty,
-            ignore_prefix = $prefix,
-            executor = $db,
-            sql = $query,
-            args = [$($args)*]
-        )
-    });
-    (id_ty = $id_ty:ident, $db:expr, $query:expr) => ({
-        $crate::expand_es_query!(
-            id_ty = $id_ty,
-            executor = $db,
-            sql = $query
-        )
-    });
-    (id_ty = $id_ty:ident, $db:expr, $query:expr, $($args:tt)*) => ({
-        $crate::expand_es_query!(
-            id_ty = $id_ty,
             executor = $db,
             sql = $query,
             args = [$($args)*]

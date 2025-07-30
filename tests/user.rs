@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 

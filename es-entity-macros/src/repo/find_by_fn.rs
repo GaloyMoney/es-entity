@@ -1,6 +1,6 @@
 use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, TokenStreamExt};
+use quote::{TokenStreamExt, quote};
 
 use super::options::*;
 
@@ -12,7 +12,6 @@ pub struct FindByFn<'a> {
     error: &'a syn::Type,
     delete: DeleteOption,
     nested_fn_names: Vec<syn::Ident>,
-    id_ty: &'a syn::Ident,
 }
 
 impl<'a> FindByFn<'a> {
@@ -25,7 +24,6 @@ impl<'a> FindByFn<'a> {
             error: opts.err(),
             delete: opts.delete,
             nested_fn_names: opts.all_nested().map(|f| f.find_nested_fn_name()).collect(),
-            id_ty: opts.id(),
         }
     }
 }
@@ -36,7 +34,6 @@ impl ToTokens for FindByFn<'_> {
         let column_name = &self.column.name();
         let column_type = &self.column.ty();
         let error = self.error;
-        let id_ty = self.id_ty;
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
                 self.#f(&mut entities).await?;
@@ -114,7 +111,6 @@ impl ToTokens for FindByFn<'_> {
                     let #column_name = #column_name.borrow();
                     let entity = es_entity::es_query!(
                         entity_ty = #entity,
-                        id_ty = #id_ty,
                         #prefix_arg
                         executor,
                         #query,
@@ -146,7 +142,6 @@ mod tests {
         let entity = Ident::new("Entity", Span::call_site());
         let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
-        let id_ty = Ident::new("EntityId", Span::call_site());
         let persist_fn = FindByFn {
             ignore_prefix: None,
             column: &column,
@@ -155,7 +150,6 @@ mod tests {
             error: &error,
             delete: DeleteOption::No,
             nested_fn_names: Vec::new(),
-            id_ty: &id_ty,
         };
 
         let mut tokens = TokenStream::new();
@@ -185,7 +179,6 @@ mod tests {
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
                         entity_ty = Entity,
-                        id_ty = EntityId,
                         executor,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
@@ -205,7 +198,6 @@ mod tests {
         let entity = Ident::new("Entity", Span::call_site());
         let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
-        let id_ty = Ident::new("EntityId", Span::call_site());
         let persist_fn = FindByFn {
             ignore_prefix: None,
             column: &column,
@@ -214,7 +206,6 @@ mod tests {
             error: &error,
             delete: DeleteOption::Soft,
             nested_fn_names: Vec::new(),
-            id_ty: &id_ty,
         };
 
         let mut tokens = TokenStream::new();
@@ -244,7 +235,6 @@ mod tests {
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
                         entity_ty = Entity,
-                        id_ty = EntityId,
                         executor,
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
@@ -277,7 +267,6 @@ mod tests {
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
                         entity_ty = Entity,
-                        id_ty = EntityId,
                         executor,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,

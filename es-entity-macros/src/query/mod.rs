@@ -3,7 +3,7 @@ mod input;
 use convert_case::{Case, Casing};
 use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, TokenStreamExt};
+use quote::{TokenStreamExt, quote};
 
 pub use input::QueryInput;
 
@@ -55,11 +55,7 @@ impl ToTokens for EsQuery {
         let order_by = self.input.order_by();
 
         let executor = &self.input.executor;
-        let id = if let Some(id_ty) = &self.input.id_ty {
-            id_ty.clone()
-        } else {
-            syn::Ident::new(&format!("{entity}Id"), Span::call_site())
-        };
+        let id = syn::Ident::new("Repo__Id", Span::call_site());
         let events_table = syn::Ident::new(&format!("{singular}_events"), Span::call_site());
         let args = &self.input.arg_exprs;
 
@@ -70,6 +66,8 @@ impl ToTokens for EsQuery {
 
         tokens.append_all(quote! {
             {
+                use #repo_types_mod::#id;
+
                 let rows = sqlx::query_as!(
                     #repo_types_mod::Repo__DbEvent,
                     #query,
@@ -106,9 +104,11 @@ mod tests {
 
         let expected = quote! {
             {
+                use user_repo_types::Repo__Id;
+
                 let rows = sqlx::query_as!(
                     user_repo_types::Repo__DbEvent,
-                    "WITH entities AS (SELECT * FROM users WHERE id = $1) SELECT i.id AS \"entity_id: UserId\", e.sequence, e.event, e.recorded_at FROM entities i JOIN user_events e ON i.id = e.id ORDER BY i.id, e.sequence",
+                    "WITH entities AS (SELECT * FROM users WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN user_events e ON i.id = e.id ORDER BY i.id, e.sequence",
                     id as UserId
                 )
                     .fetch_all(self.pool())
@@ -128,7 +128,7 @@ mod tests {
             entity_ty = MyCustomEntity,
             executor = self.pool(),
             sql = "SELECT * FROM my_custom_table WHERE id = $1",
-            args = [id as MyCustomEntityId]
+            args = [id as Repo__Id]
         );
 
         let query = EsQuery::from(input);
@@ -137,10 +137,12 @@ mod tests {
 
         let expected = quote! {
             {
+                use my_custom_entity_repo_types::Repo__Id;
+
                 let rows = sqlx::query_as!(
                     my_custom_entity_repo_types::Repo__DbEvent,
-                    "WITH entities AS (SELECT * FROM my_custom_table WHERE id = $1) SELECT i.id AS \"entity_id: MyCustomEntityId\", e.sequence, e.event, e.recorded_at FROM entities i JOIN my_custom_table_events e ON i.id = e.id ORDER BY i.id, e.sequence",
-                    id as MyCustomEntityId
+                    "WITH entities AS (SELECT * FROM my_custom_table WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN my_custom_table_events e ON i.id = e.id ORDER BY i.id, e.sequence",
+                    id as Repo__Id
                 )
                     .fetch_all(self.pool())
                     .await?;
@@ -160,7 +162,7 @@ mod tests {
             sql = "SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1",
             args = [
                 (first + 1) as i64,
-                id as Option<EntityId>,
+                id as Option<Repo__Id>,
                 name as Option<String>
             ]
         );
@@ -171,11 +173,13 @@ mod tests {
 
         let expected = quote! {
             {
+                use entity_repo_types::Repo__Id;
+
                 let rows = sqlx::query_as!(
                     entity_repo_types::Repo__DbEvent,
-                    "WITH entities AS (SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1) SELECT i.id AS \"entity_id: EntityId\", e.sequence, e.event, e.recorded_at FROM entities i JOIN entity_events e ON i.id = e.id ORDER BY i.name, i.id, i.id, e.sequence",
+                    "WITH entities AS (SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN entity_events e ON i.id = e.id ORDER BY i.name, i.id, i.id, e.sequence",
                     (first + 1) as i64,
-                    id as Option<EntityId>,
+                    id as Option<Repo__Id>,
                     name as Option<String>
                 )
                     .fetch_all(self.pool())

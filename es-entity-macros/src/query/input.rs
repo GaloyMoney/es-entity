@@ -11,7 +11,6 @@ pub struct QueryInput {
     pub(super) sql_span: Span,
     pub(super) arg_exprs: Vec<syn::Expr>,
     pub(super) entity_ty: Option<syn::Ident>,
-    pub(super) id_ty: Option<syn::Ident>,
 }
 
 impl QueryInput {
@@ -75,7 +74,6 @@ impl Parse for QueryInput {
         let mut expect_comma = false;
         let mut ignore_prefix = None;
         let mut entity_ty = None;
-        let mut id_ty = None;
 
         while !input.is_empty() {
             if expect_comma {
@@ -102,8 +100,6 @@ impl Parse for QueryInput {
                 args = Some(exprs.elems.into_iter().collect())
             } else if key == "entity_ty" {
                 entity_ty = Some(input.parse::<syn::Ident>()?);
-            } else if key == "id_ty" {
-                id_ty = Some(input.parse::<syn::Ident>()?);
             } else {
                 let message = format!("unexpected input key: {key}");
                 return Err(syn::Error::new_spanned(key, message));
@@ -122,7 +118,6 @@ impl Parse for QueryInput {
             sql_span,
             arg_exprs: args.unwrap_or_default(),
             entity_ty,
-            id_ty,
         })
     }
 }
@@ -191,7 +186,6 @@ mod tests {
                 sql_span: Span::call_site(),
                 arg_exprs: vec![],
                 entity_ty: None,
-                id_ty: None,
             };
             assert_eq!(input.order_by_columns(), expected, "Failed for SQL: {sql}",);
         }
