@@ -10,8 +10,7 @@ use user_with_id_ty::*;
 #[derive(EsRepo, Debug)]
 #[es_repo(
     id = Uuid,
-    tbl = "test_users",
-    events_tbl = "test_user_events",
+    tbl_prefix = "test",
     entity = "User",
     err = "EsRepoError",
     columns(name(ty = "String"))

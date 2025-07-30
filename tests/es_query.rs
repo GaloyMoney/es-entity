@@ -5,7 +5,7 @@ use es_entity::*;
 use sqlx::PgPool;
 
 use user::*;
-
+// crud on User entities stored in users
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "User", err = "EsRepoError", columns(name(ty = "String")))]
 pub struct Users {

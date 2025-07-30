@@ -9,8 +9,8 @@ use customer_with_id_ty::*;
 // crud on customer entities(not using CustomerId) stored in users
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    tbl = "users",
     id = Uuid,
+    tbl = "users",
     events_tbl = "user_events",
     entity = "Customer",
     err = "EsRepoError",
