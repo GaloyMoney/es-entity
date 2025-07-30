@@ -1,11 +1,10 @@
-# fn create
+# fn update
 
-The `create` fn takes a `NewEntity` type and returns an `Entity` type.
-It `INSERT`s a row into the `index` table and persists all the events returned from the `IntoEvents::into_events` `fn` in the `events` table.
+The `update` fn takes a mutable reference to an `Entity` and persists any new events that have been added to it.
+It will also `UPDATE` the row in the `index` table with the latest values derived from the entities attributes.
+It returns the number of events that were persisted.
 
-We must use the `columns` option to specify which columns need inserting into the `index` table
-
-In the code below we want to include a `name` column in the `index` table that requires mapping.
+In the code below we have a `name` column in the `index` table that needs to be kept in sync with the entity's state.
 ```rust
 # extern crate es_entity;
 # extern crate sqlx;
@@ -19,6 +18,7 @@ In the code below we want to include a `name` column in the `index` table that r
 # #[es_event(id = "UserId")]
 # pub enum UserEvent {
 #     Initialized { id: UserId, name: String },
+#     NameChanged { name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
 #     fn into_events(self) -> EntityEvents<UserEvent> {
@@ -32,18 +32,22 @@ In the code below we want to include a `name` column in the `index` table that r
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
-#         Ok(User { id: events.id().clone(), name: "Fred".to_string(), events })
+#     fn try_from_events(mut events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#         let mut name = String::new();
+#         for event in events.iter_all() {
+#             match event {
+#                 UserEvent::Initialized { name: n, .. } => name = n.clone(),
+#                 UserEvent::NameChanged { name: n } => name = n.clone(),
+#             }
+#         }
+#         Ok(User { id: events.id().clone(), name, events })
 #     }
 # }
+# pub struct NewUser {
+#     id: UserId,
+#     name: String
+# }
 use es_entity::*;
-
-pub struct NewUser {
-    id: UserId,
-    // The `name` attribute on the `NewEntity` must be accessible
-    // for inserting into the `index` table.
-    name: String
-}
 
 #[derive(EsEntity)]
 pub struct User {
@@ -52,6 +56,13 @@ pub struct User {
     // for updates of the `index` table.
     name: String,
     events: EntityEvents<UserEvent>,
+}
+
+impl User {
+    pub fn change_name(&mut self, name: String) {
+        self.events.push(UserEvent::NameChanged { name: name.clone() });
+        self.name = name;
+    }
 }
 
 #[derive(EsRepo)]
@@ -67,41 +78,53 @@ pub struct Users {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let users = Users { pool: init_pool().await? };
+    
+    // First create a user
     let new_user = NewUser { id: UserId::new(), name: "Fred".to_string() };
-    // The `create` fn takes a `NewEntity` and returns a persisted and hydrated `Entity`
-    let _user = users.create(new_user).await?;
+    let mut user = users.create(new_user).await?;
+    
+    // Now update the user
+    user.change_name("Frederick".to_string());
+    
+    // The `update` fn takes a mutable reference to an `Entity` and persists new events
+    let n_events = users.update(&mut user).await?;
+    assert_eq!(n_events, 1); // One NameChanged event was persisted
 
     Ok(())
 }
 ```
 
-The insert part of the `create` function looks somewhat equivalent to:
+The update part of the `update` function looks somewhat equivalent to:
 ```rust,ignore
 impl Users {
-    pub async fn create(
+    pub async fn update(
         &self,
-        new_entity: NewUser
-    ) -> Result<User, es_entity::EsRepoError> {
-        let id = &new_entity.id;
-        // The attribute specified in the `columns` option
-        let name = &new_entity.name;
+        entity: &mut User
+    ) -> Result<usize, es_entity::EsRepoError> {
+        // Check if there are any new events to persist
+        if !entity.events().any_new() {
+            return Ok(0);
+        }
 
-        sqlx::query!("INSERT INTO users (id, name) VALUES ($1, $2)",
+        let id = &entity.id;
+        // The attribute specified in the `columns` option
+        let name = &entity.name;
+
+        sqlx::query!("UPDATE users SET name = $2 WHERE id = $1",
             id as &UserId,
             name as &String
         )
         .execute(self.pool())
         .await?;
 
-        // persist events
-        // hydrate entity
+        // persist new events
         // execute post_persist_hook
-        // return entity
+        // return number of events persisted
     }
 }
 ```
-The key thing to configure is how the columns of the index table get populated via the `create` option.
-The `create(accessor = "<>")` option modifies how the field is accessed on the `NewEntity` type.
+The key thing to configure is how the columns of the index table get updated via the `update` option.
+The `update(accessor = "<>")` option modifies how the field is accessed on the `Entity` type.
 
 ```rust
 # extern crate es_entity;
@@ -126,18 +149,19 @@ The `create(accessor = "<>")` option modifies how the field is accessed on the `
 #         unimplemented!()
 #     }
 # }
-# #[derive(EsEntity)]
-# pub struct User {
-#     pub id: UserId,
-#     name: String,
-#     events: EntityEvents<UserEvent>,
-# }
+# pub struct NewUser { id: UserId, name: String }
 use es_entity::*;
 
-pub struct NewUser { id: UserId, some_hidden_field: String }
-impl NewUser {
-    fn my_name(&self) -> String {
-        self.some_hidden_field.clone()
+#[derive(EsEntity)]
+pub struct User {
+    pub id: UserId,
+    name: String,
+    events: EntityEvents<UserEvent>,
+}
+
+impl User {
+    pub fn display_name(&self) -> String {
+        format!("User: {}", self.name)
     }
 }
 
@@ -145,10 +169,10 @@ impl NewUser {
 #[es_repo(
     entity = "User",
     columns(
-        // Instead of using the `name` field on the `NewEntity` struct
-        // the generated code will use: `new_entity.my_name()`
-        // to populate the `name` column.
-        name(ty = "String", create(accessor = "my_name()")),
+        // Instead of using the `name` field on the `Entity` struct
+        // the generated code will use: `entity.display_name()`
+        // to populate the `name` column during updates.
+        name(ty = "String", update(accessor = "display_name()")),
     )
 )]
 pub struct Users {
@@ -156,8 +180,8 @@ pub struct Users {
 }
 ```
 
-The `create(persist = false)` option omits inserting the column during creation.
-This is useful for dynamic values that don't become known until later on in the entities lifecycle.
+The `update(persist = false)` option prevents updating the column.
+This is useful for columns that should never change after creation.
 
 ```rust
 # extern crate es_entity;
@@ -182,25 +206,30 @@ This is useful for dynamic values that don't become known until later on in the 
 #         unimplemented!()
 #     }
 # }
-# #[derive(EsEntity)]
-# pub struct User {
-#     pub id: UserId,
-#     name: String,
-#     events: EntityEvents<UserEvent>,
-# }
 use es_entity::*;
 
-// There is no `name` attribute because we do not initially insert into this column.
-pub struct NewUser { id: UserId }
+// Assume the name of a user is immutable.
+pub struct NewUser { id: UserId, name: String }
+
+#[derive(EsEntity)]
+pub struct User {
+    pub id: UserId,
+    // Exposing the `name` attribute on the `Entity` is optional
+    // as it does not need to be accessed during update.
+    // name: String
+    events: EntityEvents<UserEvent>,
+}
 
 #[derive(EsRepo)]
 #[es_repo(
     entity = "User",
     columns(
-        name(ty = "String", create(persist = false)),
+        name(ty = "String", update(persist = false))
     )
 )]
 pub struct Users {
     pool: sqlx::PgPool
 }
 ```
+
+Note that if no columns need updating (all columns have `update(persist = false)`), the `UPDATE` query is skipped entirely for better performance.

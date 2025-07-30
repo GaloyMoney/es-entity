@@ -15,3 +15,4 @@
   - [es_query](./es-query.md)
   - [EsRepo trait](./es-repo.md)
     - [create](./repo-create.md)
+    - [update](./repo-update.md)
