@@ -390,12 +390,12 @@ impl ToTokens for ListByFn<'_> {
                     let #maybe_mut_entities = match direction {
                         es_entity::ListDirection::Ascending => {
                             #es_query_asc_call
-                                .fetch_n::<#error>(executor, first)
+                                .fetch_n(executor, first)
                                 .await?
                         },
                         es_entity::ListDirection::Descending => {
                             #es_query_desc_call
-                                .fetch_n::<#error>(executor, first)
+                                .fetch_n(executor, first)
                                 .await?
                         },
                     };
@@ -562,7 +562,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n::<es_entity::EsRepoError>(executor, first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -572,7 +572,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n::<es_entity::EsRepoError>(executor, first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                 };
@@ -622,7 +622,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n::<es_entity::EsRepoError>(executor, first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -632,7 +632,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n::<es_entity::EsRepoError>(executor, first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                 };
@@ -714,7 +714,7 @@ mod tests {
                             id as Option<EntityId>,
                             name as Option<String>,
                         )
-                            .fetch_n::<es_entity::EsRepoError>(executor, first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -725,7 +725,7 @@ mod tests {
                             id as Option<EntityId>,
                             name as Option<String>,
                         )
-                            .fetch_n::<es_entity::EsRepoError>(executor, first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                 };
@@ -809,7 +809,7 @@ mod tests {
                             id as Option<EntityId>,
                             value as Option<rust_decimal::Decimal>,
                         )
-                            .fetch_n::<es_entity::EsRepoError>(executor, first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -820,7 +820,7 @@ mod tests {
                             id as Option<EntityId>,
                             value as Option<rust_decimal::Decimal>,
                         )
-                            .fetch_n::<es_entity::EsRepoError>(executor, first)
+                            .fetch_n(executor, first)
                             .await?
                     },
                 };

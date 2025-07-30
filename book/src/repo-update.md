@@ -18,7 +18,7 @@ In the code below we have a `name` column in the `index` table that needs to be 
 # #[es_event(id = "UserId")]
 # pub enum UserEvent {
 #     Initialized { id: UserId, name: String },
-#     NameChanged { name: String },
+#     NameUpdated { name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
 #     fn into_events(self) -> EntityEvents<UserEvent> {
@@ -37,7 +37,7 @@ In the code below we have a `name` column in the `index` table that needs to be 
 #         for event in events.iter_all() {
 #             match event {
 #                 UserEvent::Initialized { name: n, .. } => name = n.clone(),
-#                 UserEvent::NameChanged { name: n } => name = n.clone(),
+#                 UserEvent::NameUpdated { name: n } => name = n.clone(),
 #             }
 #         }
 #         Ok(User { id: events.id().clone(), name, events })
@@ -60,7 +60,7 @@ pub struct User {
 
 impl User {
     pub fn change_name(&mut self, name: String) {
-        self.events.push(UserEvent::NameChanged { name: name.clone() });
+        self.events.push(UserEvent::NameUpdated { name: name.clone() });
         self.name = name;
     }
 }
@@ -88,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
     
     // The `update` fn takes a mutable reference to an `Entity` and persists new events
     let n_events = users.update(&mut user).await?;
-    assert_eq!(n_events, 1); // One NameChanged event was persisted
+    assert_eq!(n_events, 1); // One NameUpdated event was persisted
 
     Ok(())
 }

@@ -54,22 +54,21 @@ impl ToTokens for EsQuery {
             syn::Ident::new(&format!("{entity_snake}_repo_types"), Span::call_site());
         let order_by = self.input.order_by();
 
-        let id = syn::Ident::new("Repo__Id", Span::call_site());
         let events_table = syn::Ident::new(&format!("{singular}_events"), Span::call_site());
         let args = &self.input.arg_exprs;
 
         let query = format!(
-            r#"WITH entities AS ({}) SELECT i.id AS "entity_id: {}", e.sequence, e.event, e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY {} e.sequence"#,
-            self.input.sql, id, events_table, order_by
+            r#"WITH entities AS ({}) SELECT i.id AS "entity_id: Repo__Id", e.sequence, e.event, e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY {} e.sequence"#,
+            self.input.sql, events_table, order_by
         );
 
         tokens.append_all(quote! {
             {
-                use #repo_types_mod::#id;
+                use #repo_types_mod::*;
 
-                es_entity::EsQuery::new(
+                es_entity::EsQuery::<Repo__Entity, Repo__Error, _, _, _>::new(
                     sqlx::query_as!(
-                        #repo_types_mod::Repo__DbEvent,
+                        Repo__DbEvent,
                         #query,
                         #(#args),*
                     )
@@ -98,11 +97,11 @@ mod tests {
 
         let expected = quote! {
             {
-                use user_repo_types::Repo__Id;
+                use user_repo_types::*;
 
-                es_entity::EsQuery::new(
+                es_entity::EsQuery::<Repo__Entity, Repo__Error, _, _, _>::new(
                     sqlx::query_as!(
-                        user_repo_types::Repo__DbEvent,
+                        Repo__DbEvent,
                         "WITH entities AS (SELECT * FROM users WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN user_events e ON i.id = e.id ORDER BY i.id, e.sequence",
                         id as UserId
                     )
@@ -127,11 +126,11 @@ mod tests {
 
         let expected = quote! {
             {
-                use my_custom_entity_repo_types::Repo__Id;
+                use my_custom_entity_repo_types::*;
 
-                es_entity::EsQuery::new(
+                es_entity::EsQuery::<Repo__Entity, Repo__Error, _, _, _>::new(
                     sqlx::query_as!(
-                        my_custom_entity_repo_types::Repo__DbEvent,
+                        Repo__DbEvent,
                         "WITH entities AS (SELECT * FROM my_custom_table WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN my_custom_table_events e ON i.id = e.id ORDER BY i.id, e.sequence",
                         id as MyCustomEntityId
                     )
@@ -159,11 +158,11 @@ mod tests {
 
         let expected = quote! {
             {
-                use entity_repo_types::Repo__Id;
+                use entity_repo_types::*;
 
-                es_entity::EsQuery::new(
+                es_entity::EsQuery::<Repo__Entity, Repo__Error, _, _, _>::new(
                     sqlx::query_as!(
-                        entity_repo_types::Repo__DbEvent,
+                        Repo__DbEvent,
                         "WITH entities AS (SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN entity_events e ON i.id = e.id ORDER BY i.name, i.id, i.id, e.sequence",
                         (first + 1) as i64,
                         id as Option<MyCustomEntityId>,

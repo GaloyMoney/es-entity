@@ -126,7 +126,7 @@ impl ToTokens for FindByFn<'_> {
                 ) -> Result<#entity, #error> {
                     let #column_name = #column_name.borrow();
                     let entity = #es_query_call
-                        .fetch_one::<#error>(executor)
+                        .fetch_one(executor)
                         .await?;
                     #maybe_lookup_nested
                     Ok(entity)
@@ -192,7 +192,7 @@ mod tests {
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                 )
-                    .fetch_one::<es_entity::EsRepoError>(executor)
+                    .fetch_one(executor)
                     .await?;
                 Ok(entity)
             }
@@ -247,7 +247,7 @@ mod tests {
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
                 )
-                    .fetch_one::<es_entity::EsRepoError>(executor)
+                    .fetch_one(executor)
                     .await?;
                 Ok(entity)
             }
@@ -278,7 +278,7 @@ mod tests {
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                 )
-                    .fetch_one::<es_entity::EsRepoError>(executor)
+                    .fetch_one(executor)
                     .await?;
                 Ok(entity)
             }
