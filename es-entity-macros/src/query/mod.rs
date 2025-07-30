@@ -128,7 +128,7 @@ mod tests {
             entity_ty = MyCustomEntity,
             executor = self.pool(),
             sql = "SELECT * FROM my_custom_table WHERE id = $1",
-            args = [id as Repo__Id]
+            args = [id as MyCustomEntityId]
         );
 
         let query = EsQuery::from(input);
@@ -142,7 +142,7 @@ mod tests {
                 let rows = sqlx::query_as!(
                     my_custom_entity_repo_types::Repo__DbEvent,
                     "WITH entities AS (SELECT * FROM my_custom_table WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN my_custom_table_events e ON i.id = e.id ORDER BY i.id, e.sequence",
-                    id as Repo__Id
+                    id as MyCustomEntityId
                 )
                     .fetch_all(self.pool())
                     .await?;
@@ -162,7 +162,7 @@ mod tests {
             sql = "SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1",
             args = [
                 (first + 1) as i64,
-                id as Option<Repo__Id>,
+                id as Option<MyCustomEntityId>,
                 name as Option<String>
             ]
         );
@@ -179,7 +179,7 @@ mod tests {
                     entity_repo_types::Repo__DbEvent,
                     "WITH entities AS (SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN entity_events e ON i.id = e.id ORDER BY i.name, i.id, i.id, e.sequence",
                     (first + 1) as i64,
-                    id as Option<Repo__Id>,
+                    id as Option<MyCustomEntityId>,
                     name as Option<String>
                 )
                     .fetch_all(self.pool())
