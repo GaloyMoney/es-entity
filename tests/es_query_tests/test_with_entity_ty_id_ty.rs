@@ -1,11 +1,8 @@
-mod helpers;
-mod user_with_id_ty;
-
+use super::user_with_id_ty::*;
+use crate::helpers::init_pool;
 use es_entity::*;
 use sqlx::PgPool;
 use uuid::Uuid;
-
-use user_with_id_ty::*;
 // crud on user entities(not using UserId) stored in custom_name_for_users
 #[derive(EsRepo, Debug)]
 #[es_repo(
@@ -49,7 +46,7 @@ impl Users {
 
 #[tokio::test]
 async fn test_es_query_with_entity_ty_and_id_ty_with_args() -> anyhow::Result<()> {
-    let pool = helpers::init_pool().await?;
+    let pool = init_pool().await?;
 
     let users = Users::new(pool);
     let id = Uuid::new_v4();
@@ -64,7 +61,7 @@ async fn test_es_query_with_entity_ty_and_id_ty_with_args() -> anyhow::Result<()
 
 #[tokio::test]
 async fn test_es_query_with_entity_ty_and_id_ty_without_args() -> anyhow::Result<()> {
-    let pool = helpers::init_pool().await?;
+    let pool = init_pool().await?;
     let users = Users::new(pool);
 
     let user1 = NewUser::builder()

@@ -1,16 +1,11 @@
-mod helpers;
-mod user_with_id_ty;
-
+use crate::{helpers::init_pool, user::*};
 use es_entity::*;
 use sqlx::PgPool;
-use uuid::Uuid;
-
-use user_with_id_ty::*;
-// crud on user entities(not using UserId) in ignore_prefix_users
+// crud on user entities stored in custom_name_for_users
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    id = Uuid,
-    tbl_prefix = "ignore_prefix",
+    tbl = "custom_name_for_users",
+    events_tbl = "custom_name_for_user_events",
     entity = "User",
     columns(name(ty = "String"))
 )]
@@ -22,13 +17,12 @@ impl Users {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
-    pub async fn query_with_args(&self, id: Uuid) -> Result<User, EsRepoError> {
+    pub async fn query_with_args(&self, id: UserId) -> Result<User, EsRepoError> {
         es_query!(
-            id_ty = Uuid,
-            "ignore_prefix",
+            entity_ty = User,
             self.pool(),
-            "SELECT * FROM ignore_prefix_users WHERE id = $1",
-            id
+            "SELECT * FROM custom_name_for_users WHERE id = $1",
+            id as UserId
         )
         .fetch_one()
         .await
@@ -36,10 +30,9 @@ impl Users {
 
     pub async fn query_without_args(&self) -> Result<(Vec<User>, bool), EsRepoError> {
         es_query!(
-            id_ty = Uuid,
-            "ignore_prefix",
+            entity_ty = User,
             self.pool(),
-            "SELECT * FROM ignore_prefix_users"
+            "SELECT * FROM custom_name_for_users"
         )
         .fetch_n(2)
         .await
@@ -47,11 +40,11 @@ impl Users {
 }
 
 #[tokio::test]
-async fn test_es_query_with_id_ty_and_prefix_with_args() -> anyhow::Result<()> {
-    let pool = helpers::init_pool().await?;
+async fn test_es_query_with_entity_ty_with_args() -> anyhow::Result<()> {
+    let pool = init_pool().await?;
 
     let users = Users::new(pool);
-    let id = Uuid::new_v4();
+    let id = UserId::new();
     let new_user = NewUser::builder().id(id).name("Frank").build().unwrap();
     let _ = users.create(new_user).await?;
 
@@ -62,17 +55,17 @@ async fn test_es_query_with_id_ty_and_prefix_with_args() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_es_query_with_id_ty_and_prefix_without_args() -> anyhow::Result<()> {
-    let pool = helpers::init_pool().await?;
+async fn test_es_query_with_entity_ty_without_args() -> anyhow::Result<()> {
+    let pool = init_pool().await?;
     let users = Users::new(pool);
 
     let user1 = NewUser::builder()
-        .id(Uuid::new_v4())
+        .id(UserId::new())
         .name("Alice")
         .build()
         .unwrap();
     let user2 = NewUser::builder()
-        .id(Uuid::new_v4())
+        .id(UserId::new())
         .name("Bob")
         .build()
         .unwrap();
