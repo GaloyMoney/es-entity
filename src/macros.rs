@@ -24,27 +24,42 @@ macro_rules! idempotency_guard {
 
 /// Execute an event-sourced query with automatic entity reconstruction.
 ///
-/// This macro supports the following optional parameters:
-/// - `entity_ty`: Override the entity type (useful when table name is customized)
-/// - `id_ty`: Override the ID type (defaults to {Entity}Id)
-/// - Prefix literal: Table prefix to ignore when deriving names
-/// - `executor`: The database executor
-/// - `sql`: The SQL query string
-/// - Additional arguments for the SQL query
+/// This macro requires query options to be specified in square brackets, followed by the SQL query
+/// and optional arguments.
+///
+/// # Parameters
+///
+/// Required in brackets:
+/// - `db`: The database executor (e.g., `self.pool()`, `&mut tx`)
+///
+/// Optional in brackets:
+/// - `entity`: Override the entity type (useful when table name doesn't match entity name)
+/// - `tbl_prefix`: Table prefix to ignore when deriving entity names from table names
+///
+/// After brackets:
+/// - SQL query string
+/// - Additional arguments for the SQL query (optional)
 ///
 /// # Examples
 /// ```ignore
-/// // Basic usage
-/// es_query!(executor, "SELECT id FROM users WHERE id = $1", id)
+/// // Basic usage with mandatory db
+/// es_query!([db = self.pool()], "SELECT id FROM users WHERE id = $1", id)
 ///
-/// // With custom entity and ID types
+/// // With custom entity type
 /// es_query!(
-///     entity_ty = MyEntity,
-///     id_ty = MyEntityId,
-///     executor,
-///     "SELECT id FROM custom_table WHERE id = $1",
-///     id
+///     [entity = User, db = self.pool()],
+///     "SELECT id FROM custom_users_table WHERE id = $1",
+///     id as UserId
 /// )
+///
+/// // With table prefix
+/// es_query!(
+///     [tbl_prefix = "app", db = self.pool()],
+///     "SELECT id FROM app_users WHERE active = true"
+/// )
+///
+/// // Transaction usage
+/// es_query!([db = &mut tx], "SELECT id FROM users")
 /// ```
 #[macro_export]
 macro_rules! es_query {
