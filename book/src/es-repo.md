@@ -1,4 +1,4 @@
-# Es Repo
+# EsRepo
 
 Deriving the `EsRepo` macro on a struct will generate a bunch of CRUD `fns` (and some additional supporting structs) to interact with the persistence layer.
 
@@ -41,7 +41,7 @@ use es_entity::*;
 #[es_repo(
     entity = "User",
 
-    // defaults that get derived if not explicitly configured:
+    // Defaults that get derived if not explicitly configured:
     // id = "UserId",                  // The type of the `id`
     // new = "NewUser",                // The type of the `NewEntity`
     // event = "UserEvent",            // The type of the `Event` enum
@@ -52,7 +52,8 @@ use es_entity::*;
 
     // Columns specify a list of attributes that get mapped to the index table:
     // columns(
-    //     id(ty = "UserId", list_by)  // The id column is always mapped - no need to specify it
+    //     The id column is always mapped - no need to specify it
+    //     id(ty = "UserId", list_by)
     // )
 )]
 pub struct Users {
@@ -64,7 +65,7 @@ pub struct Users {
 }
 ```
 
-But there are a number of additional options that cate be passed to `es_repo` to modify the behaviour or type of functions it generates.
+There are a number of options that can be passed to `es_repo` to modify the behaviour or type of functions it generates.
 
 The most important of which is the `columns` option that configures the mapping from entity attributes to index table columns.
 
@@ -112,6 +113,9 @@ pub struct User {
         // and the `Entity` types have an accessible `.name` attribute
         // for populating and updating the index table.
         name = "String",
+        
+        // The above is equivalent to the more explicit notation:
+        // name(ty = "String")
     )
 )]
 pub struct Users {
