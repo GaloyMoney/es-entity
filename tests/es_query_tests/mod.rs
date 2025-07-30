@@ -1,4 +1,4 @@
-pub mod test_with_entity_ty;
-pub mod test_with_entity_ty_prefix;
-pub mod test_with_none;
-pub mod test_with_prefix;
+pub mod entity_ty;
+pub mod entity_ty_prefix;
+pub mod no_params;
+pub mod prefix;

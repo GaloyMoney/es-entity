@@ -31,7 +31,7 @@ impl Users {
 }
 
 #[tokio::test]
-async fn test_es_query_with_args() -> anyhow::Result<()> {
+async fn with_args() -> anyhow::Result<()> {
     let pool = init_pool().await?;
 
     let users = Users::new(pool);
@@ -46,7 +46,7 @@ async fn test_es_query_with_args() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_es_query_without_args() -> anyhow::Result<()> {
+async fn without_args() -> anyhow::Result<()> {
     let pool = init_pool().await?;
     let users = Users::new(pool);
 
