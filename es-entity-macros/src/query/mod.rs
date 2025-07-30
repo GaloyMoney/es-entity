@@ -3,7 +3,7 @@ mod input;
 use convert_case::{Case, Casing};
 use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, TokenStreamExt};
+use quote::{TokenStreamExt, quote};
 
 pub use input::QueryInput;
 
@@ -32,7 +32,7 @@ impl ToTokens for EsQuery {
             1,
             false,
         );
-        let entity = if let Some(entity_ty) = &self.input.entity_ty {
+        let entity = if let Some(entity_ty) = &self.input.entity {
             entity_ty.clone()
         } else {
             let singular_without_prefix = pluralizer::pluralize(
@@ -54,7 +54,7 @@ impl ToTokens for EsQuery {
             syn::Ident::new(&format!("{entity_snake}_repo_types"), Span::call_site());
         let order_by = self.input.order_by();
 
-        let executor = &self.input.executor;
+        let db = &self.input.db;
         let id = syn::Ident::new("Repo__Id", Span::call_site());
         let events_table = syn::Ident::new(&format!("{singular}_events"), Span::call_site());
         let args = &self.input.arg_exprs;
@@ -73,7 +73,7 @@ impl ToTokens for EsQuery {
                     #query,
                     #(#args),*
                 )
-                    .fetch_all(#executor)
+                    .fetch_all(#db)
                     .await?;
 
                 #repo_types_mod::QueryRes {
@@ -93,7 +93,7 @@ mod tests {
     #[test]
     fn query() {
         let input: QueryInput = parse_quote!(
-            executor = self.pool(),
+            db = self.pool(),
             sql = "SELECT * FROM users WHERE id = $1",
             args = [id as UserId]
         );
@@ -125,8 +125,8 @@ mod tests {
     #[test]
     fn query_with_entity_ty() {
         let input: QueryInput = parse_quote!(
-            entity_ty = MyCustomEntity,
-            executor = self.pool(),
+            entity = MyCustomEntity,
+            db = self.pool(),
             sql = "SELECT * FROM my_custom_table WHERE id = $1",
             args = [id as MyCustomEntityId]
         );
@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn query_with_order() {
         let input: QueryInput = parse_quote!(
-            executor = self.pool(),
+            db = self.pool(),
             sql = "SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1",
             args = [
                 (first + 1) as i64,

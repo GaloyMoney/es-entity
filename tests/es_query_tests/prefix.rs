@@ -19,8 +19,7 @@ impl Users {
 
     pub async fn query_with_args(&self, id: UserId) -> Result<User, EsRepoError> {
         es_query!(
-            "ignore_prefix",
-            self.pool(),
+            [tbl_prefix = "ignore_prefix", db = self.pool()],
             "SELECT * FROM ignore_prefix_users WHERE id = $1",
             id as UserId
         )
@@ -30,8 +29,7 @@ impl Users {
 
     pub async fn query_without_args(&self) -> Result<(Vec<User>, bool), EsRepoError> {
         es_query!(
-            "ignore_prefix",
-            self.pool(),
+            [tbl_prefix = "ignore_prefix", db = self.pool()],
             "SELECT * FROM ignore_prefix_users"
         )
         .fetch_n(2)

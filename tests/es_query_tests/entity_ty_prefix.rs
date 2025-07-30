@@ -19,9 +19,7 @@ impl Users {
     }
     pub async fn query_with_args(&self, id: UserId) -> Result<User, EsRepoError> {
         es_query!(
-            entity_ty = User,
-            "ignore_prefix",
-            self.pool(),
+            [entity = User, db = self.pool(),],
             "SELECT * FROM ignore_prefix_custom_name_for_users WHERE id = $1",
             id as UserId
         )
@@ -31,9 +29,7 @@ impl Users {
 
     pub async fn query_without_args(&self) -> Result<(Vec<User>, bool), EsRepoError> {
         es_query!(
-            entity_ty = User,
-            "ignore_prefix",
-            self.pool(),
+            [entity = User, db = self.pool(),],
             "SELECT * FROM ignore_prefix_custom_name_for_users"
         )
         .fetch_n(2)

@@ -48,66 +48,27 @@ macro_rules! idempotency_guard {
 /// ```
 #[macro_export]
 macro_rules! es_query {
-    // With only entity_ty
-    (entity_ty = $entity_ty:ident, $prefix:literal, $db:expr, $query:expr) => ({
+    // With options and args
+    (
+        [$($key:ident = $value:expr),* $(,)?],
+        $query:expr,
+        $($args:tt)*
+    ) => ({
         $crate::expand_es_query!(
-            entity_ty = $entity_ty,
-            ignore_prefix = $prefix,
-            executor = $db,
-            sql = $query
-        )
-    });
-    (entity_ty = $entity_ty:ident, $prefix:literal, $db:expr, $query:expr, $($args:tt)*) => ({
-        $crate::expand_es_query!(
-            entity_ty = $entity_ty,
-            ignore_prefix = $prefix,
-            executor = $db,
+            $($key = $value,)*
             sql = $query,
             args = [$($args)*]
         )
     });
-    (entity_ty = $entity_ty:ident, $db:expr, $query:expr) => ({
+
+    // With options, no args
+    (
+        [$($key:ident = $value:expr),* $(,)?],
+        $query:expr
+    ) => ({
         $crate::expand_es_query!(
-            entity_ty = $entity_ty,
-            executor = $db,
+            $($key = $value,)*
             sql = $query
-        )
-    });
-    (entity_ty = $entity_ty:ident, $db:expr, $query:expr, $($args:tt)*) => ({
-        $crate::expand_es_query!(
-            entity_ty = $entity_ty,
-            executor = $db,
-            sql = $query,
-            args = [$($args)*]
-        )
-    });
-    // Without entity_ty or id_ty (existing patterns)
-    ($prefix:literal, $db:expr, $query:expr) => ({
-        $crate::expand_es_query!(
-            ignore_prefix = $prefix,
-            executor = $db,
-            sql = $query
-        )
-    });
-    ($prefix:literal, $db:expr, $query:expr, $($args:tt)*) => ({
-        $crate::expand_es_query!(
-            ignore_prefix = $prefix,
-            executor = $db,
-            sql = $query,
-            args = [$($args)*]
-        )
-    });
-    ($db:expr, $query:expr) => ({
-        $crate::expand_es_query!(
-            executor = $db,
-            sql = $query
-        )
-    });
-    ($db:expr, $query:expr, $($args:tt)*) => ({
-        $crate::expand_es_query!(
-            executor = $db,
-            sql = $query,
-            args = [$($args)*]
         )
     });
 }

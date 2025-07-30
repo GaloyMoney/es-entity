@@ -1,11 +1,11 @@
 use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, TokenStreamExt};
+use quote::{TokenStreamExt, quote};
 
 use super::options::*;
 
 pub struct FindByFn<'a> {
-    ignore_prefix: Option<&'a syn::LitStr>,
+    prefix: Option<&'a syn::LitStr>,
     entity: &'a syn::Ident,
     column: &'a Column,
     table_name: &'a str,
@@ -17,7 +17,7 @@ pub struct FindByFn<'a> {
 impl<'a> FindByFn<'a> {
     pub fn new(column: &'a Column, opts: &'a RepositoryOptions) -> Self {
         Self {
-            ignore_prefix: opts.table_prefix(),
+            prefix: opts.table_prefix(),
             column,
             entity: opts.entity(),
             table_name: opts.table_name(),
@@ -48,7 +48,7 @@ impl ToTokens for FindByFn<'_> {
                 let entity = entities.pop().unwrap();
             }
         };
-        let prefix_arg = self.ignore_prefix.map(|p| quote! { #p, });
+        let prefix_arg = self.prefix.map(|p| quote! { tbl_prefix = #p, });
 
         for delete in [DeleteOption::No, DeleteOption::Soft] {
             let fn_name = syn::Ident::new(
@@ -110,9 +110,7 @@ impl ToTokens for FindByFn<'_> {
                 ) -> Result<#entity, #error> {
                     let #column_name = #column_name.borrow();
                     let entity = es_entity::es_query!(
-                        entity_ty = #entity,
-                        #prefix_arg
-                        executor,
+                        [entity = #entity, db = executor, #prefix_arg],
                         #query,
                         #column_name as &#column_type,
                     )
@@ -143,7 +141,7 @@ mod tests {
         let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
         let persist_fn = FindByFn {
-            ignore_prefix: None,
+            prefix: None,
             column: &column,
             entity: &entity,
             table_name: "entities",
@@ -178,8 +176,7 @@ mod tests {
             ) -> Result<Entity, es_entity::EsRepoError> {
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
-                        entity_ty = Entity,
-                        executor,
+                        [entity = Entity, db = executor,],
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                 )
@@ -199,7 +196,7 @@ mod tests {
         let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
         let persist_fn = FindByFn {
-            ignore_prefix: None,
+            prefix: None,
             column: &column,
             entity: &entity,
             table_name: "entities",
@@ -234,8 +231,7 @@ mod tests {
             ) -> Result<Entity, es_entity::EsRepoError> {
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
-                        entity_ty = Entity,
-                        executor,
+                        [entity = Entity, db = executor,],
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
                 )
@@ -266,8 +262,7 @@ mod tests {
             ) -> Result<Entity, es_entity::EsRepoError> {
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
-                        entity_ty = Entity,
-                        executor,
+                        [entity = Entity, db = executor,],
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                 )
