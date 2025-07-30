@@ -5,27 +5,25 @@ use quote::{quote, TokenStreamExt};
 use super::options::*;
 
 pub struct FindByFn<'a> {
-    ignore_prefix: Option<&'a syn::LitStr>,
+    prefix: Option<&'a syn::LitStr>,
     entity: &'a syn::Ident,
     column: &'a Column,
     table_name: &'a str,
     error: &'a syn::Type,
     delete: DeleteOption,
     nested_fn_names: Vec<syn::Ident>,
-    id_ty: &'a syn::Ident,
 }
 
 impl<'a> FindByFn<'a> {
     pub fn new(column: &'a Column, opts: &'a RepositoryOptions) -> Self {
         Self {
-            ignore_prefix: opts.table_prefix(),
+            prefix: opts.table_prefix(),
             column,
             entity: opts.entity(),
             table_name: opts.table_name(),
             error: opts.err(),
             delete: opts.delete,
             nested_fn_names: opts.all_nested().map(|f| f.find_nested_fn_name()).collect(),
-            id_ty: opts.id(),
         }
     }
 }
@@ -36,7 +34,6 @@ impl ToTokens for FindByFn<'_> {
         let column_name = &self.column.name();
         let column_type = &self.column.ty();
         let error = self.error;
-        let id_ty = self.id_ty;
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
                 self.#f(&mut entities).await?;
@@ -51,7 +48,7 @@ impl ToTokens for FindByFn<'_> {
                 let entity = entities.pop().unwrap();
             }
         };
-        let prefix_arg = self.ignore_prefix.map(|p| quote! { #p, });
+        let prefix_arg = self.prefix.map(|p| quote! { tbl_prefix = #p, });
 
         for delete in [DeleteOption::No, DeleteOption::Soft] {
             let fn_name = syn::Ident::new(
@@ -113,10 +110,7 @@ impl ToTokens for FindByFn<'_> {
                 ) -> Result<#entity, #error> {
                     let #column_name = #column_name.borrow();
                     let entity = es_entity::es_query!(
-                        entity_ty = #entity,
-                        id_ty = #id_ty,
-                        #prefix_arg
-                        executor,
+                        [entity = #entity, db = executor, #prefix_arg],
                         #query,
                         #column_name as &#column_type,
                     )
@@ -146,16 +140,14 @@ mod tests {
         let entity = Ident::new("Entity", Span::call_site());
         let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
-        let id_ty = Ident::new("EntityId", Span::call_site());
         let persist_fn = FindByFn {
-            ignore_prefix: None,
+            prefix: None,
             column: &column,
             entity: &entity,
             table_name: "entities",
             error: &error,
             delete: DeleteOption::No,
             nested_fn_names: Vec::new(),
-            id_ty: &id_ty,
         };
 
         let mut tokens = TokenStream::new();
@@ -184,9 +176,7 @@ mod tests {
             ) -> Result<Entity, es_entity::EsRepoError> {
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
-                        entity_ty = Entity,
-                        id_ty = EntityId,
-                        executor,
+                        [entity = Entity, db = executor,],
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                 )
@@ -205,16 +195,14 @@ mod tests {
         let entity = Ident::new("Entity", Span::call_site());
         let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
-        let id_ty = Ident::new("EntityId", Span::call_site());
         let persist_fn = FindByFn {
-            ignore_prefix: None,
+            prefix: None,
             column: &column,
             entity: &entity,
             table_name: "entities",
             error: &error,
             delete: DeleteOption::Soft,
             nested_fn_names: Vec::new(),
-            id_ty: &id_ty,
         };
 
         let mut tokens = TokenStream::new();
@@ -243,9 +231,7 @@ mod tests {
             ) -> Result<Entity, es_entity::EsRepoError> {
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
-                        entity_ty = Entity,
-                        id_ty = EntityId,
-                        executor,
+                        [entity = Entity, db = executor,],
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
                 )
@@ -276,9 +262,7 @@ mod tests {
             ) -> Result<Entity, es_entity::EsRepoError> {
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
-                        entity_ty = Entity,
-                        id_ty = EntityId,
-                        executor,
+                        [entity = Entity, db = executor,],
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                 )

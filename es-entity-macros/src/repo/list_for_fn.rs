@@ -45,13 +45,12 @@ impl<'a> ListForFn<'a> {
 
 impl ToTokens for ListForFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let prefix_arg = self.ignore_prefix.map(|p| quote! { #p, });
+        let prefix_arg = self.ignore_prefix.map(|p| quote! { tbl_prefix = #p, });
         let entity = self.entity;
         let cursor = self.cursor();
         let cursor_ident = cursor.ident();
         let cursor_mod = cursor.cursor_mod();
         let error = self.error;
-        let id_ty = self.id;
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
                 self.#f(&mut entities).await?;
@@ -173,10 +172,7 @@ impl ToTokens for ListForFn<'_> {
                     let #maybe_mut_entities = match direction {
                         es_entity::ListDirection::Ascending => {
                             es_entity::es_query!(
-                                entity_ty = #entity,
-                                id_ty = #id_ty,
-                                #prefix_arg
-                                executor,
+                                [entity = #entity, #prefix_arg db = executor,],
                                 #asc_query,
                                 #filter_arg_name as #for_column_type,
                                 #arg_tokens
@@ -186,10 +182,7 @@ impl ToTokens for ListForFn<'_> {
                         },
                         es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
-                                entity_ty = #entity,
-                                id_ty = #id_ty,
-                                #prefix_arg
-                                executor,
+                                [entity = #entity, #prefix_arg db = executor,],
                                 #desc_query,
                                 #filter_arg_name as #for_column_type,
                                 #arg_tokens
@@ -288,9 +281,7 @@ mod tests {
                 let (entities, has_next_page) = match direction {
                     es_entity::ListDirection::Ascending => {
                         es_entity::es_query!(
-                            entity_ty = Entity,
-                            id_ty = EntityId,
-                            executor,
+                            [entity = Entity, db = executor,],
                             "SELECT customer_id, id FROM entities WHERE ((customer_id = $1) AND (COALESCE(id > $3, true))) ORDER BY id ASC LIMIT $2",
                             filter_customer_id as Uuid,
                             (first + 1) as i64,
@@ -301,9 +292,7 @@ mod tests {
                     },
                     es_entity::ListDirection::Descending => {
                         es_entity::es_query!(
-                            entity_ty = Entity,
-                            id_ty = EntityId,
-                            executor,
+                            [entity = Entity, db = executor,],
                             "SELECT customer_id, id FROM entities WHERE ((customer_id = $1) AND (COALESCE(id < $3, true))) ORDER BY id DESC LIMIT $2",
                             filter_customer_id as Uuid,
                             (first + 1) as i64,
@@ -389,9 +378,7 @@ mod tests {
                 let (entities, has_next_page) = match direction {
                     es_entity::ListDirection::Ascending => {
                         es_entity::es_query!(
-                            entity_ty = Entity,
-                            id_ty = EntityId,
-                            executor,
+                            [entity = Entity, db = executor,],
                             "SELECT email, id FROM entities WHERE ((email = $1) AND (COALESCE((email, id) > ($4, $3), $3 IS NULL))) ORDER BY email ASC, id ASC LIMIT $2",
                             filter_email as String,
                             (first + 1) as i64,
@@ -403,9 +390,7 @@ mod tests {
                     },
                     es_entity::ListDirection::Descending => {
                         es_entity::es_query!(
-                            entity_ty = Entity,
-                            id_ty = EntityId,
-                            executor,
+                            [entity = Entity, db = executor,],
                             "SELECT email, id FROM entities WHERE ((email = $1) AND (COALESCE((email, id) < ($4, $3), $3 IS NULL))) ORDER BY email DESC, id DESC LIMIT $2",
                             filter_email as String,
                             (first + 1) as i64,

@@ -5,13 +5,12 @@ use syn::{
 };
 
 pub struct QueryInput {
-    pub(super) ignore_prefix: Option<String>,
-    pub(super) executor: syn::Expr,
+    pub(super) tbl_prefix: Option<String>,
+    pub(super) db: syn::Expr,
     pub(super) sql: String,
     pub(super) sql_span: Span,
     pub(super) arg_exprs: Vec<syn::Expr>,
-    pub(super) entity_ty: Option<syn::Ident>,
-    pub(super) id_ty: Option<syn::Ident>,
+    pub(super) entity: Option<syn::Ident>,
 }
 
 impl QueryInput {
@@ -31,7 +30,7 @@ impl QueryInput {
 
     pub(super) fn table_name_without_prefix(&self) -> darling::Result<String> {
         let table_name = self.table_name()?;
-        if let Some(ignore_prefix) = &self.ignore_prefix {
+        if let Some(ignore_prefix) = &self.tbl_prefix {
             if table_name.starts_with(ignore_prefix) {
                 return Ok(table_name[ignore_prefix.len() + 1..].to_string());
             }
@@ -71,11 +70,10 @@ impl Parse for QueryInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut sql: Option<(String, Span)> = None;
         let mut args: Option<Vec<syn::Expr>> = None;
-        let mut executor: Option<syn::Expr> = None;
+        let mut db: Option<syn::Expr> = None;
         let mut expect_comma = false;
-        let mut ignore_prefix = None;
-        let mut entity_ty = None;
-        let mut id_ty = None;
+        let mut tbl_prefix = None;
+        let mut entity = None;
 
         while !input.is_empty() {
             if expect_comma {
@@ -85,10 +83,10 @@ impl Parse for QueryInput {
 
             let _ = input.parse::<syn::token::Eq>()?;
 
-            if key == "executor" {
-                executor = Some(input.parse::<syn::Expr>()?);
-            } else if key == "ignore_prefix" {
-                ignore_prefix = Some(input.parse::<syn::LitStr>()?.value());
+            if key == "db" {
+                db = Some(input.parse::<syn::Expr>()?);
+            } else if key == "tbl_prefix" {
+                tbl_prefix = Some(input.parse::<syn::LitStr>()?.value());
             } else if key == "sql" {
                 sql = Some((
                     Punctuated::<syn::LitStr, syn::Token![+]>::parse_separated_nonempty(input)?
@@ -100,10 +98,8 @@ impl Parse for QueryInput {
             } else if key == "args" {
                 let exprs = input.parse::<syn::ExprArray>()?;
                 args = Some(exprs.elems.into_iter().collect())
-            } else if key == "entity_ty" {
-                entity_ty = Some(input.parse::<syn::Ident>()?);
-            } else if key == "id_ty" {
-                id_ty = Some(input.parse::<syn::Ident>()?);
+            } else if key == "entity" {
+                entity = Some(input.parse::<syn::Ident>()?);
             } else {
                 let message = format!("unexpected input key: {key}");
                 return Err(syn::Error::new_spanned(key, message));
@@ -113,16 +109,15 @@ impl Parse for QueryInput {
         }
 
         let (sql, sql_span) = sql.ok_or_else(|| input.error("expected `sql` key"))?;
-        let executor = executor.ok_or_else(|| input.error("expected `executor` key"))?;
+        let db = db.ok_or_else(|| input.error("expected `db` key"))?;
 
         Ok(QueryInput {
-            ignore_prefix,
-            executor,
+            tbl_prefix,
+            db,
             sql,
             sql_span,
             arg_exprs: args.unwrap_or_default(),
-            entity_ty,
-            id_ty,
+            entity,
         })
     }
 }
@@ -136,17 +131,17 @@ mod tests {
     #[test]
     fn parse_input() {
         let input: QueryInput = parse_quote!(
-            ignore_prefix = "ignore_prefix",
-            executor = &mut **tx,
+            tbl_prefix = "ignore_prefix",
+            db = &mut **tx,
             sql = "SELECT * FROM ignore_prefix_users WHERE name = $1",
             args = [id]
         );
-        assert_eq!(input.ignore_prefix, Some("ignore_prefix".to_string()));
+        assert_eq!(input.tbl_prefix, Some("ignore_prefix".to_string()));
         assert_eq!(
             input.sql,
             "SELECT * FROM ignore_prefix_users WHERE name = $1"
         );
-        assert_eq!(input.executor, parse_quote!(&mut **tx));
+        assert_eq!(input.db, parse_quote!(&mut **tx));
         assert_eq!(input.arg_exprs[0], parse_quote!(id));
         assert_eq!(input.table_name_without_prefix().unwrap(), "users");
     }
@@ -185,13 +180,12 @@ mod tests {
 
         for (sql, expected) in test_cases {
             let input = QueryInput {
-                ignore_prefix: None,
-                executor: parse_quote!(&mut **tx),
+                tbl_prefix: None,
+                db: parse_quote!(&mut **tx),
                 sql: sql.to_string(),
                 sql_span: Span::call_site(),
                 arg_exprs: vec![],
-                entity_ty: None,
-                id_ty: None,
+                entity: None,
             };
             assert_eq!(input.order_by_columns(), expected, "Failed for SQL: {sql}",);
         }
