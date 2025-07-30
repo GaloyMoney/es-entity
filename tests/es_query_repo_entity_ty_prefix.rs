@@ -1,45 +1,45 @@
-mod customer;
 mod helpers;
+mod user;
 
 use es_entity::*;
 use sqlx::PgPool;
 
-use customer::*;
-// crud on customer entities stored in test_users
+use user::*;
+// crud on user entities stored in test_customers
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    tbl = "test_users",
-    events_tbl = "test_user_events",
-    entity = "Customer",
+    tbl = "test_customers",
+    events_tbl = "test_customer_events",
+    entity = "User",
     err = "EsRepoError",
     columns(name(ty = "String"))
 )]
-pub struct Customers {
+pub struct Users {
     pool: PgPool,
 }
 
-impl Customers {
+impl Users {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
-    pub async fn query_with_args(&self, id: CustomerId) -> Result<Customer, EsRepoError> {
+    pub async fn query_with_args(&self, id: UserId) -> Result<User, EsRepoError> {
         es_query!(
-            entity_ty = Customer,
+            entity_ty = User,
             "test",
             self.pool(),
-            "SELECT * FROM test_users WHERE id = $1",
-            id as CustomerId
+            "SELECT * FROM test_customers WHERE id = $1",
+            id as UserId
         )
         .fetch_one()
         .await
     }
 
-    pub async fn query_without_args(&self) -> Result<(Vec<Customer>, bool), EsRepoError> {
+    pub async fn query_without_args(&self) -> Result<(Vec<User>, bool), EsRepoError> {
         es_query!(
-            entity_ty = Customer,
+            entity_ty = User,
             "test",
             self.pool(),
-            "SELECT * FROM test_users"
+            "SELECT * FROM test_customers"
         )
         .fetch_n(2)
         .await
@@ -50,9 +50,9 @@ impl Customers {
 async fn test_es_query_with_entity_ty_and_prefix_and_args() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
 
-    let users = Customers::new(pool);
-    let id = CustomerId::new();
-    let new_user = NewCustomer::builder().id(id).name("Frank").build().unwrap();
+    let users = Users::new(pool);
+    let id = UserId::new();
+    let new_user = NewUser::builder().id(id).name("Frank").build().unwrap();
     let _ = users.create(new_user).await?;
 
     let loaded_user = users.query_with_args(id).await?;
@@ -64,15 +64,15 @@ async fn test_es_query_with_entity_ty_and_prefix_and_args() -> anyhow::Result<()
 #[tokio::test]
 async fn test_es_query_with_entity_ty_query_and_prefix() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
-    let users = Customers::new(pool);
+    let users = Users::new(pool);
 
-    let user1 = NewCustomer::builder()
-        .id(CustomerId::new())
+    let user1 = NewUser::builder()
+        .id(UserId::new())
         .name("Alice")
         .build()
         .unwrap();
-    let user2 = NewCustomer::builder()
-        .id(CustomerId::new())
+    let user2 = NewUser::builder()
+        .id(UserId::new())
         .name("Bob")
         .build()
         .unwrap();
