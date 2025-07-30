@@ -18,7 +18,7 @@ mod update_fn;
 
 use darling::{FromDeriveInput, ToTokens};
 use proc_macro2::TokenStream;
-use quote::{TokenStreamExt, quote};
+use quote::{quote, TokenStreamExt};
 
 use options::RepositoryOptions;
 

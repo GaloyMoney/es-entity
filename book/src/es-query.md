@@ -108,10 +108,9 @@ pub struct Users {
 impl Users {
     pub async fn find_by_name(&self, name: String) -> Result<User, EsRepoError> {
         let res = es_query!(
-            [db = &self.pool],
             "SELECT id FROM users WHERE name = $1",
             name
-        ).fetch_one().await?;
+        ).fetch_one(&self.pool).await?;
         Ok(res)
     }
 }
