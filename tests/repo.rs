@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use user::*;
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "User", err = "EsRepoError", columns(name(ty = "String")))]
+#[es_repo(entity = "User", columns(name(ty = "String")))]
 pub struct Users {
     pool: PgPool,
 }
