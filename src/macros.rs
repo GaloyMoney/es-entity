@@ -149,44 +149,6 @@ macro_rules! es_query {
     });
 }
 
-/// Implement error handling for types that wrap `EsEntityError`.
-///
-/// Adds `From<EsEntityError>` conversion and utility methods for checking specific error types.
-/// Required for integration with `EsRepo` trait and event-sourced operations.
-///
-/// # Requirements
-///
-/// Your error type must have an `EsEntityError` variant and sqlx::Error variant for sqlx operations.
-/// ```rust
-/// #[derive(Error, Debug)]
-/// pub enum MyError {
-///     #[error("Database error: {0}")]
-///     Database(#[from] sqlx::Error), // ← Required variant
-///     #[error("{0}")]
-///     EsEntityError(EsEntityError), // ← Required variant
-/// }
-/// ```
-///
-/// # Generated Methods
-///
-/// - `was_not_found()` - checks for `NotFound` errors
-/// - `was_concurrent_modification()` - checks for `ConcurrentModification` errors
-///
-/// # Examples
-///
-/// ```rust
-/// from_es_entity_error!(MyError);
-///
-/// // Now works with EsRepo
-/// impl EsRepo for MyRepository {
-///     type Err = MyError;  // ← Implements From<EsEntityError>
-/// }
-///
-/// // Check error types
-/// if error.was_not_found() {
-///     // Handle not found
-/// }
-/// ```
 #[macro_export]
 macro_rules! from_es_entity_error {
     ($name:ident) => {
@@ -294,6 +256,106 @@ macro_rules! __entity_id_conversions {
     };
 }
 
+#[doc(hidden)]
+#[cfg(all(feature = "graphql", feature = "json-schema"))]
+#[macro_export]
+macro_rules! entity_id {
+    // Match identifiers without conversions
+    ($($name:ident),+ $(,)?) => {
+        $crate::entity_id! { $($name),+ ; }
+    };
+    ($($name:ident),+ $(,)? ; $($from:ty => $to:ty),* $(,)?) => {
+        $(
+            #[derive(
+                $crate::prelude::sqlx::Type,
+                Debug,
+                Clone,
+                Copy,
+                PartialEq,
+                Eq,
+                PartialOrd,
+                Ord,
+                Hash,
+                $crate::prelude::serde::Deserialize,
+                $crate::prelude::serde::Serialize,
+                $crate::prelude::schemars::JsonSchema,
+            )]
+            #[serde(transparent)]
+            #[sqlx(transparent)]
+            pub struct $name($crate::prelude::uuid::Uuid);
+            $crate::__entity_id_common_impls!($name);
+            $crate::__entity_id_graphql_impls!($name);
+        )+
+        $crate::__entity_id_conversions!($($from => $to),*);
+    };
+}
+
+#[doc(hidden)]
+#[cfg(all(feature = "graphql", not(feature = "json-schema")))]
+#[macro_export]
+macro_rules! entity_id {
+    // Match identifiers without conversions
+    ($($name:ident),+ $(,)?) => {
+        $crate::entity_id! { $($name),+ ; }
+    };
+    ($($name:ident),+ $(,)? ; $($from:ty => $to:ty),* $(,)?) => {
+        $(
+            #[derive(
+                $crate::prelude::sqlx::Type,
+                Debug,
+                Clone,
+                Copy,
+                PartialEq,
+                Eq,
+                PartialOrd,
+                Ord,
+                Hash,
+                $crate::prelude::serde::Deserialize,
+                $crate::prelude::serde::Serialize,
+            )]
+            #[serde(transparent)]
+            #[sqlx(transparent)]
+            pub struct $name($crate::prelude::uuid::Uuid);
+            $crate::__entity_id_common_impls!($name);
+            $crate::__entity_id_graphql_impls!($name);
+        )+
+        $crate::__entity_id_conversions!($($from => $to),*);
+    };
+}
+
+#[doc(hidden)]
+#[cfg(all(feature = "json-schema", not(feature = "graphql")))]
+#[macro_export]
+macro_rules! entity_id {
+    // Match identifiers without conversions
+    ($($name:ident),+ $(,)?) => {
+        $crate::entity_id! { $($name),+ ; }
+    };
+    ($($name:ident),+ $(,)? ; $($from:ty => $to:ty),* $(,)?) => {
+        $(
+            #[derive(
+                $crate::prelude::sqlx::Type,
+                Debug,
+                Clone,
+                Copy,
+                PartialEq,
+                Eq,
+                PartialOrd,
+                Ord,
+                Hash,
+                $crate::prelude::serde::Deserialize,
+                $crate::prelude::serde::Serialize,
+                $crate::prelude::schemars::JsonSchema,
+            )]
+            #[serde(transparent)]
+            #[sqlx(transparent)]
+            pub struct $name($crate::prelude::uuid::Uuid);
+            $crate::__entity_id_common_impls!($name);
+        )+
+        $crate::__entity_id_conversions!($($from => $to),*);
+    };
+}
+
 /// Create UUID-wrappers for database operations.
 ///
 /// This macro generates type-safe UUID-wrapper structs with trait support for
@@ -342,6 +404,7 @@ macro_rules! __entity_id_conversions {
 ///
 /// // Creates UserId and AdminUserId with automatic conversion between them
 /// ```
+#[cfg(all(not(feature = "json-schema"), not(feature = "graphql")))]
 #[macro_export]
 macro_rules! entity_id {
     // Match identifiers without conversions
@@ -350,7 +413,6 @@ macro_rules! entity_id {
     };
     ($($name:ident),+ $(,)? ; $($from:ty => $to:ty),* $(,)?) => {
         $(
-            #[cfg_attr(feature = "json-schema", derive($crate::prelude::schemars::JsonSchema))]
             #[derive(
                 $crate::prelude::sqlx::Type,
                 Debug,
@@ -367,11 +429,7 @@ macro_rules! entity_id {
             #[serde(transparent)]
             #[sqlx(transparent)]
             pub struct $name($crate::prelude::uuid::Uuid);
-
             $crate::__entity_id_common_impls!($name);
-
-            #[cfg(feature = "graphql")]
-            $crate::__entity_id_graphql_impls!($name);
         )+
         $crate::__entity_id_conversions!($($from => $to),*);
     };
