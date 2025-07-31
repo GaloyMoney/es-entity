@@ -55,3 +55,29 @@ pub trait PopulateNested<C>: EsRepo {
 
 pub trait RetryableInto<T>: Into<T> + Copy + std::fmt::Debug {}
 impl<T, O> RetryableInto<O> for T where T: Into<O> + Copy + std::fmt::Debug {}
+
+pub trait AsExecutor<'a> {
+    type Executor: sqlx::Executor<'a, Database = sqlx::Postgres>;
+
+    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        None
+    }
+
+    fn as_executor(self) -> Self::Executor;
+}
+
+impl<'a, 't> AsExecutor<'a> for &'a mut sqlx::Transaction<'t, sqlx::Postgres> {
+    type Executor = &'a mut sqlx::PgConnection;
+
+    fn as_executor(self) -> Self::Executor {
+        &mut *self
+    }
+}
+
+impl<'a> AsExecutor<'a> for &'a sqlx::PgPool {
+    type Executor = Self;
+
+    fn as_executor(self) -> Self::Executor {
+        self
+    }
+}

@@ -24,6 +24,7 @@ es-entity-macros = { path = "es-entity-macros", package = "es-entity-macros", ve
 sim-time = { path = "sim-time", optional = true, package = "sim-time", version = "0.6.10" }
 
 async-trait = { workspace = true }
+base64 = { workspace = true, optional = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
 chrono =  { workspace = true }
@@ -32,7 +33,6 @@ serde_json =  { workspace = true }
 derive_builder = { workspace = true }
 uuid = { workspace = true }
 async-graphql = { workspace = true, optional = true }
-base64 = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 
 tokio = { workspace = true, optional = true }

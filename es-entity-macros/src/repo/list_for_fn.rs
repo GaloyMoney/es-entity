@@ -93,18 +93,9 @@ impl ToTokens for ListForFn<'_> {
                 ),
                 Span::call_site(),
             );
-            let fn_via = syn::Ident::new(
+            let fn_in_op = syn::Ident::new(
                 &format!(
-                    "list_for_{}_by_{}_via{}",
-                    for_column_name,
-                    by_column_name,
-                    delete.include_deletion_fn_postfix()
-                ),
-                Span::call_site(),
-            );
-            let fn_in_tx = syn::Ident::new(
-                &format!(
-                    "list_for_{}_by_{}_in_tx{}",
+                    "list_for_{}_by_{}_in_op{}",
                     for_column_name,
                     by_column_name,
                     delete.include_deletion_fn_postfix()
@@ -186,26 +177,18 @@ impl ToTokens for ListForFn<'_> {
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
-                    self.#fn_via(self.pool(), #filter_arg_name, cursor, direction).await
+                    self.#fn_in_op(self.pool(), #filter_arg_name, cursor, direction).await
                 }
 
-                pub async fn #fn_in_tx(
+                async fn #fn_in_op(
                     &self,
-                    db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                    op: impl es_entity::AsExecutor<'_>,
                     #filter_arg_name: impl std::borrow::Borrow<#for_column_type>,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
-                    self.#fn_via(&mut **db, #filter_arg_name, cursor, direction).await
-                }
+                    let executor = op.as_executor();
 
-                async fn #fn_via(
-                    &self,
-                    executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-                    #filter_arg_name: impl std::borrow::Borrow<#for_column_type>,
-                    cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
-                    direction: es_entity::ListDirection,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
                     let #filter_arg_name = #filter_arg_name.borrow();
                     #destructure_tokens
 
@@ -282,26 +265,18 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
-                self.list_for_customer_id_by_id_via(self.pool(), filter_customer_id, cursor, direction).await
+                self.list_for_customer_id_by_id_in_op(self.pool(), filter_customer_id, cursor, direction).await
             }
 
-            pub async fn list_for_customer_id_by_id_in_tx(
+            async fn list_for_customer_id_by_id_in_op(
                 &self,
-                db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                op: impl es_entity::AsExecutor<'_>,
                 filter_customer_id: impl std::borrow::Borrow<Uuid>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
-                self.list_for_customer_id_by_id_via(&mut **db, filter_customer_id, cursor, direction).await
-            }
+                let executor = op.as_executor();
 
-            async fn list_for_customer_id_by_id_via(
-                &self,
-                executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-                filter_customer_id: impl std::borrow::Borrow<Uuid>,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
                 let filter_customer_id = filter_customer_id.borrow();
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let id = if let Some(after) = after {
@@ -380,26 +355,18 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByEmailCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, es_entity::EsRepoError> {
-                self.list_for_email_by_email_via(self.pool(), filter_email, cursor, direction).await
+                self.list_for_email_by_email_in_op(self.pool(), filter_email, cursor, direction).await
             }
 
-            pub async fn list_for_email_by_email_in_tx(
+            async fn list_for_email_by_email_in_op(
                 &self,
-                db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                op: impl es_entity::AsExecutor<'_>,
                 filter_email: impl std::borrow::Borrow<str>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByEmailCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, es_entity::EsRepoError> {
-                self.list_for_email_by_email_via(&mut **db, filter_email, cursor, direction).await
-            }
+                let executor = op.as_executor();
 
-            async fn list_for_email_by_email_via(
-                &self,
-                executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-                filter_email: impl std::borrow::Borrow<str>,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByEmailCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, es_entity::EsRepoError> {
                 let filter_email = filter_email.borrow();
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let (id, email) = if let Some(after) = after {
