@@ -115,7 +115,7 @@ impl Users {
     }
 }
 ```
-It is much simpler by automatically selecting the relevent events from the events table.
+It is much simpler by automatically selecting the relevant events from the events table.
 
 The `fetch_one()` `fn` intends to mimic the `sqlx` interface but will hydrate one entity (instead of returning one row).
 

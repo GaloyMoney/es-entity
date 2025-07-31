@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
     assert!(!entities.is_empty());
 
     // To collect all entities in a loop you can use `into_next_query()`.
-    // This is not recomended - just to highlight the API.
+    // This is not recommended - just to highlight the API.
     let mut query = Default::default();
     let mut all_users = Vec::new();
     loop {
