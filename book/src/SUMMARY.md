@@ -16,3 +16,4 @@
   - [EsRepo trait](./es-repo.md)
     - [create](./repo-create.md)
     - [update](./repo-update.md)
+    - [find_by](./repo-find-by.md)

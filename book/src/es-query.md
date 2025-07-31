@@ -117,5 +117,14 @@ impl Users {
 
 The  `es_query!` expands the event selection part of the query.
 The `fetch_one()` `fn` intends to mimic the `sqlx` interface but will hydrate one entity (instead of returning one row).
+It also supports returning an `Option<Entity>` via:
+```rust,ignore
+.fetch_optional(<executor)
+```
+and a `(Vec<Entity>, bool)` tuple for listing. The `bool` signifies whether or not the query could have fetched more or the list is exhausted.
+```rust,ignore
+.fetch_n(<executor>, <n>)
+```
+
 
 The expansion of `es_query` results in a call to the `sqlx::query_as!` macro - which means that you still get typesafety and compile time column validation.
