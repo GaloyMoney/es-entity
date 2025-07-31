@@ -53,7 +53,7 @@ macro_rules! idempotency_guard {
 /// Execute an event-sourced query with automatic entity hydration.
 ///
 /// Executes user-defined queries and returns entities by internally
-/// joining with events table and hydrating entities, essentially giving the
+/// joining with events table to hydrate entities, essentially giving the
 /// illusion of working with just the index table.
 ///
 /// # Parameters
@@ -171,8 +171,6 @@ macro_rules! es_query {
 ///
 /// - `was_not_found()` - checks for `NotFound` errors
 /// - `was_concurrent_modification()` - checks for `ConcurrentModification` errors
-///
-/// `EsEntityError` includes: `NotFound`, `ConcurrentModification`, `UninitializedFieldError`, `EventDeserialization`
 ///
 /// # Examples
 ///
