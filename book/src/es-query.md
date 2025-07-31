@@ -1,5 +1,9 @@
 # es_query
 
+The `es_query!` macro is a helper that allows you only to query the `index` table without needing to join with the `events` table.
+
+The expansion of `es_query!` results in a call to the `sqlx::query_as!` macro - which means that you still get typesafety and compile time column validation.
+
 Given the query we arrived at in the previous section - this is what a `find_by_name` `fn` could look like:
 
 ```rust
@@ -62,9 +66,6 @@ impl Users {
 }
 ```
 
-The `es_query!` macro is a helper that only needs to know the `inner` part of the query
-and adds the event selection part when it gets expanded.
-
 Another way to write the function above is:
 ```rust
 # extern crate es_entity;
@@ -114,17 +115,16 @@ impl Users {
     }
 }
 ```
+It is much simpler by automatically selecting the relevent events from the events table.
 
-The  `es_query!` expands the event selection part of the query.
 The `fetch_one()` `fn` intends to mimic the `sqlx` interface but will hydrate one entity (instead of returning one row).
+
 It also supports returning an `Option<Entity>` via:
 ```rust,ignore
 .fetch_optional(<executor)
 ```
-and a `(Vec<Entity>, bool)` tuple for listing. The `bool` signifies whether or not the query could have fetched more or the list is exhausted.
+and a `(Vec<Entity>, bool)` tuple for listing. The `bool` signifies whether or not the query could have fetched more or the list is exhausted:
 ```rust,ignore
 .fetch_n(<executor>, <n>)
 ```
 
-
-The expansion of `es_query` results in a call to the `sqlx::query_as!` macro - which means that you still get typesafety and compile time column validation.

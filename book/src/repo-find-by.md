@@ -7,10 +7,8 @@ fn find_by_<column> -> Result<Entity, EntityError>
 fn maybe_find_by_<column> -> Result<Option<Entity>, EntityError>
 ```
 
-It is assumed that your database schema has a relevant `INDEX` on `<column>` so make the lookup efficient.
+It is assumed that your database schema has a relevant `INDEX` on `<column>` to make the lookup efficient.
 
-
-In the code below we want to include a `name` column in the `index` table that requires mapping.
 ```rust
 # extern crate es_entity;
 # extern crate sqlx;
