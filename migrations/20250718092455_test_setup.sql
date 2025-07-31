@@ -1,6 +1,7 @@
 CREATE TABLE users (
   id UUID PRIMARY KEY,
   name VARCHAR NOT NULL,
+  deleted BOOL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX idx_users_name ON users (name);

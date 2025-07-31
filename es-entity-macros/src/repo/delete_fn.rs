@@ -46,6 +46,16 @@ impl ToTokens for DeleteFn<'_> {
         let args = self.columns.update_query_args();
 
         tokens.append_all(quote! {
+            pub async fn delete(
+                &self,
+                entity: #entity
+            ) -> Result<(), #error> {
+                let mut op = self.begin_op().await?;
+                let res = self.delete_in_op(&mut op, entity).await?;
+                op.commit().await?;
+                Ok(res)
+            }
+
             pub async fn delete_in_op(&self,
                 op: &mut es_entity::DbOp<'_>,
                 mut entity: #entity
@@ -105,6 +115,16 @@ mod tests {
         delete_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
+            pub async fn delete(
+                &self,
+                entity: Entity
+            ) -> Result<(), #error> {
+                let mut op = self.begin_op().await?;
+                let res = self.delete_in_op(&mut op, entity).await?;
+                op.commit().await?;
+                Ok(res)
+            }
+
             pub async fn delete_in_op(
                 &self,
                 op: &mut es_entity::DbOp<'_>,
@@ -166,6 +186,16 @@ mod tests {
         delete_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
+            pub async fn delete(
+                &self,
+                entity: Entity
+            ) -> Result<(), #error> {
+                let mut op = self.begin_op().await?;
+                let res = self.delete_in_op(&mut op, entity).await?;
+                op.commit().await?;
+                Ok(res)
+            }
+
             pub async fn delete_in_op(
                 &self,
                 op: &mut es_entity::DbOp<'_>,

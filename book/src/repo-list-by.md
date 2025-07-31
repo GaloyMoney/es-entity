@@ -18,6 +18,7 @@ This will generate the `list_by_<column>` `fn`s and appropriate `cursor` structs
 # pub enum UserEvent {
 #     Initialized { id: UserId, name: String },
 #     NameUpdated { name: String },
+#     Deleted
 # }
 # impl IntoEvents<UserEvent> for NewUser {
 #     fn into_events(self) -> EntityEvents<UserEvent> {
