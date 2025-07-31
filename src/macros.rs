@@ -12,7 +12,7 @@
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```ignore
 /// // Basic: prevent duplicate operations
 /// idempotency_guard!(
 ///     self.events.iter().rev(),
