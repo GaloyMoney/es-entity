@@ -15,6 +15,7 @@
   - [es_query](./es-query.md)
   - [EsRepo trait](./es-repo.md)
     - [create](./repo-create.md)
+    - [create_all](./repo-create-all.md)
     - [update](./repo-update.md)
     - [find_by](./repo-find-by.md)
     - [list_by](./repo-list-by.md)

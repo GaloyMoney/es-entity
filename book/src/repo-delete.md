@@ -100,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
     let found_user = users.maybe_find_by_name("Delyth").await?;
     assert!(found_user.is_some());
 
-    if user.delete().was_executed() {
+    if user.delete().did_execute() {
         users.delete(user).await?;
     }
 
