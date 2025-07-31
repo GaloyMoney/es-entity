@@ -47,6 +47,7 @@ pub fn es_repo_derive(input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro]
+#[doc(hidden)]
 pub fn expand_es_query(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as query::QueryInput);
     match query::expand(input) {
