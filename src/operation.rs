@@ -2,12 +2,15 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 pub struct DbOp<'t> {
     tx: Transaction<'t, Postgres>,
-    now: chrono::DateTime<chrono::Utc>,
+    now: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl<'t> DbOp<'t> {
     pub fn new(tx: Transaction<'t, Postgres>, time: chrono::DateTime<chrono::Utc>) -> Self {
-        Self { tx, now: time }
+        Self {
+            tx,
+            now: Some(time),
+        }
     }
 
     pub async fn init(pool: &PgPool) -> Result<Self, sqlx::Error> {
@@ -15,24 +18,19 @@ impl<'t> DbOp<'t> {
         let res = {
             let tx = pool.begin().await?;
             let now = sim_time::now();
-            Self { tx, now }
+            Self { tx, now: Some(now) }
         };
 
         #[cfg(not(feature = "sim-time"))]
         let res = {
-            let mut tx = pool.begin().await?;
-            let now = sqlx::query!("SELECT NOW()")
-                .fetch_one(&mut *tx)
-                .await?
-                .now
-                .expect("NOW() is not NULL");
-            Self { tx, now }
+            let tx = pool.begin().await?;
+            Self { tx, now: None }
         };
 
         Ok(res)
     }
 
-    pub fn now(&self) -> chrono::DateTime<chrono::Utc> {
+    pub fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.now
     }
 

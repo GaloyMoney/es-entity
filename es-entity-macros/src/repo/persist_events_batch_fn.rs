@@ -30,9 +30,9 @@ impl ToTokens for PersistEventsBatchFn<'_> {
 
         let query = format!(
             "INSERT INTO {} (id, recorded_at, sequence, event_type, event) \
-             SELECT unnested.id, $1, unnested.sequence, unnested.event_type, unnested.event \
+             SELECT unnested.id, COALESCE($1, NOW()), unnested.sequence, unnested.event_type, unnested.event \
              FROM UNNEST($2, $3::INT[], $4::TEXT[], $5::JSONB[]) \
-             AS unnested(id, sequence, event_type, event)",
+             AS unnested(id, sequence, event_type, event) RETURNING recorded_at",
             self.events_table_name
         );
 
@@ -42,6 +42,8 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                 op: &mut es_entity::DbOp<'_>,
                 all_events: &mut [es_entity::EntityEvents<#event_type>]
             ) -> Result<std::collections::HashMap<#id_type, usize>, #error> {
+                use es_entity::prelude::sqlx::Row;
+
                 let mut all_serialized = Vec::new();
                 let mut all_types = Vec::new();
                 let mut all_ids: Vec<&#id_type> = Vec::new();
@@ -79,8 +81,10 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                         .await
                 )?;
 
+                let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
+
                 for events in all_events.iter_mut() {
-                    events.mark_new_events_persisted_at(now);
+                    events.mark_new_events_persisted_at(recorded_at);
                 }
 
                 Ok(n_events_map)
@@ -114,6 +118,8 @@ mod tests {
                 op: &mut es_entity::DbOp<'_>,
                 all_events: &mut [es_entity::EntityEvents<EntityEvent>]
             ) -> Result<std::collections::HashMap<EntityId, usize>, es_entity::EsRepoError> {
+                use es_entity::prelude::sqlx::Row;
+
                 let mut all_serialized = Vec::new();
                 let mut all_types = Vec::new();
                 let mut all_ids: Vec<&EntityId> = Vec::new();
@@ -141,7 +147,7 @@ mod tests {
                 }
 
                 let rows = Self::extract_concurrent_modification(
-                    sqlx::query("INSERT INTO entity_events (id, recorded_at, sequence, event_type, event) SELECT unnested.id, $1, unnested.sequence, unnested.event_type, unnested.event FROM UNNEST($2, $3::INT[], $4::TEXT[], $5::JSONB[]) AS unnested(id, sequence, event_type, event)")
+                    sqlx::query("INSERT INTO entity_events (id, recorded_at, sequence, event_type, event) SELECT unnested.id, COALESCE($1, NOW()), unnested.sequence, unnested.event_type, unnested.event FROM UNNEST($2, $3::INT[], $4::TEXT[], $5::JSONB[]) AS unnested(id, sequence, event_type, event) RETURNING recorded_at")
                         .bind(now)
                         .bind(&all_ids)
                         .bind(&all_sequences)
@@ -151,8 +157,10 @@ mod tests {
                         .await
                 )?;
 
+                let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
+
                 for events in all_events.iter_mut() {
-                    events.mark_new_events_persisted_at(now);
+                    events.mark_new_events_persisted_at(recorded_at);
                 }
 
                 Ok(n_events_map)

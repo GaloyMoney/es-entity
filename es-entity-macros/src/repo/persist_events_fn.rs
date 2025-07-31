@@ -25,7 +25,7 @@ impl<'a> From<&'a RepositoryOptions> for PersistEventsFn<'a> {
 impl ToTokens for PersistEventsFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let query = format!(
-            "INSERT INTO {} (id, recorded_at, sequence, event_type, event) SELECT $1, $2, ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event FROM UNNEST($4::text[], $5::jsonb[]) AS unnested(event_type, event)",
+            "INSERT INTO {} (id, recorded_at, sequence, event_type, event) SELECT $1, COALESCE($2, NOW()), ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event FROM UNNEST($4::text[], $5::jsonb[]) AS unnested(event_type, event) RETURNING recorded_at",
             self.events_table_name,
         );
         let id_type = &self.id;
@@ -67,7 +67,8 @@ impl ToTokens for PersistEventsFn<'_> {
                         &serialized_events,
                     ).fetch_all(&mut **op.tx()).await)?;
 
-                let n_events = events.mark_new_events_persisted_at(now);
+                let recorded_at = rows[0].recorded_at;
+                let n_events = events.mark_new_events_persisted_at(recorded_at);
 
                 Ok(n_events)
             }
@@ -118,7 +119,7 @@ mod tests {
 
                 let rows = Self::extract_concurrent_modification(
                     sqlx::query!(
-                        "INSERT INTO entity_events (id, recorded_at, sequence, event_type, event) SELECT $1, $2, ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event FROM UNNEST($4::text[], $5::jsonb[]) AS unnested(event_type, event)",
+                        "INSERT INTO entity_events (id, recorded_at, sequence, event_type, event) SELECT $1, COALESCE($2, NOW()), ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event FROM UNNEST($4::text[], $5::jsonb[]) AS unnested(event_type, event) RETURNING recorded_at",
                         id as &EntityId,
                         now,
                         offset as i32,
@@ -126,7 +127,8 @@ mod tests {
                         &serialized_events,
                     ).fetch_all(&mut **op.tx()).await)?;
 
-                let n_events = events.mark_new_events_persisted_at(now);
+                let recorded_at = rows[0].recorded_at;
+                let n_events = events.mark_new_events_persisted_at(recorded_at);
 
                 Ok(n_events)
             }

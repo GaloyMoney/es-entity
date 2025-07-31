@@ -53,7 +53,7 @@ impl ToTokens for CreateFn<'_> {
         let args = self.columns.create_query_args();
 
         let query = format!(
-            "INSERT INTO {} ({}, created_at) VALUES ({}, ${})",
+            "INSERT INTO {} ({}, created_at) VALUES ({}, COALESCE(${}, NOW()))",
             table_name,
             column_names.join(", "),
             placeholders,
@@ -180,7 +180,7 @@ mod tests {
             ) -> Result<Entity, es_entity::EsRepoError> {
                 let id = &new_entity.id;
 
-                sqlx::query!("INSERT INTO entities (id, created_at) VALUES ($1, $2)",
+                sqlx::query!("INSERT INTO entities (id, created_at) VALUES ($1, COALESCE($2, NOW()))",
                     id as &EntityId,
                     op.now()
                 )
@@ -260,7 +260,7 @@ mod tests {
                 let id = &new_entity.id;
                 let name = &new_entity.name();
 
-                sqlx::query!("INSERT INTO entities (id, name, created_at) VALUES ($1, $2, $3)",
+                sqlx::query!("INSERT INTO entities (id, name, created_at) VALUES ($1, $2, COALESCE($3, NOW()))",
                     id as &EntityId,
                     name as &String,
                     op.now()
