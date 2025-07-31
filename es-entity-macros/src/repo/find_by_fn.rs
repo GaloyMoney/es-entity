@@ -48,93 +48,119 @@ impl ToTokens for FindByFn<'_> {
                 let entity = entities.pop().unwrap();
             }
         };
-        for delete in [DeleteOption::No, DeleteOption::Soft] {
-            let fn_name = syn::Ident::new(
-                &format!(
-                    "find_by_{}{}",
-                    column_name,
-                    delete.include_deletion_fn_postfix()
-                ),
-                Span::call_site(),
-            );
-            let fn_via = syn::Ident::new(
-                &format!(
-                    "find_by_{}_via{}",
-                    column_name,
-                    delete.include_deletion_fn_postfix()
-                ),
-                Span::call_site(),
-            );
-            let fn_in_tx = syn::Ident::new(
-                &format!(
-                    "find_by_{}_in_tx{}",
-                    column_name,
-                    delete.include_deletion_fn_postfix()
-                ),
-                Span::call_site(),
-            );
-
-            let query = format!(
-                r#"SELECT id FROM {} WHERE {} = $1{}"#,
-                self.table_name,
-                column_name,
-                if delete == DeleteOption::No {
-                    self.delete.not_deleted_condition()
-                } else {
-                    ""
-                }
-            );
-
-            let es_query_call = if let Some(prefix) = self.prefix {
-                quote! {
-                    es_entity::es_query!(
-                        tbl_prefix = #prefix,
-                        #query,
-                        #column_name as &#column_type,
-                    )
-                }
+        for maybe in ["", "maybe_"] {
+            let (result_type, fetch_fn, early_return, regular_return) = if maybe == "" {
+                (
+                    quote! { #entity },
+                    quote! { .fetch_one(executor) },
+                    quote! {},
+                    quote! { Ok(entity) },
+                )
             } else {
-                quote! {
-                    es_entity::es_query!(
-                        entity = #entity,
-                        #query,
-                        #column_name as &#column_type,
-                    )
-                }
+                (
+                    quote! { Option<#entity> },
+                    quote! { .fetch_optional(executor) },
+                    quote! {
+                        let Some(entity) = entity else {
+                            return Ok(None);
+                        };
+                    },
+                    quote! { Ok(Some(entity)) },
+                )
             };
 
-            tokens.append_all(quote! {
-                pub async fn #fn_name(
-                    &self,
-                    #column_name: impl std::borrow::Borrow<#column_type>
-                ) -> Result<#entity, #error> {
-                    self.#fn_via(self.pool(), #column_name).await
-                }
+            for delete in [DeleteOption::No, DeleteOption::Soft] {
+                let fn_name = syn::Ident::new(
+                    &format!(
+                        "{}find_by_{}{}",
+                        maybe,
+                        column_name,
+                        delete.include_deletion_fn_postfix()
+                    ),
+                    Span::call_site(),
+                );
+                let fn_via = syn::Ident::new(
+                    &format!(
+                        "{}find_by_{}_via{}",
+                        maybe,
+                        column_name,
+                        delete.include_deletion_fn_postfix()
+                    ),
+                    Span::call_site(),
+                );
+                let fn_in_tx = syn::Ident::new(
+                    &format!(
+                        "{}find_by_{}_in_tx{}",
+                        maybe,
+                        column_name,
+                        delete.include_deletion_fn_postfix()
+                    ),
+                    Span::call_site(),
+                );
 
-                pub async fn #fn_in_tx(
-                    &self,
-                    db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-                    #column_name: impl std::borrow::Borrow<#column_type>
-                ) -> Result<#entity, #error> {
-                    self.#fn_via(&mut **db, #column_name).await
-                }
+                let query = format!(
+                    r#"SELECT id FROM {} WHERE {} = $1{}"#,
+                    self.table_name,
+                    column_name,
+                    if delete == DeleteOption::No {
+                        self.delete.not_deleted_condition()
+                    } else {
+                        ""
+                    }
+                );
 
-                async fn #fn_via(
-                    &self,
-                    executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-                    #column_name: impl std::borrow::Borrow<#column_type>
-                ) -> Result<#entity, #error> {
-                    let #column_name = #column_name.borrow();
-                    let entity = #es_query_call
-                        .fetch_one(executor)
-                        .await?;
-                    #maybe_lookup_nested
-                    Ok(entity)
-                }
-            });
+                let es_query_call = if let Some(prefix) = self.prefix {
+                    quote! {
+                        es_entity::es_query!(
+                            tbl_prefix = #prefix,
+                            #query,
+                            #column_name as &#column_type,
+                        )
+                    }
+                } else {
+                    quote! {
+                        es_entity::es_query!(
+                            entity = #entity,
+                            #query,
+                            #column_name as &#column_type,
+                        )
+                    }
+                };
 
-            if delete == self.delete {
-                break;
+                tokens.append_all(quote! {
+                    pub async fn #fn_name(
+                        &self,
+                        #column_name: impl std::borrow::Borrow<#column_type>
+                    ) -> Result<#result_type, #error> {
+                        self.#fn_via(self.pool(), #column_name).await
+                    }
+
+                    pub async fn #fn_in_tx(
+                        &self,
+                        db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                        #column_name: impl std::borrow::Borrow<#column_type>
+                    ) -> Result<#result_type, #error> {
+                        self.#fn_via(&mut **db, #column_name).await
+                    }
+
+                    async fn #fn_via(
+                        &self,
+                        executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
+                        #column_name: impl std::borrow::Borrow<#column_type>
+                    ) -> Result<#result_type, #error> {
+                        let #column_name = #column_name.borrow();
+                        let entity = #es_query_call
+                            #fetch_fn
+                            .await?;
+                        #early_return
+                        #maybe_lookup_nested
+                        #regular_return
+                    }
+                });
+
+                if delete == self.delete {
+                    break;
+                }
             }
         }
     }
@@ -195,6 +221,40 @@ mod tests {
                     .fetch_one(executor)
                     .await?;
                 Ok(entity)
+            }
+
+            pub async fn maybe_find_by_id(
+                &self,
+                id: impl std::borrow::Borrow<EntityId>
+            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+                self.maybe_find_by_id_via(self.pool(), id).await
+            }
+
+            pub async fn maybe_find_by_id_in_tx(
+                &self,
+                db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                id: impl std::borrow::Borrow<EntityId>
+            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+                self.maybe_find_by_id_via(&mut **db, id).await
+            }
+
+            async fn maybe_find_by_id_via(
+                &self,
+                executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
+                id: impl std::borrow::Borrow<EntityId>
+            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+                let id = id.borrow();
+                let entity = es_entity::es_query!(
+                        entity = Entity,
+                        "SELECT id FROM entities WHERE id = $1",
+                        id as &EntityId,
+                )
+                    .fetch_optional(executor)
+                    .await?;
+                let Some(entity) = entity else {
+                    return Ok(None);
+                };
+                Ok(Some(entity))
             }
         };
 
@@ -281,6 +341,74 @@ mod tests {
                     .fetch_one(executor)
                     .await?;
                 Ok(entity)
+            }
+
+            pub async fn maybe_find_by_id(
+                &self,
+                id: impl std::borrow::Borrow<EntityId>
+            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+                self.maybe_find_by_id_via(self.pool(), id).await
+            }
+
+            pub async fn maybe_find_by_id_in_tx(
+                &self,
+                db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                id: impl std::borrow::Borrow<EntityId>
+            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+                self.maybe_find_by_id_via(&mut **db, id).await
+            }
+
+            async fn maybe_find_by_id_via(
+                &self,
+                executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
+                id: impl std::borrow::Borrow<EntityId>
+            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+                let id = id.borrow();
+                let entity = es_entity::es_query!(
+                        entity = Entity,
+                        "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
+                        id as &EntityId,
+                )
+                    .fetch_optional(executor)
+                    .await?;
+                let Some(entity) = entity else {
+                    return Ok(None);
+                };
+                Ok(Some(entity))
+            }
+
+            pub async fn maybe_find_by_id_include_deleted(
+                &self,
+                id: impl std::borrow::Borrow<EntityId>
+            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+                self.maybe_find_by_id_via_include_deleted(self.pool(), id).await
+            }
+
+            pub async fn maybe_find_by_id_in_tx_include_deleted(
+                &self,
+                db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                id: impl std::borrow::Borrow<EntityId>
+            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+                self.maybe_find_by_id_via_include_deleted(&mut **db, id).await
+            }
+
+            async fn maybe_find_by_id_via_include_deleted(
+                &self,
+                executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
+                id: impl std::borrow::Borrow<EntityId>
+            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+                let id = id.borrow();
+                let entity = es_entity::es_query!(
+                        entity = Entity,
+                        "SELECT id FROM entities WHERE id = $1",
+                        id as &EntityId,
+                )
+                    .fetch_optional(executor)
+                    .await?;
+                let Some(entity) = entity else {
+                    return Ok(None);
+                };
+                Ok(Some(entity))
             }
         };
 
