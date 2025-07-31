@@ -17,3 +17,4 @@
     - [create](./repo-create.md)
     - [update](./repo-update.md)
     - [find_by](./repo-find-by.md)
+    - [list_by](./repo-list-by.md)

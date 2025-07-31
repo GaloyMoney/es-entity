@@ -42,3 +42,35 @@ async fn create() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn list_by() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+
+    let users = Users::new(pool);
+
+    let new_user = NewUser::builder()
+        .id(UserId::new())
+        .name("Frank")
+        .build()
+        .unwrap();
+
+    users.create(new_user).await?;
+    let PaginatedQueryRet {
+        entities,
+        has_next_page: _,
+        end_cursor: _,
+    } = users
+        .list_by_id(
+            PaginatedQueryArgs {
+                first: 5,
+                after: Some(user_cursor::UsersByIdCursor {
+                    id: uuid::Uuid::nil().into(),
+                }),
+            },
+            ListDirection::Ascending,
+        )
+        .await?;
+    assert!(!entities.is_empty());
+    Ok(())
+}
