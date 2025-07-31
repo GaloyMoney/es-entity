@@ -77,7 +77,7 @@ impl ToTokens for ListForFn<'_> {
             &format!("filter_{}", self.for_column.name()),
             Span::call_site(),
         );
-        let for_column_type = self.for_column.ty();
+        let for_column_type = self.for_column.ty_for_find_by();
 
         let destructure_tokens = self.cursor().destructure_tokens();
         let select_columns = cursor.select_columns(Some(for_column_name));
@@ -144,7 +144,7 @@ impl ToTokens for ListForFn<'_> {
                     es_entity::es_query!(
                         tbl_prefix = #prefix,
                         #asc_query,
-                        #filter_arg_name as #for_column_type,
+                        #filter_arg_name as &#for_column_type,
                         #arg_tokens
                     )
                 }
@@ -153,7 +153,7 @@ impl ToTokens for ListForFn<'_> {
                     es_entity::es_query!(
                         entity = #entity,
                         #asc_query,
-                        #filter_arg_name as #for_column_type,
+                        #filter_arg_name as &#for_column_type,
                         #arg_tokens
                     )
                 }
@@ -164,7 +164,7 @@ impl ToTokens for ListForFn<'_> {
                     es_entity::es_query!(
                         tbl_prefix = #prefix,
                         #desc_query,
-                        #filter_arg_name as #for_column_type,
+                        #filter_arg_name as &#for_column_type,
                         #arg_tokens
                     )
                 }
@@ -173,7 +173,7 @@ impl ToTokens for ListForFn<'_> {
                     es_entity::es_query!(
                         entity = #entity,
                         #desc_query,
-                        #filter_arg_name as #for_column_type,
+                        #filter_arg_name as &#for_column_type,
                         #arg_tokens
                     )
                 }
@@ -182,7 +182,7 @@ impl ToTokens for ListForFn<'_> {
             tokens.append_all(quote! {
                 pub async fn #fn_name(
                     &self,
-                    #filter_arg_name: #for_column_type,
+                    #filter_arg_name: impl std::borrow::Borrow<#for_column_type>,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
@@ -192,7 +192,7 @@ impl ToTokens for ListForFn<'_> {
                 pub async fn #fn_in_tx(
                     &self,
                     db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-                    #filter_arg_name: #for_column_type,
+                    #filter_arg_name: impl std::borrow::Borrow<#for_column_type>,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
@@ -202,10 +202,11 @@ impl ToTokens for ListForFn<'_> {
                 async fn #fn_via(
                     &self,
                     executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-                    #filter_arg_name: #for_column_type,
+                    #filter_arg_name: impl std::borrow::Borrow<#for_column_type>,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
+                    let #filter_arg_name = #filter_arg_name.borrow();
                     #destructure_tokens
 
                     let #maybe_mut_entities = match direction {
@@ -277,7 +278,7 @@ mod tests {
         let expected = quote! {
             pub async fn list_for_customer_id_by_id(
                 &self,
-                filter_customer_id: Uuid,
+                filter_customer_id: impl std::borrow::Borrow<Uuid>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
@@ -287,7 +288,7 @@ mod tests {
             pub async fn list_for_customer_id_by_id_in_tx(
                 &self,
                 db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-                filter_customer_id: Uuid,
+                filter_customer_id: impl std::borrow::Borrow<Uuid>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
@@ -297,10 +298,11 @@ mod tests {
             async fn list_for_customer_id_by_id_via(
                 &self,
                 executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-                filter_customer_id: Uuid,
+                filter_customer_id: impl std::borrow::Borrow<Uuid>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
+                let filter_customer_id = filter_customer_id.borrow();
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let id = if let Some(after) = after {
                     Some(after.id)
@@ -312,7 +314,7 @@ mod tests {
                         es_entity::es_query!(
                             entity = Entity,
                             "SELECT customer_id, id FROM entities WHERE ((customer_id = $1) AND (COALESCE(id > $3, true))) ORDER BY id ASC LIMIT $2",
-                            filter_customer_id as Uuid,
+                            filter_customer_id as &Uuid,
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
@@ -323,7 +325,7 @@ mod tests {
                         es_entity::es_query!(
                             entity = Entity,
                             "SELECT customer_id, id FROM entities WHERE ((customer_id = $1) AND (COALESCE(id < $3, true))) ORDER BY id DESC LIMIT $2",
-                            filter_customer_id as Uuid,
+                            filter_customer_id as &Uuid,
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
@@ -374,7 +376,7 @@ mod tests {
         let expected = quote! {
             pub async fn list_for_email_by_email(
                 &self,
-                filter_email: String,
+                filter_email: impl std::borrow::Borrow<str>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByEmailCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, es_entity::EsRepoError> {
@@ -384,7 +386,7 @@ mod tests {
             pub async fn list_for_email_by_email_in_tx(
                 &self,
                 db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-                filter_email: String,
+                filter_email: impl std::borrow::Borrow<str>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByEmailCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, es_entity::EsRepoError> {
@@ -394,10 +396,11 @@ mod tests {
             async fn list_for_email_by_email_via(
                 &self,
                 executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-                filter_email: String,
+                filter_email: impl std::borrow::Borrow<str>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByEmailCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, es_entity::EsRepoError> {
+                let filter_email = filter_email.borrow();
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let (id, email) = if let Some(after) = after {
                     (Some(after.id), Some(after.email))
@@ -409,7 +412,7 @@ mod tests {
                         es_entity::es_query!(
                             entity = Entity,
                             "SELECT email, id FROM entities WHERE ((email = $1) AND (COALESCE((email, id) > ($4, $3), $3 IS NULL))) ORDER BY email ASC, id ASC LIMIT $2",
-                            filter_email as String,
+                            filter_email as &str,
                             (first + 1) as i64,
                             id as Option<EntityId>,
                             email as Option<String>,
@@ -421,7 +424,7 @@ mod tests {
                         es_entity::es_query!(
                             entity = Entity,
                             "SELECT email, id FROM entities WHERE ((email = $1) AND (COALESCE((email, id) < ($4, $3), $3 IS NULL))) ORDER BY email DESC, id DESC LIMIT $2",
-                            filter_email as String,
+                            filter_email as &str,
                             (first + 1) as i64,
                             id as Option<EntityId>,
                             email as Option<String>,
