@@ -28,7 +28,8 @@
 ///         let name = new_name.into();
 ///         idempotency_guard!(
 ///             self.events.iter().rev(),
-///             UserEvent::NameUpdated { name: existing_name } if existing_name == &name // <- this returns early if same name found
+///             UserEvent::NameUpdated { name: existing_name } if existing_name == &name
+///             // above line returns early if same name found
 ///         );
 ///         self.events.push(UserEvent::NameUpdated{name});
 ///         Idempotent::Executed(())
@@ -39,7 +40,8 @@
 ///         idempotency_guard!(
 ///             self.events.iter().rev(),
 ///             UserEvent::NameUpdated { name: existing_name } if existing_name == &name,
-///             => UserEvent::NameUpdated {..} // <- this breaks iteration
+///             => UserEvent::NameUpdated {..}
+///             // above line breaks iteration if same event found
 ///        );
 ///        self.events.push(UserEvent::NameUpdated{name});
 ///        Idempotent::Executed(())     
