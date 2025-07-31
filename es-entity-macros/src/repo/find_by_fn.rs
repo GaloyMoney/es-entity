@@ -32,7 +32,7 @@ impl ToTokens for FindByFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let entity = self.entity;
         let column_name = &self.column.name();
-        let column_type = &self.column.ty();
+        let column_type = &self.column.ty_for_find_by();
         let error = self.error;
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {

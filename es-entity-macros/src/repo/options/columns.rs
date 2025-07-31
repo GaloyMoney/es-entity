@@ -298,6 +298,15 @@ impl Column {
         &self.opts.ty
     }
 
+    pub fn ty_for_find_by(&self) -> syn::Type {
+        if let syn::Type::Path(type_path) = self.ty() {
+            if type_path.path.is_ident("String") {
+                return syn::parse_quote! { str };
+            }
+        }
+        self.ty().clone()
+    }
+
     pub fn accessor(&self) -> proc_macro2::TokenStream {
         self.opts.update_accessor(&self.name)
     }
