@@ -110,7 +110,7 @@ impl<T: std::fmt::Debug> Default for PaginatedQueryArgs<T> {
 /// let result = users.list_by_id(query_args, ListDirection::Ascending).await?;
 ///
 /// // Continue pagination using the `next_query_args` argument updated with `PaginatedQueryRet`
-/// // Will conitinue only if 'has_next_page` returned from `result` is true
+/// // Will continue only if 'has_next_page` returned from `result` is true
 /// if result.has_next_page {
 ///     let next_query_args = PaginatedQueryArgs {
 ///         first: 10,
