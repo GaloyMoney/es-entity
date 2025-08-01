@@ -59,10 +59,6 @@ impl<T, O> RetryableInto<O> for T where T: Into<O> + Copy + std::fmt::Debug {}
 pub trait AsExecutor<'a> {
     type Executor: sqlx::Executor<'a, Database = sqlx::Postgres>;
 
-    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        None
-    }
-
     fn as_executor(&'a mut self) -> Self::Executor;
 }
 
@@ -71,5 +67,11 @@ impl<'a, 't> AsExecutor<'a> for sqlx::Transaction<'t, sqlx::Postgres> {
 
     fn as_executor(&'a mut self) -> Self::Executor {
         &mut *self
+    }
+}
+
+pub trait AtomicOperation<'a>: AsExecutor<'a> {
+    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        None
     }
 }
