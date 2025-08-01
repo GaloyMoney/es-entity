@@ -41,7 +41,7 @@ impl ToTokens for FindByFn<'_> {
                     if self.any_nested {
                         quote! { .fetch_one_include_nested(op) }
                     } else {
-                        quote! { .fetch_one(op) }
+                        quote! { .fetch_one(op.as_executor()) }
                     },
                 )
             } else {
@@ -50,7 +50,7 @@ impl ToTokens for FindByFn<'_> {
                     if self.any_nested {
                         quote! { .fetch_optional_include_nested(op) }
                     } else {
-                        quote! { .fetch_optional(op) }
+                        quote! { .fetch_optional(op.as_executor()) }
                     },
                 )
             };
@@ -185,7 +185,7 @@ mod tests {
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                     )
-                    .fetch_one(op)
+                    .fetch_one(op.as_executor())
                     .await?
                 )
             }
@@ -212,7 +212,7 @@ mod tests {
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                     )
-                    .fetch_optional(op)
+                    .fetch_optional(op.as_executor())
                     .await?
                 )
             }
@@ -263,7 +263,7 @@ mod tests {
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
                     )
-                    .fetch_one(op)
+                    .fetch_one(op.as_executor())
                     .await?
                 )
             }
@@ -290,7 +290,7 @@ mod tests {
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                     )
-                    .fetch_one(op)
+                    .fetch_one(op.as_executor())
                     .await?
                 )
             }
@@ -317,7 +317,7 @@ mod tests {
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
                     )
-                    .fetch_optional(op)
+                    .fetch_optional(op.as_executor())
                     .await?
                 )
             }
@@ -344,7 +344,7 @@ mod tests {
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                     )
-                    .fetch_optional(op)
+                    .fetch_optional(op.as_executor())
                     .await?
                 )
             }

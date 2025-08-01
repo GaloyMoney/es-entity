@@ -18,18 +18,20 @@ impl Users {
         Self { pool }
     }
     pub async fn query_with_args(&self, id: UserId) -> Result<User, EsRepoError> {
+        let mut op = self.begin_op().await?;
         es_query!(
             entity = User,
             "SELECT * FROM custom_name_for_users WHERE id = $1",
             id as UserId
         )
-        .fetch_one(&mut self.begin_op().await?)
+        .fetch_one(op.as_executor())
         .await
     }
 
     pub async fn query_without_args(&self) -> Result<(Vec<User>, bool), EsRepoError> {
+        let mut op = self.begin_op().await?;
         es_query!(entity = User, "SELECT * FROM custom_name_for_users")
-            .fetch_n(&mut self.begin_op().await?, 2)
+            .fetch_n(op.as_executor(), 2)
             .await
     }
 }
