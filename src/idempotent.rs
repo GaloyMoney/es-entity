@@ -33,11 +33,11 @@
 /// fn example(){
 ///     let mut user = User{ events: vec![] };
 ///     assert!(user.update_name("Alice").did_execute());
-///     // updating "ALice" executes as no such event has been processed before.
+///     // updating "Alice" executes as no such event has been processed before.
 ///     // Signalled by returning `Idempotent::Executed(T)`, validated with `did_execute` helper method
 ///
 ///     assert!(user.update_name("Alice").was_ignored());
-///     // updating "ALice" again ignored because same event has been processed before.
+///     // updating "Alice" again ignored because same event has been processed before.
 ///     // Signalled by returning `Idempotent::Ignored` early, validated with `was_ignored` helper method
 /// }
 /// ```
