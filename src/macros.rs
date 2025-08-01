@@ -12,19 +12,54 @@
 ///
 /// # Examples
 ///
-/// ```ignore
-/// // Basic: prevent duplicate operations
-/// idempotency_guard!(
-///     self.events.iter().rev(),
-///     UserEvent::NameUpdated { name } if name == &new_name
-/// );
+/// ```rust
+/// use es_entity::{idempotency_guard, Idempotent};
+/// pub enum UserEvent{
+///     Initialized {id: u64, name: String},
+///     NameUpdated {name: String}
+/// }
 ///
-/// // With break: allow re-applying past operations
-/// idempotency_guard!(
-///     self.events.iter().rev(),
-///     UserEvent::NameUpdated { name } if name == &new_name,
-///     => UserEvent::NameUpdated { .. }  // Stop at any name update
-/// );
+/// pub struct User{
+///     events: Vec<UserEvent>
+/// }
+///
+/// impl User{
+///     pub fn update_name(&mut self, new_name: impl Into<String>) -> Idempotent<()>{
+///         let name = new_name.into();
+///         idempotency_guard!(
+///             self.events.iter().rev(),
+///             UserEvent::NameUpdated { name: existing_name } if existing_name == &name
+///             // above line returns early if same name found
+///         );
+///         self.events.push(UserEvent::NameUpdated{name});
+///         Idempotent::Executed(())
+///     }
+///     
+///     pub fn update_name_with_break(&mut self, new_name: impl Into<String>) -> Idempotent<()>{
+///         let name = new_name.into();
+///         idempotency_guard!(
+///             self.events.iter().rev(),
+///             UserEvent::NameUpdated { name: existing_name } if existing_name == &name,
+///             => UserEvent::NameUpdated {..}
+///             // above line breaks iteration if same event found
+///        );
+///        self.events.push(UserEvent::NameUpdated{name});
+///        Idempotent::Executed(())     
+///     }
+/// }
+///   
+/// fn main(){
+///     let mut user1 = User{ events: vec![] };
+///     let mut user2 = User{ events: vec![] };
+///     assert!(user1.update_name("Alice").did_execute());
+///     // updating "ALice" again ignored because same event with same name exists
+///     assert!(user1.update_name("Alice").was_ignored());
+///     
+///     assert!(user2.update_name_with_break("Alice").did_execute());
+///     assert!(user2.update_name_with_break("Bob").did_execute());
+///     // updating "ALice" again works because of early break condition
+///     assert!(user2.update_name_with_break("Alice").did_execute());
+/// }
 /// ```
 #[macro_export]
 macro_rules! idempotency_guard {
