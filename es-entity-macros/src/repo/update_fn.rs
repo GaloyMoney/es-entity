@@ -54,7 +54,7 @@ impl ToTokens for UpdateFn<'_> {
                 #query,
                 #(#args),*
             )
-                .execute(&mut **op.tx())
+                .execute(op.as_executor())
                 .await?;
             })
         } else {
@@ -81,11 +81,14 @@ impl ToTokens for UpdateFn<'_> {
                 Ok(res)
             }
 
-            pub async fn update_in_op(
+            pub async fn update_in_op<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 entity: &mut #entity
-            ) -> Result<usize, #error> {
+            ) -> Result<usize, #error>
+            where
+                OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 #(#nested)*
 
                 if !Self::extract_events(entity).any_new() {
@@ -98,7 +101,7 @@ impl ToTokens for UpdateFn<'_> {
                     self.persist_events(op, events).await?
                 };
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
 
                 Ok(n_events)
             }
@@ -157,11 +160,14 @@ mod tests {
                 Ok(res)
             }
 
-            pub async fn update_in_op(
+            pub async fn update_in_op<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 entity: &mut Entity
-            ) -> Result<usize, es_entity::EsRepoError> {
+            ) -> Result<usize, es_entity::EsRepoError>
+            where
+                OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 if !Self::extract_events(entity).any_new() {
                     return Ok(0);
                 }
@@ -173,7 +179,7 @@ mod tests {
                     id as &EntityId,
                     name as &String
                 )
-                    .execute(&mut **op.tx())
+                    .execute(op.as_executor())
                     .await?;
 
                 let n_events = {
@@ -181,7 +187,7 @@ mod tests {
                     self.persist_events(op, events).await?
                 };
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
 
                 Ok(n_events)
             }
@@ -230,11 +236,14 @@ mod tests {
                 Ok(res)
             }
 
-            pub async fn update_in_op(
+            pub async fn update_in_op<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 entity: &mut Entity
-            ) -> Result<usize, es_entity::EsRepoError> {
+            ) -> Result<usize, es_entity::EsRepoError>
+            where
+                OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 if !Self::extract_events(entity).any_new() {
                     return Ok(0);
                 }
@@ -244,7 +253,7 @@ mod tests {
                     self.persist_events(op, events).await?
                 };
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
 
                 Ok(n_events)
             }

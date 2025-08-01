@@ -90,11 +90,14 @@ impl ToTokens for CreateFn<'_> {
                 Ok(res)
             }
 
-            pub async fn create_in_op(
+            pub async fn create_in_op<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 new_entity: <#entity as es_entity::EsEntity>::New
-            ) -> Result<#entity, #error> {
+            ) -> Result<#entity, #error>
+            where
+                OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 #assignments
 
                  sqlx::query!(
@@ -102,7 +105,7 @@ impl ToTokens for CreateFn<'_> {
                      #(#args)*
                      op.now()
                 )
-                .execute(&mut **op.tx())
+                .execute(op.as_executor())
                 .await?;
 
                 let mut events = Self::convert_new(new_entity);
@@ -111,7 +114,7 @@ impl ToTokens for CreateFn<'_> {
 
                 #(#nested)*
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
                 Ok(entity)
             }
         });
@@ -173,25 +176,28 @@ mod tests {
                 Ok(res)
             }
 
-            pub async fn create_in_op(
+            pub async fn create_in_op<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, es_entity::EsRepoError> {
+            ) -> Result<Entity, es_entity::EsRepoError>
+            where
+                OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 let id = &new_entity.id;
 
                 sqlx::query!("INSERT INTO entities (id, created_at) VALUES ($1, COALESCE($2, NOW()))",
                     id as &EntityId,
                     op.now()
                 )
-                .execute(&mut **op.tx())
+                .execute(op.as_executor())
                 .await?;
 
                 let mut events = Self::convert_new(new_entity);
                 let n_events = self.persist_events(op, &mut events).await?;
                 let entity = Self::hydrate_entity(events)?;
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
                 Ok(entity)
             }
         };
@@ -252,11 +258,14 @@ mod tests {
                 Ok(res)
             }
 
-            pub async fn create_in_op(
+            pub async fn create_in_op<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, es_entity::EsRepoError> {
+            ) -> Result<Entity, es_entity::EsRepoError>
+            where
+                OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 let id = &new_entity.id;
                 let name = &new_entity.name();
 
@@ -265,14 +274,14 @@ mod tests {
                     name as &String,
                     op.now()
                 )
-                .execute(&mut **op.tx())
+                .execute(op.as_executor())
                 .await?;
 
                 let mut events = Self::convert_new(new_entity);
                 let n_events = self.persist_events(op, &mut events).await?;
                 let entity = Self::hydrate_entity(events)?;
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
                 Ok(entity)
             }
         };
