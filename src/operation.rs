@@ -51,7 +51,6 @@ use sqlx::{PgPool, Postgres, Transaction};
 ///     Ok(())
 /// }
 /// ```
-
 pub struct DbOp<'t> {
     tx: Transaction<'t, Postgres>,
     now: Option<chrono::DateTime<chrono::Utc>>,

@@ -28,6 +28,7 @@ impl<E: Clone + EsEvent> Clone for PersistedEvent<E> {
         }
     }
 }
+
 /// A [Vec] wrapper that holds events in chronological sequence.
 ///
 /// Mutations of entity are appended to it as events, providing ES specific augmentations
