@@ -51,20 +51,15 @@ pub struct Sort<T> {
 ///     after: None, // Start from beginning
 /// };
 ///
-/// // Execute query and get PaginatedQueryRet
+/// // Execute query using `query_args` argument of `PaginatedQueryArgs` type
 /// let result = users.list_by_id(query_args, ListDirection::Ascending).await?;
 ///
-/// // Continue pagination using PaginatedQueryRet fields
+/// // Continue pagination using the updated `next_query_args` of `PaginatedQueryArgs` type
 /// if result.has_next_page {
 ///     let next_query_args = PaginatedQueryArgs {
 ///         first: 10,
 ///         after: result.end_cursor, // Use cursor from previous result
 ///     };
-///     let next_result = users.list_by_id(next_query_args, ListDirection::Ascending).await?;
-/// }
-///
-/// // Or use PaginatedQueryRet::into_next_query() convenience method
-/// if let Some(next_query_args) = result.into_next_query() {
 ///     let next_result = users.list_by_id(next_query_args, ListDirection::Ascending).await?;
 /// }
 /// ```
@@ -99,12 +94,36 @@ impl<T: std::fmt::Debug> Default for PaginatedQueryArgs<T> {
 
 /// Return type for paginated queries containing entities and pagination metadata
 ///
-/// `PaginatedQueryRet` contains the fetched entities, pagination state, and provides utilities for continuing pagination.
+/// `PaginatedQueryRet` contains the fetched entities and utilities for continuing pagination.
 /// Returned by the [crate::EsRepo] functions like `list_by`, `list_for`, `find_many`.
 /// Used with [crate::PaginatedQueryArgs] to perform consistent and efficient pagination
 ///
-/// # Example
-/// [See comprehensive usage examples in PaginatedQueryArgs section][crate::PaginatedQueryArgs]
+/// # Examples
+///
+/// ```ignore
+/// let query_args = PaginatedQueryArgs {
+///     first: 10,
+///     after: None,
+/// };
+///
+/// // Execute query and get the `result` of type `PaginatedQueryRet`
+/// let result = users.list_by_id(query_args, ListDirection::Ascending).await?;
+///
+/// // Continue pagination using the `next_query_args` argument updated with `PaginatedQueryRet`
+/// // Will conitinue only if 'has_next_page` returned from `result` is true
+/// if result.has_next_page {
+///     let next_query_args = PaginatedQueryArgs {
+///         first: 10,
+///         after: result.end_cursor, // update with 'end_cursor' of previous `PaginatedQueryRet` result
+///     };
+///     let next_result = users.list_by_id(next_query_args, ListDirection::Ascending).await?;
+/// }
+///
+/// // Or use PaginatedQueryRet::into_next_query() convenience method
+/// if let Some(next_query_args) = result.into_next_query() {
+///     let next_result = users.list_by_id(next_query_args, ListDirection::Ascending).await?;
+/// }
+/// ```
 pub struct PaginatedQueryRet<T, C> {
     /// [Vec] for the fetched `entities` by the paginated query
     pub entities: Vec<T>,
