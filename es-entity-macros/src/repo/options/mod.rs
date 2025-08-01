@@ -29,21 +29,21 @@ impl RepoField {
 
     pub fn create_nested_fn_name(&self) -> syn::Ident {
         syn::Ident::new(
-            &format!("create_nested_{}", self.ident()),
+            &format!("create_nested_{}_in_op", self.ident()),
             proc_macro2::Span::call_site(),
         )
     }
 
     pub fn update_nested_fn_name(&self) -> syn::Ident {
         syn::Ident::new(
-            &format!("update_nested_{}", self.ident()),
+            &format!("update_nested_{}_in_op", self.ident()),
             proc_macro2::Span::call_site(),
         )
     }
 
     pub fn find_nested_fn_name(&self) -> syn::Ident {
         syn::Ident::new(
-            &format!("find_nested_{}", self.ident()),
+            &format!("find_nested_{}_in_op", self.ident()),
             proc_macro2::Span::call_site(),
         )
     }

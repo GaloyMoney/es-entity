@@ -252,7 +252,7 @@ impl ToTokens for ListByFn<'_> {
         let error = self.error;
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
-                self.#f(&mut entities).await?;
+                self.#f(op, &mut entities).await?;
             }
         });
         let maybe_mut_entities = if self.nested_fn_names.is_empty() {
@@ -362,15 +362,14 @@ impl ToTokens for ListByFn<'_> {
                     self.#fn_in_op(&mut self.begin_op().await?, cursor, direction).await
                 }
 
-                async fn #fn_in_op<'a, 'o, OP>(
+                async fn #fn_in_op<OP>(
                     &self,
-                    op: &'a mut OP,
+                    op: &mut OP,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
                    where
-                       'a: 'o,
-                       OP: es_entity::AtomicOperation<'o>
+                       OP: for<'o> es_entity::AtomicOperation<'o>
                  {
                     let executor = op.as_executor();
 
@@ -521,15 +520,14 @@ mod tests {
                 self.list_by_id_in_op(&mut self.begin_op().await?, cursor, direction).await
             }
 
-            async fn list_by_id_in_op<'a, 'o, OP>(
+            async fn list_by_id_in_op<OP>(
                 &self,
-                op: &'a mut OP,
+                op: &mut OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError>
                 where
-                    'a: 'o,
-                    OP: es_entity::AtomicOperation<'o>
+                    OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
 
@@ -579,15 +577,14 @@ mod tests {
                 self.list_by_id_include_deleted_in_op(&mut self.begin_op().await?, cursor, direction).await
             }
 
-            async fn list_by_id_include_deleted_in_op<'a, 'o, OP>(
+            async fn list_by_id_include_deleted_in_op<OP>(
                 &self,
-                op: &'a mut OP,
+                op: &mut OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError>
             where
-                'a: 'o,
-                OP: es_entity::AtomicOperation<'o>
+                OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
 
@@ -666,15 +663,14 @@ mod tests {
                 self.list_by_name_in_op(&mut self.begin_op().await?, cursor, direction).await
             }
 
-            async fn list_by_name_in_op<'a, 'o, OP>(
+            async fn list_by_name_in_op<OP>(
                 &self,
-                op: &'a mut OP,
+                op: &mut OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByNameCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, es_entity::EsRepoError>
                 where
-                    'a: 'o,
-                    OP: es_entity::AtomicOperation<'o>
+                    OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
 
@@ -758,15 +754,14 @@ mod tests {
                 self.list_by_value_in_op(&mut self.begin_op().await?, cursor, direction).await
             }
 
-            async fn list_by_value_in_op<'a, 'o, OP>(
+            async fn list_by_value_in_op<OP>(
                 &self,
-                op: &'a mut OP,
+                op: &mut OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByValueCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, es_entity::EsRepoError>
                 where
-                    'a: 'o,
-                    OP: es_entity::AtomicOperation<'o>
+                    OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
 

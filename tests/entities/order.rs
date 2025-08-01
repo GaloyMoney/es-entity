@@ -46,7 +46,8 @@ impl OrderItem {
         );
 
         self.quantity = quantity;
-        self.events.push(OrderItemEvent::QuantityUpdated { quantity });
+        self.events
+            .push(OrderItemEvent::QuantityUpdated { quantity });
 
         Idempotent::Executed(())
     }

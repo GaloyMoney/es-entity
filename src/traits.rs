@@ -47,16 +47,19 @@ pub trait EsRepo {
 
 #[async_trait]
 pub trait PopulateNested<C>: EsRepo {
-    async fn populate(
+    async fn populate_in_op<OP>(
         &self,
+        op: &mut OP,
         lookup: std::collections::HashMap<C, &mut Nested<<Self as EsRepo>::Entity>>,
-    ) -> Result<(), <Self as EsRepo>::Err>;
+    ) -> Result<(), <Self as EsRepo>::Err>
+    where
+        OP: for<'o> AtomicOperation<'o>;
 }
 
 pub trait RetryableInto<T>: Into<T> + Copy + std::fmt::Debug {}
 impl<T, O> RetryableInto<O> for T where T: Into<O> + Copy + std::fmt::Debug {}
 
-pub trait AtomicOperation<'a> {
+pub trait AtomicOperation<'a>: Send {
     type Executor: sqlx::Executor<'a, Database = sqlx::Postgres>;
 
     fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {

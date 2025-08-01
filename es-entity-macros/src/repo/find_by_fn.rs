@@ -36,7 +36,7 @@ impl ToTokens for FindByFn<'_> {
         let error = self.error;
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
-                self.#f(&mut entities).await?;
+                self.#f(op, &mut entities).await?;
             }
         });
         let maybe_lookup_nested = if self.nested_fn_names.is_empty() {
@@ -126,14 +126,13 @@ impl ToTokens for FindByFn<'_> {
                         self.#fn_in_op(&mut self.begin_op().await?, #column_name).await
                     }
 
-                    pub async fn #fn_in_op<'a, 'o, OP>(
+                    pub async fn #fn_in_op<OP>(
                         &self,
-                        op: &'a mut OP,
+                        op: &mut OP,
                         #column_name: impl std::borrow::Borrow<#column_type>
                     ) -> Result<#result_type, #error>
                         where
-                            'a: 'o,
-                            OP: es_entity::AtomicOperation<'o>
+                            OP: for<'o> es_entity::AtomicOperation<'o>
                     {
                         let executor = op.as_executor();
                         let #column_name = #column_name.borrow();
@@ -187,14 +186,13 @@ mod tests {
                 self.find_by_id_in_op(&mut self.begin_op().await?, id).await
             }
 
-            pub async fn find_by_id_in_op<'a, 'o, OP>(
+            pub async fn find_by_id_in_op<OP>(
                 &self,
-                op: &'a mut OP,
+                op: &mut OP,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    'a: 'o,
-                    OP: es_entity::AtomicOperation<'o>
+                    OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
                 let id = id.borrow();
@@ -215,14 +213,13 @@ mod tests {
                 self.maybe_find_by_id_in_op(&mut self.begin_op().await?, id).await
             }
 
-            pub async fn maybe_find_by_id_in_op<'a, 'o, OP>(
+            pub async fn maybe_find_by_id_in_op<OP>(
                 &self,
-                op: &'a mut OP,
+                op: &mut OP,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    'a: 'o,
-                    OP: es_entity::AtomicOperation<'o>
+                    OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
                 let id = id.borrow();
@@ -270,14 +267,13 @@ mod tests {
                 self.find_by_id_in_op(&mut self.begin_op().await?, id).await
             }
 
-            pub async fn find_by_id_in_op<'a, 'o, OP>(
+            pub async fn find_by_id_in_op<OP>(
                 &self,
-                op: &'a mut OP,
+                op: &mut OP,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    'a: 'o,
-                    OP: es_entity::AtomicOperation<'o>
+                    OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
                 let id = id.borrow();
@@ -298,14 +294,13 @@ mod tests {
                 self.find_by_id_include_deleted_in_op(&mut self.begin_op().await?, id).await
             }
 
-            pub async fn find_by_id_include_deleted_in_op<'a, 'o, OP>(
+            pub async fn find_by_id_include_deleted_in_op<OP>(
                 &self,
-                op: &'a mut OP,
+                op: &mut OP,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    'a: 'o,
-                    OP: es_entity::AtomicOperation<'o>
+                    OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
                 let id = id.borrow();
@@ -326,14 +321,13 @@ mod tests {
                 self.maybe_find_by_id_in_op(&mut self.begin_op().await?, id).await
             }
 
-            pub async fn maybe_find_by_id_in_op<'a, 'o, OP>(
+            pub async fn maybe_find_by_id_in_op<OP>(
                 &self,
-                op: &'a mut OP,
+                op: &mut OP,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    'a: 'o,
-                    OP: es_entity::AtomicOperation<'o>
+                    OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
                 let id = id.borrow();
@@ -357,14 +351,13 @@ mod tests {
                 self.maybe_find_by_id_include_deleted_in_op(&mut self.begin_op().await?, id).await
             }
 
-            pub async fn maybe_find_by_id_include_deleted_in_op<'a, 'o, OP>(
+            pub async fn maybe_find_by_id_include_deleted_in_op<OP>(
                 &self,
-                op: &'a mut OP,
+                op: &mut OP,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    'a: 'o,
-                    OP: es_entity::AtomicOperation<'o>
+                    OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
                 let id = id.borrow();
