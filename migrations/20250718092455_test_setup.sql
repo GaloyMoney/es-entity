@@ -65,8 +65,6 @@ CREATE TABLE custom_name_for_user_events (
 -- Tables for nested entities test
 CREATE TABLE orders (
   id UUID PRIMARY KEY,
-  customer_name VARCHAR NOT NULL,
-  status VARCHAR NOT NULL DEFAULT 'pending',
   created_at TIMESTAMPTZ NOT NULL
 );
 
@@ -82,9 +80,6 @@ CREATE TABLE order_events (
 CREATE TABLE order_items (
   id UUID PRIMARY KEY,
   order_id UUID NOT NULL REFERENCES orders(id),
-  product_name VARCHAR NOT NULL,
-  quantity INTEGER NOT NULL,
-  price DECIMAL(10,2) NOT NULL,
   created_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX idx_order_items_order_id ON order_items (order_id);

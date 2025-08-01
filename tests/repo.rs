@@ -1,10 +1,9 @@
+mod entities;
 mod helpers;
-mod user;
 
+use entities::user::*;
 use es_entity::*;
 use sqlx::PgPool;
-
-use user::*;
 
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "User", columns(name(ty = "String")))]
