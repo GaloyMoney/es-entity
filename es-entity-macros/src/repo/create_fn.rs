@@ -49,7 +49,7 @@ impl ToTokens for CreateFn<'_> {
         let table_name = self.table_name;
 
         let column_names = self.columns.insert_column_names();
-        let placeholders = self.columns.insert_placeholders();
+        let placeholders = self.columns.insert_placeholders(0);
         let args = self.columns.create_query_args();
 
         let query = format!(

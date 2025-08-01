@@ -42,18 +42,24 @@ impl ToTokens for CreateAllFn<'_> {
         } else {
             quote! { mut entity }
         };
-        let assignments = self
-            .columns
-            .variable_assignments_for_create_all(syn::parse_quote! { new_entity });
 
         let table_name = self.table_name;
 
         let column_names = self.columns.insert_column_names();
-        let builder_args = self.columns.create_query_builder_args();
+        let placeholders = self.columns.insert_placeholders(1);
+        let (arg_collection, bindings) = self
+            .columns
+            .create_all_arg_collection(syn::parse_quote! { new_entity });
 
-        let insert_fragment = format!(
-            "INSERT INTO {} ({}, created_at)",
+        let query = format!(
+            "INSERT INTO {} (created_at, {}) \
+            SELECT COALESCE($1, NOW()), unnested.{} \
+            FROM UNNEST({}) \
+            AS unnested({})",
             table_name,
+            column_names.join(", "),
+            column_names.join(", unnested."),
+            placeholders,
             column_names.join(", "),
         );
 
@@ -78,16 +84,14 @@ impl ToTokens for CreateAllFn<'_> {
                     return Ok(res);
                 }
 
-                let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
-                    #insert_fragment,
-                );
-                query_builder.push_values(new_entities.iter(), |mut builder, new_entity: &<#entity as es_entity::EsEntity>::New| {
-                    #assignments
-                    #(#builder_args)*
-                    builder.push_bind(op.now());
-                });
-                let query = query_builder.build();
-                query.execute(&mut **op.tx()).await?;
+                #arg_collection
+
+                let now = op.now();
+                sqlx::query(#query)
+                   .bind(now)
+                   #(#bindings)*
+                   .fetch_all(&mut **op.tx())
+                   .await?;
 
 
                 let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event>> = new_entities.into_iter().map(Self::convert_new).collect();
@@ -159,21 +163,26 @@ mod tests {
                     return Ok(res);
                 }
 
-                let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
-                    "INSERT INTO entities (id, name, created_at)",
-                );
+                let mut id_collection = Vec::new();
+                let mut name_collection = Vec::new();
 
-                query_builder.push_values(new_entities.iter(), |mut builder, new_entity: &<Entity as es_entity::EsEntity>::New| {
+                for new_entity in new_entities.iter() {
                     let id: &EntityId = &new_entity.id;
                     let name: &String = &new_entity.name;
 
-                    builder.push_bind(id);
-                    builder.push_bind(name);
-                    builder.push_bind(op.now());
-                });
+                    id_collection.push(id);
+                    name_collection.push(name);
+                }
 
-                let query = query_builder.build();
-                query.execute(&mut **op.tx()).await?;
+                let now = op.now();
+                sqlx::query(
+                    "INSERT INTO entities (created_at, id, name) SELECT COALESCE($1, NOW()), unnested.id, unnested.name FROM UNNEST($2, $3) AS unnested(id, name)")
+                    .bind(now)
+                    .bind(id_collection)
+                    .bind(name_collection)
+                    .fetch_all(&mut **op.tx())
+                    .await?;
+
 
                 let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event>> = new_entities.into_iter().map(Self::convert_new).collect();
                 let mut n_persisted = self.persist_events_batch(op, &mut all_events).await?;

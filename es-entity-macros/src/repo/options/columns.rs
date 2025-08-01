@@ -100,17 +100,53 @@ impl Columns {
             .collect()
     }
 
-    pub fn create_query_builder_args(&self) -> Vec<proc_macro2::TokenStream> {
-        self.all
+    pub fn create_all_arg_collection(
+        &self,
+        ident: syn::Ident,
+    ) -> (proc_macro2::TokenStream, Vec<proc_macro2::TokenStream>) {
+        let assignments = self.variable_assignments_for_create_all(ident.clone());
+        let (vecs, pushes, bindings) = self
+            .all
             .iter()
             .filter(|c| c.opts.persist_on_create())
             .map(|column| {
+                let vec_ident = syn::Ident::new(
+                    &format!("{}_collection", column.name),
+                    proc_macro2::Span::call_site(),
+                );
                 let ident = &column.name;
-                quote! {
-                    builder.push_bind(#ident);
-                }
+                (
+                    quote! {
+                        let mut #vec_ident = Vec::new();
+                    },
+                    quote! {
+                        #vec_ident.push(#ident);
+                    },
+                    quote! {
+                        .bind(#vec_ident)
+                    },
+                )
             })
-            .collect()
+            .fold(
+                (Vec::new(), Vec::new(), Vec::new()),
+                |(mut v1, mut v2, mut v3): (Vec<_>, Vec<_>, Vec<_>), (a, b, c)| {
+                    v1.push(a);
+                    v2.push(b);
+                    v3.push(c);
+                    (v1, v2, v3)
+                },
+            );
+        (
+            quote! {
+                #(#vecs)*
+                for #ident in new_entities.iter() {
+                    #assignments
+
+                    #(#pushes)*
+                }
+            },
+            bindings,
+        )
     }
 
     pub fn insert_column_names(&self) -> Vec<String> {
@@ -126,13 +162,13 @@ impl Columns {
             .collect()
     }
 
-    pub fn insert_placeholders(&self) -> String {
+    pub fn insert_placeholders(&self, offset: usize) -> String {
         let count = self
             .all
             .iter()
             .filter(|c| c.opts.persist_on_create())
             .count();
-        (1..=count)
+        ((1 + offset)..=(count + offset))
             .map(|i| format!("${i}"))
             .collect::<Vec<_>>()
             .join(", ")
