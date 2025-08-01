@@ -83,7 +83,7 @@ pub trait IntoEvents<E: EsEvent> {
     fn into_events(self) -> EntityEvents<E>;
 }
 
-/// Required trait for re-constructing entites from their events in chronological order.
+/// Required trait for re-constructing entities from their events in chronological order.
 ///
 /// All `Entity` types must implement this trait and its `try_from_events` method to hydrate
 /// entities post-persistence, enabling event-sourcing pattern where entities are built from

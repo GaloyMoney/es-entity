@@ -9,7 +9,7 @@
 /// [See comprehensive usage examples][crate::idempotency_guard]
 #[must_use]
 pub enum Idempotent<T> {
-    /// Signals if the idempotent mutation was executed and returnd `T`
+    /// Signals if the idempotent mutation was executed and returned `T`
     Executed(T),
     /// Signals if the idempotent mutation was ignored 
     Ignored,
