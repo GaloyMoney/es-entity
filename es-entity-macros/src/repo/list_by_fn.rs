@@ -285,7 +285,7 @@ impl ToTokens for ListByFn<'_> {
             );
             let fn_in_op = syn::Ident::new(
                 &format!(
-                    "list_by_{}_in_op{}",
+                    "list_by_{}{}_in_op",
                     column_name,
                     delete.include_deletion_fn_postfix()
                 ),
@@ -576,10 +576,10 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
-                self.list_by_id_in_op_include_deleted(&mut self.begin_op().await?, cursor, direction).await
+                self.list_by_id_include_deleted_in_op(&mut self.begin_op().await?, cursor, direction).await
             }
 
-            async fn list_by_id_in_op_include_deleted<'a, 'o, OP>(
+            async fn list_by_id_include_deleted_in_op<'a, 'o, OP>(
                 &self,
                 op: &'a mut OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,

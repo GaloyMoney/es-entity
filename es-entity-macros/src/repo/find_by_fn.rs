@@ -81,7 +81,7 @@ impl ToTokens for FindByFn<'_> {
                 );
                 let fn_in_op = syn::Ident::new(
                     &format!(
-                        "{}find_by_{}_in_op{}",
+                        "{}find_by_{}{}_in_op",
                         maybe,
                         column_name,
                         delete.include_deletion_fn_postfix()
@@ -295,10 +295,10 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError> {
-                self.find_by_id_in_op_include_deleted(&mut self.begin_op().await?, id).await
+                self.find_by_id_include_deleted_in_op(&mut self.begin_op().await?, id).await
             }
 
-            pub async fn find_by_id_in_op_include_deleted<'a, 'o, OP>(
+            pub async fn find_by_id_include_deleted_in_op<'a, 'o, OP>(
                 &self,
                 op: &'a mut OP,
                 id: impl std::borrow::Borrow<EntityId>
@@ -354,10 +354,10 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError> {
-                self.maybe_find_by_id_in_op_include_deleted(&mut self.begin_op().await?, id).await
+                self.maybe_find_by_id_include_deleted_in_op(&mut self.begin_op().await?, id).await
             }
 
-            pub async fn maybe_find_by_id_in_op_include_deleted<'a, 'o, OP>(
+            pub async fn maybe_find_by_id_include_deleted_in_op<'a, 'o, OP>(
                 &self,
                 op: &'a mut OP,
                 id: impl std::borrow::Borrow<EntityId>

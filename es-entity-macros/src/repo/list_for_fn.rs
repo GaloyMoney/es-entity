@@ -95,7 +95,7 @@ impl ToTokens for ListForFn<'_> {
             );
             let fn_in_op = syn::Ident::new(
                 &format!(
-                    "list_for_{}_by_{}_in_op{}",
+                    "list_for_{}_by_{}{}_in_op",
                     for_column_name,
                     by_column_name,
                     delete.include_deletion_fn_postfix()
