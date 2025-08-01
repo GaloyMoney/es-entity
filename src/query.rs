@@ -129,4 +129,47 @@ where
         let rows = self.inner.fetch_all(executor).await?;
         Ok(EntityEvents::load_n(rows.into_iter(), first)?)
     }
+
+    pub async fn fetch_optional_include_nested<OP>(
+        self,
+        op: &mut OP,
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::Err>
+    where
+        OP: for<'o> AtomicOperation<'o>,
+    {
+        let Some(entity) = self.fetch_optional(op).await? else {
+            return Ok(None);
+        };
+        let mut entities = [entity];
+        <Repo as EsRepo>::load_all_nested_in_op(op, &mut entities).await?;
+        let [entity] = entities;
+        Ok(Some(entity))
+    }
+
+    pub async fn fetch_one_include_nested<OP>(
+        self,
+        op: &mut OP,
+    ) -> Result<<Repo as EsRepo>::Entity, <Repo as EsRepo>::Err>
+    where
+        OP: for<'o> AtomicOperation<'o>,
+    {
+        let entity = self.fetch_one(op).await?;
+        let mut entities = [entity];
+        <Repo as EsRepo>::load_all_nested_in_op(op, &mut entities).await?;
+        let [entity] = entities;
+        Ok(entity)
+    }
+
+    pub async fn fetch_n_include_nested<OP>(
+        self,
+        op: &mut OP,
+        first: usize,
+    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::Err>
+    where
+        OP: for<'o> AtomicOperation<'o>,
+    {
+        let (mut entities, more) = self.fetch_n(op, first).await?;
+        <Repo as EsRepo>::load_all_nested_in_op(op, &mut entities).await?;
+        Ok((entities, more))
+    }
 }

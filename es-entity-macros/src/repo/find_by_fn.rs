@@ -11,7 +11,7 @@ pub struct FindByFn<'a> {
     table_name: &'a str,
     error: &'a syn::Type,
     delete: DeleteOption,
-    nested_fn_names: Vec<syn::Ident>,
+    any_nested: bool,
 }
 
 impl<'a> FindByFn<'a> {
@@ -23,7 +23,7 @@ impl<'a> FindByFn<'a> {
             table_name: opts.table_name(),
             error: opts.err(),
             delete: opts.delete,
-            nested_fn_names: opts.all_nested().map(|f| f.find_nested_fn_name()).collect(),
+            any_nested: opts.any_nested(),
         }
     }
 }
@@ -34,38 +34,24 @@ impl ToTokens for FindByFn<'_> {
         let column_name = &self.column.name();
         let column_type = &self.column.ty_for_find_by();
         let error = self.error;
-        let nested = self.nested_fn_names.iter().map(|f| {
-            quote! {
-                Self::#f(op, &mut entities).await?;
-            }
-        });
-        let maybe_lookup_nested = if self.nested_fn_names.is_empty() {
-            quote! {}
-        } else {
-            quote! {
-                let mut entities = vec![entity];
-                #(#nested)*
-                let entity = entities.pop().unwrap();
-            }
-        };
         for maybe in ["", "maybe_"] {
-            let (result_type, fetch_fn, early_return, regular_return) = if maybe.is_empty() {
+            let (result_type, fetch_fn) = if maybe.is_empty() {
                 (
                     quote! { #entity },
-                    quote! { .fetch_one(op) },
-                    quote! {},
-                    quote! { Ok(entity) },
+                    if self.any_nested {
+                        quote! { .fetch_one_include_nested(op) }
+                    } else {
+                        quote! { .fetch_one(op) }
+                    },
                 )
             } else {
                 (
                     quote! { Option<#entity> },
-                    quote! { .fetch_optional(op) },
-                    quote! {
-                        let Some(entity) = entity else {
-                            return Ok(None);
-                        };
+                    if self.any_nested {
+                        quote! { .fetch_optional_include_nested(op) }
+                    } else {
+                        quote! { .fetch_optional(op) }
                     },
-                    quote! { Ok(Some(entity)) },
                 )
             };
 
@@ -135,12 +121,11 @@ impl ToTokens for FindByFn<'_> {
                             OP: for<'o> es_entity::AtomicOperation<'o>
                     {
                         let #column_name = #column_name.borrow();
-                        let entity = #es_query_call
+                        Ok(
+                            #es_query_call
                             #fetch_fn
-                            .await?;
-                        #early_return
-                        #maybe_lookup_nested
-                        #regular_return
+                            .await?
+                        )
                     }
                 });
 
@@ -171,7 +156,7 @@ mod tests {
             table_name: "entities",
             error: &error,
             delete: DeleteOption::No,
-            nested_fn_names: Vec::new(),
+            any_nested: false,
         };
 
         let mut tokens = TokenStream::new();
@@ -194,14 +179,15 @@ mod tests {
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let id = id.borrow();
-                let entity = es_entity::es_query!(
+                Ok(
+                    es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
-                )
+                    )
                     .fetch_one(op)
-                    .await?;
-                Ok(entity)
+                    .await?
+                )
             }
 
             pub async fn maybe_find_by_id(
@@ -220,17 +206,15 @@ mod tests {
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let id = id.borrow();
-                let entity = es_entity::es_query!(
+                Ok(
+                    es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
-                )
+                    )
                     .fetch_optional(op)
-                    .await?;
-                let Some(entity) = entity else {
-                    return Ok(None);
-                };
-                Ok(Some(entity))
+                    .await?
+                )
             }
         };
 
@@ -250,7 +234,7 @@ mod tests {
             table_name: "entities",
             error: &error,
             delete: DeleteOption::Soft,
-            nested_fn_names: Vec::new(),
+            any_nested: false,
         };
 
         let mut tokens = TokenStream::new();
@@ -273,14 +257,15 @@ mod tests {
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let id = id.borrow();
-                let entity = es_entity::es_query!(
+                Ok(
+                    es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
-                )
+                    )
                     .fetch_one(op)
-                    .await?;
-                Ok(entity)
+                    .await?
+                )
             }
 
             pub async fn find_by_id_include_deleted(
@@ -299,14 +284,15 @@ mod tests {
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let id = id.borrow();
-                let entity = es_entity::es_query!(
+                Ok(
+                    es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
-                )
+                    )
                     .fetch_one(op)
-                    .await?;
-                Ok(entity)
+                    .await?
+                )
             }
 
             pub async fn maybe_find_by_id(
@@ -325,17 +311,15 @@ mod tests {
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let id = id.borrow();
-                let entity = es_entity::es_query!(
+                Ok(
+                    es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
-                )
+                    )
                     .fetch_optional(op)
-                    .await?;
-                let Some(entity) = entity else {
-                    return Ok(None);
-                };
-                Ok(Some(entity))
+                    .await?
+                )
             }
 
             pub async fn maybe_find_by_id_include_deleted(
@@ -354,17 +338,15 @@ mod tests {
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let id = id.borrow();
-                let entity = es_entity::es_query!(
+                Ok(
+                    es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
-                )
+                    )
                     .fetch_optional(op)
-                    .await?;
-                let Some(entity) = entity else {
-                    return Ok(None);
-                };
-                Ok(Some(entity))
+                    .await?
+                )
             }
         };
 

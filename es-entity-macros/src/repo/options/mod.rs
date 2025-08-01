@@ -174,6 +174,14 @@ impl RepositoryOptions {
         field.expect("Repo must have a field named 'pool' or marked with #[es_repo(pool)]")
     }
 
+    pub fn any_nested(&self) -> bool {
+        if let darling::ast::Data::Struct(fields) = &self.data {
+            fields.iter().any(|f| f.nested)
+        } else {
+            panic!("Repository must be a struct")
+        }
+    }
+
     pub fn all_nested(&self) -> impl Iterator<Item = &RepoField> {
         if let darling::ast::Data::Struct(fields) = &self.data {
             fields.iter().filter(|f| f.nested)
