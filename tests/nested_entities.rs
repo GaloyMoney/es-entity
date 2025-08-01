@@ -4,11 +4,11 @@ use derive_builder::Builder;
 use es_entity::*;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use std::collections::HashMap;
 
-// Define IDs using the macro
-es_entity::entity_id! { OrderId }
-es_entity::entity_id! { OrderItemId }
+es_entity::entity_id! {
+    OrderId ,
+    OrderItemId
+}
 
 // OrderItem - the nested entity
 #[derive(EsEvent, Debug, Clone, Serialize, Deserialize)]
@@ -27,7 +27,7 @@ pub enum OrderItemEvent {
     },
 }
 
-#[derive(EsEntity, Clone, Builder)]
+#[derive(EsEntity, Builder)]
 #[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
 pub struct OrderItem {
     pub id: OrderItemId,
@@ -120,15 +120,17 @@ pub enum OrderEvent {
     StatusUpdated { status: String },
 }
 
-#[derive(EsEntity, Clone, Builder)]
+#[derive(EsEntity, Builder)]
 #[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
 pub struct Order {
     pub id: OrderId,
     pub customer_name: String,
     pub status: String,
     events: EntityEvents<OrderEvent>,
-    items: HashMap<OrderItemId, OrderItem>,
-    new_items: Vec<NewOrderItem>,
+
+    #[es_entity(nested)]
+    #[builder(default)]
+    items: Nested<OrderItem>,
 }
 
 impl Order {
@@ -144,24 +146,28 @@ impl Order {
         }
     }
 
-    pub fn add_new_item(&mut self, item: NewOrderItem) {
-        self.new_items.push(item);
+    pub fn add_item(&mut self, item: NewOrderItem) {
+        self.items.add_new(item);
     }
 
-    pub fn items(&self) -> &HashMap<OrderItemId, OrderItem> {
-        &self.items
+    pub fn get_item(&self, item_id: &OrderItemId) -> Option<&OrderItem> {
+        self.items.get_persisted(item_id)
     }
 
-    pub fn items_mut(&mut self) -> &mut HashMap<OrderItemId, OrderItem> {
-        &mut self.items
+    pub fn get_item_mut(&mut self, item_id: &OrderItemId) -> Option<&mut OrderItem> {
+        self.items.get_persisted_mut(item_id)
     }
 
-    pub fn new_items_mut(&mut self) -> &mut Vec<NewOrderItem> {
-        &mut self.new_items
+    // @ claude this should return the item
+    pub fn item_with_name(&self, product_name: &str) -> Option<&OrderItem> {
+        self.items
+            .entities()
+            .values()
+            .find(|item| item.product_name == product_name)
     }
 
-    pub fn add_item(&mut self, item: OrderItem) {
-        self.items.insert(item.id, item);
+    pub fn n_items(&self) -> usize {
+        self.items.entities().len()
     }
 }
 
@@ -181,11 +187,7 @@ impl TryFromEvents<OrderEvent> for Order {
             }
         }
 
-        builder
-            .events(events)
-            .items(HashMap::new())
-            .new_items(Vec::new())
-            .build()
+        builder.events(events).build()
     }
 }
 
@@ -220,7 +222,7 @@ impl IntoEvents<OrderEvent> for NewOrder {
     entity = "OrderItem",
     err = "es_entity::EsRepoError",
     columns(
-        order_id(ty = "OrderId", list_by),
+        order_id(ty = "OrderId", list_by, parent),
         product_name(ty = "String"),
         quantity(ty = "i32", update(persist = true)),
         price(ty = "f64")
@@ -240,113 +242,21 @@ impl OrderItems {
 #[es_repo(
     entity = "Order",
     err = "es_entity::EsRepoError",
-    columns(
-        customer_name(ty = "String", create(accessor = "customer_name.clone()")),
-        status(
-            ty = "String",
-            create(accessor = "status.clone()"),
-            update(persist = true)
-        )
-    )
+    columns(customer_name = "String", status = "String")
 )]
 pub struct Orders {
     pool: PgPool,
+
+    #[es_repo(nested)]
+    items: OrderItems,
 }
 
 impl Orders {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-
-    async fn create_order_items<OP>(
-        &self,
-        op: &mut OP,
-        order: &mut Order,
-    ) -> Result<(), EsRepoError>
-    where
-        OP: for<'o> es_entity::AtomicOperation<'o>,
-    {
-        let order_items = OrderItems::new(self.pool.clone());
-
-        let new_items = order.new_items_mut().drain(..).collect::<Vec<_>>();
-        for new_item in new_items {
-            let item = order_items.create_in_op(op, new_item).await?;
-            order.add_item(item);
+        Self {
+            pool: pool.clone(),
+            items: OrderItems::new(pool),
         }
-
-        Ok(())
-    }
-
-    async fn update_order_items<OP>(
-        &self,
-        op: &mut OP,
-        order: &mut Order,
-    ) -> Result<(), EsRepoError>
-    where
-        OP: for<'o> es_entity::AtomicOperation<'o>,
-    {
-        let order_items = OrderItems::new(self.pool.clone());
-
-        // Update existing items
-        for item in order.items_mut().values_mut() {
-            order_items.update_in_op(op, item).await?;
-        }
-
-        // Create new items
-        self.create_order_items(op, order).await?;
-
-        Ok(())
-    }
-
-    pub async fn create_with_items(
-        &self,
-        new_order: NewOrder,
-        items: Vec<NewOrderItem>,
-    ) -> Result<Order, EsRepoError> {
-        let mut op = self.begin_op().await?;
-        let mut order = self.create_in_op(&mut op, new_order).await?;
-
-        for item in items {
-            order.add_new_item(item);
-        }
-
-        self.create_order_items(&mut op, &mut order).await?;
-        op.commit().await?;
-
-        Ok(order)
-    }
-
-    pub async fn update_with_items(&self, order: &mut Order) -> Result<(), EsRepoError> {
-        let mut op = self.begin_op().await?;
-        self.update_in_op(&mut op, order).await?;
-        self.update_order_items(&mut op, order).await?;
-        op.commit().await?;
-        Ok(())
-    }
-
-    pub async fn find_with_items(&self, id: OrderId) -> Result<Order, EsRepoError> {
-        let mut order = self.find_by_id(id).await?;
-
-        // Load items
-        let order_items = OrderItems::new(self.pool.clone());
-        let query_result = order_items
-            .list_by_order_id(
-                PaginatedQueryArgs {
-                    first: 100,
-                    after: None,
-                },
-                ListDirection::Descending,
-            )
-            .await?;
-        let items = query_result.entities;
-
-        for item in items {
-            if item.order_id == id {
-                order.add_item(item);
-            }
-        }
-
-        Ok(order)
     }
 }
 
@@ -384,18 +294,25 @@ async fn create_order_with_items() -> anyhow::Result<()> {
             .unwrap(),
     ];
 
-    let _order = orders.create_with_items(new_order, items).await?;
+    let mut order = orders.create(new_order).await?;
+
+    // Add items to the order
+    for item in items {
+        order.add_item(item);
+    }
+
+    // Update to persist the nested items
+    orders.update(&mut order).await?;
 
     // Load the order with items
-    let loaded_order = orders.find_with_items(order_id).await?;
+    let loaded_order = orders.find_by_id(order_id).await?;
 
     assert_eq!(loaded_order.customer_name, "Alice Johnson");
-    assert_eq!(loaded_order.items().len(), 2);
 
-    // Verify items
-    let items: Vec<&OrderItem> = loaded_order.items().values().collect();
-    assert!(items.iter().any(|item| item.product_name == "Laptop"));
-    assert!(items.iter().any(|item| item.product_name == "Mouse"));
+    // Verify items are automatically loaded
+    assert_eq!(loaded_order.n_items(), 2);
+    assert!(loaded_order.item_with_name("Laptop").is_some());
+    assert!(loaded_order.item_with_name("Mouse").is_some());
 
     Ok(())
 }
@@ -425,18 +342,28 @@ async fn update_order_and_items() -> anyhow::Result<()> {
             .unwrap(),
     ];
 
-    orders.create_with_items(new_order, items).await?;
+    let mut order = orders.create(new_order).await?;
+
+    // Add items to the order
+    for item in items {
+        order.add_item(item);
+    }
+
+    // Update to persist the nested items
+    orders.update(&mut order).await?;
 
     // Load and update
-    let mut loaded_order = orders.find_with_items(order_id).await?;
+    let mut loaded_order = orders.find_by_id(order_id).await?;
 
     // Update order status
     loaded_order.update_status("processing".to_string());
 
-    // Update item quantity
-    if let Some(item) = loaded_order.items_mut().values_mut().next() {
-        item.update_quantity(3);
-    }
+    // Update item quantity using item name
+    let keyboard_id = { loaded_order.item_with_name("Keyboard").unwrap().id };
+    loaded_order
+        .get_item_mut(&keyboard_id)
+        .unwrap()
+        .update_quantity(3);
 
     // Add another item
     let new_item = NewOrderItemBuilder::default()
@@ -448,21 +375,18 @@ async fn update_order_and_items() -> anyhow::Result<()> {
         .build()
         .unwrap();
 
-    loaded_order.add_new_item(new_item);
+    loaded_order.add_item(new_item);
 
-    orders.update_with_items(&mut loaded_order).await?;
+    orders.update(&mut loaded_order).await?;
 
     // Verify updates
-    let final_order = orders.find_with_items(order_id).await?;
+    let final_order = orders.find_by_id(order_id).await?;
 
     assert_eq!(final_order.status, "processing");
-    assert_eq!(final_order.items().len(), 2);
 
-    let keyboard = final_order
-        .items()
-        .values()
-        .find(|item| item.product_name == "Keyboard")
-        .unwrap();
+    // Verify items
+    assert_eq!(final_order.n_items(), 2);
+    let keyboard = final_order.item_with_name("Keyboard").unwrap();
     assert_eq!(keyboard.quantity, 3);
 
     Ok(())

@@ -38,6 +38,10 @@ impl<T: EsEntity> Nested<T> {
         &mut self.new_entities
     }
 
+    pub fn entities(&self) -> &HashMap<<<T as EsEntity>::Event as EsEvent>::EntityId, T> {
+        &self.entities
+    }
+
     pub fn entities_mut(
         &mut self,
     ) -> &mut HashMap<<<T as EsEntity>::Event as EsEvent>::EntityId, T> {
