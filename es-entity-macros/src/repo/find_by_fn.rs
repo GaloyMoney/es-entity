@@ -52,14 +52,14 @@ impl ToTokens for FindByFn<'_> {
             let (result_type, fetch_fn, early_return, regular_return) = if maybe.is_empty() {
                 (
                     quote! { #entity },
-                    quote! { .fetch_one(executor) },
+                    quote! { .fetch_one(op) },
                     quote! {},
                     quote! { Ok(entity) },
                 )
             } else {
                 (
                     quote! { Option<#entity> },
-                    quote! { .fetch_optional(executor) },
+                    quote! { .fetch_optional(op) },
                     quote! {
                         let Some(entity) = entity else {
                             return Ok(None);
@@ -134,7 +134,6 @@ impl ToTokens for FindByFn<'_> {
                         where
                             OP: for<'o> es_entity::AtomicOperation<'o>
                     {
-                        let executor = op.as_executor();
                         let #column_name = #column_name.borrow();
                         let entity = #es_query_call
                             #fetch_fn
@@ -194,14 +193,13 @@ mod tests {
                 where
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
-                let executor = op.as_executor();
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                 )
-                    .fetch_one(executor)
+                    .fetch_one(op)
                     .await?;
                 Ok(entity)
             }
@@ -221,14 +219,13 @@ mod tests {
                 where
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
-                let executor = op.as_executor();
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                 )
-                    .fetch_optional(executor)
+                    .fetch_optional(op)
                     .await?;
                 let Some(entity) = entity else {
                     return Ok(None);
@@ -275,14 +272,13 @@ mod tests {
                 where
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
-                let executor = op.as_executor();
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
                 )
-                    .fetch_one(executor)
+                    .fetch_one(op)
                     .await?;
                 Ok(entity)
             }
@@ -302,14 +298,13 @@ mod tests {
                 where
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
-                let executor = op.as_executor();
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                 )
-                    .fetch_one(executor)
+                    .fetch_one(op)
                     .await?;
                 Ok(entity)
             }
@@ -329,14 +324,13 @@ mod tests {
                 where
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
-                let executor = op.as_executor();
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
                 )
-                    .fetch_optional(executor)
+                    .fetch_optional(op)
                     .await?;
                 let Some(entity) = entity else {
                     return Ok(None);
@@ -359,14 +353,13 @@ mod tests {
                 where
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
-                let executor = op.as_executor();
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                 )
-                    .fetch_optional(executor)
+                    .fetch_optional(op)
                     .await?;
                 let Some(entity) = entity else {
                     return Ok(None);

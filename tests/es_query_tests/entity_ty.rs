@@ -23,13 +23,13 @@ impl Users {
             "SELECT * FROM custom_name_for_users WHERE id = $1",
             id as UserId
         )
-        .fetch_one(self.pool())
+        .fetch_one(&mut self.begin_op().await?)
         .await
     }
 
     pub async fn query_without_args(&self) -> Result<(Vec<User>, bool), EsRepoError> {
         es_query!(entity = User, "SELECT * FROM custom_name_for_users")
-            .fetch_n(self.pool(), 2)
+            .fetch_n(&mut self.begin_op().await?, 2)
             .await
     }
 }

@@ -23,7 +23,7 @@ impl Users {
             "SELECT * FROM ignore_prefix_users WHERE id = $1",
             id as UserId
         )
-        .fetch_one(self.pool())
+        .fetch_one(&mut self.begin_op().await?)
         .await
     }
 
@@ -32,7 +32,7 @@ impl Users {
             tbl_prefix = "ignore_prefix",
             "SELECT * FROM ignore_prefix_users"
         )
-        .fetch_n(self.pool(), 2)
+        .fetch_n(&mut self.begin_op().await?, 2)
         .await
     }
 }

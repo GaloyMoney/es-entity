@@ -371,19 +371,17 @@ impl ToTokens for ListByFn<'_> {
                    where
                        OP: for<'o> es_entity::AtomicOperation<'o>
                  {
-                    let executor = op.as_executor();
-
                     #destructure_tokens
 
                     let #maybe_mut_entities = match direction {
                         es_entity::ListDirection::Ascending => {
                             #es_query_asc_call
-                                .fetch_n(executor, first)
+                                .fetch_n(op, first)
                                 .await?
                         },
                         es_entity::ListDirection::Descending => {
                             #es_query_desc_call
-                                .fetch_n(executor, first)
+                                .fetch_n(op, first)
                                 .await?
                         },
                     };
@@ -529,8 +527,6 @@ mod tests {
                 where
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
-                let executor = op.as_executor();
-
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let id = if let Some(after) = after {
                     Some(after.id)
@@ -546,7 +542,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -556,7 +552,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                 };
@@ -586,8 +582,6 @@ mod tests {
             where
                 OP: for<'o> es_entity::AtomicOperation<'o>
             {
-                let executor = op.as_executor();
-
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let id = if let Some(after) = after {
                     Some(after.id)
@@ -602,7 +596,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -612,7 +606,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                 };
@@ -672,8 +666,6 @@ mod tests {
                 where
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
-                let executor = op.as_executor();
-
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let (id, name) = if let Some(after) = after {
                     (Some(after.id), Some(after.name))
@@ -690,7 +682,7 @@ mod tests {
                             id as Option<EntityId>,
                             name as Option<String>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -701,7 +693,7 @@ mod tests {
                             id as Option<EntityId>,
                             name as Option<String>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                 };
@@ -763,8 +755,6 @@ mod tests {
                 where
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
-                let executor = op.as_executor();
-
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let (id, value) = if let Some(after) = after {
                     (Some(after.id), after.value)
@@ -781,7 +771,7 @@ mod tests {
                             id as Option<EntityId>,
                             value as Option<rust_decimal::Decimal>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -792,7 +782,7 @@ mod tests {
                             id as Option<EntityId>,
                             value as Option<rust_decimal::Decimal>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                 };

@@ -190,20 +190,18 @@ impl ToTokens for ListForFn<'_> {
                     where
                         OP: for<'o> es_entity::AtomicOperation<'o>
                 {
-                    let executor = op.as_executor();
-
                     let #filter_arg_name = #filter_arg_name.borrow();
                     #destructure_tokens
 
                     let #maybe_mut_entities = match direction {
                         es_entity::ListDirection::Ascending => {
                             #es_query_asc_call
-                                .fetch_n(executor, first)
+                                .fetch_n(op, first)
                                 .await?
                         },
                         es_entity::ListDirection::Descending => {
                             #es_query_desc_call
-                                .fetch_n(executor, first)
+                                .fetch_n(op, first)
                                 .await?
                         }
                     };
@@ -281,8 +279,6 @@ mod tests {
                 where
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
-                let executor = op.as_executor();
-
                 let filter_customer_id = filter_customer_id.borrow();
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let id = if let Some(after) = after {
@@ -299,7 +295,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -310,7 +306,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     }
                 };
@@ -374,8 +370,6 @@ mod tests {
                 where
                     OP: for<'o> es_entity::AtomicOperation<'o>
             {
-                let executor = op.as_executor();
-
                 let filter_email = filter_email.borrow();
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let (id, email) = if let Some(after) = after {
@@ -393,7 +387,7 @@ mod tests {
                             id as Option<EntityId>,
                             email as Option<String>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -405,7 +399,7 @@ mod tests {
                             id as Option<EntityId>,
                             email as Option<String>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     }
                 };

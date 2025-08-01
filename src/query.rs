@@ -65,30 +65,26 @@ impl<T, C> PaginatedQueryRet<T, C> {
     }
 }
 
-pub struct EsQuery<'q, Entity, Err, DB, F, A>
-where
-    DB: sqlx::Database,
-{
-    inner: sqlx::query::Map<'q, DB, F, A>,
+pub struct EsQuery<'q, Entity, Err, F, A> {
+    inner: sqlx::query::Map<'q, sqlx::Postgres, F, A>,
     _entity: std::marker::PhantomData<Entity>,
     _err: std::marker::PhantomData<Err>,
 }
 
-impl<'q, Entity, Err, DB, F, A> EsQuery<'q, Entity, Err, DB, F, A>
+impl<'q, Entity, Err, F, A> EsQuery<'q, Entity, Err, F, A>
 where
     Entity: EsEntity,
     <<Entity as EsEntity>::Event as EsEvent>::EntityId: Unpin,
     Err: From<sqlx::Error> + From<crate::error::EsEntityError>,
-    DB: sqlx::Database,
     F: FnMut(
-            <DB as sqlx::Database>::Row,
+            sqlx::postgres::PgRow,
         ) -> Result<
             GenericEvent<<<Entity as EsEntity>::Event as EsEvent>::EntityId>,
             sqlx::Error,
         > + Send,
-    A: 'q + Send + sqlx::IntoArguments<'q, DB>,
+    A: 'q + Send + sqlx::IntoArguments<'q, sqlx::Postgres>,
 {
-    pub fn new(query: sqlx::query::Map<'q, DB, F, A>) -> Self {
+    pub fn new(query: sqlx::query::Map<'q, sqlx::Postgres, F, A>) -> Self {
         Self {
             inner: query,
             _entity: std::marker::PhantomData,
@@ -96,10 +92,14 @@ where
         }
     }
 
-    pub async fn fetch_optional(
+    pub async fn fetch_optional<OP>(
         self,
-        executor: impl sqlx::Executor<'_, Database = DB>,
-    ) -> Result<Option<Entity>, Err> {
+        op: &mut OP,
+    ) -> Result<Option<Entity>, Err> 
+    where
+        OP: for<'o> AtomicOperation<'o>,
+    {
+        let executor = op.as_executor();
         let rows = self.inner.fetch_all(executor).await?;
         if rows.is_empty() {
             return Ok(None);
@@ -108,19 +108,27 @@ where
         Ok(Some(EntityEvents::load_first(rows.into_iter())?))
     }
 
-    pub async fn fetch_one(
+    pub async fn fetch_one<OP>(
         self,
-        executor: impl sqlx::Executor<'_, Database = DB>,
-    ) -> Result<Entity, Err> {
+        op: &mut OP,
+    ) -> Result<Entity, Err>
+    where
+        OP: for<'o> AtomicOperation<'o>,
+    {
+        let executor = op.as_executor();
         let rows = self.inner.fetch_all(executor).await?;
         Ok(EntityEvents::load_first(rows.into_iter())?)
     }
 
-    pub async fn fetch_n(
+    pub async fn fetch_n<OP>(
         self,
-        executor: impl sqlx::Executor<'_, Database = DB>,
+        op: &mut OP,
         first: usize,
-    ) -> Result<(Vec<Entity>, bool), Err> {
+    ) -> Result<(Vec<Entity>, bool), Err>
+    where
+        OP: for<'o> AtomicOperation<'o>,
+    {
+        let executor = op.as_executor();
         let rows = self.inner.fetch_all(executor).await?;
         Ok(EntityEvents::load_n(rows.into_iter(), first)?)
     }
