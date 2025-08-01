@@ -42,6 +42,7 @@ pub struct EsRepo<'a> {
     begin: begin::Begin<'a>,
     list_by_fns: Vec<list_by_fn::ListByFn<'a>>,
     list_for_fns: Vec<list_for_fn::ListForFn<'a>>,
+    nested_fns: Vec<syn::Ident>,
     nested: Vec<nested::Nested<'a>>,
     populate_nested: Option<populate_nested::PopulateNested<'a>>,
     opts: &'a RepositoryOptions,
@@ -72,10 +73,10 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             .columns
             .parent()
             .map(|c| populate_nested::PopulateNested::new(c, opts));
-        let nested = opts
+        let (nested_fns, nested): (Vec<_>, Vec<_>) = opts
             .all_nested()
-            .map(|n| nested::Nested::new(n, opts))
-            .collect();
+            .map(|n| (n.find_nested_fn_name(), nested::Nested::new(n, opts)))
+            .unzip();
 
         Self {
             repo: &opts.ident,
@@ -92,6 +93,7 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             begin: begin::Begin::from(opts),
             list_by_fns,
             list_for_fns,
+            nested_fns,
             nested,
             populate_nested,
             opts,
@@ -149,6 +151,7 @@ impl ToTokens for EsRepo<'_> {
         let cursor_mod = self.opts.cursor_mod();
         let types_mod = self.opts.repo_types_mod();
 
+        let nested_fns = &self.nested_fns;
         let nested = &self.nested;
         let populate_nested = &self.populate_nested;
         let pool_field = self.opts.pool_field();
@@ -204,15 +207,26 @@ impl ToTokens for EsRepo<'_> {
                 #find_many
                 #(#list_by_fns)*
                 #(#list_for_fns)*
-
                 #(#nested)*
             }
 
             #populate_nested
 
+             #[es_entity::prelude::async_trait::async_trait]
             impl #impl_generics es_entity::EsRepo for #repo #ty_generics #where_clause {
                 type Entity = #entity;
                 type Err = #error;
+
+               #[inline(always)]
+               async fn load_all_nested_in_op<OP>(
+                   &self, op: &mut OP, entities: &mut [#entity]
+               ) -> Result<(), #error>
+                   where
+                       OP: for<'o> es_entity::AtomicOperation<'o>,
+               {
+                   #(self.#nested_fns(op, entities).await?;)*
+                   Ok(())
+               }
             }
         });
     }

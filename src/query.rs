@@ -65,21 +65,19 @@ impl<T, C> PaginatedQueryRet<T, C> {
     }
 }
 
-pub struct EsQuery<'q, Entity, Err, F, A> {
+pub struct EsQuery<'q, Repo, F, A> {
     inner: sqlx::query::Map<'q, sqlx::Postgres, F, A>,
-    _entity: std::marker::PhantomData<Entity>,
-    _err: std::marker::PhantomData<Err>,
+    _repo: std::marker::PhantomData<Repo>,
 }
 
-impl<'q, Entity, Err, F, A> EsQuery<'q, Entity, Err, F, A>
+impl<'q, Repo, F, A> EsQuery<'q, Repo, F, A>
 where
-    Entity: EsEntity,
-    <<Entity as EsEntity>::Event as EsEvent>::EntityId: Unpin,
-    Err: From<sqlx::Error> + From<crate::error::EsEntityError>,
+    Repo: EsRepo,
+    <<<Repo as EsRepo>::Entity as EsEntity>::Event as EsEvent>::EntityId: Unpin,
     F: FnMut(
             sqlx::postgres::PgRow,
         ) -> Result<
-            GenericEvent<<<Entity as EsEntity>::Event as EsEvent>::EntityId>,
+            GenericEvent<<<<Repo as EsRepo>::Entity as EsEntity>::Event as EsEvent>::EntityId>,
             sqlx::Error,
         > + Send,
     A: 'q + Send + sqlx::IntoArguments<'q, sqlx::Postgres>,
@@ -87,15 +85,14 @@ where
     pub fn new(query: sqlx::query::Map<'q, sqlx::Postgres, F, A>) -> Self {
         Self {
             inner: query,
-            _entity: std::marker::PhantomData,
-            _err: std::marker::PhantomData,
+            _repo: std::marker::PhantomData,
         }
     }
 
     pub async fn fetch_optional<OP>(
         self,
         op: &mut OP,
-    ) -> Result<Option<Entity>, Err> 
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::Err>
     where
         OP: for<'o> AtomicOperation<'o>,
     {
@@ -111,7 +108,7 @@ where
     pub async fn fetch_one<OP>(
         self,
         op: &mut OP,
-    ) -> Result<Entity, Err>
+    ) -> Result<<Repo as EsRepo>::Entity, <Repo as EsRepo>::Err>
     where
         OP: for<'o> AtomicOperation<'o>,
     {
@@ -124,7 +121,7 @@ where
         self,
         op: &mut OP,
         first: usize,
-    ) -> Result<(Vec<Entity>, bool), Err>
+    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::Err>
     where
         OP: for<'o> AtomicOperation<'o>,
     {

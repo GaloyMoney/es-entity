@@ -40,9 +40,18 @@ pub trait Parent<T: EsEntity> {
     fn nested_mut(&mut self) -> &mut Nested<T>;
 }
 
+#[async_trait]
 pub trait EsRepo {
     type Entity: EsEntity;
-    type Err: From<EsEntityError>;
+    type Err: From<EsEntityError> + From<sqlx::Error>;
+
+    async fn load_all_nested_in_op<OP>(
+        &self,
+        op: &mut OP,
+        entities: &mut [Self::Entity],
+    ) -> Result<(), Self::Err>
+    where
+        OP: for<'o> AtomicOperation<'o>;
 }
 
 #[async_trait]
