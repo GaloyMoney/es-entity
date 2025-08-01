@@ -28,7 +28,10 @@ impl<E: Clone + EsEvent> Clone for PersistedEvent<E> {
         }
     }
 }
-
+/// A [Vec] wrapper that holds events in chronological sequence.
+///
+/// Mutations of entity are appended to it as events, providing ES specific augmentations
+/// and methods to load, persist and push events. Entity has a required `events` field of `EntityEvents<T>` type
 pub struct EntityEvents<T: EsEvent> {
     pub entity_id: <T as EsEvent>::EntityId,
     persisted_events: Vec<PersistedEvent<T>>,

@@ -3,6 +3,26 @@ use crate::{
     traits::*,
 };
 
+/// Controls sorting order of listing the entities from the database
+///
+/// ListDirection is used to specify the sorting order of entities when listing them using [crate::EsRepo]
+/// methods like `list_by` and `list_for`.
+///
+/// # Examples
+///
+/// ```ignore
+/// // List users by ID in ascending order (oldest first)
+/// let paginated_users = users.list_by_id(
+///     PaginatedQueryArgs { first: 5, after: None },
+///     ListDirection::Ascending, // or just Default::default()
+/// ).await?
+///
+/// // List users by name in descending order (Z to A)
+/// users.list_by_name(
+///     PaginatedQueryArgs { first: 10, after: None },
+///     ListDirection::Descending,
+/// ).await?
+/// ```
 #[derive(Default, std::fmt::Debug, Clone, Copy)]
 pub enum ListDirection {
     #[default]
@@ -16,9 +36,43 @@ pub struct Sort<T> {
     pub direction: ListDirection,
 }
 
+/// A cursor-based pagination structure for efficiently paginating through large datasets
+///
+/// The `PaginatedQueryArgs<T>` encapsulates a `size` field and an optional `after` field.
+/// `<T>` parameter represents cursor type, which depends on the sorting field (e.g., `UsersByIdCursor`, `UsersByNameCursor`).
+/// Used in [crate::EsRepo] functions like `list_by`, `list_for`, `find_many`.
+///
+/// # Examples
+///
+/// ```ignore
+/// // Initial query - fetch first 10 users
+/// let query_args = PaginatedQueryArgs {
+///     first: 10,
+///     after: None, // Start from beginning
+/// };
+///
+/// // Execute query and get PaginatedQueryRet
+/// let result = users.list_by_id(query_args, ListDirection::Ascending).await?;
+///
+/// // Continue pagination using PaginatedQueryRet fields
+/// if result.has_next_page {
+///     let next_query_args = PaginatedQueryArgs {
+///         first: 10,
+///         after: result.end_cursor, // Use cursor from previous result
+///     };
+///     let next_result = users.list_by_id(next_query_args, ListDirection::Ascending).await?;
+/// }
+///
+/// // Or use PaginatedQueryRet::into_next_query() convenience method
+/// if let Some(next_query_args) = result.into_next_query() {
+///     let next_result = users.list_by_id(next_query_args, ListDirection::Ascending).await?;
+/// }
+/// ```
 #[derive(Debug)]
 pub struct PaginatedQueryArgs<T: std::fmt::Debug> {
+    /// Specifies the number of queries to fetch per query
     pub first: usize,
+    /// Specifies the cursor/marker to start from for current query
     pub after: Option<T>,
 }
 
@@ -43,13 +97,25 @@ impl<T: std::fmt::Debug> Default for PaginatedQueryArgs<T> {
     }
 }
 
+/// Return type for paginated queries containing entities and pagination metadata
+///
+/// `PaginatedQueryRet` contains the fetched entities, pagination state, and provides utilities for continuing pagination.
+/// Returned by the [crate::EsRepo] functions like `list_by`, `list_for`, `find_many`.
+/// Used with [crate::PaginatedQueryArgs] to perform consistent and efficient pagination
+///
+/// # Example
+/// [See comprehensive usage examples in PaginatedQueryArgs section][crate::PaginatedQueryArgs]
 pub struct PaginatedQueryRet<T, C> {
+    /// [Vec] for the fetched `entities` by the paginated query
     pub entities: Vec<T>,
+    /// [bool] for indicating if the list has been exhausted or more entities can be fetched
     pub has_next_page: bool,
+    /// cursor on the last entity fetched to continue paginated queries.
     pub end_cursor: Option<C>,
 }
 
 impl<T, C> PaginatedQueryRet<T, C> {
+    /// Convenience method to create next query args if more pages are available
     pub fn into_next_query(self) -> Option<PaginatedQueryArgs<C>>
     where
         C: std::fmt::Debug,

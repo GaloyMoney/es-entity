@@ -1,6 +1,18 @@
+/// Enum type for handling idempotent operations in event-sourced systems.
+///
+/// Distinguishes between operations that were executed versus those that were
+/// ignored due to idempotency checks. Prevents duplicate event processing by
+/// signaling whether a mutation actually applied changes or was skipped.
+/// The [crate::idempotency_guard] macro provides an easy way to do such checks.
+///
+/// # Examples
+/// [See comprehensive usage examples][crate::idempotency_guard]
+
 #[must_use]
 pub enum Idempotent<T> {
+    /// Signals if the idempotent mutation was executed and returnd `T`
     Executed(T),
+    /// Signals if the idempotent mutation was ignored 
     Ignored,
 }
 
