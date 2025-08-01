@@ -74,11 +74,14 @@ impl ToTokens for CreateAllFn<'_> {
                 Ok(res)
             }
 
-            pub async fn create_all_in_op(
+            pub async fn create_all_in_op<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 new_entities: Vec<<#entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<#entity>, #error> {
+            ) -> Result<Vec<#entity>, #error>
+            where
+                OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 let mut res = Vec::new();
                 if new_entities.is_empty() {
                     return Ok(res);
@@ -90,7 +93,7 @@ impl ToTokens for CreateAllFn<'_> {
                 sqlx::query(#query)
                    .bind(now)
                    #(#bindings)*
-                   .fetch_all(&mut **op.tx())
+                   .fetch_all(op.as_executor())
                    .await?;
 
 
@@ -103,7 +106,7 @@ impl ToTokens for CreateAllFn<'_> {
 
                     #(#nested)*
 
-                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
                     res.push(entity);
                 }
 
@@ -153,11 +156,14 @@ mod tests {
                 Ok(res)
             }
 
-            pub async fn create_all_in_op(
+            pub async fn create_all_in_op<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 new_entities: Vec<<Entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<Entity>, es_entity::EsRepoError> {
+            ) -> Result<Vec<Entity>, es_entity::EsRepoError>
+            where
+                OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 let mut res = Vec::new();
                 if new_entities.is_empty() {
                     return Ok(res);
@@ -180,7 +186,7 @@ mod tests {
                     .bind(now)
                     .bind(id_collection)
                     .bind(name_collection)
-                    .fetch_all(&mut **op.tx())
+                    .fetch_all(op.as_executor())
                     .await?;
 
 
@@ -191,7 +197,7 @@ mod tests {
                     let n_events = n_persisted.remove(events.id()).expect("n_events exists");
                     let entity = Self::hydrate_entity(events)?;
 
-                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
                     res.push(entity);
                 }
 

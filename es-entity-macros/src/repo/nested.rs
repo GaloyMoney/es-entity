@@ -29,8 +29,9 @@ impl ToTokens for Nested<'_> {
         let find_fn_name = self.field.find_nested_fn_name();
 
         tokens.append_all(quote! {
-            async fn #create_fn_name<P>(&self, op: &mut es_entity::DbOp<'_>, entity: &mut P) -> Result<(), #error>
+            async fn #create_fn_name<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), #error>
                 where
+                    OP: for<'o> es_entity::AtomicOperation<'o>,
                     P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>
             {
                 let nested = entity.nested_mut();
@@ -47,8 +48,9 @@ impl ToTokens for Nested<'_> {
                 Ok(())
             }
 
-            async fn #update_fn_name<P>(&self, op: &mut es_entity::DbOp<'_>, entity: &mut P) -> Result<(), #error>
+            async fn #update_fn_name<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), #error>
                 where
+                    OP: for<'o> es_entity::AtomicOperation<'o>,
                     P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>
             {
                 let entities = entity.nested_mut().entities_mut();
@@ -98,8 +100,9 @@ mod tests {
         cursor.to_tokens(&mut tokens);
 
         let expected = quote! {
-            async fn create_nested_users<P>(&self, op: &mut es_entity::DbOp<'_>, entity: &mut P) -> Result<(), es_entity::EsRepoError>
+            async fn create_nested_users<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), es_entity::EsRepoError>
                 where
+                    OP: for<'o> es_entity::AtomicOperation<'o>,
                     P: es_entity::Parent<<UserRepo as EsRepo>::Entity>
             {
                 let nested = entity.nested_mut();
@@ -116,8 +119,9 @@ mod tests {
                 Ok(())
             }
 
-            async fn update_nested_users<P>(&self, op: &mut es_entity::DbOp<'_>, entity: &mut P) -> Result<(), es_entity::EsRepoError>
+            async fn update_nested_users<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), es_entity::EsRepoError>
                 where
+                    OP: for<'o> es_entity::AtomicOperation<'o>,
                     P: es_entity::Parent<<UserRepo as EsRepo>::Entity>
             {
                 let entities = entity.nested_mut().entities_mut();
