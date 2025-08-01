@@ -123,14 +123,18 @@ impl ToTokens for FindByFn<'_> {
                         &self,
                         #column_name: impl std::borrow::Borrow<#column_type>
                     ) -> Result<#result_type, #error> {
-                        self.#fn_in_op(self.pool(), #column_name).await
+                        self.#fn_in_op(&mut self.begin_op().await?, #column_name).await
                     }
 
-                    pub async fn #fn_in_op(
+                    pub async fn #fn_in_op<'a, 'o, OP>(
                         &self,
-                        op: impl es_entity::AsExecutor<'_>,
+                        op: &'a mut OP,
                         #column_name: impl std::borrow::Borrow<#column_type>
-                    ) -> Result<#result_type, #error> {
+                    ) -> Result<#result_type, #error>
+                        where
+                            'a: 'o,
+                            OP: es_entity::AsExecutor<'o>
+                    {
                         let executor = op.as_executor();
                         let #column_name = #column_name.borrow();
                         let entity = #es_query_call
@@ -180,14 +184,18 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError> {
-                self.find_by_id_in_op(self.pool(), id).await
+                self.find_by_id_in_op(&mut self.begin_op().await?, id).await
             }
 
-            pub async fn find_by_id_in_op(
+            pub async fn find_by_id_in_op<'a, 'o, OP>(
                 &self,
-                op: impl es_entity::AsExecutor<'_>,
+                op: &'a mut OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, es_entity::EsRepoError> {
+            ) -> Result<Entity, es_entity::EsRepoError>
+                where
+                    'a: 'o,
+                    OP: es_entity::AsExecutor<'o>
+            {
                 let executor = op.as_executor();
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
@@ -204,14 +212,18 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError> {
-                self.maybe_find_by_id_in_op(self.pool(), id).await
+                self.maybe_find_by_id_in_op(&mut self.begin_op().await?, id).await
             }
 
-            pub async fn maybe_find_by_id_in_op(
+            pub async fn maybe_find_by_id_in_op<'a, 'o, OP>(
                 &self,
-                op: impl es_entity::AsExecutor<'_>,
+                op: &'a mut OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+            ) -> Result<Option<Entity>, es_entity::EsRepoError>
+                where
+                    'a: 'o,
+                    OP: es_entity::AsExecutor<'o>
+            {
                 let executor = op.as_executor();
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
@@ -255,14 +267,18 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError> {
-                self.find_by_id_in_op(self.pool(), id).await
+                self.find_by_id_in_op(&mut self.begin_op().await?, id).await
             }
 
-            pub async fn find_by_id_in_op(
+            pub async fn find_by_id_in_op<'a, 'o, OP>(
                 &self,
-                op: impl es_entity::AsExecutor<'_>,
+                op: &'a mut OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, es_entity::EsRepoError> {
+            ) -> Result<Entity, es_entity::EsRepoError>
+                where
+                    'a: 'o,
+                    OP: es_entity::AsExecutor<'o>
+            {
                 let executor = op.as_executor();
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
@@ -279,14 +295,18 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError> {
-                self.find_by_id_in_op_include_deleted(self.pool(), id).await
+                self.find_by_id_in_op_include_deleted(&mut self.begin_op().await?, id).await
             }
 
-            pub async fn find_by_id_in_op_include_deleted(
+            pub async fn find_by_id_in_op_include_deleted<'a, 'o, OP>(
                 &self,
-                op: impl es_entity::AsExecutor<'_>,
+                op: &'a mut OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, es_entity::EsRepoError> {
+            ) -> Result<Entity, es_entity::EsRepoError>
+                where
+                    'a: 'o,
+                    OP: es_entity::AsExecutor<'o>
+            {
                 let executor = op.as_executor();
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
@@ -303,14 +323,18 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError> {
-                self.maybe_find_by_id_in_op(self.pool(), id).await
+                self.maybe_find_by_id_in_op(&mut self.begin_op().await?, id).await
             }
 
-            pub async fn maybe_find_by_id_in_op(
+            pub async fn maybe_find_by_id_in_op<'a, 'o, OP>(
                 &self,
-                op: impl es_entity::AsExecutor<'_>,
+                op: &'a mut OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+            ) -> Result<Option<Entity>, es_entity::EsRepoError>
+                where
+                    'a: 'o,
+                    OP: es_entity::AsExecutor<'o>
+            {
                 let executor = op.as_executor();
                 let id = id.borrow();
                 let entity = es_entity::es_query!(
@@ -330,14 +354,18 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError> {
-                self.maybe_find_by_id_in_op_include_deleted(self.pool(), id).await
+                self.maybe_find_by_id_in_op_include_deleted(&mut self.begin_op().await?, id).await
             }
 
-            pub async fn maybe_find_by_id_in_op_include_deleted(
+            pub async fn maybe_find_by_id_in_op_include_deleted<'a, 'o, OP>(
                 &self,
-                op: impl es_entity::AsExecutor<'_>,
+                op: &'a mut OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+            ) -> Result<Option<Entity>, es_entity::EsRepoError>
+                where
+                    'a: 'o,
+                    OP: es_entity::AsExecutor<'o>
+            {
                 let executor = op.as_executor();
                 let id = id.borrow();
                 let entity = es_entity::es_query!(

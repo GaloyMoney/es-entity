@@ -30,10 +30,6 @@ impl<'t> DbOp<'t> {
         Ok(res)
     }
 
-    pub fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.now
-    }
-
     pub fn tx(&mut self) -> &mut Transaction<'t, Postgres> {
         &mut self.tx
     }
@@ -45,5 +41,17 @@ impl<'t> DbOp<'t> {
     pub async fn commit(self) -> Result<(), sqlx::Error> {
         self.tx.commit().await?;
         Ok(())
+    }
+}
+
+impl<'a, 't> crate::traits::AsExecutor<'a> for DbOp<'t> {
+    type Executor = &'a mut sqlx::PgConnection;
+
+    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.now
+    }
+
+    fn as_executor(&'a mut self) -> Self::Executor {
+        self.tx.as_executor()
     }
 }

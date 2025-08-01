@@ -63,21 +63,13 @@ pub trait AsExecutor<'a> {
         None
     }
 
-    fn as_executor(self) -> Self::Executor;
+    fn as_executor(&'a mut self) -> Self::Executor;
 }
 
-impl<'a, 't> AsExecutor<'a> for &'a mut sqlx::Transaction<'t, sqlx::Postgres> {
+impl<'a, 't> AsExecutor<'a> for sqlx::Transaction<'t, sqlx::Postgres> {
     type Executor = &'a mut sqlx::PgConnection;
 
-    fn as_executor(self) -> Self::Executor {
+    fn as_executor(&'a mut self) -> Self::Executor {
         &mut *self
-    }
-}
-
-impl<'a> AsExecutor<'a> for &'a sqlx::PgPool {
-    type Executor = Self;
-
-    fn as_executor(self) -> Self::Executor {
-        self
     }
 }

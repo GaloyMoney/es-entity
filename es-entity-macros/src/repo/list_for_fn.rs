@@ -177,16 +177,20 @@ impl ToTokens for ListForFn<'_> {
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
-                    self.#fn_in_op(self.pool(), #filter_arg_name, cursor, direction).await
+                    self.#fn_in_op(&mut self.begin_op().await?, #filter_arg_name, cursor, direction).await
                 }
 
-                async fn #fn_in_op(
+                async fn #fn_in_op<'a, 'o, OP>(
                     &self,
-                    op: impl es_entity::AsExecutor<'_>,
+                    op: &'a mut OP,
                     #filter_arg_name: impl std::borrow::Borrow<#for_column_type>,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
+                    where
+                        'a: 'o,
+                        OP: es_entity::AsExecutor<'o>
+                {
                     let executor = op.as_executor();
 
                     let #filter_arg_name = #filter_arg_name.borrow();
@@ -265,16 +269,20 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
-                self.list_for_customer_id_by_id_in_op(self.pool(), filter_customer_id, cursor, direction).await
+                self.list_for_customer_id_by_id_in_op(&mut self.begin_op().await?, filter_customer_id, cursor, direction).await
             }
 
-            async fn list_for_customer_id_by_id_in_op(
+            async fn list_for_customer_id_by_id_in_op<'a, 'o, OP>(
                 &self,
-                op: impl es_entity::AsExecutor<'_>,
+                op: &'a mut OP,
                 filter_customer_id: impl std::borrow::Borrow<Uuid>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError>
+                where
+                    'a: 'o,
+                    OP: es_entity::AsExecutor<'o>
+            {
                 let executor = op.as_executor();
 
                 let filter_customer_id = filter_customer_id.borrow();
@@ -355,16 +363,20 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByEmailCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, es_entity::EsRepoError> {
-                self.list_for_email_by_email_in_op(self.pool(), filter_email, cursor, direction).await
+                self.list_for_email_by_email_in_op(&mut self.begin_op().await?, filter_email, cursor, direction).await
             }
 
-            async fn list_for_email_by_email_in_op(
+            async fn list_for_email_by_email_in_op<'a, 'o, OP>(
                 &self,
-                op: impl es_entity::AsExecutor<'_>,
+                op: &'a mut OP,
                 filter_email: impl std::borrow::Borrow<str>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByEmailCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, es_entity::EsRepoError> {
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, es_entity::EsRepoError>
+                where
+                    'a: 'o,
+                    OP: es_entity::AsExecutor<'o>
+            {
                 let executor = op.as_executor();
 
                 let filter_email = filter_email.borrow();
