@@ -46,7 +46,6 @@ pub trait EsRepo {
     type Err: From<EsEntityError> + From<sqlx::Error>;
 
     async fn load_all_nested_in_op<OP>(
-        &self,
         op: &mut OP,
         entities: &mut [Self::Entity],
     ) -> Result<(), Self::Err>
@@ -57,7 +56,6 @@ pub trait EsRepo {
 #[async_trait]
 pub trait PopulateNested<C>: EsRepo {
     async fn populate_in_op<OP>(
-        &self,
         op: &mut OP,
         lookup: std::collections::HashMap<C, &mut Nested<<Self as EsRepo>::Entity>>,
     ) -> Result<(), <Self as EsRepo>::Err>

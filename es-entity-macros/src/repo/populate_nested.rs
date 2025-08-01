@@ -52,7 +52,6 @@ impl ToTokens for PopulateNested<'_> {
             #[es_entity::prelude::async_trait::async_trait]
             impl #impl_generics es_entity::PopulateNested<#ty> for #ident #ty_generics #where_clause {
                 async fn populate_in_op<OP>(
-                    &self,
                     op: &mut OP,
                     mut lookup: std::collections::HashMap<#ty, &mut Nested<<Self as EsRepo>::Entity>>,
                 ) -> Result<(), #error>

@@ -219,12 +219,12 @@ impl ToTokens for EsRepo<'_> {
 
                #[inline(always)]
                async fn load_all_nested_in_op<OP>(
-                   &self, op: &mut OP, entities: &mut [#entity]
+                   op: &mut OP, entities: &mut [#entity]
                ) -> Result<(), #error>
                    where
                        OP: for<'o> es_entity::AtomicOperation<'o>,
                {
-                   #(self.#nested_fns(op, entities).await?;)*
+                   #(Self::#nested_fns(op, entities).await?;)*
                    Ok(())
                }
             }

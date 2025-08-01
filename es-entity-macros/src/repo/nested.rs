@@ -61,7 +61,7 @@ impl ToTokens for Nested<'_> {
                 Ok(())
             }
 
-            async fn #find_fn_name<OP, P>(&self, op: &mut OP, entities: &mut [P]) -> Result<(), #error>
+            async fn #find_fn_name<OP, P>(op: &mut OP, entities: &mut [P]) -> Result<(), #error>
                 where
                     OP: for<'o> es_entity::AtomicOperation<'o>,
                     P: es_entity::Parent<<#nested_repo_ty as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
@@ -69,7 +69,7 @@ impl ToTokens for Nested<'_> {
                     #error: From<<#nested_repo_ty as es_entity::EsRepo>::Err>
             {
                 let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e.nested_mut())).collect();
-                self.#repo_field.populate_in_op(op, lookup).await?;
+                #nested_repo_ty::populate_in_op(op, lookup).await?;
                 Ok(())
             }
         });
@@ -133,7 +133,7 @@ mod tests {
                 Ok(())
             }
 
-            async fn find_nested_users_in_op<OP, P>(&self, op: &mut OP, entities: &mut [P]) -> Result<(), es_entity::EsRepoError>
+            async fn find_nested_users_in_op<OP, P>(op: &mut OP, entities: &mut [P]) -> Result<(), es_entity::EsRepoError>
                 where
                     OP: for<'o> es_entity::AtomicOperation<'o>,
                     P: es_entity::Parent<<UserRepo as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
@@ -141,7 +141,7 @@ mod tests {
                     es_entity::EsRepoError: From<<UserRepo as es_entity::EsRepo>::Err>
             {
                 let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e.nested_mut())).collect();
-                self.users.populate_in_op(op, lookup).await?;
+                UserRepo::populate_in_op(op, lookup).await?;
                 Ok(())
             }
         };

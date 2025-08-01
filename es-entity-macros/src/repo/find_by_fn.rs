@@ -36,7 +36,7 @@ impl ToTokens for FindByFn<'_> {
         let error = self.error;
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
-                self.#f(op, &mut entities).await?;
+                Self::#f(op, &mut entities).await?;
             }
         });
         let maybe_lookup_nested = if self.nested_fn_names.is_empty() {
