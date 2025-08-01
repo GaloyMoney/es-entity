@@ -189,7 +189,7 @@ impl ToTokens for ListForFn<'_> {
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
                     where
                         'a: 'o,
-                        OP: es_entity::AsExecutor<'o>
+                        OP: es_entity::AtomicOperation<'o>
                 {
                     let executor = op.as_executor();
 
@@ -281,7 +281,7 @@ mod tests {
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError>
                 where
                     'a: 'o,
-                    OP: es_entity::AsExecutor<'o>
+                    OP: es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
 
@@ -375,7 +375,7 @@ mod tests {
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, es_entity::EsRepoError>
                 where
                     'a: 'o,
-                    OP: es_entity::AsExecutor<'o>
+                    OP: es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
 

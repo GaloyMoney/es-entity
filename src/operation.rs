@@ -44,16 +44,14 @@ impl<'t> DbOp<'t> {
     }
 }
 
-impl<'a, 't> crate::traits::AsExecutor<'a> for DbOp<'t> {
+impl<'a, 't> crate::traits::AtomicOperation<'a> for DbOp<'t> {
     type Executor = &'a mut sqlx::PgConnection;
+
+    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.now
+    }
 
     fn as_executor(&'a mut self) -> Self::Executor {
         self.tx.as_executor()
-    }
-}
-
-impl<'a> crate::traits::AtomicOperation<'a> for DbOp<'a> {
-    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.now
     }
 }

@@ -49,7 +49,7 @@ impl ToTokens for FindByFn<'_> {
             }
         };
         for maybe in ["", "maybe_"] {
-            let (result_type, fetch_fn, early_return, regular_return) = if maybe == "" {
+            let (result_type, fetch_fn, early_return, regular_return) = if maybe.is_empty() {
                 (
                     quote! { #entity },
                     quote! { .fetch_one(executor) },
@@ -133,7 +133,7 @@ impl ToTokens for FindByFn<'_> {
                     ) -> Result<#result_type, #error>
                         where
                             'a: 'o,
-                            OP: es_entity::AsExecutor<'o>
+                            OP: es_entity::AtomicOperation<'o>
                     {
                         let executor = op.as_executor();
                         let #column_name = #column_name.borrow();
@@ -194,7 +194,7 @@ mod tests {
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
                     'a: 'o,
-                    OP: es_entity::AsExecutor<'o>
+                    OP: es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
                 let id = id.borrow();
@@ -222,7 +222,7 @@ mod tests {
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
                     'a: 'o,
-                    OP: es_entity::AsExecutor<'o>
+                    OP: es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
                 let id = id.borrow();
@@ -277,7 +277,7 @@ mod tests {
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
                     'a: 'o,
-                    OP: es_entity::AsExecutor<'o>
+                    OP: es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
                 let id = id.borrow();
@@ -305,7 +305,7 @@ mod tests {
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
                     'a: 'o,
-                    OP: es_entity::AsExecutor<'o>
+                    OP: es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
                 let id = id.borrow();
@@ -333,7 +333,7 @@ mod tests {
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
                     'a: 'o,
-                    OP: es_entity::AsExecutor<'o>
+                    OP: es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
                 let id = id.borrow();
@@ -364,7 +364,7 @@ mod tests {
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
                     'a: 'o,
-                    OP: es_entity::AsExecutor<'o>
+                    OP: es_entity::AtomicOperation<'o>
             {
                 let executor = op.as_executor();
                 let id = id.borrow();
