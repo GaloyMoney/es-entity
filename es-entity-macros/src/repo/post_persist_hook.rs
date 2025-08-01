@@ -41,11 +41,15 @@ impl ToTokens for PostPersistHook<'_> {
 
         tokens.append_all(quote! {
             #[inline(always)]
-            async fn execute_post_persist_hook(&self,
-                op: &mut es_entity::DbOp<'_>,
+            async fn execute_post_persist_hook<OP>(
+                &self,
+                op: &mut OP,
                 entity: &#entity,
                 new_events: es_entity::LastPersisted<'_, #event>
-            ) -> Result<(), #error> {
+            ) -> Result<(), #error>
+                where
+                    OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 #hook
             }
         });
@@ -75,11 +79,14 @@ mod tests {
 
         let expected = quote! {
             #[inline(always)]
-            async fn execute_post_persist_hook(&self,
-                op: &mut es_entity::DbOp<'_>,
+            async fn execute_post_persist_hook<OP>(&self,
+                op: &mut OP,
                 entity: &Entity,
                 new_events: es_entity::LastPersisted<'_, #event>
-            ) -> Result<(), es_entity::EsRepoError> {
+            ) -> Result<(), es_entity::EsRepoError>
+                where
+                    OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 Ok(())
             }
         };

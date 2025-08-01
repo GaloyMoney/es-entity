@@ -101,7 +101,7 @@ impl ToTokens for UpdateFn<'_> {
                     self.persist_events(op, events).await?
                 };
 
-                // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
 
                 Ok(n_events)
             }
@@ -187,7 +187,7 @@ mod tests {
                     self.persist_events(op, events).await?
                 };
 
-                // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
 
                 Ok(n_events)
             }
@@ -253,7 +253,7 @@ mod tests {
                     self.persist_events(op, events).await?
                 };
 
-                // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
 
                 Ok(n_events)
             }

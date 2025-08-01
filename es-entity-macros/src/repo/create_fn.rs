@@ -114,7 +114,7 @@ impl ToTokens for CreateFn<'_> {
 
                 #(#nested)*
 
-                // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
                 Ok(entity)
             }
         });
@@ -197,7 +197,7 @@ mod tests {
                 let n_events = self.persist_events(op, &mut events).await?;
                 let entity = Self::hydrate_entity(events)?;
 
-                // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
                 Ok(entity)
             }
         };
@@ -281,7 +281,7 @@ mod tests {
                 let n_events = self.persist_events(op, &mut events).await?;
                 let entity = Self::hydrate_entity(events)?;
 
-                // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
                 Ok(entity)
             }
         };
