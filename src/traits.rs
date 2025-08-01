@@ -13,10 +13,138 @@ pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
         + Sync;
 }
 
+/// Required trait for converting new entities into their initial events before persistence.
+///
+/// All `NewEntity` types must implement this trait and its `into_events` method to emit the initial
+/// events that need to be persisted, later the `Entity` is re-constructed by replaying these events.
+///
+/// # Example
+///
+/// ```rust
+/// use es_entity::*;
+/// use serde::{Serialize, Deserialize};
+///
+/// entity_id!{ UserId }
+///
+/// #[derive(EsEvent, Serialize, Deserialize)]
+/// #[serde(tag = "type", rename_all = "snake_case")]
+/// #[es_event(id = "UserId")]
+/// pub enum UserEvent {
+///     Initialized { id: UserId, name: String },
+///     NameUpdated { name: String }
+/// }
+///
+/// // The main `Entity` type
+/// #[derive(EsEntity)]
+/// pub struct User {
+///     pub id: UserId,
+///     name: String,
+///     events: EntityEvents<UserEvent>
+/// }
+/// // The `NewEntity` type used for initialization.
+/// pub struct NewUser {
+///     id: UserId,
+///     name: String
+/// }
+///
+/// // The `IntoEvents` implementation which emits an event stream.
+/// // These events help track `Entity` state mutations
+/// // Returns the `EntityEvents<UserEvent>`
+/// impl IntoEvents<UserEvent> for NewUser {
+///     fn into_events(self) -> EntityEvents<UserEvent> {
+///         EntityEvents::init(
+///             self.id,
+///             [UserEvent::Initialized {
+///                 id: self.id,
+///                 name: self.name,
+///             }],
+///         )
+///     }
+/// }
+///
+/// // The `TryFromEvents` implementation to hydrate entities by replaying events chronologically.
+/// impl TryFromEvents<UserEvent> for User {
+///     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+///         let mut name = String::new();
+///         for event in events.iter_all() {
+///              match event {
+///                 UserEvent::Initialized { name: n, .. } => name = n.clone(),
+///                 UserEvent::NameUpdated { name: n, .. } => name = n.clone(),
+///                 // ...similarly other events can be matched
+///             }
+///         }
+///         Ok(User { id: events.id().clone(), name, events })
+///     }
+/// }
+/// ```
 pub trait IntoEvents<E: EsEvent> {
     fn into_events(self) -> EntityEvents<E>;
 }
 
+/// Required trait for re-constructing entities from their events in chronological order.
+///
+/// All `Entity` types must implement this trait and its `try_from_events` method to hydrate
+/// entities post-persistence.
+///
+/// # Example
+///
+/// ```rust
+/// use es_entity::*;
+/// use serde::{Serialize, Deserialize};
+///
+/// entity_id!{ UserId }
+///
+/// #[derive(EsEvent, Serialize, Deserialize)]
+/// #[serde(tag = "type", rename_all = "snake_case")]
+/// #[es_event(id = "UserId")]
+/// pub enum UserEvent {
+///     Initialized { id: UserId, name: String },
+///     NameUpdated { name: String }
+/// }
+///
+/// // The main 'Entity' type
+/// #[derive(EsEntity)]
+/// pub struct User {
+///     pub id: UserId,
+///     name: String,
+///     events: EntityEvents<UserEvent>
+/// }
+/// // The 'NewEntity' type used for initialization.
+/// pub struct NewUser {
+///     id: UserId,
+///     name: String
+/// }
+///
+/// // The IntoEvents implementation which emits an event stream.
+/// impl IntoEvents<UserEvent> for NewUser {
+///     fn into_events(self) -> EntityEvents<UserEvent> {
+///         EntityEvents::init(
+///             self.id,
+///             [UserEvent::Initialized {
+///                 id: self.id,
+///                 name: self.name,
+///             }],
+///         )
+///     }
+/// }
+///
+/// // The `TryFromEvents` implementation to hydrate entities by replaying events chronologically.
+/// // Replays events in chronological order to hydrate the final `Entity`
+/// // Returns the `User` entity
+/// impl TryFromEvents<UserEvent> for User {
+///     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+///         let mut name = String::new();
+///         for event in events.iter_all() {
+///              match event {
+///                 UserEvent::Initialized { name: n, .. } => name = n.clone(),
+///                 UserEvent::NameUpdated { name: n, .. } => name = n.clone(),
+///                 // ...similarly other events can be matched
+///             }
+///         }
+///         Ok(User { id: events.id().clone(), name, events })
+///     }
+/// }
+/// ```
 pub trait TryFromEvents<E: EsEvent> {
     fn try_from_events(events: EntityEvents<E>) -> Result<Self, EsEntityError>
     where

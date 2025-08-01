@@ -34,10 +34,12 @@ impl<'t> DbOp<'t> {
         self.now
     }
 
+    /// Returns a mutable reference to the `Transaction<'t, Postgres>` value
     pub fn tx(&mut self) -> &mut Transaction<'t, Postgres> {
         &mut self.tx
     }
 
+    /// Returns an owned `Transaction<'t, Postgres>` value by consuming the `DbOp`
     pub fn into_tx(self) -> Transaction<'t, Postgres> {
         self.tx
     }
