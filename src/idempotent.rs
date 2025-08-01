@@ -11,7 +11,7 @@
 pub enum Idempotent<T> {
     /// Signals if the idempotent mutation was executed and returned `T`
     Executed(T),
-    /// Signals if the idempotent mutation was ignored 
+    /// Signals if the idempotent mutation was ignored
     Ignored,
 }
 
