@@ -256,7 +256,7 @@ impl ToTokens for ListByFn<'_> {
             }
         } else {
             quote! {
-                .fetch_n(op.as_executor(), first)
+                .fetch_n(op, first)
             }
         };
 
@@ -530,7 +530,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(op.as_executor(), first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -540,7 +540,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(op.as_executor(), first)
+                            .fetch_n(op, first)
                             .await?
                     },
                 };
@@ -584,7 +584,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(op.as_executor(), first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -594,7 +594,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(op.as_executor(), first)
+                            .fetch_n(op, first)
                             .await?
                     },
                 };
@@ -670,7 +670,7 @@ mod tests {
                             id as Option<EntityId>,
                             name as Option<String>,
                         )
-                            .fetch_n(op.as_executor(), first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -681,7 +681,7 @@ mod tests {
                             id as Option<EntityId>,
                             name as Option<String>,
                         )
-                            .fetch_n(op.as_executor(), first)
+                            .fetch_n(op, first)
                             .await?
                     },
                 };
@@ -759,7 +759,7 @@ mod tests {
                             id as Option<EntityId>,
                             value as Option<rust_decimal::Decimal>,
                         )
-                            .fetch_n(op.as_executor(), first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -770,7 +770,7 @@ mod tests {
                             id as Option<EntityId>,
                             value as Option<rust_decimal::Decimal>,
                         )
-                            .fetch_n(op.as_executor(), first)
+                            .fetch_n(op, first)
                             .await?
                     },
                 };

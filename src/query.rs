@@ -89,11 +89,14 @@ where
         }
     }
 
-    pub async fn fetch_optional(
+    pub async fn fetch_optional<'a, OP>(
         self,
-        executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::Err> {
-        let rows = self.inner.fetch_all(executor).await?;
+        op: OP,
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::Err>
+    where
+        OP: IntoExecutor<'a>,
+    {
+        let rows = self.inner.fetch_all(op.into_executor()).await?;
         if rows.is_empty() {
             return Ok(None);
         }
@@ -101,20 +104,26 @@ where
         Ok(Some(EntityEvents::load_first(rows.into_iter())?))
     }
 
-    pub async fn fetch_one(
+    pub async fn fetch_one<'a, OP>(
         self,
-        executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-    ) -> Result<<Repo as EsRepo>::Entity, <Repo as EsRepo>::Err> {
-        let rows = self.inner.fetch_all(executor).await?;
+        op: OP,
+    ) -> Result<<Repo as EsRepo>::Entity, <Repo as EsRepo>::Err>
+    where
+        OP: IntoExecutor<'a>,
+    {
+        let rows = self.inner.fetch_all(op.into_executor()).await?;
         Ok(EntityEvents::load_first(rows.into_iter())?)
     }
 
-    pub async fn fetch_n(
+    pub async fn fetch_n<'a, OP>(
         self,
-        executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
+        op: OP,
         first: usize,
-    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::Err> {
-        let rows = self.inner.fetch_all(executor).await?;
+    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::Err>
+    where
+        OP: IntoExecutor<'a>,
+    {
+        let rows = self.inner.fetch_all(op.into_executor()).await?;
         Ok(EntityEvents::load_n(rows.into_iter(), first)?)
     }
 
@@ -125,7 +134,7 @@ where
     where
         OP: for<'o> AtomicOperation<'o>,
     {
-        let Some(entity) = self.fetch_optional(op.as_executor()).await? else {
+        let Some(entity) = self.fetch_optional(&mut *op).await? else {
             return Ok(None);
         };
         let mut entities = [entity];
@@ -141,7 +150,7 @@ where
     where
         OP: for<'o> AtomicOperation<'o>,
     {
-        let entity = self.fetch_one(op.as_executor()).await?;
+        let entity = self.fetch_one(&mut *op).await?;
         let mut entities = [entity];
         <Repo as EsRepo>::load_all_nested_in_op(op, &mut entities).await?;
         let [entity] = entities;
@@ -156,7 +165,7 @@ where
     where
         OP: for<'o> AtomicOperation<'o>,
     {
-        let (mut entities, more) = self.fetch_n(op.as_executor(), first).await?;
+        let (mut entities, more) = self.fetch_n(&mut *op, first).await?;
         <Repo as EsRepo>::load_all_nested_in_op(op, &mut entities).await?;
         Ok((entities, more))
     }

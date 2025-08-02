@@ -83,3 +83,36 @@ impl<'a, 't> AtomicOperation<'a> for sqlx::Transaction<'t, sqlx::Postgres> {
         &mut *self
     }
 }
+
+pub trait IntoExecutor<'a> {
+    type Executor: sqlx::Executor<'a, Database = sqlx::Postgres>;
+
+    fn into_executor(self) -> Self::Executor;
+}
+
+impl<'a, T> IntoExecutor<'a> for &'a mut T
+where
+    T: AtomicOperation<'a>,
+{
+    type Executor = T::Executor;
+
+    fn into_executor(self) -> Self::Executor {
+        self.as_executor()
+    }
+}
+
+impl<'a> IntoExecutor<'a> for &sqlx::PgPool {
+    type Executor = Self;
+
+    fn into_executor(self) -> Self::Executor {
+        self
+    }
+}
+
+impl<'a> IntoExecutor<'a> for &'a mut sqlx::PgConnection {
+    type Executor = Self;
+
+    fn into_executor(self) -> Self::Executor {
+        self
+    }
+}

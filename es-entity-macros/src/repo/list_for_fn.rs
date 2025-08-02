@@ -56,7 +56,7 @@ impl ToTokens for ListForFn<'_> {
             }
         } else {
             quote! {
-                .fetch_n(op.as_executor(), first)
+                .fetch_n(op, first)
             }
         };
 
@@ -283,7 +283,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(op.as_executor(), first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -294,7 +294,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(op.as_executor(), first)
+                            .fetch_n(op, first)
                             .await?
                     }
                 };
@@ -375,7 +375,7 @@ mod tests {
                             id as Option<EntityId>,
                             email as Option<String>,
                         )
-                            .fetch_n(op.as_executor(), first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -387,7 +387,7 @@ mod tests {
                             id as Option<EntityId>,
                             email as Option<String>,
                         )
-                            .fetch_n(op.as_executor(), first)
+                            .fetch_n(op, first)
                             .await?
                     }
                 };
