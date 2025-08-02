@@ -5,17 +5,22 @@ use quote::{TokenStreamExt, quote};
 use super::RepositoryOptions;
 
 pub struct Begin<'a> {
+    op: &'a syn::Type,
     begin: &'a Option<syn::Ident>,
 }
 
 impl<'a> From<&'a RepositoryOptions> for Begin<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
-        Self { begin: &opts.begin }
+        Self {
+            op: opts.op(),
+            begin: &opts.begin,
+        }
     }
 }
 
 impl ToTokens for Begin<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
+        let op = &self.op;
         let begin = if let Some(begin) = self.begin {
             quote! {
                 self.#begin()
@@ -28,7 +33,7 @@ impl ToTokens for Begin<'_> {
 
         tokens.append_all(quote! {
             #[inline(always)]
-            pub async fn begin_op(&self) -> Result<es_entity::DbOp<'static>, sqlx::Error>{
+            pub async fn begin_op(&self) -> Result<#op, sqlx::Error>{
                 #begin
             }
         });

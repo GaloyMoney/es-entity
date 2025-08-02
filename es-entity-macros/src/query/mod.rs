@@ -66,7 +66,7 @@ impl ToTokens for EsQuery {
             {
                 use #repo_types_mod::*;
 
-                es_entity::EsQuery::<Repo__Entity, Repo__Error, _, _, _>::new(
+                es_entity::EsQuery::<Self, _, _>::new(
                     sqlx::query_as!(
                         Repo__DbEvent,
                         #query,
@@ -99,7 +99,7 @@ mod tests {
             {
                 use user_repo_types::*;
 
-                es_entity::EsQuery::<Repo__Entity, Repo__Error, _, _, _>::new(
+                es_entity::EsQuery::<Self, _, _>::new(
                     sqlx::query_as!(
                         Repo__DbEvent,
                         "WITH entities AS (SELECT * FROM users WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN user_events e ON i.id = e.id ORDER BY i.id, e.sequence",
@@ -128,7 +128,7 @@ mod tests {
             {
                 use my_custom_entity_repo_types::*;
 
-                es_entity::EsQuery::<Repo__Entity, Repo__Error, _, _, _>::new(
+                es_entity::EsQuery::<Self, _, _>::new(
                     sqlx::query_as!(
                         Repo__DbEvent,
                         "WITH entities AS (SELECT * FROM my_custom_table WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN my_custom_table_events e ON i.id = e.id ORDER BY i.id, e.sequence",
@@ -160,7 +160,7 @@ mod tests {
             {
                 use entity_repo_types::*;
 
-                es_entity::EsQuery::<Repo__Entity, Repo__Error, _, _, _>::new(
+                es_entity::EsQuery::<Self, _, _>::new(
                     sqlx::query_as!(
                         Repo__DbEvent,
                         "WITH entities AS (SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, e.recorded_at FROM entities i JOIN entity_events e ON i.id = e.id ORDER BY i.name, i.id, i.id, e.sequence",

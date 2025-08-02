@@ -61,3 +61,34 @@ CREATE TABLE custom_name_for_user_events (
   recorded_at TIMESTAMPTZ NOT NULL,
   UNIQUE(id, sequence)
 );
+
+-- Tables for nested entities test
+CREATE TABLE orders (
+  id UUID PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE order_events (
+  id UUID NOT NULL REFERENCES orders(id),
+  sequence INT NOT NULL,
+  event_type VARCHAR NOT NULL,
+  event JSONB NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL,
+  UNIQUE(id, sequence)
+);
+
+CREATE TABLE order_items (
+  id UUID PRIMARY KEY,
+  order_id UUID NOT NULL REFERENCES orders(id),
+  created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX idx_order_items_order_id ON order_items (order_id);
+
+CREATE TABLE order_item_events (
+  id UUID NOT NULL REFERENCES order_items(id),
+  sequence INT NOT NULL,
+  event_type VARCHAR NOT NULL,
+  event JSONB NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL,
+  UNIQUE(id, sequence)
+);

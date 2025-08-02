@@ -10,6 +10,7 @@ pub struct CreateFn<'a> {
     columns: &'a Columns,
     error: &'a syn::Type,
     nested_fn_names: Vec<syn::Ident>,
+    additional_op_constraint: proc_macro2::TokenStream,
 }
 
 impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
@@ -23,6 +24,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
                 .map(|f| f.create_nested_fn_name())
                 .collect(),
             columns: &opts.columns,
+            additional_op_constraint: opts.additional_op_constraint(),
         }
     }
 }
@@ -31,6 +33,7 @@ impl ToTokens for CreateFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let entity = self.entity;
         let error = self.error;
+        let additional_op_constraint = &self.additional_op_constraint;
 
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
@@ -90,11 +93,15 @@ impl ToTokens for CreateFn<'_> {
                 Ok(res)
             }
 
-            pub async fn create_in_op(
+            pub async fn create_in_op<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 new_entity: <#entity as es_entity::EsEntity>::New
-            ) -> Result<#entity, #error> {
+            ) -> Result<#entity, #error>
+            where
+                OP: for<'o> es_entity::AtomicOperation<'o>
+                #additional_op_constraint
+            {
                 #assignments
 
                  sqlx::query!(
@@ -102,7 +109,7 @@ impl ToTokens for CreateFn<'_> {
                      #(#args)*
                      op.now()
                 )
-                .execute(&mut **op.tx())
+                .execute(op.as_executor())
                 .await?;
 
                 let mut events = Self::convert_new(new_entity);
@@ -138,6 +145,7 @@ mod tests {
             error: &error,
             columns: &columns,
             nested_fn_names: Vec::new(),
+            additional_op_constraint: quote! {},
         };
 
         let mut tokens = TokenStream::new();
@@ -173,18 +181,21 @@ mod tests {
                 Ok(res)
             }
 
-            pub async fn create_in_op(
+            pub async fn create_in_op<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, es_entity::EsRepoError> {
+            ) -> Result<Entity, es_entity::EsRepoError>
+            where
+                OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 let id = &new_entity.id;
 
                 sqlx::query!("INSERT INTO entities (id, created_at) VALUES ($1, COALESCE($2, NOW()))",
                     id as &EntityId,
                     op.now()
                 )
-                .execute(&mut **op.tx())
+                .execute(op.as_executor())
                 .await?;
 
                 let mut events = Self::convert_new(new_entity);
@@ -217,6 +228,7 @@ mod tests {
             error: &error,
             columns: &columns,
             nested_fn_names: Vec::new(),
+            additional_op_constraint: quote! {},
         };
 
         let mut tokens = TokenStream::new();
@@ -252,11 +264,14 @@ mod tests {
                 Ok(res)
             }
 
-            pub async fn create_in_op(
+            pub async fn create_in_op<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, es_entity::EsRepoError> {
+            ) -> Result<Entity, es_entity::EsRepoError>
+            where
+                OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 let id = &new_entity.id;
                 let name = &new_entity.name();
 
@@ -265,7 +280,7 @@ mod tests {
                     name as &String,
                     op.now()
                 )
-                .execute(&mut **op.tx())
+                .execute(op.as_executor())
                 .await?;
 
                 let mut events = Self::convert_new(new_entity);

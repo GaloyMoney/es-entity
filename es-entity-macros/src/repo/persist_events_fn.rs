@@ -46,11 +46,14 @@ impl ToTokens for PersistEventsFn<'_> {
                 }
             }
 
-            async fn persist_events(
+            async fn persist_events<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 events: &mut es_entity::EntityEvents<#event_type>
-            ) -> Result<usize, #error> {
+            ) -> Result<usize, #error>
+            where
+                OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 let id = events.id();
                 let offset = events.len_persisted();
                 let serialized_events = events.serialize_new_events();
@@ -65,7 +68,7 @@ impl ToTokens for PersistEventsFn<'_> {
                         offset as i32,
                         &events_types,
                         &serialized_events,
-                    ).fetch_all(&mut **op.tx()).await)?;
+                    ).fetch_all(op.as_executor()).await)?;
 
                 let recorded_at = rows[0].recorded_at;
                 let n_events = events.mark_new_events_persisted_at(recorded_at);
@@ -106,11 +109,14 @@ mod tests {
                 }
             }
 
-            async fn persist_events(
+            async fn persist_events<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 events: &mut es_entity::EntityEvents<EntityEvent>
-            ) -> Result<usize, es_entity::EsRepoError> {
+            ) -> Result<usize, es_entity::EsRepoError>
+            where
+                OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 let id = events.id();
                 let offset = events.len_persisted();
                 let serialized_events = events.serialize_new_events();
@@ -125,7 +131,7 @@ mod tests {
                         offset as i32,
                         &events_types,
                         &serialized_events,
-                    ).fetch_all(&mut **op.tx()).await)?;
+                    ).fetch_all(op.as_executor()).await)?;
 
                 let recorded_at = rows[0].recorded_at;
                 let n_events = events.mark_new_events_persisted_at(recorded_at);

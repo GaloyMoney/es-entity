@@ -214,7 +214,7 @@ pub struct ListByFn<'a> {
     error: &'a syn::Type,
     delete: DeleteOption,
     cursor_mod: syn::Ident,
-    nested_fn_names: Vec<syn::Ident>,
+    any_nested: bool,
 }
 
 impl<'a> ListByFn<'a> {
@@ -228,7 +228,7 @@ impl<'a> ListByFn<'a> {
             error: opts.err(),
             delete: opts.delete,
             cursor_mod: opts.cursor_mod(),
-            nested_fn_names: opts.all_nested().map(|f| f.find_nested_fn_name()).collect(),
+            any_nested: opts.any_nested(),
         }
     }
 
@@ -250,23 +250,17 @@ impl ToTokens for ListByFn<'_> {
         let cursor_ident = cursor.ident();
         let cursor_mod = cursor.cursor_mod();
         let error = self.error;
-        let nested = self.nested_fn_names.iter().map(|f| {
+        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
+        let query_fn_op_constraint = RepositoryOptions::query_fn_op_constraint(self.any_nested);
+        let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
+        let fetch_fn = if self.any_nested {
             quote! {
-                self.#f(&mut entities).await?;
+                .fetch_n_include_nested(op, first)
             }
-        });
-        let maybe_mut_entities = if self.nested_fn_names.is_empty() {
-            quote! { (entities, has_next_page) }
-        } else {
-            quote! { (mut entities, has_next_page) }
-        };
-        let maybe_lookup_nested = if self.nested_fn_names.is_empty() {
-            quote! {}
         } else {
             quote! {
-                {
-                    #(#nested)*
-                }
+                .fetch_n(op, first)
             }
         };
 
@@ -283,17 +277,9 @@ impl ToTokens for ListByFn<'_> {
                 ),
                 Span::call_site(),
             );
-            let fn_via = syn::Ident::new(
+            let fn_in_op = syn::Ident::new(
                 &format!(
-                    "list_by_{}_via{}",
-                    column_name,
-                    delete.include_deletion_fn_postfix()
-                ),
-                Span::call_site(),
-            );
-            let fn_in_tx = syn::Ident::new(
-                &format!(
-                    "list_by_{}_in_tx{}",
+                    "list_by_{}{}_in_op",
                     column_name,
                     delete.include_deletion_fn_postfix()
                 ),
@@ -367,40 +353,32 @@ impl ToTokens for ListByFn<'_> {
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
-                    self.#fn_via(self.pool(), cursor, direction).await
+                    self.#fn_in_op(#query_fn_get_op, cursor, direction).await
                 }
 
-                pub async fn #fn_in_tx(
+                async fn #fn_in_op #query_fn_generics(
                     &self,
-                    db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                    #query_fn_op_arg,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
-                    self.#fn_via(&mut **db, cursor, direction).await
-                }
-
-                async fn #fn_via(
-                    &self,
-                    executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-                    cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
-                    direction: es_entity::ListDirection,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
+                   where
+                       #query_fn_op_constraint
+                 {
                     #destructure_tokens
 
-                    let #maybe_mut_entities = match direction {
+                    let (entities, has_next_page) = match direction {
                         es_entity::ListDirection::Ascending => {
                             #es_query_asc_call
-                                .fetch_n(executor, first)
+                                #fetch_fn
                                 .await?
                         },
                         es_entity::ListDirection::Descending => {
                             #es_query_desc_call
-                                .fetch_n(executor, first)
+                                #fetch_fn
                                 .await?
                         },
                     };
-
-                    #maybe_lookup_nested
 
                     let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
 
@@ -517,7 +495,7 @@ mod tests {
             error: &error,
             delete: DeleteOption::Soft,
             cursor_mod,
-            nested_fn_names: Vec::new(),
+            any_nested: false,
         };
 
         let mut tokens = TokenStream::new();
@@ -529,24 +507,18 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
-                self.list_by_id_via(self.pool(), cursor, direction).await
+                self.list_by_id_in_op(self.pool(), cursor, direction).await
             }
 
-            pub async fn list_by_id_in_tx(
+            async fn list_by_id_in_op<'a, OP>(
                 &self,
-                db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                op: OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
-                self.list_by_id_via(&mut **db, cursor, direction).await
-            }
-
-            async fn list_by_id_via(
-                &self,
-                executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError>
+                where
+                    OP: IntoExecutor<'a>
+            {
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let id = if let Some(after) = after {
                     Some(after.id)
@@ -562,7 +534,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -572,7 +544,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                 };
@@ -590,24 +562,18 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
-                self.list_by_id_via_include_deleted(self.pool(), cursor, direction).await
+                self.list_by_id_include_deleted_in_op(self.pool(), cursor, direction).await
             }
 
-            pub async fn list_by_id_in_tx_include_deleted(
+            async fn list_by_id_include_deleted_in_op<'a, OP>(
                 &self,
-                db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                op: OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
-                self.list_by_id_via_include_deleted(&mut **db, cursor, direction).await
-            }
-
-            async fn list_by_id_via_include_deleted(
-                &self,
-                executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError>
+            where
+                OP: IntoExecutor<'a>
+            {
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let id = if let Some(after) = after {
                     Some(after.id)
@@ -622,7 +588,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -632,7 +598,7 @@ mod tests {
                             (first + 1) as i64,
                             id as Option<EntityId>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                 };
@@ -668,7 +634,7 @@ mod tests {
             error: &error,
             delete: DeleteOption::No,
             cursor_mod,
-            nested_fn_names: Vec::new(),
+            any_nested: false,
         };
 
         let mut tokens = TokenStream::new();
@@ -680,24 +646,18 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByNameCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, es_entity::EsRepoError> {
-                self.list_by_name_via(self.pool(), cursor, direction).await
+                self.list_by_name_in_op(self.pool(), cursor, direction).await
             }
 
-            pub async fn list_by_name_in_tx(
+            async fn list_by_name_in_op<'a, OP>(
                 &self,
-                db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                op: OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByNameCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, es_entity::EsRepoError> {
-                self.list_by_name_via(&mut **db, cursor, direction).await
-            }
-
-            async fn list_by_name_via(
-                &self,
-                executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByNameCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, es_entity::EsRepoError> {
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, es_entity::EsRepoError>
+                where
+                    OP: IntoExecutor<'a>
+            {
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let (id, name) = if let Some(after) = after {
                     (Some(after.id), Some(after.name))
@@ -714,7 +674,7 @@ mod tests {
                             id as Option<EntityId>,
                             name as Option<String>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -725,7 +685,7 @@ mod tests {
                             id as Option<EntityId>,
                             name as Option<String>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                 };
@@ -763,7 +723,7 @@ mod tests {
             error: &error,
             delete: DeleteOption::No,
             cursor_mod,
-            nested_fn_names: Vec::new(),
+            any_nested: false,
         };
 
         let mut tokens = TokenStream::new();
@@ -775,24 +735,18 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByValueCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, es_entity::EsRepoError> {
-                self.list_by_value_via(self.pool(), cursor, direction).await
+                self.list_by_value_in_op(self.pool(), cursor, direction).await
             }
 
-            pub async fn list_by_value_in_tx(
+            async fn list_by_value_in_op<'a, OP>(
                 &self,
-                db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                op: OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByValueCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, es_entity::EsRepoError> {
-                self.list_by_value_via(&mut **db, cursor, direction).await
-            }
-
-            async fn list_by_value_via(
-                &self,
-                executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByValueCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, es_entity::EsRepoError> {
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, es_entity::EsRepoError>
+                where
+                    OP: IntoExecutor<'a>
+            {
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let (id, value) = if let Some(after) = after {
                     (Some(after.id), after.value)
@@ -809,7 +763,7 @@ mod tests {
                             id as Option<EntityId>,
                             value as Option<rust_decimal::Decimal>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                     es_entity::ListDirection::Descending => {
@@ -820,7 +774,7 @@ mod tests {
                             id as Option<EntityId>,
                             value as Option<rust_decimal::Decimal>,
                         )
-                            .fetch_n(executor, first)
+                            .fetch_n(op, first)
                             .await?
                     },
                 };

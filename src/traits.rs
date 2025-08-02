@@ -40,18 +40,79 @@ pub trait Parent<T: EsEntity> {
     fn nested_mut(&mut self) -> &mut Nested<T>;
 }
 
+#[async_trait]
 pub trait EsRepo {
     type Entity: EsEntity;
-    type Err: From<EsEntityError>;
+    type Err: From<EsEntityError> + From<sqlx::Error>;
+
+    async fn load_all_nested_in_op<OP>(
+        op: &mut OP,
+        entities: &mut [Self::Entity],
+    ) -> Result<(), Self::Err>
+    where
+        OP: for<'o> AtomicOperation<'o>;
 }
 
 #[async_trait]
 pub trait PopulateNested<C>: EsRepo {
-    async fn populate(
-        &self,
+    async fn populate_in_op<OP>(
+        op: &mut OP,
         lookup: std::collections::HashMap<C, &mut Nested<<Self as EsRepo>::Entity>>,
-    ) -> Result<(), <Self as EsRepo>::Err>;
+    ) -> Result<(), <Self as EsRepo>::Err>
+    where
+        OP: for<'o> AtomicOperation<'o>;
 }
 
 pub trait RetryableInto<T>: Into<T> + Copy + std::fmt::Debug {}
 impl<T, O> RetryableInto<O> for T where T: Into<O> + Copy + std::fmt::Debug {}
+
+pub trait AtomicOperation<'a>: Send {
+    type Executor: sqlx::Executor<'a, Database = sqlx::Postgres>;
+
+    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        None
+    }
+
+    fn as_executor(&'a mut self) -> Self::Executor;
+}
+
+impl<'a, 't> AtomicOperation<'a> for sqlx::Transaction<'t, sqlx::Postgres> {
+    type Executor = &'a mut sqlx::PgConnection;
+
+    fn as_executor(&'a mut self) -> Self::Executor {
+        &mut *self
+    }
+}
+
+pub trait IntoExecutor<'a> {
+    type Executor: sqlx::Executor<'a, Database = sqlx::Postgres>;
+
+    fn into_executor(self) -> Self::Executor;
+}
+
+impl<'a, T> IntoExecutor<'a> for &'a mut T
+where
+    T: AtomicOperation<'a>,
+{
+    type Executor = T::Executor;
+
+    fn into_executor(self) -> Self::Executor {
+        self.as_executor()
+    }
+}
+
+impl<'a> IntoExecutor<'a> for &sqlx::PgPool {
+    type Executor = Self;
+
+    fn into_executor(self) -> Self::Executor {
+        self
+    }
+}
+
+impl<'a> IntoExecutor<'a> for &'a mut sqlx::PgConnection {
+    type Executor = Self;
+
+    fn into_executor(self) -> Self::Executor {
+        self
+    }
+}

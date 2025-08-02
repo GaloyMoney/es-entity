@@ -1,4 +1,4 @@
-use crate::{helpers::init_pool, user::*};
+use crate::{entities::user::*, helpers::init_pool};
 use es_entity::*;
 use sqlx::PgPool;
 
@@ -18,18 +18,20 @@ impl Users {
         Self { pool }
     }
     pub async fn query_with_args(&self, id: UserId) -> Result<User, EsRepoError> {
+        let mut op = self.begin_op().await?;
         es_query!(
             entity = User,
             "SELECT * FROM custom_name_for_users WHERE id = $1",
             id as UserId
         )
-        .fetch_one(self.pool())
+        .fetch_one(op.as_executor())
         .await
     }
 
     pub async fn query_without_args(&self) -> Result<(Vec<User>, bool), EsRepoError> {
+        let mut op = self.begin_op().await?;
         es_query!(entity = User, "SELECT * FROM custom_name_for_users")
-            .fetch_n(self.pool(), 2)
+            .fetch_n(op.as_executor(), 2)
             .await
     }
 }

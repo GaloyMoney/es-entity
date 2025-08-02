@@ -37,11 +37,14 @@ impl ToTokens for PersistEventsBatchFn<'_> {
         );
 
         tokens.append_all(quote! {
-            async fn persist_events_batch(
+            async fn persist_events_batch<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 all_events: &mut [es_entity::EntityEvents<#event_type>]
-            ) -> Result<std::collections::HashMap<#id_type, usize>, #error> {
+            ) -> Result<std::collections::HashMap<#id_type, usize>, #error>
+            where
+                OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 use es_entity::prelude::sqlx::Row;
 
                 let mut all_serialized = Vec::new();
@@ -77,7 +80,7 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                         .bind(&all_sequences)
                         .bind(&all_types)
                         .bind(&all_serialized)
-                        .fetch_all(&mut **op.tx())
+                        .fetch_all(op.as_executor())
                         .await
                 )?;
 
@@ -113,11 +116,14 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            async fn persist_events_batch(
+            async fn persist_events_batch<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 all_events: &mut [es_entity::EntityEvents<EntityEvent>]
-            ) -> Result<std::collections::HashMap<EntityId, usize>, es_entity::EsRepoError> {
+            ) -> Result<std::collections::HashMap<EntityId, usize>, es_entity::EsRepoError>
+            where
+                OP: for<'o> es_entity::AtomicOperation<'o>
+            {
                 use es_entity::prelude::sqlx::Row;
 
                 let mut all_serialized = Vec::new();
@@ -153,7 +159,7 @@ mod tests {
                         .bind(&all_sequences)
                         .bind(&all_types)
                         .bind(&all_serialized)
-                        .fetch_all(&mut **op.tx())
+                        .fetch_all(op.as_executor())
                         .await
                 )?;
 

@@ -3,6 +3,7 @@ mod delete;
 
 use convert_case::{Case, Casing};
 use darling::{FromDeriveInput, FromField};
+use quote::quote;
 
 pub use columns::*;
 pub use delete::*;
@@ -29,21 +30,21 @@ impl RepoField {
 
     pub fn create_nested_fn_name(&self) -> syn::Ident {
         syn::Ident::new(
-            &format!("create_nested_{}", self.ident()),
+            &format!("create_nested_{}_in_op", self.ident()),
             proc_macro2::Span::call_site(),
         )
     }
 
     pub fn update_nested_fn_name(&self) -> syn::Ident {
         syn::Ident::new(
-            &format!("update_nested_{}", self.ident()),
+            &format!("update_nested_{}_in_op", self.ident()),
             proc_macro2::Span::call_site(),
         )
     }
 
     pub fn find_nested_fn_name(&self) -> syn::Ident {
         syn::Ident::new(
-            &format!("find_nested_{}", self.ident()),
+            &format!("find_nested_{}_in_op", self.ident()),
             proc_macro2::Span::call_site(),
         )
     }
@@ -79,6 +80,10 @@ pub struct RepositoryOptions {
     table_name: Option<String>,
     #[darling(default, rename = "events_tbl")]
     events_table_name: Option<String>,
+    #[darling(default, rename = "op")]
+    op_ty: Option<syn::Type>,
+    #[darling(default, rename = "additional_op_traits")]
+    additional_op_traits: Option<String>,
 }
 
 impl RepositoryOptions {
@@ -105,6 +110,10 @@ impl RepositoryOptions {
         } else {
             String::new()
         };
+        if self.op_ty.is_none() {
+            self.op_ty =
+                Some(syn::parse_str("es_entity::DbOp<'static>").expect("Failed to parse op type"));
+        }
         if self.table_name.is_none() {
             self.table_name = Some(format!(
                 "{prefix}{}",
@@ -144,6 +153,23 @@ impl RepositoryOptions {
             .expect("Event identifier is not set")
     }
 
+    pub fn op(&self) -> &syn::Type {
+        self.op_ty.as_ref().expect("Op type is not set")
+    }
+
+    pub fn additional_op_constraint(&self) -> proc_macro2::TokenStream {
+        if let Some(additional_traits) = &self.additional_op_traits {
+            let additional_traits_tokens: proc_macro2::TokenStream = additional_traits
+                .parse()
+                .expect("Failed to parse additional_op_traits");
+            quote! {
+                , OP: #additional_traits_tokens
+            }
+        } else {
+            quote! {}
+        }
+    }
+
     pub fn events_table_name(&self) -> &str {
         self.events_table_name
             .as_ref()
@@ -174,11 +200,67 @@ impl RepositoryOptions {
         field.expect("Repo must have a field named 'pool' or marked with #[es_repo(pool)]")
     }
 
+    pub fn any_nested(&self) -> bool {
+        if let darling::ast::Data::Struct(fields) = &self.data {
+            fields.iter().any(|f| f.nested)
+        } else {
+            panic!("Repository must be a struct")
+        }
+    }
+
     pub fn all_nested(&self) -> impl Iterator<Item = &RepoField> {
         if let darling::ast::Data::Struct(fields) = &self.data {
             fields.iter().filter(|f| f.nested)
         } else {
             panic!("Repository must be a struct")
+        }
+    }
+
+    pub fn query_fn_generics(nested: bool) -> proc_macro2::TokenStream {
+        if nested {
+            quote! {
+                <OP>
+            }
+        } else {
+            quote! {
+                <'a, OP>
+            }
+        }
+    }
+
+    pub fn query_fn_op_arg(nested: bool) -> proc_macro2::TokenStream {
+        if nested {
+            quote! {
+                op: &mut OP
+            }
+        } else {
+            quote! {
+                op: OP
+            }
+        }
+    }
+
+    pub fn query_fn_op_constraint(nested: bool) -> proc_macro2::TokenStream {
+        if nested {
+            quote! {
+                OP: for<'a> AtomicOperation<'a>
+            }
+        } else {
+            quote! {
+                OP: IntoExecutor<'a>
+            }
+        }
+    }
+
+    pub fn query_fn_get_op(nested: bool) -> proc_macro2::TokenStream {
+        if nested {
+            quote! {
+                &mut self.pool().begin().await?
+            }
+        } else {
+            quote! {
+                self.pool()
+            }
         }
     }
 

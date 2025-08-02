@@ -1,4 +1,4 @@
-use crate::{helpers::init_pool, user::*};
+use crate::{entities::user::*, helpers::init_pool};
 use es_entity::*;
 use sqlx::PgPool;
 
