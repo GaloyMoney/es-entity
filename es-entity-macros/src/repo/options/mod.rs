@@ -230,7 +230,7 @@ impl RepositoryOptions {
     pub fn query_fn_get_op(nested: bool) -> proc_macro2::TokenStream {
         if nested {
             quote! {
-                &mut self.begin_op().await?
+                &mut self.pool().begin().await?
             }
         } else {
             quote! {

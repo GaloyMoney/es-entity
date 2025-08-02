@@ -381,7 +381,7 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError> {
-                self.find_by_id_in_op(&mut self.begin_op().await?, id).await
+                self.find_by_id_in_op(&mut self.pool().begin().await?, id).await
             }
 
             pub async fn find_by_id_in_op<OP>(
@@ -408,7 +408,7 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError> {
-                self.maybe_find_by_id_in_op(&mut self.begin_op().await?, id).await
+                self.maybe_find_by_id_in_op(&mut self.pool().begin().await?, id).await
             }
 
             pub async fn maybe_find_by_id_in_op<OP>(
