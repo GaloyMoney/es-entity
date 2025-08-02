@@ -252,7 +252,7 @@ impl ToTokens for ListByFn<'_> {
         let error = self.error;
         let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
         let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
-        let query_fn_op_constraint = RepositoryOptions::query_fn_op_constraint(self.any_nested);
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
         let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
         let fetch_fn = if self.any_nested {
             quote! {
@@ -363,7 +363,7 @@ impl ToTokens for ListByFn<'_> {
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
                    where
-                       #query_fn_op_constraint
+                       OP: #query_fn_op_traits
                  {
                     #destructure_tokens
 

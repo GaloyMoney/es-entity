@@ -240,14 +240,14 @@ impl RepositoryOptions {
         }
     }
 
-    pub fn query_fn_op_constraint(nested: bool) -> proc_macro2::TokenStream {
+    pub fn query_fn_op_traits(nested: bool) -> proc_macro2::TokenStream {
         if nested {
             quote! {
-                OP: for<'a> AtomicOperation<'a>
+                for<'a> AtomicOperation<'a>
             }
         } else {
             quote! {
-                OP: IntoExecutor<'a>
+                IntoExecutor<'a>
             }
         }
     }

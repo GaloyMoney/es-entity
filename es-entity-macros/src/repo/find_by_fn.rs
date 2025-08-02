@@ -36,7 +36,7 @@ impl ToTokens for FindByFn<'_> {
         let error = self.error;
         let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
         let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
-        let query_fn_op_constraint = RepositoryOptions::query_fn_op_constraint(self.any_nested);
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
         let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
         for maybe in ["", "maybe_"] {
             let (result_type, fetch_fn) = if maybe.is_empty() {
@@ -122,7 +122,7 @@ impl ToTokens for FindByFn<'_> {
                         #column_name: impl std::borrow::Borrow<#column_type>
                     ) -> Result<#result_type, #error>
                         where
-                            #query_fn_op_constraint
+                            OP: #query_fn_op_traits
                     {
                         let #column_name = #column_name.borrow();
                         Ok(
