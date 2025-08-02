@@ -356,7 +356,7 @@ impl ToTokens for ListByFn<'_> {
                     self.#fn_in_op(#query_fn_get_op, cursor, direction).await
                 }
 
-                async fn #fn_in_op #query_fn_generics(
+                pub async fn #fn_in_op #query_fn_generics(
                     &self,
                     #query_fn_op_arg,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
@@ -510,7 +510,7 @@ mod tests {
                 self.list_by_id_in_op(self.pool(), cursor, direction).await
             }
 
-            async fn list_by_id_in_op<'a, OP>(
+            pub async fn list_by_id_in_op<'a, OP>(
                 &self,
                 op: OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
@@ -565,7 +565,7 @@ mod tests {
                 self.list_by_id_include_deleted_in_op(self.pool(), cursor, direction).await
             }
 
-            async fn list_by_id_include_deleted_in_op<'a, OP>(
+            pub async fn list_by_id_include_deleted_in_op<'a, OP>(
                 &self,
                 op: OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
@@ -649,7 +649,7 @@ mod tests {
                 self.list_by_name_in_op(self.pool(), cursor, direction).await
             }
 
-            async fn list_by_name_in_op<'a, OP>(
+            pub async fn list_by_name_in_op<'a, OP>(
                 &self,
                 op: OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByNameCursor>,
@@ -738,7 +738,7 @@ mod tests {
                 self.list_by_value_in_op(self.pool(), cursor, direction).await
             }
 
-            async fn list_by_value_in_op<'a, OP>(
+            pub async fn list_by_value_in_op<'a, OP>(
                 &self,
                 op: OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByValueCursor>,

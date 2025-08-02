@@ -30,7 +30,7 @@ impl<'t> DbOp<'t> {
         Ok(res)
     }
 
-    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    pub fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.now
     }
 

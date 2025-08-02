@@ -174,7 +174,7 @@ impl ToTokens for ListForFn<'_> {
                     self.#fn_in_op(#query_fn_get_op, #filter_arg_name, cursor, direction).await
                 }
 
-                async fn #fn_in_op #query_fn_generics(
+                pub async fn #fn_in_op #query_fn_generics(
                     &self,
                     #query_fn_op_arg,
                     #filter_arg_name: impl std::borrow::Borrow<#for_column_type>,
@@ -261,7 +261,7 @@ mod tests {
                 self.list_for_customer_id_by_id_in_op(self.pool(), filter_customer_id, cursor, direction).await
             }
 
-            async fn list_for_customer_id_by_id_in_op<'a, OP>(
+            pub async fn list_for_customer_id_by_id_in_op<'a, OP>(
                 &self,
                 op: OP,
                 filter_customer_id: impl std::borrow::Borrow<Uuid>,
@@ -352,7 +352,7 @@ mod tests {
                 self.list_for_email_by_email_in_op(self.pool(), filter_email, cursor, direction).await
             }
 
-            async fn list_for_email_by_email_in_op<'a, OP>(
+            pub async fn list_for_email_by_email_in_op<'a, OP>(
                 &self,
                 op: OP,
                 filter_email: impl std::borrow::Borrow<str>,

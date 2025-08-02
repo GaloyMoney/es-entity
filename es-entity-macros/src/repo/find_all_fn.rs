@@ -5,21 +5,23 @@ use quote::{TokenStreamExt, quote};
 use super::options::*;
 
 pub struct FindAllFn<'a> {
+    prefix: Option<&'a syn::LitStr>,
     id: &'a syn::Ident,
     entity: &'a syn::Ident,
     table_name: &'a str,
-    events_table_name: &'a str,
     error: &'a syn::Type,
+    any_nested: bool,
 }
 
 impl<'a> From<&'a RepositoryOptions> for FindAllFn<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
+            prefix: opts.table_prefix(),
             id: opts.id(),
             entity: opts.entity(),
             table_name: opts.table_name(),
-            events_table_name: opts.events_table_name(),
             error: opts.err(),
+            any_nested: opts.any_nested(),
         }
     }
 }
@@ -29,60 +31,76 @@ impl ToTokens for FindAllFn<'_> {
         let id = self.id;
         let entity = self.entity;
         let error = self.error;
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
+        let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
+
+        let generics = if self.any_nested {
+            quote! { <Out: From<#entity>> }
+        } else {
+            quote! { <'a, Out: From<#entity>> }
+        };
 
         let query = format!(
-            "SELECT i.id, e.sequence, e.event, e.recorded_at \
-             FROM {} i \
-             JOIN {} e ON i.id = e.id \
-             WHERE i.id = ANY($1) \
-             ORDER BY i.id, e.sequence",
-            self.table_name, self.events_table_name
+            "SELECT id FROM {} WHERE id = ANY($1)",
+            self.table_name
         );
+
+        let es_query_call = if let Some(prefix) = self.prefix {
+            quote! {
+                es_entity::es_query!(
+                    tbl_prefix = #prefix,
+                    #query,
+                    ids as &[#id],
+                )
+            }
+        } else {
+            quote! {
+                es_entity::es_query!(
+                    entity = #entity,
+                    #query,
+                    ids as &[#id],
+                )
+            }
+        };
+
+        let (op_param, fetch_and_process) = if self.any_nested {
+            (
+                quote! { op: &mut impl #query_fn_op_traits },
+                quote! {
+                    let entities = #es_query_call
+                        .fetch_n_include_nested(op, ids.len())
+                        .await?
+                        .0;
+                    Ok(entities.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
+                }
+            )
+        } else {
+            (
+                quote! { op: impl #query_fn_op_traits },
+                quote! {
+                    let entities = #es_query_call
+                        .fetch_n(op, ids.len())
+                        .await?
+                        .0;
+                    Ok(entities.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
+                }
+            )
+        };
 
         tokens.append_all(quote! {
             pub async fn find_all<Out: From<#entity>>(
                 &self,
                 ids: &[#id]
             ) -> Result<std::collections::HashMap<#id, Out>, #error> {
-                self.find_all_via(self.pool(), ids).await
+                self.find_all_in_op(#query_fn_get_op, ids).await
             }
 
-            pub async fn find_all_in_tx<Out: From<#entity>>(
+            pub async fn find_all_in_op #generics(
                 &self,
-                db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                #op_param,
                 ids: &[#id]
             ) -> Result<std::collections::HashMap<#id, Out>, #error> {
-                self.find_all_via(&mut **db, ids).await
-            }
-
-            async fn find_all_via<Out: From<#entity>>(
-                &self,
-                executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-                ids: &[#id]
-            ) -> Result<std::collections::HashMap<#id, Out>, #error> {
-                #[derive(sqlx::FromRow)]
-                struct EventRow {
-                    id: #id,
-                    sequence: i32,
-                    event: es_entity::prelude::serde_json::Value,
-                    recorded_at: es_entity::prelude::chrono::DateTime<es_entity::prelude::chrono::Utc>,
-                }
-
-                let rows: Vec<EventRow> = sqlx::query_as(#query)
-                    .bind(ids)
-                    .fetch_all(executor)
-                    .await?;
-
-                let n = rows.len();
-                let res = es_entity::EntityEvents::load_n::<#entity>(rows.into_iter().map(|r|
-                        es_entity::GenericEvent {
-                            entity_id: r.id,
-                            sequence: r.sequence,
-                            event: r.event,
-                            recorded_at: r.recorded_at,
-                        }), n)?;
-
-                Ok(res.0.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
+                #fetch_and_process
             }
         });
     }
@@ -101,11 +119,12 @@ mod tests {
         let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
         let persist_fn = FindAllFn {
+            prefix: None,
             id: &id_type,
             entity: &entity,
             table_name: "entities",
-            events_table_name: "entity_events",
             error: &error,
+            any_nested: false,
         };
 
         let mut tokens = TokenStream::new();
@@ -116,45 +135,23 @@ mod tests {
                 &self,
                 ids: &[EntityId]
             ) -> Result<std::collections::HashMap<EntityId, Out>, es_entity::EsRepoError> {
-                self.find_all_via(self.pool(), ids).await
+                self.find_all_in_op(self.pool(), ids).await
             }
 
-            pub async fn find_all_in_tx<Out: From<Entity>>(
+            pub async fn find_all_in_op<'a, Out: From<Entity>>(
                 &self,
-                db: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                op: impl IntoExecutor<'a>,
                 ids: &[EntityId]
             ) -> Result<std::collections::HashMap<EntityId, Out>, es_entity::EsRepoError> {
-                self.find_all_via(&mut **db, ids).await
-            }
-
-            async fn find_all_via<Out: From<Entity>>(
-                &self,
-                executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-                ids: &[EntityId]
-            ) -> Result<std::collections::HashMap<EntityId, Out>, es_entity::EsRepoError> {
-                #[derive(sqlx::FromRow)]
-                struct EventRow {
-                    id: EntityId,
-                    sequence: i32,
-                    event: es_entity::prelude::serde_json::Value,
-                    recorded_at: es_entity::prelude::chrono::DateTime<es_entity::prelude::chrono::Utc>,
-                }
-
-                let rows: Vec<EventRow> = sqlx::query_as("SELECT i.id, e.sequence, e.event, e.recorded_at FROM entities i JOIN entity_events e ON i.id = e.id WHERE i.id = ANY($1) ORDER BY i.id, e.sequence")
-                    .bind(ids)
-                    .fetch_all(executor)
-                    .await?;
-
-                let n = rows.len();
-                let res = es_entity::EntityEvents::load_n::<Entity>(rows.into_iter().map(|r|
-                        es_entity::GenericEvent {
-                            entity_id: r.id,
-                            sequence: r.sequence,
-                            event: r.event,
-                            recorded_at: r.recorded_at,
-                        }), n)?;
-
-                Ok(res.0.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
+                let entities = es_entity::es_query!(
+                    entity = Entity,
+                    "SELECT id FROM entities WHERE id = ANY($1)",
+                    ids as &[EntityId],
+                )
+                    .fetch_n(op, ids.len())
+                    .await?
+                    .0;
+                Ok(entities.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
             }
         };
 
