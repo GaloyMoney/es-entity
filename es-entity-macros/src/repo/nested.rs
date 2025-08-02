@@ -43,11 +43,8 @@ impl ToTokens for Nested<'_> {
                     return Ok(());
                 }
 
-                let mut entities = Vec::new();
-                for new_entity in nested.new_entities_mut().drain(..) {
-                    let entity = self.#repo_field.create_in_op(op, new_entity).await?;
-                    entities.push(entity);
-                }
+                let new_entities = nested.new_entities_mut().drain(..).collect();
+                let entities = self.#repo_field.create_all_in_op(op, new_entities).await?;
                 nested.extend_entities(entities);
                 Ok(())
             }
@@ -117,11 +114,8 @@ mod tests {
                     return Ok(());
                 }
 
-                let mut entities = Vec::new();
-                for new_entity in nested.new_entities_mut().drain(..) {
-                    let entity = self.users.create_in_op(op, new_entity).await?;
-                    entities.push(entity);
-                }
+                let new_entities = nested.new_entities_mut().drain(..).collect();
+                let entities = self.users.create_all_in_op(op, new_entities).await?;
                 nested.extend_entities(entities);
                 Ok(())
             }
