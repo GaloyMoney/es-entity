@@ -80,6 +80,8 @@ pub struct RepositoryOptions {
     table_name: Option<String>,
     #[darling(default, rename = "events_tbl")]
     events_table_name: Option<String>,
+    #[darling(default, rename = "op")]
+    op_ty: Option<syn::Type>,
 }
 
 impl RepositoryOptions {
@@ -106,6 +108,10 @@ impl RepositoryOptions {
         } else {
             String::new()
         };
+        if self.op_ty.is_none() {
+            self.op_ty =
+                Some(syn::parse_str("es_entity::DbOp<'static>").expect("Failed to parse op type"));
+        }
         if self.table_name.is_none() {
             self.table_name = Some(format!(
                 "{prefix}{}",
@@ -143,6 +149,10 @@ impl RepositoryOptions {
         self.event_ident
             .as_ref()
             .expect("Event identifier is not set")
+    }
+
+    pub fn op(&self) -> &syn::Type {
+        self.op_ty.as_ref().expect("Op type is not set")
     }
 
     pub fn events_table_name(&self) -> &str {
