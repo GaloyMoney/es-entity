@@ -110,7 +110,7 @@ impl ToTokens for CreateAllFn<'_> {
 
                     #(#nested)*
 
-                    // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
                     res.push(entity);
                 }
 
@@ -202,7 +202,7 @@ mod tests {
                     let n_events = n_persisted.remove(events.id()).expect("n_events exists");
                     let entity = Self::hydrate_entity(events)?;
 
-                    // self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
                     res.push(entity);
                 }
 
