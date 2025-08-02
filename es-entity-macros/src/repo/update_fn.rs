@@ -10,6 +10,7 @@ pub struct UpdateFn<'a> {
     columns: &'a Columns,
     error: &'a syn::Type,
     nested_fn_names: Vec<syn::Ident>,
+    additional_op_constraint: proc_macro2::TokenStream,
 }
 
 impl<'a> From<&'a RepositoryOptions> for UpdateFn<'a> {
@@ -23,6 +24,7 @@ impl<'a> From<&'a RepositoryOptions> for UpdateFn<'a> {
                 .all_nested()
                 .map(|f| f.update_nested_fn_name())
                 .collect(),
+            additional_op_constraint: opts.additional_op_constraint(),
         }
     }
 }
@@ -31,6 +33,7 @@ impl ToTokens for UpdateFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let entity = self.entity;
         let error = self.error;
+        let additional_op_constraint = &self.additional_op_constraint;
 
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
@@ -88,6 +91,7 @@ impl ToTokens for UpdateFn<'_> {
             ) -> Result<usize, #error>
             where
                 OP: for<'o> es_entity::AtomicOperation<'o>
+                #additional_op_constraint
             {
                 #(#nested)*
 
@@ -135,6 +139,7 @@ mod tests {
             error: &error,
             columns: &columns,
             nested_fn_names: Vec::new(),
+            additional_op_constraint: quote! {},
         };
 
         let mut tokens = TokenStream::new();
@@ -211,6 +216,7 @@ mod tests {
             error: &error,
             columns: &columns,
             nested_fn_names: Vec::new(),
+            additional_op_constraint: quote! {},
         };
 
         let mut tokens = TokenStream::new();

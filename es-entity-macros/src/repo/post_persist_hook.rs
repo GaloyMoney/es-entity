@@ -9,6 +9,7 @@ pub struct PostPersistHook<'a> {
     entity: &'a syn::Ident,
     error: &'a syn::Type,
     hook: &'a Option<syn::Ident>,
+    additional_op_constraint: proc_macro2::TokenStream,
 }
 
 impl<'a> From<&'a RepositoryOptions> for PostPersistHook<'a> {
@@ -18,6 +19,7 @@ impl<'a> From<&'a RepositoryOptions> for PostPersistHook<'a> {
             entity: opts.entity(),
             error: opts.err(),
             hook: &opts.post_persist_hook,
+            additional_op_constraint: opts.additional_op_constraint(),
         }
     }
 }
@@ -27,6 +29,7 @@ impl ToTokens for PostPersistHook<'_> {
         let event = &self.event;
         let entity = &self.entity;
         let error = &self.error;
+        let additional_op_constraint = &self.additional_op_constraint;
 
         let hook = if let Some(hook) = self.hook {
             quote! {
@@ -49,6 +52,7 @@ impl ToTokens for PostPersistHook<'_> {
             ) -> Result<(), #error>
                 where
                     OP: for<'o> es_entity::AtomicOperation<'o>
+                    #additional_op_constraint
             {
                 #hook
             }
@@ -72,6 +76,7 @@ mod tests {
             entity: &entity,
             error: &error,
             hook: &hook,
+            additional_op_constraint: quote! {},
         };
 
         let mut tokens = TokenStream::new();
@@ -86,6 +91,41 @@ mod tests {
             ) -> Result<(), es_entity::EsRepoError>
                 where
                     OP: for<'o> es_entity::AtomicOperation<'o>
+            {
+                Ok(())
+            }
+        };
+
+        assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn post_persist_hook_with_additional_traits() {
+        let event = syn::Ident::new("EntityEvent", proc_macro2::Span::call_site());
+        let entity = syn::Ident::new("Entity", proc_macro2::Span::call_site());
+        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
+        let hook = None;
+        let hook = PostPersistHook {
+            event: &event,
+            entity: &entity,
+            error: &error,
+            hook: &hook,
+            additional_op_constraint: quote! { , OP: Send + Sync },
+        };
+
+        let mut tokens = TokenStream::new();
+        hook.to_tokens(&mut tokens);
+
+        let expected = quote! {
+            #[inline(always)]
+            async fn execute_post_persist_hook<OP>(&self,
+                op: &mut OP,
+                entity: &Entity,
+                new_events: es_entity::LastPersisted<'_, #event>
+            ) -> Result<(), es_entity::EsRepoError>
+                where
+                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    , OP: Send + Sync
             {
                 Ok(())
             }

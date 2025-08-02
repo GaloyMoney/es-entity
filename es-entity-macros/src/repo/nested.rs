@@ -7,6 +7,7 @@ use super::options::{RepoField, RepositoryOptions};
 pub struct Nested<'a> {
     field: &'a RepoField,
     error: &'a syn::Type,
+    additional_op_constraint: proc_macro2::TokenStream,
 }
 
 impl<'a> Nested<'a> {
@@ -14,6 +15,7 @@ impl<'a> Nested<'a> {
         Nested {
             field,
             error: opts.err(),
+            additional_op_constraint: opts.additional_op_constraint(),
         }
     }
 }
@@ -22,6 +24,7 @@ impl ToTokens for Nested<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let error = self.error;
         let repo_field = self.field.ident();
+        let additional_op_constraint = &self.additional_op_constraint;
 
         let nested_repo_ty = &self.field.ty;
         let create_fn_name = self.field.create_nested_fn_name();
@@ -31,8 +34,9 @@ impl ToTokens for Nested<'_> {
         tokens.append_all(quote! {
             async fn #create_fn_name<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), #error>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>,
-                    P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>
+                    P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>,
+                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    #additional_op_constraint
             {
                 let nested = entity.nested_mut();
                 if nested.new_entities_mut().is_empty() {
@@ -50,8 +54,9 @@ impl ToTokens for Nested<'_> {
 
             async fn #update_fn_name<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), #error>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>,
-                    P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>
+                    P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>,
+                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    #additional_op_constraint
             {
                 let entities = entity.nested_mut().entities_mut();
                 for entity in entities.values_mut() {
@@ -95,6 +100,7 @@ mod tests {
         let cursor = Nested {
             error: &error,
             field: &field,
+            additional_op_constraint: quote! {},
         };
 
         let mut tokens = TokenStream::new();
@@ -103,8 +109,8 @@ mod tests {
         let expected = quote! {
             async fn create_nested_users_in_op<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), es_entity::EsRepoError>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>,
-                    P: es_entity::Parent<<UserRepo as EsRepo>::Entity>
+                    P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
+                    OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let nested = entity.nested_mut();
                 if nested.new_entities_mut().is_empty() {
@@ -122,8 +128,8 @@ mod tests {
 
             async fn update_nested_users_in_op<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), es_entity::EsRepoError>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>,
-                    P: es_entity::Parent<<UserRepo as EsRepo>::Entity>
+                    P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
+                    OP: for<'o> es_entity::AtomicOperation<'o>
             {
                 let entities = entity.nested_mut().entities_mut();
                 for entity in entities.values_mut() {

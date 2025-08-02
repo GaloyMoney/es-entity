@@ -82,6 +82,8 @@ pub struct RepositoryOptions {
     events_table_name: Option<String>,
     #[darling(default, rename = "op")]
     op_ty: Option<syn::Type>,
+    #[darling(default, rename = "additional_op_traits")]
+    additional_op_traits: Option<String>,
 }
 
 impl RepositoryOptions {
@@ -153,6 +155,19 @@ impl RepositoryOptions {
 
     pub fn op(&self) -> &syn::Type {
         self.op_ty.as_ref().expect("Op type is not set")
+    }
+
+    pub fn additional_op_constraint(&self) -> proc_macro2::TokenStream {
+        if let Some(additional_traits) = &self.additional_op_traits {
+            let additional_traits_tokens: proc_macro2::TokenStream = additional_traits
+                .parse()
+                .expect("Failed to parse additional_op_traits");
+            quote! {
+                , OP: #additional_traits_tokens
+            }
+        } else {
+            quote! {}
+        }
     }
 
     pub fn events_table_name(&self) -> &str {
