@@ -30,6 +30,10 @@ impl<'t> DbOp<'t> {
         Ok(res)
     }
 
+    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.now
+    }
+
     pub fn tx(&mut self) -> &mut Transaction<'t, Postgres> {
         &mut self.tx
     }
@@ -48,7 +52,7 @@ impl<'a, 't> crate::traits::AtomicOperation<'a> for DbOp<'t> {
     type Executor = &'a mut sqlx::PgConnection;
 
     fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.now
+        self.now()
     }
 
     fn as_executor(&'a mut self) -> Self::Executor {
