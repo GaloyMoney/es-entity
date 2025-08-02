@@ -3,6 +3,7 @@ mod delete;
 
 use convert_case::{Case, Casing};
 use darling::{FromDeriveInput, FromField};
+use quote::quote;
 
 pub use columns::*;
 pub use delete::*;
@@ -187,6 +188,54 @@ impl RepositoryOptions {
             fields.iter().filter(|f| f.nested)
         } else {
             panic!("Repository must be a struct")
+        }
+    }
+
+    pub fn query_fn_generics(nested: bool) -> proc_macro2::TokenStream {
+        if nested {
+            quote! {
+                <OP>
+            }
+        } else {
+            quote! {
+                <'a, OP>
+            }
+        }
+    }
+
+    pub fn query_fn_op_arg(nested: bool) -> proc_macro2::TokenStream {
+        if nested {
+            quote! {
+                op: &mut OP
+            }
+        } else {
+            quote! {
+                op: OP
+            }
+        }
+    }
+
+    pub fn query_fn_op_constraint(nested: bool) -> proc_macro2::TokenStream {
+        if nested {
+            quote! {
+                OP: for<'a> AtomicOperation<'a>
+            }
+        } else {
+            quote! {
+                OP: IntoExecutor<'a>
+            }
+        }
+    }
+
+    pub fn query_fn_get_op(nested: bool) -> proc_macro2::TokenStream {
+        if nested {
+            quote! {
+                &mut self.begin_op().await?
+            }
+        } else {
+            quote! {
+                self.pool()
+            }
         }
     }
 

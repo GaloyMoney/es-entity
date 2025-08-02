@@ -34,6 +34,10 @@ impl ToTokens for FindByFn<'_> {
         let column_name = &self.column.name();
         let column_type = &self.column.ty_for_find_by();
         let error = self.error;
+        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
+        let query_fn_op_constraint = RepositoryOptions::query_fn_op_constraint(self.any_nested);
+        let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
         for maybe in ["", "maybe_"] {
             let (result_type, fetch_fn) = if maybe.is_empty() {
                 (
@@ -109,16 +113,16 @@ impl ToTokens for FindByFn<'_> {
                         &self,
                         #column_name: impl std::borrow::Borrow<#column_type>
                     ) -> Result<#result_type, #error> {
-                        self.#fn_in_op(&mut self.begin_op().await?, #column_name).await
+                        self.#fn_in_op(#query_fn_get_op, #column_name).await
                     }
 
-                    pub async fn #fn_in_op<OP>(
+                    pub async fn #fn_in_op #query_fn_generics(
                         &self,
-                        op: &mut OP,
+                        #query_fn_op_arg,
                         #column_name: impl std::borrow::Borrow<#column_type>
                     ) -> Result<#result_type, #error>
                         where
-                            OP: for<'o> es_entity::AtomicOperation<'o>
+                            #query_fn_op_constraint
                     {
                         let #column_name = #column_name.borrow();
                         Ok(
@@ -167,16 +171,16 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError> {
-                self.find_by_id_in_op(&mut self.begin_op().await?, id).await
+                self.find_by_id_in_op(self.pool(), id).await
             }
 
-            pub async fn find_by_id_in_op<OP>(
+            pub async fn find_by_id_in_op<'a, OP>(
                 &self,
-                op: &mut OP,
+                op: OP,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    OP: IntoExecutor<'a>
             {
                 let id = id.borrow();
                 Ok(
@@ -194,16 +198,16 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError> {
-                self.maybe_find_by_id_in_op(&mut self.begin_op().await?, id).await
+                self.maybe_find_by_id_in_op(self.pool(), id).await
             }
 
-            pub async fn maybe_find_by_id_in_op<OP>(
+            pub async fn maybe_find_by_id_in_op<'a, OP>(
                 &self,
-                op: &mut OP,
+                op: OP,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    OP: IntoExecutor<'a>
             {
                 let id = id.borrow();
                 Ok(
@@ -245,16 +249,16 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError> {
-                self.find_by_id_in_op(&mut self.begin_op().await?, id).await
+                self.find_by_id_in_op(self.pool(), id).await
             }
 
-            pub async fn find_by_id_in_op<OP>(
+            pub async fn find_by_id_in_op<'a, OP>(
                 &self,
-                op: &mut OP,
+                op: OP,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    OP: IntoExecutor<'a>
             {
                 let id = id.borrow();
                 Ok(
@@ -272,16 +276,16 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError> {
-                self.find_by_id_include_deleted_in_op(&mut self.begin_op().await?, id).await
+                self.find_by_id_include_deleted_in_op(self.pool(), id).await
             }
 
-            pub async fn find_by_id_include_deleted_in_op<OP>(
+            pub async fn find_by_id_include_deleted_in_op<'a, OP>(
                 &self,
-                op: &mut OP,
+                op: OP,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    OP: IntoExecutor<'a>
             {
                 let id = id.borrow();
                 Ok(
@@ -299,16 +303,16 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError> {
-                self.maybe_find_by_id_in_op(&mut self.begin_op().await?, id).await
+                self.maybe_find_by_id_in_op(self.pool(), id).await
             }
 
-            pub async fn maybe_find_by_id_in_op<OP>(
+            pub async fn maybe_find_by_id_in_op<'a, OP>(
                 &self,
-                op: &mut OP,
+                op: OP,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    OP: IntoExecutor<'a>
             {
                 let id = id.borrow();
                 Ok(
@@ -326,16 +330,16 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError> {
-                self.maybe_find_by_id_include_deleted_in_op(&mut self.begin_op().await?, id).await
+                self.maybe_find_by_id_include_deleted_in_op(self.pool(), id).await
             }
 
-            pub async fn maybe_find_by_id_include_deleted_in_op<OP>(
+            pub async fn maybe_find_by_id_include_deleted_in_op<'a, OP>(
                 &self,
-                op: &mut OP,
+                op: OP,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    OP: IntoExecutor<'a>
             {
                 let id = id.borrow();
                 Ok(
@@ -345,6 +349,84 @@ mod tests {
                         id as &EntityId,
                     )
                     .fetch_optional(op)
+                    .await?
+                )
+            }
+        };
+
+        assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn find_by_fn_nested() {
+        let column = Column::for_id(syn::parse_str("EntityId").unwrap());
+        let entity = Ident::new("Entity", Span::call_site());
+        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
+
+        let persist_fn = FindByFn {
+            prefix: None,
+            column: &column,
+            entity: &entity,
+            table_name: "entities",
+            error: &error,
+            delete: DeleteOption::No,
+            any_nested: true,
+        };
+
+        let mut tokens = TokenStream::new();
+        persist_fn.to_tokens(&mut tokens);
+
+        let expected = quote! {
+            pub async fn find_by_id(
+                &self,
+                id: impl std::borrow::Borrow<EntityId>
+            ) -> Result<Entity, es_entity::EsRepoError> {
+                self.find_by_id_in_op(&mut self.begin_op().await?, id).await
+            }
+
+            pub async fn find_by_id_in_op<OP>(
+                &self,
+                op: &mut OP,
+                id: impl std::borrow::Borrow<EntityId>
+            ) -> Result<Entity, es_entity::EsRepoError>
+                where
+                    OP: for<'a> AtomicOperation<'a>
+            {
+                let id = id.borrow();
+                Ok(
+                    es_entity::es_query!(
+                        entity = Entity,
+                        "SELECT id FROM entities WHERE id = $1",
+                        id as &EntityId,
+                    )
+                    .fetch_one_include_nested(op)
+                    .await?
+                )
+            }
+
+            pub async fn maybe_find_by_id(
+                &self,
+                id: impl std::borrow::Borrow<EntityId>
+            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+                self.maybe_find_by_id_in_op(&mut self.begin_op().await?, id).await
+            }
+
+            pub async fn maybe_find_by_id_in_op<OP>(
+                &self,
+                op: &mut OP,
+                id: impl std::borrow::Borrow<EntityId>
+            ) -> Result<Option<Entity>, es_entity::EsRepoError>
+                where
+                    OP: for<'a> AtomicOperation<'a>
+            {
+                let id = id.borrow();
+                Ok(
+                    es_entity::es_query!(
+                        entity = Entity,
+                        "SELECT id FROM entities WHERE id = $1",
+                        id as &EntityId,
+                    )
+                    .fetch_optional_include_nested(op)
                     .await?
                 )
             }

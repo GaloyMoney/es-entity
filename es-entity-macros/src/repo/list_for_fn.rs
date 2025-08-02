@@ -50,6 +50,10 @@ impl ToTokens for ListForFn<'_> {
         let cursor_ident = cursor.ident();
         let cursor_mod = cursor.cursor_mod();
         let error = self.error;
+        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
+        let query_fn_op_constraint = RepositoryOptions::query_fn_op_constraint(self.any_nested);
+        let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
         let fetch_fn = if self.any_nested {
             quote! {
                 .fetch_n_include_nested(op, first)
@@ -167,18 +171,18 @@ impl ToTokens for ListForFn<'_> {
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
-                    self.#fn_in_op(&mut self.begin_op().await?, #filter_arg_name, cursor, direction).await
+                    self.#fn_in_op(#query_fn_get_op, #filter_arg_name, cursor, direction).await
                 }
 
-                async fn #fn_in_op<OP>(
+                async fn #fn_in_op #query_fn_generics(
                     &self,
-                    op: &mut OP,
+                    #query_fn_op_arg,
                     #filter_arg_name: impl std::borrow::Borrow<#for_column_type>,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
                     where
-                        OP: for<'o> es_entity::AtomicOperation<'o>
+                        #query_fn_op_constraint
                 {
                     let #filter_arg_name = #filter_arg_name.borrow();
                     #destructure_tokens
@@ -254,18 +258,18 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
-                self.list_for_customer_id_by_id_in_op(&mut self.begin_op().await?, filter_customer_id, cursor, direction).await
+                self.list_for_customer_id_by_id_in_op(self.pool(), filter_customer_id, cursor, direction).await
             }
 
-            async fn list_for_customer_id_by_id_in_op<OP>(
+            async fn list_for_customer_id_by_id_in_op<'a, OP>(
                 &self,
-                op: &mut OP,
+                op: OP,
                 filter_customer_id: impl std::borrow::Borrow<Uuid>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    OP: IntoExecutor<'a>
             {
                 let filter_customer_id = filter_customer_id.borrow();
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
@@ -345,18 +349,18 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByEmailCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, es_entity::EsRepoError> {
-                self.list_for_email_by_email_in_op(&mut self.begin_op().await?, filter_email, cursor, direction).await
+                self.list_for_email_by_email_in_op(self.pool(), filter_email, cursor, direction).await
             }
 
-            async fn list_for_email_by_email_in_op<OP>(
+            async fn list_for_email_by_email_in_op<'a, OP>(
                 &self,
-                op: &mut OP,
+                op: OP,
                 filter_email: impl std::borrow::Borrow<str>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByEmailCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, es_entity::EsRepoError>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    OP: IntoExecutor<'a>
             {
                 let filter_email = filter_email.borrow();
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;

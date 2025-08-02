@@ -250,6 +250,10 @@ impl ToTokens for ListByFn<'_> {
         let cursor_ident = cursor.ident();
         let cursor_mod = cursor.cursor_mod();
         let error = self.error;
+        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
+        let query_fn_op_constraint = RepositoryOptions::query_fn_op_constraint(self.any_nested);
+        let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
         let fetch_fn = if self.any_nested {
             quote! {
                 .fetch_n_include_nested(op, first)
@@ -349,17 +353,17 @@ impl ToTokens for ListByFn<'_> {
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
-                    self.#fn_in_op(&mut self.begin_op().await?, cursor, direction).await
+                    self.#fn_in_op(#query_fn_get_op, cursor, direction).await
                 }
 
-                async fn #fn_in_op<OP>(
+                async fn #fn_in_op #query_fn_generics(
                     &self,
-                    op: &mut OP,
+                    #query_fn_op_arg,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
                    where
-                       OP: for<'o> es_entity::AtomicOperation<'o>
+                       #query_fn_op_constraint
                  {
                     #destructure_tokens
 
@@ -503,17 +507,17 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
-                self.list_by_id_in_op(&mut self.begin_op().await?, cursor, direction).await
+                self.list_by_id_in_op(self.pool(), cursor, direction).await
             }
 
-            async fn list_by_id_in_op<OP>(
+            async fn list_by_id_in_op<'a, OP>(
                 &self,
-                op: &mut OP,
+                op: OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    OP: IntoExecutor<'a>
             {
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let id = if let Some(after) = after {
@@ -558,17 +562,17 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
-                self.list_by_id_include_deleted_in_op(&mut self.begin_op().await?, cursor, direction).await
+                self.list_by_id_include_deleted_in_op(self.pool(), cursor, direction).await
             }
 
-            async fn list_by_id_include_deleted_in_op<OP>(
+            async fn list_by_id_include_deleted_in_op<'a, OP>(
                 &self,
-                op: &mut OP,
+                op: OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError>
             where
-                OP: for<'o> es_entity::AtomicOperation<'o>
+                OP: IntoExecutor<'a>
             {
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let id = if let Some(after) = after {
@@ -642,17 +646,17 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByNameCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, es_entity::EsRepoError> {
-                self.list_by_name_in_op(&mut self.begin_op().await?, cursor, direction).await
+                self.list_by_name_in_op(self.pool(), cursor, direction).await
             }
 
-            async fn list_by_name_in_op<OP>(
+            async fn list_by_name_in_op<'a, OP>(
                 &self,
-                op: &mut OP,
+                op: OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByNameCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, es_entity::EsRepoError>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    OP: IntoExecutor<'a>
             {
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let (id, name) = if let Some(after) = after {
@@ -731,17 +735,17 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByValueCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, es_entity::EsRepoError> {
-                self.list_by_value_in_op(&mut self.begin_op().await?, cursor, direction).await
+                self.list_by_value_in_op(self.pool(), cursor, direction).await
             }
 
-            async fn list_by_value_in_op<OP>(
+            async fn list_by_value_in_op<'a, OP>(
                 &self,
-                op: &mut OP,
+                op: OP,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByValueCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, es_entity::EsRepoError>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    OP: IntoExecutor<'a>
             {
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let (id, value) = if let Some(after) = after {
