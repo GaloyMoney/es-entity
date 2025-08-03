@@ -111,8 +111,7 @@ impl RepositoryOptions {
             String::new()
         };
         if self.op_ty.is_none() {
-            self.op_ty =
-                Some(syn::parse_str("es_entity::DbOp<'static>").expect("Failed to parse op type"));
+            self.op_ty = Some(syn::parse_str("es_entity::DbOp").expect("Failed to parse op type"));
         }
         if self.table_name.is_none() {
             self.table_name = Some(format!(

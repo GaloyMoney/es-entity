@@ -75,7 +75,9 @@ pub trait AtomicOperation: Send {
         None
     }
 
-    fn as_executor(&mut self) -> Self::Executor<'_>;
+    fn as_executor<'a, 'c>(&'a mut self) -> Self::Executor<'c>
+    where
+        'a: 'c;
 }
 
 impl<'t> AtomicOperation for sqlx::Transaction<'t, sqlx::Postgres> {
@@ -84,7 +86,10 @@ impl<'t> AtomicOperation for sqlx::Transaction<'t, sqlx::Postgres> {
     where
         Self: 'c;
 
-    fn as_executor(&mut self) -> Self::Executor<'_> {
+    fn as_executor<'a, 'c>(&'a mut self) -> Self::Executor<'c>
+    where
+        'a: 'c,
+    {
         &mut **self
     }
 }
@@ -95,19 +100,19 @@ pub trait IntoExecutor<'c> {
     fn into_executor(self) -> Self::Executor;
 }
 
-impl<'a, T> IntoExecutor<'a> for &'a mut T
+impl<'a, 'c, T> IntoExecutor<'c> for &'a mut T
 where
+    'a: 'c,
     T: AtomicOperation,
 {
-    type Executor = T::Executor<'a>;
-
+    type Executor = T::Executor<'c>;
     fn into_executor(self) -> Self::Executor {
         self.as_executor()
     }
 }
 
-impl<'c> IntoExecutor<'c> for &'c sqlx::PgPool {
-    type Executor = &'c sqlx::PgPool;
+impl<'c> IntoExecutor<'c> for &sqlx::PgPool {
+    type Executor = Self;
 
     fn into_executor(self) -> Self::Executor {
         self

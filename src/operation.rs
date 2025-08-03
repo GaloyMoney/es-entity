@@ -1,16 +1,16 @@
 use sqlx::{Acquire, PgPool, Postgres, Transaction};
 
-pub struct DbOp<'t> {
-    tx: Transaction<'t, Postgres>,
+pub struct DbOp<'c> {
+    tx: Transaction<'c, Postgres>,
     now: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl<'t> DbOp<'t> {
-    fn new(tx: Transaction<'t, Postgres>, time: Option<chrono::DateTime<chrono::Utc>>) -> Self {
+impl<'c> DbOp<'c> {
+    fn new(tx: Transaction<'c, Postgres>, time: Option<chrono::DateTime<chrono::Utc>>) -> Self {
         Self { tx, now: time }
     }
 
-    pub async fn init(pool: &PgPool) -> Result<Self, sqlx::Error> {
+    pub async fn init(pool: &PgPool) -> Result<DbOp<'static>, sqlx::Error> {
         let tx = pool.begin().await?;
 
         #[cfg(feature = "sim-time")]
@@ -18,14 +18,14 @@ impl<'t> DbOp<'t> {
         #[cfg(not(feature = "sim-time"))]
         let time = None;
 
-        Ok(Self::new(tx, time))
+        Ok(DbOp::new(tx, time))
     }
 
-    pub fn with_time(self, time: chrono::DateTime<chrono::Utc>) -> DbOpWithTime<'t> {
+    pub fn with_time(self, time: chrono::DateTime<chrono::Utc>) -> DbOpWithTime<'c> {
         DbOpWithTime::new(self.tx, time)
     }
 
-    pub fn with_system_time(self) -> DbOpWithTime<'t> {
+    pub fn with_system_time(self) -> DbOpWithTime<'c> {
         #[cfg(feature = "sim-time")]
         let time = sim_time::now();
         #[cfg(not(feature = "sim-time"))]
@@ -34,7 +34,7 @@ impl<'t> DbOp<'t> {
         DbOpWithTime::new(self.tx, time)
     }
 
-    pub async fn with_db_time(mut self) -> Result<DbOpWithTime<'t>, sqlx::Error> {
+    pub async fn with_db_time(mut self) -> Result<DbOpWithTime<'c>, sqlx::Error> {
         #[cfg(feature = "sim-time")]
         let time = sim_time::now();
         #[cfg(not(feature = "sim-time"))]
@@ -62,40 +62,43 @@ impl<'t> DbOp<'t> {
     }
 }
 
-impl<'t> crate::traits::AtomicOperation for DbOp<'t> {
-    type Executor<'a>
-        = &'a mut sqlx::PgConnection
+impl<'o> crate::traits::AtomicOperation for DbOp<'o> {
+    type Executor<'c>
+        = <sqlx::Transaction<'o, sqlx::Postgres> as crate::traits::AtomicOperation>::Executor<'c>
     where
-        Self: 'a;
+        Self: 'c;
 
     fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.now()
     }
 
-    fn as_executor(&mut self) -> Self::Executor<'_> {
+    fn as_executor<'a, 'c>(&'a mut self) -> Self::Executor<'c>
+    where
+        'a: 'c,
+    {
         self.tx.as_executor()
     }
 }
 
-impl<'t> From<Transaction<'t, Postgres>> for DbOp<'t> {
-    fn from(tx: Transaction<'t, Postgres>) -> Self {
+impl<'c> From<Transaction<'c, Postgres>> for DbOp<'c> {
+    fn from(tx: Transaction<'c, Postgres>) -> Self {
         Self::new(tx, None)
     }
 }
 
-impl<'t> From<DbOp<'t>> for Transaction<'t, Postgres> {
-    fn from(op: DbOp<'t>) -> Self {
+impl<'c> From<DbOp<'c>> for Transaction<'c, Postgres> {
+    fn from(op: DbOp<'c>) -> Self {
         op.tx
     }
 }
 
-pub struct DbOpWithTime<'t> {
-    tx: Transaction<'t, Postgres>,
+pub struct DbOpWithTime<'c> {
+    tx: Transaction<'c, Postgres>,
     now: chrono::DateTime<chrono::Utc>,
 }
 
-impl<'t> DbOpWithTime<'t> {
-    fn new(tx: Transaction<'t, Postgres>, time: chrono::DateTime<chrono::Utc>) -> Self {
+impl<'c> DbOpWithTime<'c> {
+    fn new(tx: Transaction<'c, Postgres>, time: chrono::DateTime<chrono::Utc>) -> Self {
         Self { tx, now: time }
     }
 
@@ -113,23 +116,26 @@ impl<'t> DbOpWithTime<'t> {
     }
 }
 
-impl<'t> crate::traits::AtomicOperation for DbOpWithTime<'t> {
-    type Executor<'a>
-        = &'a mut sqlx::PgConnection
+impl<'o> crate::traits::AtomicOperation for DbOpWithTime<'o> {
+    type Executor<'c>
+        = <sqlx::Transaction<'o, sqlx::Postgres> as crate::traits::AtomicOperation>::Executor<'c>
     where
-        Self: 'a;
+        Self: 'c;
 
     fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         Some(self.now())
     }
 
-    fn as_executor(&mut self) -> Self::Executor<'_> {
+    fn as_executor<'a, 'c>(&'a mut self) -> Self::Executor<'c>
+    where
+        'a: 'c,
+    {
         self.tx.as_executor()
     }
 }
 
-impl<'t> From<DbOpWithTime<'t>> for Transaction<'t, Postgres> {
-    fn from(op: DbOpWithTime<'t>) -> Self {
+impl<'c> From<DbOpWithTime<'c>> for Transaction<'c, Postgres> {
+    fn from(op: DbOpWithTime<'c>) -> Self {
         op.tx
     }
 }
