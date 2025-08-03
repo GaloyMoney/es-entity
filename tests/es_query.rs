@@ -84,73 +84,6 @@ mod tbl_prefix_tests {
     }
 }
 
-mod no_params_tests {
-    use super::*;
-
-    #[derive(EsRepo, Debug)]
-    #[es_repo(entity = "User", columns(name(ty = "String")))]
-    struct UsersNoParams {
-        pool: PgPool,
-    }
-
-    impl UsersNoParams {
-        fn new(pool: PgPool) -> Self {
-            Self { pool }
-        }
-
-        async fn query_with_args(&self, id: UserId) -> Result<User, EsRepoError> {
-            es_query!("SELECT * FROM users WHERE id = $1", id as UserId)
-                .fetch_one(self.pool())
-                .await
-        }
-
-        async fn query_without_args(&self) -> Result<(Vec<User>, bool), EsRepoError> {
-            es_query!("SELECT * FROM users")
-                .fetch_n(self.pool(), 2)
-                .await
-        }
-    }
-
-    #[tokio::test]
-    async fn with_args() -> anyhow::Result<()> {
-        let pool = init_pool().await?;
-        let users = UsersNoParams::new(pool);
-        let id = UserId::new();
-        let new_user = NewUser::builder().id(id).name("Frank").build().unwrap();
-
-        users.create(new_user).await?;
-        let loaded_user = users.query_with_args(id).await?;
-        assert_eq!(loaded_user.id, id);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn without_args() -> anyhow::Result<()> {
-        let pool = init_pool().await?;
-        let users = UsersNoParams::new(pool);
-
-        let user1 = NewUser::builder()
-            .id(UserId::new())
-            .name("Alice")
-            .build()
-            .unwrap();
-        let user2 = NewUser::builder()
-            .id(UserId::new())
-            .name("Bob")
-            .build()
-            .unwrap();
-
-        users.create(user1).await?;
-        users.create(user2).await?;
-
-        let (users_list, _) = users.query_without_args().await?;
-        assert_eq!(users_list.len(), 2);
-
-        Ok(())
-    }
-}
-
 mod entity_tests {
     use super::*;
 
@@ -207,6 +140,73 @@ mod entity_tests {
     async fn without_args() -> anyhow::Result<()> {
         let pool = init_pool().await?;
         let users = UsersEntity::new(pool);
+
+        let user1 = NewUser::builder()
+            .id(UserId::new())
+            .name("Alice")
+            .build()
+            .unwrap();
+        let user2 = NewUser::builder()
+            .id(UserId::new())
+            .name("Bob")
+            .build()
+            .unwrap();
+
+        users.create(user1).await?;
+        users.create(user2).await?;
+
+        let (users_list, _) = users.query_without_args().await?;
+        assert_eq!(users_list.len(), 2);
+
+        Ok(())
+    }
+}
+
+mod no_params_tests {
+    use super::*;
+
+    #[derive(EsRepo, Debug)]
+    #[es_repo(entity = "User", columns(name(ty = "String")))]
+    struct UsersNoParams {
+        pool: PgPool,
+    }
+
+    impl UsersNoParams {
+        fn new(pool: PgPool) -> Self {
+            Self { pool }
+        }
+
+        async fn query_with_args(&self, id: UserId) -> Result<User, EsRepoError> {
+            es_query!("SELECT * FROM users WHERE id = $1", id as UserId)
+                .fetch_one(self.pool())
+                .await
+        }
+
+        async fn query_without_args(&self) -> Result<(Vec<User>, bool), EsRepoError> {
+            es_query!("SELECT * FROM users")
+                .fetch_n(self.pool(), 2)
+                .await
+        }
+    }
+
+    #[tokio::test]
+    async fn with_args() -> anyhow::Result<()> {
+        let pool = init_pool().await?;
+        let users = UsersNoParams::new(pool);
+        let id = UserId::new();
+        let new_user = NewUser::builder().id(id).name("Frank").build().unwrap();
+
+        users.create(new_user).await?;
+        let loaded_user = users.query_with_args(id).await?;
+        assert_eq!(loaded_user.id, id);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn without_args() -> anyhow::Result<()> {
+        let pool = init_pool().await?;
+        let users = UsersNoParams::new(pool);
 
         let user1 = NewUser::builder()
             .id(UserId::new())
