@@ -222,7 +222,7 @@ impl ToTokens for EsRepo<'_> {
                    op: &mut OP, entities: &mut [#entity]
                ) -> Result<(), #error>
                    where
-                       OP: for<'o> es_entity::AtomicOperation<'o>,
+                       OP: es_entity::AtomicOperation,
                {
                    #(Self::#nested_fns(op, entities).await?;)*
                    Ok(())

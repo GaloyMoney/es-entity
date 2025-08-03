@@ -51,7 +51,7 @@ impl ToTokens for PostPersistHook<'_> {
                 new_events: es_entity::LastPersisted<'_, #event>
             ) -> Result<(), #error>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    OP: es_entity::AtomicOperation
                     #additional_op_constraint
             {
                 #hook
@@ -90,7 +90,7 @@ mod tests {
                 new_events: es_entity::LastPersisted<'_, #event>
             ) -> Result<(), es_entity::EsRepoError>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    OP: es_entity::AtomicOperation
             {
                 Ok(())
             }
@@ -124,7 +124,7 @@ mod tests {
                 new_events: es_entity::LastPersisted<'_, #event>
             ) -> Result<(), es_entity::EsRepoError>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>
+                    OP: es_entity::AtomicOperation
                     , OP: Send + Sync
             {
                 Ok(())

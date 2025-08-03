@@ -50,7 +50,7 @@ pub trait EsRepo {
         entities: &mut [Self::Entity],
     ) -> Result<(), Self::Err>
     where
-        OP: for<'o> AtomicOperation<'o>;
+        OP: AtomicOperation;
 }
 
 #[async_trait]
@@ -60,56 +60,61 @@ pub trait PopulateNested<C>: EsRepo {
         lookup: std::collections::HashMap<C, &mut Nested<<Self as EsRepo>::Entity>>,
     ) -> Result<(), <Self as EsRepo>::Err>
     where
-        OP: for<'o> AtomicOperation<'o>;
+        OP: AtomicOperation;
 }
 
 pub trait RetryableInto<T>: Into<T> + Copy + std::fmt::Debug {}
 impl<T, O> RetryableInto<O> for T where T: Into<O> + Copy + std::fmt::Debug {}
 
-pub trait AtomicOperation<'a>: Send {
-    type Executor: sqlx::Executor<'a, Database = sqlx::Postgres>;
+pub trait AtomicOperation: Send {
+    type Executor<'c>: sqlx::Executor<'c, Database = sqlx::Postgres>
+    where
+        Self: 'c;
 
     fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         None
     }
 
-    fn as_executor(&'a mut self) -> Self::Executor;
+    fn as_executor(&mut self) -> Self::Executor<'_>;
 }
 
-impl<'a, 't> AtomicOperation<'a> for sqlx::Transaction<'t, sqlx::Postgres> {
-    type Executor = &'a mut sqlx::PgConnection;
+impl<'t> AtomicOperation for sqlx::Transaction<'t, sqlx::Postgres> {
+    type Executor<'c>
+        = &'c mut sqlx::PgConnection
+    where
+        Self: 'c;
 
-    fn as_executor(&'a mut self) -> Self::Executor {
-        &mut *self
+    fn as_executor(&mut self) -> Self::Executor<'_> {
+        &mut **self
     }
 }
 
-pub trait IntoExecutor<'a> {
-    type Executor: sqlx::Executor<'a, Database = sqlx::Postgres>;
+pub trait IntoExecutor<'c> {
+    type Executor: sqlx::Executor<'c, Database = sqlx::Postgres>;
 
     fn into_executor(self) -> Self::Executor;
 }
 
 impl<'a, T> IntoExecutor<'a> for &'a mut T
 where
-    T: AtomicOperation<'a>,
+    T: AtomicOperation,
 {
-    type Executor = T::Executor;
+    type Executor = T::Executor<'a>;
 
     fn into_executor(self) -> Self::Executor {
         self.as_executor()
     }
 }
 
-impl<'a> IntoExecutor<'a> for &sqlx::PgPool {
-    type Executor = Self;
+impl<'c> IntoExecutor<'c> for &'c sqlx::PgPool {
+    type Executor = &'c sqlx::PgPool;
 
     fn into_executor(self) -> Self::Executor {
         self
     }
 }
 
-impl<'a> IntoExecutor<'a> for &'a mut sqlx::PgConnection {
+impl<'c> IntoExecutor<'c> for &'c mut sqlx::PgConnection {
     type Executor = Self;
 
     fn into_executor(self) -> Self::Executor {

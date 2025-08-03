@@ -56,16 +56,18 @@ impl ToTokens for PopulateNested<'_> {
                     mut lookup: std::collections::HashMap<#ty, &mut Nested<<Self as EsRepo>::Entity>>,
                 ) -> Result<(), #error>
                 where
-                    OP: for<'o> es_entity::AtomicOperation<'o>,
+                    OP: es_entity::AtomicOperation,
+                    for<'a> &'a mut OP: es_entity::IntoExecutor<'a>,
                 {
                     let parent_ids: Vec<_> = lookup.keys().collect();
-                    let rows = sqlx::query_as!(
-                        #repo_types_mod::Repo__DbEvent,
-                        #query,
-                        parent_ids.as_slice() as &[&#ty],
-                    )
-                        .fetch_all(op.as_executor())
-                        .await?;
+                    let rows = {
+                        let ex = &mut *op;
+                        sqlx::query_as!(
+                            #repo_types_mod::Repo__DbEvent,
+                            #query,
+                            parent_ids.as_slice() as &[&#ty],
+                        ).fetch_all(ex.into_executor()).await?
+                    };
                     let n = rows.len();
                     let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(rows.into_iter(), n)?;
                     #ident::load_all_nested_in_op(op, &mut res).await?;

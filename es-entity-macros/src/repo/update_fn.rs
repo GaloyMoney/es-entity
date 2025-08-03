@@ -90,7 +90,7 @@ impl ToTokens for UpdateFn<'_> {
                 entity: &mut #entity
             ) -> Result<usize, #error>
             where
-                OP: for<'o> es_entity::AtomicOperation<'o>
+                OP: es_entity::AtomicOperation
                 #additional_op_constraint
             {
                 #(#nested)*
@@ -171,7 +171,7 @@ mod tests {
                 entity: &mut Entity
             ) -> Result<usize, es_entity::EsRepoError>
             where
-                OP: for<'o> es_entity::AtomicOperation<'o>
+                OP: es_entity::AtomicOperation
             {
                 if !Self::extract_events(entity).any_new() {
                     return Ok(0);
@@ -248,7 +248,7 @@ mod tests {
                 entity: &mut Entity
             ) -> Result<usize, es_entity::EsRepoError>
             where
-                OP: for<'o> es_entity::AtomicOperation<'o>
+                OP: es_entity::AtomicOperation
             {
                 if !Self::extract_events(entity).any_new() {
                     return Ok(0);

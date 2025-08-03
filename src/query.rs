@@ -132,7 +132,7 @@ where
         op: &mut OP,
     ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::Err>
     where
-        OP: for<'o> AtomicOperation<'o>,
+        OP: AtomicOperation,
     {
         let Some(entity) = self.fetch_optional(&mut *op).await? else {
             return Ok(None);
@@ -148,7 +148,7 @@ where
         op: &mut OP,
     ) -> Result<<Repo as EsRepo>::Entity, <Repo as EsRepo>::Err>
     where
-        OP: for<'o> AtomicOperation<'o>,
+        OP: AtomicOperation,
     {
         let entity = self.fetch_one(&mut *op).await?;
         let mut entities = [entity];
@@ -163,7 +163,7 @@ where
         first: usize,
     ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::Err>
     where
-        OP: for<'o> AtomicOperation<'o>,
+        OP: AtomicOperation,
     {
         let (mut entities, more) = self.fetch_n(&mut *op, first).await?;
         <Repo as EsRepo>::load_all_nested_in_op(op, &mut entities).await?;

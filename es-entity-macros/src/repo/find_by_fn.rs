@@ -390,7 +390,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: for<'a> AtomicOperation<'a>
+                    OP: AtomicOperation
             {
                 let id = id.borrow();
                 Ok(
@@ -417,7 +417,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: for<'a> AtomicOperation<'a>
+                    OP: AtomicOperation
             {
                 let id = id.borrow();
                 Ok(

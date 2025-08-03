@@ -243,7 +243,7 @@ impl RepositoryOptions {
     pub fn query_fn_op_traits(nested: bool) -> proc_macro2::TokenStream {
         if nested {
             quote! {
-                for<'a> AtomicOperation<'a>
+                AtomicOperation
             }
         } else {
             quote! {
