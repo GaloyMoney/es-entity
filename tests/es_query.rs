@@ -6,7 +6,7 @@ use es_entity::*;
 use helpers::init_pool;
 use sqlx::PgPool;
 
-mod tbl_prefix_tests {
+mod tbl_prefix_param {
     use super::*;
 
     #[derive(EsRepo, Debug)]
@@ -84,7 +84,7 @@ mod tbl_prefix_tests {
     }
 }
 
-mod entity_tests {
+mod entity_param {
     use super::*;
 
     #[derive(EsRepo, Debug)]
@@ -162,7 +162,7 @@ mod entity_tests {
     }
 }
 
-mod no_params_tests {
+mod no_params {
     use super::*;
 
     #[derive(EsRepo, Debug)]
