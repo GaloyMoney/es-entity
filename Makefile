@@ -26,4 +26,4 @@ check-code:
 	SQLX_OFFLINE=true cargo deny check
 
 sqlx-prepare:
-	cargo sqlx prepare
+	cargo sqlx prepare --workspace
