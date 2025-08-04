@@ -6,6 +6,11 @@ use es_entity::*;
 use helpers::init_pool;
 use sqlx::PgPool;
 
+// This test is mainly here to check if the library compiles and can be used from within
+// async_trait fns.
+// When initially writing the AtomicOperation / OneTimeExecutor stuff it was very painful
+// to find a combination of generics that made the compiler happy and were ergonomic to use.
+
 trait RunJob {
     fn execute(&self) -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>;
 }
