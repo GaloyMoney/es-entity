@@ -5,7 +5,7 @@
 //! concerns while ensuring compile-time verification through [`sqlx`](https://crates.io/crates/sqlx).
 //!
 //! # Documentation
-//! - Book
+//! - [Book](https://galoymoney.github.io/es-entity)
 //! - [Github repository](https://github.com/GaloyMoney/es-entity)
 //! - [Cargo package](https://crates.io/crates/es-entity)
 //!
@@ -13,7 +13,7 @@
 //!
 //! - Store and construct from event sequences
 //! - Type-safe and compile-time verification
-//! - Safe retry mechanisms
+//! - Simple and configurable query generation
 //! - Easy idempotency checks
 //! - Cursor-based pagination
 //! - Flexible ID types
@@ -25,7 +25,7 @@
 
 mod error;
 mod events;
-mod idempotent;
+pub mod idempotent;
 mod macros;
 mod nested;
 mod operation;
