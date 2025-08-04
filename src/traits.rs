@@ -48,7 +48,7 @@ pub trait EsRepo {
     fn load_all_nested_in_op<OP>(
         op: &mut OP,
         entities: &mut [Self::Entity],
-    ) -> impl Future<Output = Result<(), Self::Err>>
+    ) -> impl Future<Output = Result<(), Self::Err>> + Send
     where
         OP: AtomicOperation;
 }
@@ -57,7 +57,7 @@ pub trait PopulateNested<C>: EsRepo {
     fn populate_in_op<OP>(
         op: &mut OP,
         lookup: std::collections::HashMap<C, &mut Nested<<Self as EsRepo>::Entity>>,
-    ) -> impl Future<Output = Result<(), <Self as EsRepo>::Err>>
+    ) -> impl Future<Output = Result<(), <Self as EsRepo>::Err>> + Send
     where
         OP: AtomicOperation;
 }
