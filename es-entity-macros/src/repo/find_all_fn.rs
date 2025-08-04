@@ -40,10 +40,7 @@ impl ToTokens for FindAllFn<'_> {
             quote! { <'a, Out: From<#entity>> }
         };
 
-        let query = format!(
-            "SELECT id FROM {} WHERE id = ANY($1)",
-            self.table_name
-        );
+        let query = format!("SELECT id FROM {} WHERE id = ANY($1)", self.table_name);
 
         let es_query_call = if let Some(prefix) = self.prefix {
             quote! {
@@ -72,7 +69,7 @@ impl ToTokens for FindAllFn<'_> {
                         .await?
                         .0;
                     Ok(entities.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
-                }
+                },
             )
         } else {
             (
@@ -83,7 +80,7 @@ impl ToTokens for FindAllFn<'_> {
                         .await?
                         .0;
                     Ok(entities.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
-                }
+                },
             )
         };
 
