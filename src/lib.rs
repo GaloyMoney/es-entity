@@ -25,7 +25,7 @@
 
 mod error;
 mod events;
-pub mod idempotent;
+mod idempotent;
 mod macros;
 mod nested;
 mod operation;

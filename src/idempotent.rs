@@ -1,4 +1,3 @@
-//! Handle idempotency in event-sourced systems.
 /// Signals if a mutation is applied or was skipped.
 ///
 /// Distinguishes between operations that were executed versus those that were
@@ -81,7 +80,7 @@ impl<T> Idempotent<T> {
 /// Internal trait used by the [crate::idempotency_guard] macro.
 ///
 /// This is internal-only trait is implemented on [crate::idempotency_guard] for it to create
-/// both `Idempotent<T>` and `Result<Idempotent<T>, E>` types when returning `Ignored` variant.
+/// both `Idempotent<T>` and `Result<Idempotent<T>, E>` return types for returning `Ignored` variant.
 ///
 pub trait FromIdempotentIgnored {
     /// Creates a value representing an ignored idempotent operation.
