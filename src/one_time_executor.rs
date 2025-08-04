@@ -28,4 +28,16 @@ where
     {
         query.fetch_all(self.executor).await
     }
+
+    pub async fn fetch_optional<'q, F, O, A>(
+        self,
+        query: sqlx::query::Map<'q, sqlx::Postgres, F, A>,
+    ) -> Result<Option<O>, sqlx::Error>
+    where
+        F: FnMut(sqlx::postgres::PgRow) -> Result<O, sqlx::Error> + Send,
+        O: Send + Unpin,
+        A: 'q + Send + sqlx::IntoArguments<'q, sqlx::Postgres>,
+    {
+        query.fetch_optional(self.executor).await
+    }
 }
