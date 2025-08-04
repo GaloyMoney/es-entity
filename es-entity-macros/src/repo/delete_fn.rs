@@ -10,6 +10,7 @@ pub struct DeleteFn<'a> {
     table_name: &'a str,
     columns: &'a Columns,
     delete_option: &'a DeleteOption,
+    additional_op_constraint: proc_macro2::TokenStream,
 }
 
 impl<'a> DeleteFn<'a> {
@@ -20,6 +21,7 @@ impl<'a> DeleteFn<'a> {
             columns: &opts.columns,
             table_name: opts.table_name(),
             delete_option: &opts.delete,
+            additional_op_constraint: opts.additional_op_constraint(),
         }
     }
 }
@@ -32,6 +34,7 @@ impl ToTokens for DeleteFn<'_> {
 
         let entity = self.entity;
         let error = self.error;
+        let additional_op_constraint = &self.additional_op_constraint;
 
         let assignments = self
             .columns
@@ -56,17 +59,21 @@ impl ToTokens for DeleteFn<'_> {
                 Ok(res)
             }
 
-            pub async fn delete_in_op(&self,
-                op: &mut es_entity::DbOp<'_>,
+            pub async fn delete_in_op<OP>(&self,
+                op: &mut OP,
                 mut entity: #entity
-            ) -> Result<(), #error> {
+            ) -> Result<(), #error>
+            where
+                OP: es_entity::AtomicOperation
+                #additional_op_constraint
+            {
                 #assignments
 
                 sqlx::query!(
                     #query,
                     #(#args),*
                 )
-                    .execute(&mut **op.tx())
+                    .execute(op.as_executor())
                     .await?;
 
                 let new_events = {
@@ -109,6 +116,7 @@ mod tests {
             table_name: "entities",
             columns: &columns,
             delete_option: &DeleteOption::Soft,
+            additional_op_constraint: quote! {},
         };
 
         let mut tokens = TokenStream::new();
@@ -125,18 +133,21 @@ mod tests {
                 Ok(res)
             }
 
-            pub async fn delete_in_op(
+            pub async fn delete_in_op<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), es_entity::EsRepoError> {
+            ) -> Result<(), es_entity::EsRepoError>
+            where
+                OP: es_entity::AtomicOperation
+            {
                 let id = &entity.id;
 
                 sqlx::query!(
                     "UPDATE entities SET deleted = TRUE WHERE id = $1",
                     id as &EntityId
                 )
-                    .execute(&mut **op.tx())
+                    .execute(op.as_executor())
                     .await?;
 
                 let new_events = {
@@ -180,6 +191,7 @@ mod tests {
             table_name: "entities",
             columns: &columns,
             delete_option: &DeleteOption::Soft,
+            additional_op_constraint: quote! {},
         };
 
         let mut tokens = TokenStream::new();
@@ -196,11 +208,14 @@ mod tests {
                 Ok(res)
             }
 
-            pub async fn delete_in_op(
+            pub async fn delete_in_op<OP>(
                 &self,
-                op: &mut es_entity::DbOp<'_>,
+                op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), es_entity::EsRepoError> {
+            ) -> Result<(), es_entity::EsRepoError>
+            where
+                OP: es_entity::AtomicOperation
+            {
                 let id = &entity.id;
                 let name = &entity.name;
 
@@ -209,7 +224,7 @@ mod tests {
                     id as &EntityId,
                     name as &String
                 )
-                    .execute(&mut **op.tx())
+                    .execute(op.as_executor())
                     .await?;
 
                 let new_events = {
