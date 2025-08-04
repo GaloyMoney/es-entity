@@ -78,7 +78,7 @@ pub trait AtomicOperation: Send {
 
 impl<'c> AtomicOperation for sqlx::PgTransaction<'c> {
     fn as_executor(&mut self) -> &mut sqlx::PgConnection {
-        &mut **self
+        &mut *self
     }
 }
 
