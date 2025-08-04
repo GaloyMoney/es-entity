@@ -1,5 +1,7 @@
 use sqlx::{Acquire, PgPool, Postgres, Transaction};
 
+use crate::traits::AtomicOperation;
+
 pub struct DbOp<'c> {
     tx: Transaction<'c, Postgres>,
     now: Option<chrono::DateTime<chrono::Utc>>,
@@ -62,20 +64,12 @@ impl<'c> DbOp<'c> {
     }
 }
 
-impl<'o> crate::traits::AtomicOperation for DbOp<'o> {
-    type Executor<'c>
-        = <sqlx::Transaction<'o, sqlx::Postgres> as crate::traits::AtomicOperation>::Executor<'c>
-    where
-        Self: 'c;
-
+impl<'o> AtomicOperation for DbOp<'o> {
     fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.now()
     }
 
-    fn as_executor<'a, 'c>(&'a mut self) -> Self::Executor<'c>
-    where
-        'a: 'c,
-    {
+    fn as_executor(&mut self) -> &mut sqlx::PgConnection {
         self.tx.as_executor()
     }
 }
@@ -116,20 +110,12 @@ impl<'c> DbOpWithTime<'c> {
     }
 }
 
-impl<'o> crate::traits::AtomicOperation for DbOpWithTime<'o> {
-    type Executor<'c>
-        = <sqlx::Transaction<'o, sqlx::Postgres> as crate::traits::AtomicOperation>::Executor<'c>
-    where
-        Self: 'c;
-
+impl<'o> AtomicOperation for DbOpWithTime<'o> {
     fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         Some(self.now())
     }
 
-    fn as_executor<'a, 'c>(&'a mut self) -> Self::Executor<'c>
-    where
-        'a: 'c,
-    {
+    fn as_executor(&mut self) -> &mut sqlx::PgConnection {
         self.tx.as_executor()
     }
 }

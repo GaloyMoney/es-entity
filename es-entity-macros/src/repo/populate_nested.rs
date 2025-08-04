@@ -57,16 +57,14 @@ impl ToTokens for PopulateNested<'_> {
                 ) -> Result<(), #error>
                 where
                     OP: es_entity::AtomicOperation,
-                    for<'a> &'a mut OP: es_entity::IntoExecutor<'a>,
                 {
                     let parent_ids: Vec<_> = lookup.keys().collect();
                     let rows = {
-                        let ex = &mut *op;
                         sqlx::query_as!(
                             #repo_types_mod::Repo__DbEvent,
                             #query,
                             parent_ids.as_slice() as &[&#ty],
-                        ).fetch_all(ex.into_executor()).await?
+                        ).fetch_all(op.as_executor()).await?
                     };
                     let n = rows.len();
                     let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(rows.into_iter(), n)?;

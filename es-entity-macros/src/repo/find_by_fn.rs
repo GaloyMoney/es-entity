@@ -176,7 +176,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: IntoExecutor<'a>
+                    OP: IntoOneTimeExecutor<'a> + 'a
             {
                 let id = id.borrow();
                 es_entity::es_query!(
@@ -201,7 +201,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: IntoExecutor<'a>
+                    OP: IntoOneTimeExecutor<'a> + 'a
             {
                 let id = id.borrow();
                 es_entity::es_query!(
@@ -250,7 +250,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: IntoExecutor<'a>
+                    OP: IntoOneTimeExecutor<'a> + 'a
             {
                 let id = id.borrow();
                 es_entity::es_query!(
@@ -275,7 +275,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: IntoExecutor<'a>
+                    OP: IntoOneTimeExecutor<'a> + 'a
             {
                 let id = id.borrow();
                 es_entity::es_query!(
@@ -300,7 +300,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: IntoExecutor<'a>
+                    OP: IntoOneTimeExecutor<'a> + 'a
             {
                 let id = id.borrow();
                 es_entity::es_query!(
@@ -325,7 +325,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: IntoExecutor<'a>
+                    OP: IntoOneTimeExecutor<'a> + 'a
             {
                 let id = id.borrow();
                 es_entity::es_query!(

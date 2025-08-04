@@ -137,7 +137,7 @@ mod tests {
 
             pub async fn find_all_in_op<'a, Out: From<Entity>>(
                 &self,
-                op: impl IntoExecutor<'a>,
+                op: impl IntoOneTimeExecutor<'a> + 'a,
                 ids: &[EntityId]
             ) -> Result<std::collections::HashMap<EntityId, Out>, es_entity::EsRepoError> {
                 let entities = es_entity::es_query!(

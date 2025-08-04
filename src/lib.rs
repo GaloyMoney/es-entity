@@ -32,6 +32,7 @@ pub use es_entity_macros::retry_on_concurrent_modification;
 pub use events::*;
 pub use idempotent::*;
 pub use nested::*;
+pub use one_time_executor::*;
 pub use operation::*;
 pub use query::*;
 pub use traits::*;
