@@ -15,21 +15,6 @@ CREATE TABLE user_events (
   UNIQUE(id, sequence)
 );
 
-CREATE TABLE user_documents (
-  id UUID PRIMARY KEY,
-  user_id UUID,
-  created_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE TABLE user_document_events (
-  id UUID NOT NULL REFERENCES user_documents(id),
-  sequence INT NOT NULL,
-  event_type VARCHAR NOT NULL,
-  event JSONB NOT NULL,
-  recorded_at TIMESTAMPTZ NOT NULL,
-  UNIQUE(id, sequence)
-);
-
 CREATE TABLE ignore_prefix_users (
   id UUID PRIMARY KEY,
   name VARCHAR NOT NULL,

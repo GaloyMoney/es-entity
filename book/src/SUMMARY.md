@@ -1,9 +1,11 @@
 # Es Entity
 
 - [Introduction](./introduction.md)
+
 - [Quickstart](./quickstart.md)
 
 - [Event Sourcing](./event-sourcing.md)
+
 - [Entity Pattern](./entity-pattern.md)
   - [Entity Event](./entity-event.md)
   - [New Entity](./new-entity.md)
@@ -21,3 +23,5 @@
     - [list_by](./repo-list-by.md)
     - [list_for](./repo-list-for.md)
     - [delete](./repo-delete.md)
+
+- [Transactions](./transactions.md)
