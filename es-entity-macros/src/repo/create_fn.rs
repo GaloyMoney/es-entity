@@ -99,7 +99,7 @@ impl ToTokens for CreateFn<'_> {
                 new_entity: <#entity as es_entity::EsEntity>::New
             ) -> Result<#entity, #error>
             where
-                OP: for<'o> es_entity::AtomicOperation<'o>
+                OP: es_entity::AtomicOperation
                 #additional_op_constraint
             {
                 #assignments
@@ -187,7 +187,7 @@ mod tests {
                 new_entity: <Entity as es_entity::EsEntity>::New
             ) -> Result<Entity, es_entity::EsRepoError>
             where
-                OP: for<'o> es_entity::AtomicOperation<'o>
+                OP: es_entity::AtomicOperation
             {
                 let id = &new_entity.id;
 
@@ -270,7 +270,7 @@ mod tests {
                 new_entity: <Entity as es_entity::EsEntity>::New
             ) -> Result<Entity, es_entity::EsRepoError>
             where
-                OP: for<'o> es_entity::AtomicOperation<'o>
+                OP: es_entity::AtomicOperation
             {
                 let id = &new_entity.id;
                 let name = &new_entity.name();

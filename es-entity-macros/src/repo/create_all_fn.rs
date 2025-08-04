@@ -83,7 +83,7 @@ impl ToTokens for CreateAllFn<'_> {
                 new_entities: Vec<<#entity as es_entity::EsEntity>::New>
             ) -> Result<Vec<#entity>, #error>
             where
-                OP: for<'o> es_entity::AtomicOperation<'o>
+                OP: es_entity::AtomicOperation
                 #additional_op_constraint
             {
                 let mut res = Vec::new();
@@ -167,7 +167,7 @@ mod tests {
                 new_entities: Vec<<Entity as es_entity::EsEntity>::New>
             ) -> Result<Vec<Entity>, es_entity::EsRepoError>
             where
-                OP: for<'o> es_entity::AtomicOperation<'o>
+                OP: es_entity::AtomicOperation
             {
                 let mut res = Vec::new();
                 if new_entities.is_empty() {

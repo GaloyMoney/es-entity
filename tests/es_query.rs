@@ -110,14 +110,14 @@ mod entity_param {
                 "SELECT * FROM custom_name_for_users WHERE id = $1",
                 id as UserId
             )
-            .fetch_one(op.as_executor())
+            .fetch_one(&mut op)
             .await
         }
 
         async fn query_without_args(&self) -> Result<(Vec<User>, bool), EsRepoError> {
             let mut op = self.begin_op().await?;
             es_query!(entity = User, "SELECT * FROM custom_name_for_users")
-                .fetch_n(op.as_executor(), 2)
+                .fetch_n(&mut op, 2)
                 .await
         }
     }

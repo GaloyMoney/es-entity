@@ -43,18 +43,18 @@ impl ToTokens for FindByFn<'_> {
                 (
                     quote! { #entity },
                     if self.any_nested {
-                        quote! { .fetch_one_include_nested(op) }
+                        quote! { fetch_one_include_nested(op) }
                     } else {
-                        quote! { .fetch_one(op) }
+                        quote! { fetch_one(op) }
                     },
                 )
             } else {
                 (
                     quote! { Option<#entity> },
                     if self.any_nested {
-                        quote! { .fetch_optional_include_nested(op) }
+                        quote! { fetch_optional_include_nested(op) }
                     } else {
-                        quote! { .fetch_optional(op) }
+                        quote! { fetch_optional(op) }
                     },
                 )
             };
@@ -125,11 +125,7 @@ impl ToTokens for FindByFn<'_> {
                             OP: #query_fn_op_traits
                     {
                         let #column_name = #column_name.borrow();
-                        Ok(
-                            #es_query_call
-                            #fetch_fn
-                            .await?
-                        )
+                        #es_query_call.#fetch_fn.await
                     }
                 });
 
@@ -180,18 +176,16 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: IntoExecutor<'a>
+                    OP: IntoOneTimeExecutor<'a>
             {
                 let id = id.borrow();
-                Ok(
-                    es_entity::es_query!(
-                        entity = Entity,
-                        "SELECT id FROM entities WHERE id = $1",
-                        id as &EntityId,
-                    )
-                    .fetch_one(op)
-                    .await?
+                es_entity::es_query!(
+                    entity = Entity,
+                    "SELECT id FROM entities WHERE id = $1",
+                    id as &EntityId,
                 )
+                .fetch_one(op)
+                .await
             }
 
             pub async fn maybe_find_by_id(
@@ -207,18 +201,16 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: IntoExecutor<'a>
+                    OP: IntoOneTimeExecutor<'a>
             {
                 let id = id.borrow();
-                Ok(
-                    es_entity::es_query!(
-                        entity = Entity,
-                        "SELECT id FROM entities WHERE id = $1",
-                        id as &EntityId,
-                    )
-                    .fetch_optional(op)
-                    .await?
+                es_entity::es_query!(
+                    entity = Entity,
+                    "SELECT id FROM entities WHERE id = $1",
+                    id as &EntityId,
                 )
+                .fetch_optional(op)
+                .await
             }
         };
 
@@ -258,18 +250,16 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: IntoExecutor<'a>
+                    OP: IntoOneTimeExecutor<'a>
             {
                 let id = id.borrow();
-                Ok(
-                    es_entity::es_query!(
-                        entity = Entity,
-                        "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
-                        id as &EntityId,
-                    )
-                    .fetch_one(op)
-                    .await?
+                es_entity::es_query!(
+                    entity = Entity,
+                    "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
+                    id as &EntityId,
                 )
+                .fetch_one(op)
+                .await
             }
 
             pub async fn find_by_id_include_deleted(
@@ -285,18 +275,16 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: IntoExecutor<'a>
+                    OP: IntoOneTimeExecutor<'a>
             {
                 let id = id.borrow();
-                Ok(
-                    es_entity::es_query!(
-                        entity = Entity,
-                        "SELECT id FROM entities WHERE id = $1",
-                        id as &EntityId,
-                    )
-                    .fetch_one(op)
-                    .await?
+                es_entity::es_query!(
+                    entity = Entity,
+                    "SELECT id FROM entities WHERE id = $1",
+                    id as &EntityId,
                 )
+                .fetch_one(op)
+                .await
             }
 
             pub async fn maybe_find_by_id(
@@ -312,18 +300,16 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: IntoExecutor<'a>
+                    OP: IntoOneTimeExecutor<'a>
             {
                 let id = id.borrow();
-                Ok(
-                    es_entity::es_query!(
-                        entity = Entity,
-                        "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
-                        id as &EntityId,
-                    )
-                    .fetch_optional(op)
-                    .await?
+                es_entity::es_query!(
+                    entity = Entity,
+                    "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
+                    id as &EntityId,
                 )
+                .fetch_optional(op)
+                .await
             }
 
             pub async fn maybe_find_by_id_include_deleted(
@@ -339,18 +325,16 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: IntoExecutor<'a>
+                    OP: IntoOneTimeExecutor<'a>
             {
                 let id = id.borrow();
-                Ok(
-                    es_entity::es_query!(
-                        entity = Entity,
-                        "SELECT id FROM entities WHERE id = $1",
-                        id as &EntityId,
-                    )
-                    .fetch_optional(op)
-                    .await?
+                es_entity::es_query!(
+                    entity = Entity,
+                    "SELECT id FROM entities WHERE id = $1",
+                    id as &EntityId,
                 )
+                .fetch_optional(op)
+                .await
             }
         };
 
@@ -390,18 +374,16 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: for<'a> AtomicOperation<'a>
+                    OP: AtomicOperation
             {
                 let id = id.borrow();
-                Ok(
-                    es_entity::es_query!(
-                        entity = Entity,
-                        "SELECT id FROM entities WHERE id = $1",
-                        id as &EntityId,
-                    )
-                    .fetch_one_include_nested(op)
-                    .await?
+                es_entity::es_query!(
+                    entity = Entity,
+                    "SELECT id FROM entities WHERE id = $1",
+                    id as &EntityId,
                 )
+                .fetch_one_include_nested(op)
+                .await
             }
 
             pub async fn maybe_find_by_id(
@@ -417,18 +399,16 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: for<'a> AtomicOperation<'a>
+                    OP: AtomicOperation
             {
                 let id = id.borrow();
-                Ok(
-                    es_entity::es_query!(
-                        entity = Entity,
-                        "SELECT id FROM entities WHERE id = $1",
-                        id as &EntityId,
-                    )
-                    .fetch_optional_include_nested(op)
-                    .await?
+                es_entity::es_query!(
+                    entity = Entity,
+                    "SELECT id FROM entities WHERE id = $1",
+                    id as &EntityId,
                 )
+                .fetch_optional_include_nested(op)
+                .await
             }
         };
 

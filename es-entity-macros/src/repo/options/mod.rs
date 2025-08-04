@@ -111,8 +111,7 @@ impl RepositoryOptions {
             String::new()
         };
         if self.op_ty.is_none() {
-            self.op_ty =
-                Some(syn::parse_str("es_entity::DbOp<'static>").expect("Failed to parse op type"));
+            self.op_ty = Some(syn::parse_str("es_entity::DbOp").expect("Failed to parse op type"));
         }
         if self.table_name.is_none() {
             self.table_name = Some(format!(
@@ -243,11 +242,11 @@ impl RepositoryOptions {
     pub fn query_fn_op_traits(nested: bool) -> proc_macro2::TokenStream {
         if nested {
             quote! {
-                for<'a> AtomicOperation<'a>
+                AtomicOperation
             }
         } else {
             quote! {
-                IntoExecutor<'a>
+                IntoOneTimeExecutor<'a>
             }
         }
     }

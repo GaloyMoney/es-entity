@@ -52,7 +52,7 @@ impl ToTokens for PersistEventsFn<'_> {
                 events: &mut es_entity::EntityEvents<#event_type>
             ) -> Result<usize, #error>
             where
-                OP: for<'o> es_entity::AtomicOperation<'o>
+                OP: es_entity::AtomicOperation
             {
                 let id = events.id();
                 let offset = events.len_persisted();
@@ -115,7 +115,7 @@ mod tests {
                 events: &mut es_entity::EntityEvents<EntityEvent>
             ) -> Result<usize, es_entity::EsRepoError>
             where
-                OP: for<'o> es_entity::AtomicOperation<'o>
+                OP: es_entity::AtomicOperation
             {
                 let id = events.id();
                 let offset = events.len_persisted();
