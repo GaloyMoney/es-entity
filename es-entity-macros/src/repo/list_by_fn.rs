@@ -517,7 +517,7 @@ mod tests {
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError>
                 where
-                    OP: IntoOneTimeExecutor<'a> + 'a
+                    OP: IntoOneTimeExecutor<'a>
             {
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let id = if let Some(after) = after {
@@ -572,7 +572,7 @@ mod tests {
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError>
             where
-                OP: IntoOneTimeExecutor<'a> + 'a
+                OP: IntoOneTimeExecutor<'a>
             {
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let id = if let Some(after) = after {
@@ -656,7 +656,7 @@ mod tests {
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, es_entity::EsRepoError>
                 where
-                    OP: IntoOneTimeExecutor<'a> + 'a
+                    OP: IntoOneTimeExecutor<'a>
             {
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let (id, name) = if let Some(after) = after {
@@ -745,7 +745,7 @@ mod tests {
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, es_entity::EsRepoError>
                 where
-                    OP: IntoOneTimeExecutor<'a> + 'a
+                    OP: IntoOneTimeExecutor<'a>
             {
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let (id, value) = if let Some(after) = after {
