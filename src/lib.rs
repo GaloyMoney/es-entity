@@ -6,6 +6,7 @@ mod events;
 mod idempotent;
 mod macros;
 mod nested;
+mod one_time_executor;
 mod operation;
 mod query;
 mod traits;
