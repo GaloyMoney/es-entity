@@ -246,7 +246,7 @@ impl RepositoryOptions {
             }
         } else {
             quote! {
-                IntoOneTimeExecutor<'a>
+                IntoOneTimeExecutor<'a> + 'a
             }
         }
     }

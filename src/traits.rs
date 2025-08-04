@@ -82,7 +82,7 @@ impl<'c> AtomicOperation for sqlx::PgTransaction<'c> {
     }
 }
 
-pub trait IntoOneTimeExecutor<'c>: 'c {
+pub trait IntoOneTimeExecutor<'c> {
     type Executor: sqlx::PgExecutor<'c>;
 
     fn into_executor(self) -> OneTimeExecutor<'c, Self::Executor>
@@ -90,7 +90,7 @@ pub trait IntoOneTimeExecutor<'c>: 'c {
         Self: 'c;
 }
 
-impl<'c> IntoOneTimeExecutor<'c> for &'c sqlx::PgPool {
+impl<'c> IntoOneTimeExecutor<'c> for &sqlx::PgPool {
     type Executor = &'c sqlx::PgPool;
 
     fn into_executor(self) -> OneTimeExecutor<'c, Self::Executor>
@@ -101,7 +101,7 @@ impl<'c> IntoOneTimeExecutor<'c> for &'c sqlx::PgPool {
     }
 }
 
-impl<'c, O> IntoOneTimeExecutor<'c> for &'c mut O
+impl<'c, O> IntoOneTimeExecutor<'c> for &mut O
 where
     O: AtomicOperation,
 {

@@ -89,9 +89,9 @@ where
         }
     }
 
-    pub async fn fetch_optional(
+    pub async fn fetch_optional<'a>(
         self,
-        op: impl IntoOneTimeExecutor<'_>,
+        op: impl IntoOneTimeExecutor<'a> + 'a,
     ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::Err> {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
@@ -102,18 +102,18 @@ where
         Ok(Some(EntityEvents::load_first(rows.into_iter())?))
     }
 
-    pub async fn fetch_one(
+    pub async fn fetch_one<'a>(
         self,
-        op: impl IntoOneTimeExecutor<'_>,
+        op: impl IntoOneTimeExecutor<'a> + 'a,
     ) -> Result<<Repo as EsRepo>::Entity, <Repo as EsRepo>::Err> {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
         Ok(EntityEvents::load_first(rows.into_iter())?)
     }
 
-    pub async fn fetch_n(
+    pub async fn fetch_n<'a>(
         self,
-        op: impl IntoOneTimeExecutor<'_>,
+        op: impl IntoOneTimeExecutor<'a> + 'a,
         first: usize,
     ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::Err> {
         let executor = op.into_executor();
