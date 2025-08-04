@@ -6,9 +6,7 @@ That is you can execute multiple writes atomically or multiple succesive queries
 
 The `sqlx` struct that manages this is the [`Transaction`](https://docs.rs/sqlx/latest/sqlx/struct.Transaction.html) that is typically aquired from a pool.
 
-All CRUD `fn`s that`es-entity` generates come in 2 variants
-
-EG:
+All CRUD `fn`s that`es-entity` generates come in 2 variants:
 ```rust,ignore
 async fn fn create(new_entity: NewEntity)
 async fn fn create_in_op(<conection>, new_entity: NewEntity)
@@ -28,21 +26,17 @@ The non-`_in_op` variant simply wraps the `_in_op` call by passing an appropriat
 The type of the argument is generic requiring either the `AtomicOperation` or `IntoOneTimeExecutor` trait to be implemented on the type.
 There is a blanket implementation that makes every `AtomicOperation` implement `IntoOneTimeExecutor` - but the reverse is _not_ the case.
 
-eg:
-```rust,ignore
-async fn fn create_in_op<OP>(op: &mut OP, new_entity: NewEntity)
-where
-    OP: AtomicOperation
-```
-
-or
 ```rust,ignore
 async fn fn find_by_id_in_op<'a, OP>(op: OP, id: EntityId)
 where
-    OP: IntoOneTimeExecutor<'a>
+    OP: IntoOneTimeExecutor<'a>;
+
+async fn fn create_in_op<OP>(op: &mut OP, new_entity: NewEntity)
+where
+    OP: AtomicOperation;
 ```
 
-Both traits wrap access to an `sqlx::Executor` implementation that ultimately execute the query.
+Both traits wrap access to an `sqlx::Executor` implementation that ultimately executes the query.
 
 The difference is that the `IntoOneTimeExecutor` trait ensures in a typesafe way that only 1 database operation can occur by consuming the inner reference.
 

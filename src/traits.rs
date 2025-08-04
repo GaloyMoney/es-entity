@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
 
 use super::{
@@ -42,25 +41,23 @@ pub trait Parent<T: EsEntity> {
     fn nested_mut(&mut self) -> &mut Nested<T>;
 }
 
-#[async_trait]
 pub trait EsRepo {
     type Entity: EsEntity;
     type Err: From<EsEntityError> + From<sqlx::Error>;
 
-    async fn load_all_nested_in_op<OP>(
+    fn load_all_nested_in_op<OP>(
         op: &mut OP,
         entities: &mut [Self::Entity],
-    ) -> Result<(), Self::Err>
+    ) -> impl Future<Output = Result<(), Self::Err>>
     where
         OP: AtomicOperation;
 }
 
-#[async_trait]
 pub trait PopulateNested<C>: EsRepo {
-    async fn populate_in_op<OP>(
+    fn populate_in_op<OP>(
         op: &mut OP,
         lookup: std::collections::HashMap<C, &mut Nested<<Self as EsRepo>::Entity>>,
-    ) -> Result<(), <Self as EsRepo>::Err>
+    ) -> impl Future<Output = Result<(), <Self as EsRepo>::Err>>
     where
         OP: AtomicOperation;
 }

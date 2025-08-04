@@ -212,7 +212,6 @@ impl ToTokens for EsRepo<'_> {
 
             #populate_nested
 
-             #[es_entity::prelude::async_trait::async_trait]
             impl #impl_generics es_entity::EsRepo for #repo #ty_generics #where_clause {
                 type Entity = #entity;
                 type Err = #error;
