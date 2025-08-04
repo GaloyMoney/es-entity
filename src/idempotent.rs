@@ -78,23 +78,25 @@ impl<T> Idempotent<T> {
     }
 }
 
-/// Creates a value from an ignored idempotent operation.
+/// Internal trait used by the [crate::idempotency_guard] macro.
 ///
-/// This trait provides a way to construct a value that represents an ignored
-/// idempotent operation, typically used when an operation was skipped due to
-/// idempotency checks.
+/// This is internal-only trait is implemented on [crate::idempotency_guard] for it to create
+/// both `Idempotent<T>` and `Result<Idempotent<T>, E>` types when returning `Ignored` variant.
+///
 pub trait FromIdempotentIgnored {
     /// Creates a value representing an ignored idempotent operation.
     fn from_ignored() -> Self;
 }
 
 impl<T> FromIdempotentIgnored for Idempotent<T> {
+    /// to handle `Idempotent<T>` return type
     fn from_ignored() -> Self {
         Idempotent::Ignored
     }
 }
 
 impl<T, E> FromIdempotentIgnored for Result<Idempotent<T>, E> {
+    /// to handle `Result<Idempotent<T>, E>` return type
     fn from_ignored() -> Self {
         Ok(Idempotent::Ignored)
     }

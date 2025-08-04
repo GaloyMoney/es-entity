@@ -48,18 +48,16 @@
 ///     }
 /// }
 ///   
-/// fn main(){
-///     let mut user1 = User{ events: vec![] };
-///     let mut user2 = User{ events: vec![] };
-///     assert!(user1.update_name("Alice").did_execute());
-///     // updating "ALice" again ignored because same event with same name exists
-///     assert!(user1.update_name("Alice").was_ignored());
+/// let mut user1 = User{ events: vec![] };
+/// let mut user2 = User{ events: vec![] };
+/// assert!(user1.update_name("Alice").did_execute());
+/// // updating "ALice" again ignored because same event with same name exists
+/// assert!(user1.update_name("Alice").was_ignored());
 ///     
-///     assert!(user2.update_name_with_break("Alice").did_execute());
-///     assert!(user2.update_name_with_break("Bob").did_execute());
-///     // updating "ALice" again works because of early break condition
-///     assert!(user2.update_name_with_break("Alice").did_execute());
-/// }
+/// assert!(user2.update_name_with_break("Alice").did_execute());
+/// assert!(user2.update_name_with_break("Bob").did_execute());
+/// // updating "ALice" again works because of early break condition
+/// assert!(user2.update_name_with_break("Alice").did_execute());
 /// ```
 #[macro_export]
 macro_rules! idempotency_guard {
