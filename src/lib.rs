@@ -1,3 +1,25 @@
+//! A Rust library for persisting Event Sourced entities to PostgreSQL
+//!
+//! This crate simplifies Event Sourcing persistence by automatically generating type-safe
+//! queries and operations for PostgreSQL. It decouples domain logic from persistence
+//! concerns while ensuring compile-time verification through [`sqlx`](https://crates.io/crates/sqlx).
+//!
+//! # Documentation
+//! - [Book](https://galoymoney.github.io/es-entity)
+//! - [Github repository](https://github.com/GaloyMoney/es-entity)
+//! - [Cargo package](https://crates.io/crates/es-entity)
+//!
+//! # Features
+//!
+//! - Store and construct from event sequences
+//! - Type-safe and compile-time verification
+//! - Simple and configurable query generation
+//! - Easy idempotency checks
+//! - Cursor-based pagination
+//! - Flexible ID types
+//! - Atomic operations
+//! - Reduce boilerplate code
+//!
 #![cfg_attr(feature = "fail-on-warnings", deny(warnings))]
 #![cfg_attr(feature = "fail-on-warnings", deny(clippy::all))]
 
