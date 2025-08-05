@@ -60,28 +60,10 @@ impl ToTokens for FindAllFn<'_> {
             }
         };
 
-        let (op_param, fetch_and_process) = if self.any_nested {
-            (
-                quote! { op: &mut impl #query_fn_op_traits },
-                quote! {
-                    let entities = #es_query_call
-                        .fetch_n_include_nested(op, ids.len())
-                        .await?
-                        .0;
-                    Ok(entities.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
-                },
-            )
+        let op_param = if self.any_nested {
+            quote! { op: &mut impl #query_fn_op_traits }
         } else {
-            (
-                quote! { op: impl #query_fn_op_traits },
-                quote! {
-                    let entities = #es_query_call
-                        .fetch_n(op, ids.len())
-                        .await?
-                        .0;
-                    Ok(entities.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
-                },
-            )
+            quote! { op: impl #query_fn_op_traits }
         };
 
         tokens.append_all(quote! {
@@ -97,7 +79,8 @@ impl ToTokens for FindAllFn<'_> {
                 #op_param,
                 ids: &[#id]
             ) -> Result<std::collections::HashMap<#id, Out>, #error> {
-                #fetch_and_process
+                 let (entities, _) = #es_query_call.fetch_n(op, ids.len()).await?;
+                 Ok(entities.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
             }
         });
     }
@@ -140,14 +123,13 @@ mod tests {
                 op: impl IntoOneTimeExecutor<'a>,
                 ids: &[EntityId]
             ) -> Result<std::collections::HashMap<EntityId, Out>, es_entity::EsRepoError> {
-                let entities = es_entity::es_query!(
+                let (entities, _) = es_entity::es_query!(
                     entity = Entity,
                     "SELECT id FROM entities WHERE id = ANY($1)",
                     ids as &[EntityId],
                 )
                     .fetch_n(op, ids.len())
-                    .await?
-                    .0;
+                    .await?;
                 Ok(entities.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
             }
         };

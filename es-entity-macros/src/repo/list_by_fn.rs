@@ -254,15 +254,6 @@ impl ToTokens for ListByFn<'_> {
         let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
         let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
         let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
-        let fetch_fn = if self.any_nested {
-            quote! {
-                .fetch_n_include_nested(op, first)
-            }
-        } else {
-            quote! {
-                .fetch_n(op, first)
-            }
-        };
 
         let destructure_tokens = self.cursor().destructure_tokens();
         let select_columns = cursor.select_columns(None);
@@ -369,14 +360,10 @@ impl ToTokens for ListByFn<'_> {
 
                     let (entities, has_next_page) = match direction {
                         es_entity::ListDirection::Ascending => {
-                            #es_query_asc_call
-                                #fetch_fn
-                                .await?
+                            #es_query_asc_call.fetch_n(op, first).await?
                         },
                         es_entity::ListDirection::Descending => {
-                            #es_query_desc_call
-                                #fetch_fn
-                                .await?
+                            #es_query_desc_call.fetch_n(op, first).await?
                         },
                     };
 
