@@ -44,6 +44,7 @@ pub trait Parent<T: EsEntity> {
 pub trait EsRepo {
     type Entity: EsEntity;
     type Err: From<EsEntityError> + From<sqlx::Error>;
+    type EsQueryFlavor;
 
     fn load_all_nested_in_op<OP>(
         op: &mut OP,

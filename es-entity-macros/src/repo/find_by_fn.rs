@@ -40,23 +40,9 @@ impl ToTokens for FindByFn<'_> {
         let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
         for maybe in ["", "maybe_"] {
             let (result_type, fetch_fn) = if maybe.is_empty() {
-                (
-                    quote! { #entity },
-                    if self.any_nested {
-                        quote! { fetch_one_include_nested(op) }
-                    } else {
-                        quote! { fetch_one(op) }
-                    },
-                )
+                (quote! { #entity }, quote! { fetch_one(op) })
             } else {
-                (
-                    quote! { Option<#entity> },
-                    if self.any_nested {
-                        quote! { fetch_optional_include_nested(op) }
-                    } else {
-                        quote! { fetch_optional(op) }
-                    },
-                )
+                (quote! { Option<#entity> }, quote! { fetch_optional(op) })
             };
 
             for delete in [DeleteOption::No, DeleteOption::Soft] {
@@ -382,7 +368,7 @@ mod tests {
                     "SELECT id FROM entities WHERE id = $1",
                     id as &EntityId,
                 )
-                .fetch_one_include_nested(op)
+                .fetch_one(op)
                 .await
             }
 
@@ -407,7 +393,7 @@ mod tests {
                     "SELECT id FROM entities WHERE id = $1",
                     id as &EntityId,
                 )
-                .fetch_optional_include_nested(op)
+                .fetch_optional(op)
                 .await
             }
         };

@@ -154,7 +154,15 @@ impl ToTokens for EsRepo<'_> {
         let nested_fns = &self.nested_fns;
         let nested = &self.nested;
         let populate_nested = &self.populate_nested;
+
         let pool_field = self.opts.pool_field();
+        let es_query_flavor = if nested_fns.is_empty() {
+            quote! {
+                es_entity::EsQueryFlavorFlat
+            }
+        } else {
+            quote! { es_entity::EsQueryFlavorNested }
+        };
 
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
 
@@ -215,6 +223,7 @@ impl ToTokens for EsRepo<'_> {
             impl #impl_generics es_entity::EsRepo for #repo #ty_generics #where_clause {
                 type Entity = #entity;
                 type Err = #error;
+                type EsQueryFlavor = #es_query_flavor;
 
                #[inline(always)]
                async fn load_all_nested_in_op<OP>(
