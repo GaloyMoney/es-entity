@@ -1,18 +1,18 @@
 # Transactions
 
-One big advantage of using an ACID compilant database (such as Postgres) is transactional guarantees.
+One big advantage of using an ACID compliant database (such as Postgres) is transactional guarantees.
 
-That is you can execute multiple writes atomically or multiple succesive queries can view a consistent snapshot of your data.
+That is you can execute multiple writes atomically or multiple successive queries can view a consistent snapshot of your data.
 
-The `sqlx` struct that manages this is the [`Transaction`](https://docs.rs/sqlx/latest/sqlx/struct.Transaction.html) that is typically aquired from a pool.
+The `sqlx` struct that manages this is the [`Transaction`](https://docs.rs/sqlx/latest/sqlx/struct.Transaction.html) that is typically acquired from a pool.
 
 All CRUD `fn`s that`es-entity` generates come in 2 variants:
 ```rust,ignore
 async fn create(new_entity: NewEntity)
-async fn create_in_op(<conection>, new_entity: NewEntity)
+async fn create_in_op(<connection>, new_entity: NewEntity)
 
 async fn update(entity: &mut Entity)
-async fn update_in_op(<conection>, entity: &mut Entity)
+async fn update_in_op(<connection>, entity: &mut Entity)
 
 async fn find_by_id(id: EntityId)
 async fn find_by_id_in_op(<connection>, id: EntityId)
@@ -57,7 +57,7 @@ async fn count_users(op: impl es_entity::IntoOneTimeExecutor<'_>) -> anyhow::Res
     Ok(row.and_then(|r| r.count).unwrap_or(0))
 }
 
-// Rediculous example of 2 operations that we want to execute atomically
+// Ridiculous example of 2 operations that we want to execute atomically
 async fn delete_and_count(op: &mut impl es_entity::AtomicOperation, id: uuid::Uuid) -> anyhow::Result<i64> {
     sqlx::query!(
         "DELETE FROM users WHERE id = $1",
