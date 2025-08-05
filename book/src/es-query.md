@@ -66,7 +66,13 @@ impl Users {
 }
 ```
 
-Another way to write the function above is:
+The `es_query!` macro removes the boilerplate of fetching the events and lets you just write the part that queries the `index` table:
+```sql
+SELECT id FROM users WHERE name = $1
+```
+
+On expansion it constructs the complete query (adding the `JOIN` with the `events` table) and hydrates the entities from the events.
+This simplifies the above implementation into:
 ```rust
 # extern crate es_entity;
 # extern crate sqlx;
@@ -115,7 +121,6 @@ impl Users {
     }
 }
 ```
-It is much simpler by automatically selecting the relevant events from the events table.
 
 The `fetch_one()` `fn` intends to mimic the `sqlx` interface but will hydrate one entity (instead of returning one row).
 

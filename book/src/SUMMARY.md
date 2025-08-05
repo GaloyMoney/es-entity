@@ -25,3 +25,5 @@
     - [delete](./repo-delete.md)
 
 - [Transactions](./transactions.md)
+- [Aggregates](./aggregates.md)
+  - [Nesting](./nesting.md)
