@@ -8,14 +8,14 @@ The `sqlx` struct that manages this is the [`Transaction`](https://docs.rs/sqlx/
 
 All CRUD `fn`s that`es-entity` generates come in 2 variants:
 ```rust,ignore
-async fn fn create(new_entity: NewEntity)
-async fn fn create_in_op(<conection>, new_entity: NewEntity)
+async fn create(new_entity: NewEntity)
+async fn create_in_op(<conection>, new_entity: NewEntity)
 
-async fn fn update(entity: &mut Entity)
-async fn fn update_in_op(<conection>, entity: &mut Entity)
+async fn update(entity: &mut Entity)
+async fn update_in_op(<conection>, entity: &mut Entity)
 
-async fn fn find_by_id(id: EntityId)
-async fn fn find_by_id_in_op(<connection>, id: EntityId)
+async fn find_by_id(id: EntityId)
+async fn find_by_id_in_op(<connection>, id: EntityId)
 
 etc
 ```
@@ -27,11 +27,11 @@ The type of the argument is generic requiring either the `AtomicOperation` or `I
 There is a blanket implementation that makes every `AtomicOperation` implement `IntoOneTimeExecutor` - but the reverse is _not_ the case.
 
 ```rust,ignore
-async fn fn find_by_id_in_op<'a, OP>(op: OP, id: EntityId)
+async fn find_by_id_in_op<'a, OP>(op: OP, id: EntityId)
 where
     OP: IntoOneTimeExecutor<'a>;
 
-async fn fn create_in_op<OP>(op: &mut OP, new_entity: NewEntity)
+async fn create_in_op<OP>(op: &mut OP, new_entity: NewEntity)
 where
     OP: AtomicOperation;
 ```
