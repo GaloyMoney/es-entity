@@ -46,7 +46,6 @@ use super::{error::EsEntityError, events::EntityEvents, operation::AtomicOperati
 ///     Deactivated { reason: String }
 /// }
 /// ```
-
 pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
     type EntityId: Clone
         + PartialEq
@@ -122,7 +121,6 @@ pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
 ///     }
 /// }
 /// ```
-
 pub trait IntoEvents<E: EsEvent> {
     /// Method to implement which emits event stream from a `NewEntity`
     fn into_events(self) -> EntityEvents<E>;
@@ -192,7 +190,6 @@ pub trait IntoEvents<E: EsEvent> {
 ///     }
 /// }
 /// ```
-
 pub trait TryFromEvents<E: EsEvent> {
     /// Method to implement which hydrates `Entity` by replaying its events chronologically
     fn try_from_events(events: EntityEvents<E>) -> Result<Self, EsEntityError>
@@ -233,7 +230,6 @@ pub trait TryFromEvents<E: EsEvent> {
 ///     events: EntityEvents<UserEvent>,
 /// }
 /// ```
-
 pub trait EsEntity: TryFromEvents<Self::Event> {
     type Event: EsEvent;
     type New: IntoEvents<Self::Event>;
@@ -274,7 +270,6 @@ pub trait EsEntity: TryFromEvents<Self::Event> {
 ///    }
 /// }
 /// ```
-
 pub trait EsRepo {
     type Entity: EsEntity;
     type Err: From<EsEntityError> + From<sqlx::Error>;
