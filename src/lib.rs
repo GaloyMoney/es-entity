@@ -23,17 +23,18 @@
 #![cfg_attr(feature = "fail-on-warnings", deny(warnings))]
 #![cfg_attr(feature = "fail-on-warnings", deny(clippy::all))]
 
-mod error;
-mod events;
-mod idempotent;
+pub mod error;
+pub mod events;
+pub mod idempotent;
 mod macros;
-mod nested;
-mod one_time_executor;
-mod operation;
-mod query;
-mod traits;
+pub mod nested;
+pub mod one_time_executor;
+pub mod operation;
+pub mod query;
+pub mod traits;
 
 pub mod prelude {
+    //! Convenience re-export of common crates
     pub use chrono;
     pub use serde;
     pub use serde_json;
@@ -44,18 +45,26 @@ pub mod prelude {
     pub use schemars;
 }
 
+#[doc(inline)]
 pub use error::*;
 pub use es_entity_macros::EsEntity;
 pub use es_entity_macros::EsEvent;
 pub use es_entity_macros::EsRepo;
 pub use es_entity_macros::expand_es_query;
 pub use es_entity_macros::retry_on_concurrent_modification;
+#[doc(inline)]
 pub use events::*;
+#[doc(inline)]
 pub use idempotent::*;
+#[doc(inline)]
 pub use nested::*;
+#[doc(inline)]
 pub use one_time_executor::*;
+#[doc(inline)]
 pub use operation::*;
+#[doc(inline)]
 pub use query::*;
+#[doc(inline)]
 pub use traits::*;
 
 #[cfg(feature = "graphql")]

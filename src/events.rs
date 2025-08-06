@@ -1,3 +1,4 @@
+//! Manage events and operations for event-sourcing
 use chrono::{DateTime, Utc};
 
 use super::{error::EsEntityError, traits::*};

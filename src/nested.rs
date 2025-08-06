@@ -1,4 +1,5 @@
-use crate::traits::*;
+//! Handle operations for nested entities
+use crate::{operation::AtomicOperation, traits::*};
 
 use std::collections::HashMap;
 
@@ -55,4 +56,18 @@ impl<T: EsEntity> Nested<T> {
                 .map(|entity| (entity.events().entity_id.clone(), entity)),
         );
     }
+}
+
+pub trait PopulateNested<C>: EsRepo {
+    fn populate_in_op<OP>(
+        op: &mut OP,
+        lookup: std::collections::HashMap<C, &mut Nested<<Self as EsRepo>::Entity>>,
+    ) -> impl Future<Output = Result<(), <Self as EsRepo>::Err>> + Send
+    where
+        OP: AtomicOperation;
+}
+
+pub trait Parent<T: EsEntity> {
+    fn nested(&self) -> &Nested<T>;
+    fn nested_mut(&mut self) -> &mut Nested<T>;
 }

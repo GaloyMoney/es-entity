@@ -1,5 +1,8 @@
+//! Control query generation, handling and execution
 use crate::{
     events::{EntityEvents, GenericEvent},
+    one_time_executor::IntoOneTimeExecutor,
+    operation::AtomicOperation,
     traits::*,
 };
 

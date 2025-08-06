@@ -1,8 +1,7 @@
+//! Traits to orchestrate and maintain and event-sourcing pattern
 use serde::{Serialize, de::DeserializeOwned};
 
-use super::{
-    error::EsEntityError, events::EntityEvents, nested::*, one_time_executor::OneTimeExecutor,
-};
+use super::{error::EsEntityError, events::EntityEvents, operation::AtomicOperation};
 
 pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
     type EntityId: Clone
@@ -36,11 +35,6 @@ pub trait EsEntity: TryFromEvents<Self::Event> {
     fn events_mut(&mut self) -> &mut EntityEvents<Self::Event>;
 }
 
-pub trait Parent<T: EsEntity> {
-    fn nested(&self) -> &Nested<T>;
-    fn nested_mut(&mut self) -> &mut Nested<T>;
-}
-
 pub trait EsRepo {
     type Entity: EsEntity;
     type Err: From<EsEntityError> + From<sqlx::Error>;
@@ -54,64 +48,5 @@ pub trait EsRepo {
         OP: AtomicOperation;
 }
 
-pub trait PopulateNested<C>: EsRepo {
-    fn populate_in_op<OP>(
-        op: &mut OP,
-        lookup: std::collections::HashMap<C, &mut Nested<<Self as EsRepo>::Entity>>,
-    ) -> impl Future<Output = Result<(), <Self as EsRepo>::Err>> + Send
-    where
-        OP: AtomicOperation;
-}
-
 pub trait RetryableInto<T>: Into<T> + Copy + std::fmt::Debug {}
 impl<T, O> RetryableInto<O> for T where T: Into<O> + Copy + std::fmt::Debug {}
-
-pub trait AtomicOperation: Send {
-    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        None
-    }
-
-    fn as_executor(&mut self) -> &mut sqlx::PgConnection;
-}
-
-impl<'c> AtomicOperation for sqlx::PgTransaction<'c> {
-    fn as_executor(&mut self) -> &mut sqlx::PgConnection {
-        &mut *self
-    }
-}
-
-pub trait IntoOneTimeExecutor<'c>: IntoOneTimeExecutorAt<'c> + 'c {}
-impl<'c, T> IntoOneTimeExecutor<'c> for T where T: IntoOneTimeExecutorAt<'c> + 'c {}
-
-pub trait IntoOneTimeExecutorAt<'c> {
-    type Executor: sqlx::PgExecutor<'c>;
-
-    fn into_executor(self) -> OneTimeExecutor<'c, Self::Executor>
-    where
-        Self: 'c;
-}
-
-impl<'c> IntoOneTimeExecutorAt<'c> for &sqlx::PgPool {
-    type Executor = &'c sqlx::PgPool;
-
-    fn into_executor(self) -> OneTimeExecutor<'c, Self::Executor>
-    where
-        Self: 'c,
-    {
-        OneTimeExecutor::new(self)
-    }
-}
-
-impl<'c, O> IntoOneTimeExecutorAt<'c> for &mut O
-where
-    O: AtomicOperation,
-{
-    type Executor = &'c mut sqlx::PgConnection;
-
-    fn into_executor(self) -> OneTimeExecutor<'c, Self::Executor>
-    where
-        Self: 'c,
-    {
-        OneTimeExecutor::new(self.as_executor())
-    }
-}
