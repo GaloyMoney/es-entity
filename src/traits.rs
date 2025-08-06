@@ -124,6 +124,7 @@ pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
 /// ```
 
 pub trait IntoEvents<E: EsEvent> {
+    /// Method to implement which emits event stream from a `NewEntity`
     fn into_events(self) -> EntityEvents<E>;
 }
 
@@ -193,6 +194,7 @@ pub trait IntoEvents<E: EsEvent> {
 /// ```
 
 pub trait TryFromEvents<E: EsEvent> {
+    /// Method to implement which hydrates `Entity` by replaying its events chronologically
     fn try_from_events(events: EntityEvents<E>) -> Result<Self, EsEntityError>
     where
         Self: Sized;
@@ -278,6 +280,7 @@ pub trait EsRepo {
     type Err: From<EsEntityError> + From<sqlx::Error>;
     type EsQueryFlavor;
 
+    /// Loads all nested entities for a given set of parent entities within an atomic operation.
     fn load_all_nested_in_op<OP>(
         op: &mut OP,
         entities: &mut [Self::Entity],
