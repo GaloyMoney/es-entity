@@ -6,6 +6,8 @@ That is you can execute multiple writes atomically or multiple successive querie
 
 The `sqlx` struct that manages this is the [`Transaction`](https://docs.rs/sqlx/latest/sqlx/struct.Transaction.html) that is typically acquired from a pool.
 
+## Method Variants
+
 All CRUD `fn`s that`es-entity` generates come in 2 variants:
 ```rust,ignore
 async fn create(new_entity: NewEntity)
@@ -23,6 +25,8 @@ etc
 In all cases the `_in_op` variant accepts a first argument that represents the connection to the database.
 The non-`_in_op` variant simply wraps the `_in_op` call by passing an appropriate connection argument internally.
 
+## Connection Types and Traits
+
 The type of the `<connection>` argument is generic requiring either the `AtomicOperation` or `IntoOneTimeExecutor` trait to be implemented on the type.
 There is a blanket implementation that makes every `AtomicOperation` implement `IntoOneTimeExecutor` - but the reverse is _not_ the case.
 
@@ -39,6 +43,8 @@ where
 Both traits wrap access to an `sqlx::Executor` implementation that ultimately executes the query.
 
 The difference is that the `IntoOneTimeExecutor` trait ensures in a typesafe way that only 1 database operation can occur by consuming the inner reference.
+
+## Example Usage
 
 ```rust
 # extern crate anyhow;
@@ -97,6 +103,8 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+## Operation Requirements
 
 In `es-entity` mutating `fn`s generally require 2 roundtrips to update the `index` table and append to the `events` table.
 Hence `create_in_op`, `update_in_op` and `delete_in_op` all require `&mut impl AtomicOperation` first arguments.
