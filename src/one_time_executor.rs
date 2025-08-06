@@ -1,4 +1,4 @@
-//! Type-safe wrapper to ensure one database operation per executor
+//! Type-safe wrapper to ensure one database operation per executor.
 
 use crate::operation::AtomicOperation;
 

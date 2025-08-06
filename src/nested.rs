@@ -1,4 +1,4 @@
-//! Handle operations for nested entities
+//! Handle operations for nested entities.
 
 use crate::{operation::AtomicOperation, traits::*};
 

@@ -1,4 +1,4 @@
-//! Control and customize the query execution and its response
+//! Control and customize the query execution and its response.
 
 #[derive(Default, std::fmt::Debug, Clone, Copy)]
 pub enum ListDirection {

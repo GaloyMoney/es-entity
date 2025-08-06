@@ -1,4 +1,4 @@
-//! Manage events and operations for event-sourcing
+//! Manage events and operations for event-sourcing.
 
 use chrono::{DateTime, Utc};
 

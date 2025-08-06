@@ -1,4 +1,4 @@
-//! Handle query generation with helper methods for execution
+//! Handle query generation with helper methods for execution.
 
 use crate::{
     events::{EntityEvents, GenericEvent},
