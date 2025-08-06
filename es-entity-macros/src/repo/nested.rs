@@ -34,29 +34,28 @@ impl ToTokens for Nested<'_> {
         tokens.append_all(quote! {
             async fn #create_fn_name<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), #error>
                 where
-                    P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>,
+                    P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity> + Send,
                     OP: es_entity::AtomicOperation,
                     #additional_op_constraint
             {
-                let nested = entity.nested_mut();
-                if nested.new_entities_mut().is_empty() {
+                let new_children = entity.new_children_mut();
+                if new_children.is_empty() {
                     return Ok(());
                 }
 
-                let new_entities = nested.new_entities_mut().drain(..).collect();
-                let entities = self.#repo_field.create_all_in_op(&mut *op, new_entities).await?;
-                nested.extend_entities(entities);
+                let new_children = new_children.drain(..).collect();
+                let children = self.#repo_field.create_all_in_op(&mut *op, new_children).await?;
+                entity.inject_children(children);
                 Ok(())
             }
 
             async fn #update_fn_name<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), #error>
                 where
-                    P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>,
+                    P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity> + Send,
                     OP: es_entity::AtomicOperation,
                     #additional_op_constraint
             {
-                let entities = entity.nested_mut().entities_mut();
-                for entity in entities.values_mut() {
+                for entity in entity.iter_persisted_children_mut() {
                     self.#repo_field.update_in_op(&mut *op, entity).await?;
                 }
                 self.#create_fn_name(&mut *op, entity).await?;
@@ -66,12 +65,12 @@ impl ToTokens for Nested<'_> {
             async fn #find_fn_name<OP, P>(op: &mut OP, entities: &mut [P]) -> Result<(), #error>
                 where
                     OP: es_entity::AtomicOperation,
-                    P: es_entity::Parent<<#nested_repo_ty as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
+                    P: es_entity::Parent<<#nested_repo_ty as es_entity::EsRepo>::Entity> + es_entity::EsEntity + Send,
                     #nested_repo_ty: es_entity::PopulateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
                     #error: From<<#nested_repo_ty as es_entity::EsRepo>::Err>
             {
-                let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e.nested_mut())).collect();
-                #nested_repo_ty::populate_in_op(&mut *op, lookup).await?;
+                let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
+                #nested_repo_ty::populate_in_op(op, lookup).await?;
                 Ok(())
             }
         });
@@ -106,27 +105,26 @@ mod tests {
         let expected = quote! {
             async fn create_nested_users_in_op<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), es_entity::EsRepoError>
                 where
-                    P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
+                    P: es_entity::Parent<<UserRepo as EsRepo>::Entity> + Send,
                     OP: es_entity::AtomicOperation,
             {
-                let nested = entity.nested_mut();
-                if nested.new_entities_mut().is_empty() {
+                let new_children = entity.new_children_mut();
+                if new_children.is_empty() {
                     return Ok(());
                 }
 
-                let new_entities = nested.new_entities_mut().drain(..).collect();
-                let entities = self.users.create_all_in_op(&mut *op, new_entities).await?;
-                nested.extend_entities(entities);
+                let new_children = new_children.drain(..).collect();
+                let children = self.users.create_all_in_op(&mut *op, new_children).await?;
+                entity.inject_children(children);
                 Ok(())
             }
 
             async fn update_nested_users_in_op<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), es_entity::EsRepoError>
                 where
-                    P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
+                    P: es_entity::Parent<<UserRepo as EsRepo>::Entity> + Send,
                     OP: es_entity::AtomicOperation,
             {
-                let entities = entity.nested_mut().entities_mut();
-                for entity in entities.values_mut() {
+                for entity in entity.iter_persisted_children_mut() {
                     self.users.update_in_op(&mut *op, entity).await?;
                 }
                 self.create_nested_users_in_op(&mut *op, entity).await?;
@@ -136,12 +134,12 @@ mod tests {
             async fn find_nested_users_in_op<OP, P>(op: &mut OP, entities: &mut [P]) -> Result<(), es_entity::EsRepoError>
                 where
                     OP: es_entity::AtomicOperation,
-                    P: es_entity::Parent<<UserRepo as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
+                    P: es_entity::Parent<<UserRepo as es_entity::EsRepo>::Entity> + es_entity::EsEntity + Send,
                     UserRepo: es_entity::PopulateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
                     es_entity::EsRepoError: From<<UserRepo as es_entity::EsRepo>::Err>
             {
-                let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e.nested_mut())).collect();
-                UserRepo::populate_in_op(&mut *op, lookup).await?;
+                let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
+                UserRepo::populate_in_op(op, lookup).await?;
                 Ok(())
             }
         };

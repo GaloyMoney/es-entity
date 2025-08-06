@@ -140,21 +140,17 @@ impl Order {
 
     pub fn find_item_with_name(&self, product_name: &str) -> Option<&OrderItem> {
         self.items
-            .entities()
-            .values()
-            .find(|item| item.product_name == product_name)
+            .find_persisted(|item| item.product_name == product_name)
     }
 
     pub fn n_items(&self) -> usize {
-        self.items.entities().len()
+        self.items.len_persisted()
     }
 
     pub fn update_item_quantity(&mut self, product_name: &str, quantity: i32) -> Idempotent<()> {
         if let Some(item) = self
             .items
-            .entities_mut()
-            .values_mut()
-            .find(|item| item.product_name == product_name)
+            .find_persisted_mut(|item| item.product_name == product_name)
         {
             item.update_quantity(quantity)
         } else {

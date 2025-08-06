@@ -101,11 +101,19 @@ impl ToTokens for EsEntity {
             let ty = f.extract_nested_entity_type();
             quote! {
                 impl es_entity::Parent<#ty> for #ident {
-                    fn nested(&self) -> &es_entity::Nested<#ty> {
-                        &self.#field
+                    fn new_children_mut(&mut self) -> &mut Vec<<#ty as es_entity::EsEntity>::New> {
+                        self.#field.new_entities_mut()
                     }
-                    fn nested_mut(&mut self) -> &mut es_entity::Nested<#ty> {
-                        &mut self.#field
+
+                    fn inject_children(&mut self, children: impl IntoIterator<Item = #ty>) {
+                        self.#field.load(children)
+                    }
+
+                    fn iter_persisted_children_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut #ty>
+                    where
+                        #ty: 'a
+                    {
+                        self.#field.iter_persisted_mut()
                     }
                 }
             }
@@ -217,11 +225,19 @@ mod tests {
             }
 
             impl es_entity::Parent<ChildEntity> for User {
-                fn nested(&self) -> &es_entity::Nested<ChildEntity> {
-                    &self.children
+                fn new_children_mut(&mut self) -> &mut Vec<<ChildEntity as es_entity::EsEntity>::New> {
+                    self.children.new_entities_mut()
                 }
-                fn nested_mut(&mut self) -> &mut es_entity::Nested<ChildEntity> {
-                    &mut self.children
+
+                fn inject_children(&mut self, children: impl IntoIterator<Item = ChildEntity>) {
+                    self.children.load(children)
+                }
+
+                fn iter_persisted_children_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut ChildEntity>
+                where
+                    ChildEntity: 'a
+                {
+                    self.children.iter_persisted_mut()
                 }
             }
         };

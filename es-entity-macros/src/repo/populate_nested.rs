@@ -50,12 +50,13 @@ impl ToTokens for PopulateNested<'_> {
 
         tokens.append_all(quote! {
             impl #impl_generics es_entity::PopulateNested<#ty> for #ident #ty_generics #where_clause {
-                async fn populate_in_op<OP>(
+                async fn populate_in_op<OP, P>(
                     op: &mut OP,
-                    mut lookup: std::collections::HashMap<#ty, &mut Nested<<Self as EsRepo>::Entity>>,
+                    mut lookup: std::collections::HashMap<#ty, &mut P>,
                 ) -> Result<(), #error>
                 where
                     OP: es_entity::AtomicOperation,
+                    P: Parent<<Self as EsRepo>::Entity> + Send
                 {
                     let parent_ids: Vec<_> = lookup.keys().collect();
                     let rows = {
@@ -70,7 +71,7 @@ impl ToTokens for PopulateNested<'_> {
                     #ident::load_all_nested_in_op(op, &mut res).await?;
                     for entity in res.into_iter() {
                         let parent = lookup.get_mut(&entity.#column_name).expect("parent not present");
-                        parent.extend_entities(std::iter::once(entity));
+                        parent.inject_children(std::iter::once(entity));
                     }
                     Ok(())
                 }

@@ -36,21 +36,33 @@ impl<T: EsEntity> Nested<T> {
         self.entities.get_mut(id)
     }
 
+    pub fn find_persisted<P>(&self, predicate: P) -> Option<&T>
+    where
+        P: FnMut(&&T) -> bool,
+    {
+        self.entities.values().find(predicate)
+    }
+
+    pub fn find_persisted_mut<P>(&mut self, predicate: P) -> Option<&mut T>
+    where
+        P: FnMut(&&mut T) -> bool,
+    {
+        self.entities.values_mut().find(predicate)
+    }
+
+    pub fn len_persisted(&self) -> usize {
+        self.entities.len()
+    }
+
+    pub fn iter_persisted_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut T> {
+        self.entities.values_mut()
+    }
+
     pub fn new_entities_mut(&mut self) -> &mut Vec<<T as EsEntity>::New> {
         &mut self.new_entities
     }
 
-    pub fn entities(&self) -> &HashMap<<<T as EsEntity>::Event as EsEvent>::EntityId, T> {
-        &self.entities
-    }
-
-    pub fn entities_mut(
-        &mut self,
-    ) -> &mut HashMap<<<T as EsEntity>::Event as EsEvent>::EntityId, T> {
-        &mut self.entities
-    }
-
-    pub fn extend_entities(&mut self, entities: impl IntoIterator<Item = T>) {
+    pub fn load(&mut self, entities: impl IntoIterator<Item = T>) {
         self.entities.extend(
             entities
                 .into_iter()
@@ -59,16 +71,25 @@ impl<T: EsEntity> Nested<T> {
     }
 }
 
-pub trait PopulateNested<C>: EsRepo {
-    fn populate_in_op<OP>(
+pub trait PopulateNested<ID>: EsRepo {
+    fn populate_in_op<OP, P>(
         op: &mut OP,
-        lookup: std::collections::HashMap<C, &mut Nested<<Self as EsRepo>::Entity>>,
+        lookup: std::collections::HashMap<ID, &mut P>,
     ) -> impl Future<Output = Result<(), <Self as EsRepo>::Err>> + Send
     where
-        OP: AtomicOperation;
+        OP: AtomicOperation,
+        P: Parent<<Self as EsRepo>::Entity> + Send;
 }
 
+/// Trait that entities implement for every field marked `#[es_entity(nested)]`
+/// Will be auto-implemented when `#[derive(EsEntity)] is used.
 pub trait Parent<T: EsEntity> {
-    fn nested(&self) -> &Nested<T>;
-    fn nested_mut(&mut self) -> &mut Nested<T>;
+    /// Access new child entities (to persist them).
+    fn new_children_mut(&mut self) -> &mut Vec<<T as EsEntity>::New>;
+    /// Access existing children to update them (incase they were mutated).
+    fn iter_persisted_children_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut T>
+    where
+        T: 'a;
+    /// Inject hydrated children while loading the parent.
+    fn inject_children(&mut self, entities: impl IntoIterator<Item = T>);
 }
