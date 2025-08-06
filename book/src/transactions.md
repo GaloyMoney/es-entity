@@ -21,9 +21,9 @@ etc
 ```
 
 In all cases the `_in_op` variant accepts a first argument that represents the connection to the database.
-The non-`_in_op` variant simply wraps the `_in_op` call by passing an appropriate connection argument.
+The non-`_in_op` variant simply wraps the `_in_op` call by passing an appropriate connection argument internally.
 
-The type of the argument is generic requiring either the `AtomicOperation` or `IntoOneTimeExecutor` trait to be implemented on the type.
+The type of the `<connection>` argument is generic requiring either the `AtomicOperation` or `IntoOneTimeExecutor` trait to be implemented on the type.
 There is a blanket implementation that makes every `AtomicOperation` implement `IntoOneTimeExecutor` - but the reverse is _not_ the case.
 
 ```rust,ignore
@@ -77,9 +77,10 @@ async fn main() -> anyhow::Result<()> {
     // &sqlx::PgPool implements IntoOneTimeExecutor
     let _ = count_users(&pool).await?;
 
-    // It can only execute 1 roundtrip per use as it will
-    // check out a new connection from the pool for each operation
-    // hence we cannot pass it to `fn`'s that need AtomicOperation
+    // It can only execute 1 roundtrip consistently as it will
+    // check out a new connection from the pool for each operation.
+    // Hence we cannot pass it to `fn`'s that need AtomicOperation
+    // as we cannot guarantee that they will be consistent.
     // let _ = delete_and_count(&pool).await?; // <- won't compile
 
     // &mut sqlx::PgTransaction implements AtomicOperation
@@ -89,10 +90,6 @@ async fn main() -> anyhow::Result<()> {
 
     let some_existing_user_id = uuid::Uuid::new_v4();
     let _ = delete_and_count(&mut tx, some_existing_user_id).await?;
-
-    // Types that implement AtomicOperation can be used for IntoOneTimeExecutor
-    // multiple times
-    let _ = count_users(&mut tx).await?;
 
     // Don't forget to commit the operation or the change won't become visible
     tx.commit().await?;
@@ -104,6 +101,6 @@ async fn main() -> anyhow::Result<()> {
 In `es-entity` mutating `fn`s generally require 2 roundtrips to update the `index` table and append to the `events` table.
 Hence `create_in_op`, `update_in_op` and `delete_in_op` all require `&mut impl AtomicOperation` first arguments.
 
-Most queries are executed with 1 round trip (to fetch the events) and thus accept `impl IntoOneTimeExecutor<'_>` first arguments.
+Most queries on the other hand are executed with 1 round trip (to fetch the events) and thus accept `impl IntoOneTimeExecutor<'_>` first arguments.
 
 Exceptions to this are for `nested` entities which have will be explained in a later section.
