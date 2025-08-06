@@ -412,8 +412,11 @@ The key points to note:
 Under the hood the `EsEntity` macro will create an implementation of the `Parent` trait:
 ```rust,ignore
 pub trait Parent<T: EsEntity> {
-    fn nested(&self) -> &Nested<T>;
-    fn nested_mut(&mut self) -> &mut Nested<T>;
+    fn new_children_mut(&mut self) -> &mut Vec<<T as EsEntity>::New>;
+    fn iter_persisted_children_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut T>
+    where
+        T: 'a;
+    fn inject_children(&mut self, entities: impl IntoIterator<Item = T>);
 }
 ```
 
@@ -810,10 +813,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     }
 #     pub fn current_billing_period(&self) -> Option<&BillingPeriod> {
 #         self.current_period_id
-#             .and_then(|id| self.billing_periods.entities().get(&id))
-#     }
-#     pub fn all_billing_periods(&self) -> impl Iterator<Item = &BillingPeriod> {
-#         self.billing_periods.entities().values()
+#             .and_then(|id| self.billing_periods.get_persisted(&id))
 #     }
 # }
 # impl TryFromEvents<SubscriptionEvent> for Subscription {
