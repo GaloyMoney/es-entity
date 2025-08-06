@@ -258,6 +258,8 @@ pub trait EsEntity: TryFromEvents<Self::Event> {
 /// # Example
 ///
 /// ```ignore
+/// 
+/// // Would show error for missing entity field if not provided in the `es_repo` attribute
 /// #[derive(EsRepo, Debug)]
 /// #[es_repo(entity = "User", columns(name(ty = "String")))]
 /// pub struct Users {
