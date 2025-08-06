@@ -36,7 +36,7 @@ impl ToTokens for PopulateNested<'_> {
         let ident = self.ident;
         let error = self.error;
         let repo_types_mod = &self.repo_types_mod;
-        let column_name = self.column.name();
+        let accessor = self.column.parent_accessor();
 
         let query = format!(
             r#"WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1))) SELECT i.id AS "entity_id: {}", e.sequence, e.event, e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY e.id, e.sequence"#,
@@ -70,7 +70,7 @@ impl ToTokens for PopulateNested<'_> {
                     let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(rows.into_iter(), n)?;
                     #ident::load_all_nested_in_op(op, &mut res).await?;
                     for entity in res.into_iter() {
-                        let parent = lookup.get_mut(&entity.#column_name).expect("parent not present");
+                        let parent = lookup.get_mut(&entity.#accessor).expect("parent not present");
                         parent.inject_children(std::iter::once(entity));
                     }
                     Ok(())

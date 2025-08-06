@@ -1,0 +1,6 @@
+es-entity::es_query es_query_tests::test_with_entity_ty_id_ty_prefix::test_es_query_with_entity_ty_and_id_ty_prefix_with_args
+
+es-entity::es_query es_query_tests::entity_ty_id_ty_prefix::execute
+
+PgPool cannot be used for create ops
+can be used for read ops

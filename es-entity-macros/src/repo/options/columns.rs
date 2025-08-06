@@ -37,7 +37,7 @@ impl Columns {
     }
 
     pub fn parent(&self) -> Option<&Column> {
-        self.all.iter().find(|c| c.opts.parent)
+        self.all.iter().find(|c| c.opts.parent_opts.is_some())
     }
 
     pub fn updates_needed(&self) -> bool {
@@ -269,7 +269,7 @@ impl Column {
                 list_by: Some(true),
                 find_by: Some(true),
                 list_for: Some(false),
-                parent: false,
+                parent_opts: None,
                 create_opts: Some(CreateOpts {
                     persist: Some(true),
                     accessor: None,
@@ -293,7 +293,7 @@ impl Column {
                 list_by: Some(true),
                 find_by: Some(false),
                 list_for: Some(false),
-                parent: false,
+                parent_opts: None,
                 create_opts: Some(CreateOpts {
                     persist: Some(false),
                     accessor: None,
@@ -347,6 +347,10 @@ impl Column {
         self.opts.update_accessor(&self.name)
     }
 
+    pub fn parent_accessor(&self) -> proc_macro2::TokenStream {
+        self.opts.parent_accessor(&self.name)
+    }
+
     fn variable_assignment_for_create(&self, ident: &syn::Ident) -> proc_macro2::TokenStream {
         let name = &self.name;
         let accessor = self.opts.create_accessor(name);
@@ -396,8 +400,8 @@ struct ColumnOpts {
     list_by: Option<bool>,
     #[darling(default)]
     list_for: Option<bool>,
-    #[darling(default)]
-    parent: bool,
+    #[darling(default, rename = "parent")]
+    parent_opts: Option<ParentOpts>,
     #[darling(default, rename = "create")]
     create_opts: Option<CreateOpts>,
     #[darling(default, rename = "update")]
@@ -412,7 +416,7 @@ impl ColumnOpts {
             find_by: None,
             list_by: None,
             list_for: None,
-            parent: false,
+            parent_opts: None,
             create_opts: None,
             update_opts: None,
         }
@@ -465,6 +469,16 @@ impl ColumnOpts {
             }
         }
     }
+
+    fn parent_accessor(&self, name: &syn::Ident) -> proc_macro2::TokenStream {
+        if let Some(accessor) = &self.parent_opts.as_ref().and_then(|o| o.accessor.as_ref()) {
+            quote! {
+                #accessor
+            }
+        } else {
+            self.update_accessor(name)
+        }
+    }
 }
 
 #[derive(Default, PartialEq, FromMeta)]
@@ -477,6 +491,30 @@ struct CreateOpts {
 struct UpdateOpts {
     persist: Option<bool>,
     accessor: Option<syn::Expr>,
+}
+
+#[derive(PartialEq, Debug, Default)]
+struct ParentOpts {
+    accessor: Option<syn::Expr>,
+}
+
+impl FromMeta for ParentOpts {
+    fn from_word() -> darling::Result<Self> {
+        Ok(ParentOpts::default())
+    }
+
+    fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
+        #[derive(FromMeta)]
+        struct Inner {
+            #[darling(default)]
+            accessor: Option<syn::Expr>,
+        }
+
+        let inner = Inner::from_list(items)?;
+        Ok(ParentOpts {
+            accessor: inner.accessor,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -530,5 +568,22 @@ mod tests {
             quote!(email()).to_string()
         );
         assert!(!columns.all[1].opts.persist_on_update());
+    }
+
+    #[test]
+    fn parent_opts_from_list() {
+        let input: syn::Meta = parse_quote!(thing(ty = "String", parent));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert_eq!(values.ty, parse_quote!(String));
+        assert!(values.parent_opts.is_some());
+
+        let input: syn::Meta = parse_quote!(thing(ty = "String", parent(accessor = "parent_id()")));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert_eq!(values.ty, parse_quote!(String));
+        assert!(values.parent_opts.is_some());
+        assert_eq!(
+            values.parent_accessor(&parse_quote!(thing)).to_string(),
+            quote!(parent_id()).to_string()
+        );
     }
 }
