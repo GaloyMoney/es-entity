@@ -19,7 +19,7 @@
 //! - Flexible ID types
 //! - Atomic operations
 //! - Reduce boilerplate code
-//!
+
 #![cfg_attr(feature = "fail-on-warnings", deny(warnings))]
 #![cfg_attr(feature = "fail-on-warnings", deny(clippy::all))]
 
@@ -30,11 +30,13 @@ mod macros;
 pub mod nested;
 pub mod one_time_executor;
 pub mod operation;
+pub mod pagination;
 pub mod query;
 pub mod traits;
 
 pub mod prelude {
-    //! Convenience re-export of common crates
+    //! Convenience re-export of crates that the derive macros reference in generated code.
+
     pub use chrono;
     pub use serde;
     pub use serde_json;
@@ -62,6 +64,8 @@ pub use nested::*;
 pub use one_time_executor::*;
 #[doc(inline)]
 pub use operation::*;
+#[doc(inline)]
+pub use pagination::*;
 #[doc(inline)]
 pub use query::*;
 #[doc(inline)]

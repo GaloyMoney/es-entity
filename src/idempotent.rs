@@ -42,6 +42,7 @@
 ///     // Signalled by returning `Idempotent::Ignored` early, validated with `was_ignored` helper method
 /// }
 /// ```
+
 #[must_use]
 pub enum Idempotent<T> {
     // Signals if executed and returns T
@@ -82,7 +83,7 @@ impl<T> Idempotent<T> {
 ///
 /// This is internal-only trait is implemented on [crate::idempotency_guard] for it to create
 /// both `Idempotent<T>` and `Result<Idempotent<T>, E>` return types for returning `Ignored` variant.
-///
+
 pub trait FromIdempotentIgnored {
     /// Creates a value representing an ignored idempotent operation.
     fn from_ignored() -> Self;

@@ -1,4 +1,5 @@
-//! Handle execution database operations and transactions
+//! Handle execution of database operations and transactions
+
 use sqlx::{Acquire, PgPool, Postgres, Transaction};
 
 pub struct DbOp<'c> {

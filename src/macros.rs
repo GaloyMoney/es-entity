@@ -59,6 +59,7 @@
 /// // updating "ALice" again works because of early break condition
 /// assert!(user2.update_name_with_break("Alice").did_execute());
 /// ```
+
 #[macro_export]
 macro_rules! idempotency_guard {
     ($events:expr, $( $pattern:pat $(if $guard:expr)? ),+ $(,)?) => {
@@ -114,6 +115,7 @@ macro_rules! idempotency_guard {
 ///     id as UserId
 /// )
 /// ```
+
 #[macro_export]
 macro_rules! es_query {
     // With entity override
@@ -437,6 +439,7 @@ macro_rules! entity_id {
 ///
 /// // Creates UserId and AdminUserId with automatic conversion between them
 /// ```
+
 #[cfg(all(not(feature = "json-schema"), not(feature = "graphql")))]
 #[macro_export]
 macro_rules! entity_id {

@@ -1,4 +1,5 @@
-//! Traits to orchestrate and maintain and event-sourcing pattern
+//! Traits to orchestrate and maintain the event-sourcing pattern
+
 use serde::{Serialize, de::DeserializeOwned};
 
 use super::{error::EsEntityError, events::EntityEvents, operation::AtomicOperation};

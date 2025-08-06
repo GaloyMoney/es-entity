@@ -1,4 +1,5 @@
 //! Handle operations for nested entities
+
 use crate::{operation::AtomicOperation, traits::*};
 
 use std::collections::HashMap;

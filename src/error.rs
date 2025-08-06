@@ -1,4 +1,5 @@
 //! Types for working with errors produced by es-entity.
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
