@@ -2,7 +2,8 @@
 
 This is the - just show me the damn code - section.
 Its an end to end working example without any background.
-Don't worry if you do not understand all the pieces on first reading - more detailed explanations will follow.
+On first reading its probably best to skip this and dive into the concepts first.
+When you are ready to start trying things out in your own implementation you can use this as a template with all the pieces in one place.
 
 ## Example
 
