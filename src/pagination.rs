@@ -128,11 +128,6 @@ impl<T: std::fmt::Debug> Default for PaginatedQueryArgs<T> {
 /// # Examples
 ///
 /// ```ignore
-/// #[derive(EsRepo, Debug)]
-/// #[es_repo(entity = "User", columns(name(ty = "String")))]
-/// pub struct Users {
-///     pool: PgPool,
-/// }
 /// let query_args = PaginatedQueryArgs {
 ///     first: 10,
 ///     after: None,
