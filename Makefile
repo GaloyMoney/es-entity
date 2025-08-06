@@ -18,6 +18,13 @@ test-book:
 	cargo build --profile mdbook-test --features mdbook-test --lib
 	CARGO_MANIFEST_DIR=$(shell pwd) mdbook test book -L ./target/mdbook-test,./target/mdbook-test/deps
 
+serve-book:
+	mdbook serve book --open
+
+test-chapter:
+	cargo build --profile mdbook-test --features mdbook-test --lib
+	CARGO_MANIFEST_DIR=$(shell pwd) mdbook test book -L ./target/mdbook-test,./target/mdbook-test/deps --chapter "$(CHAPTER)"
+
 check-code:
 	SQLX_OFFLINE=true cargo fmt --check --all
 	SQLX_OFFLINE=true cargo check --workspace

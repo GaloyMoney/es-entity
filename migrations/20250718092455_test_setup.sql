@@ -82,10 +82,39 @@ CREATE TABLE order_items (
   order_id UUID NOT NULL REFERENCES orders(id),
   created_at TIMESTAMPTZ NOT NULL
 );
-CREATE INDEX idx_order_items_order_id ON order_items (order_id);
 
 CREATE TABLE order_item_events (
   id UUID NOT NULL REFERENCES order_items(id),
+  sequence INT NOT NULL,
+  event_type VARCHAR NOT NULL,
+  event JSONB NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL,
+  UNIQUE(id, sequence)
+);
+
+-- Tables for subscription/billing period example
+CREATE TABLE subscriptions (
+  id UUID PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE subscription_events (
+  id UUID NOT NULL REFERENCES subscriptions(id),
+  sequence INT NOT NULL,
+  event_type VARCHAR NOT NULL,
+  event JSONB NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL,
+  UNIQUE(id, sequence)
+);
+
+CREATE TABLE billing_periods (
+  id UUID PRIMARY KEY,
+  subscription_id UUID NOT NULL REFERENCES subscriptions(id),
+  created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE billing_period_events (
+  id UUID NOT NULL REFERENCES billing_periods(id),
   sequence INT NOT NULL,
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,

@@ -26,7 +26,7 @@ impl Orders {
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "OrderItem",
-    columns(order_id(ty = "OrderId", update(persist = false), list_for, parent))
+    columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
 pub struct OrderItems {
     pool: PgPool,
