@@ -1,3 +1,4 @@
+//! Handle idempotency in event-sourced systems.
 /// Signals if a mutation is applied or was skipped.
 ///
 /// Distinguishes between operations that were executed versus those that were

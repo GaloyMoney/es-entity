@@ -1,6 +1,5 @@
+//! Handle execution database operations and transactions
 use sqlx::{Acquire, PgPool, Postgres, Transaction};
-
-use crate::traits::AtomicOperation;
 
 pub struct DbOp<'c> {
     tx: Transaction<'c, Postgres>,
@@ -123,5 +122,19 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
 impl<'c> From<DbOpWithTime<'c>> for Transaction<'c, Postgres> {
     fn from(op: DbOpWithTime<'c>) -> Self {
         op.tx
+    }
+}
+
+pub trait AtomicOperation: Send {
+    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        None
+    }
+
+    fn as_executor(&mut self) -> &mut sqlx::PgConnection;
+}
+
+impl<'c> AtomicOperation for sqlx::PgTransaction<'c> {
+    fn as_executor(&mut self) -> &mut sqlx::PgConnection {
+        &mut *self
     }
 }
