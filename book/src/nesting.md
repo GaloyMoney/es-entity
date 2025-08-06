@@ -322,10 +322,10 @@ pub struct Subscription {
     current_period_id: Option<BillingPeriodId>,
     events: EntityEvents<SubscriptionEvent>,
 
-    // The key attribute - marks this field as containing nested entities
-    // Must be of type `Nested<T>`
-    // The #[builder(default)] will initialize it as empty as the repo loads
-    // the children after the parent as been hydrated.
+    // The `#[es_entity(nested)]` attribute marks this field as containing nested entities.
+    // It must be of type `Nested<T>`.
+    // The #[builder(default)] will initialize it as empty.
+    // The Repository will load the children after the parent as been hydrated.
     #[es_entity(nested)]
     #[builder(default)]
     billing_periods: Nested<BillingPeriod>,
@@ -920,7 +920,7 @@ async fn main() -> anyhow::Result<()> {
 
 One thing to note is that  the `_in_op` functions of the parent repository now require an `AtomicOperation` argument since we must load all the entities in a consistent snapshot:
 ```rust,ignore
-async fn find_by_id_in_op<'a, OP>(op: OP, id: EntityId)
+async fn find_by_id_in_op<OP>(op: OP, id: EntityId)
 where
     OP: AtomicOperation;
 

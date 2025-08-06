@@ -71,7 +71,7 @@ We still have to remember however that this `logical-aggregate` exists (even if 
 
 ### 3. Nested Aggregate Approach
 
-To make the relationship more obvious and make it impossible to introduce edge cases we could also to nest the `BillingPeriod` inside the `Subscription`.
+To make the relationship more obvious and make it impossible to introduce edge cases we could also nest the `BillingPeriod` inside the `Subscription`.
 This way we use the modeling and relationships of our `struct`s to reflect the `aggregate` relationship more clearly.
 All access to the `BillingPeriod` would be moderated by the `Subscription` root.
 And updates would be proxied via the root entity to guarantee we are updating the correct one.
@@ -86,10 +86,10 @@ But it introduces some complexity on handling the nesting itself.
 
 ### 4. Domain Restructuring
 
-Finally we could simply re-structure the `entities` so that you do not need any kind of 'higher-level' enforcement.
+Finally we could simply re-structure the `entities` so that no 'higher-level' enforcement is necesairy.
 An example might be to represent `CurrentBillingPeriod` and `ClosedBillingPeriod` as separate entities entirely.
 In the real world this approach would probably be better than any of the examples above.
-After all, if a "thing" has fundamentally different domain rules when its in 1 state vs another state - why not simply represent the two states as two separate `entities`? Especially if the restructuring allows you to reduce the size of your `aggregates`.
+After all, if a "thing" has fundamentally different domain rules when its in one state vs another state - why not simply represent the two states as two separate `entities`? Especially if the restructuring allows you to reduce the size of your `aggregates`.
 
 That would make the implementation look something like:
 ```rust,ignore
