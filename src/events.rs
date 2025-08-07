@@ -106,8 +106,7 @@ where
         self.new_events.extend(events);
     }
 
-    /// Marks all new events as persisted with the given timestam and returns their count,
-    /// called internally after successful persistence.
+    #[doc(hidden)]
     pub fn mark_new_events_persisted_at(
         &mut self,
         recorded_at: chrono::DateTime<chrono::Utc>,
