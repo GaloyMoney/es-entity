@@ -2,7 +2,7 @@
 
 # es-entity
 
-**A type-safe event-sourcing entity framework for Rust**
+**A type-safe event-sourcing entity framework for rust that simplifies building event-sourced applications with PostgreSQL**
 
 [![Crates.io](https://img.shields.io/crates/v/es-entity)](https://crates.io/crates/es-entity)
 [![Documentation](https://docs.rs/es-entity/badge.svg)](https://docs.rs/es-entity)
@@ -30,7 +30,7 @@
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 use es_entity::*;
-ca
+
 // Define the entity ID
 es_entity::entity_id!{ UserId }
 
@@ -93,6 +93,7 @@ pub struct NewUser {
     pub name: String,
 }
 
+// Emit events from new entities
 impl IntoEvents<UserEvent> for NewUser {
     fn into_events(self) -> EntityEvents<UserEvent> {
         EntityEvents::init(
