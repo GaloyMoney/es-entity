@@ -54,7 +54,7 @@ impl<T: EsEntity> Nested<T> {
         self.entities.len()
     }
 
-    pub fn iter_persisted_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut T> {
+    pub fn iter_persisted_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.entities.values_mut()
     }
 

@@ -36,6 +36,7 @@ impl<'c> DbOp<'c> {
         DbOpWithTime::new(self.tx, time)
     }
 
+    #[allow(unused_mut)]
     pub async fn with_db_time(mut self) -> Result<DbOpWithTime<'c>, sqlx::Error> {
         #[cfg(feature = "sim-time")]
         let time = sim_time::now();
