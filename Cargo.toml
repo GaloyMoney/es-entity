@@ -6,7 +6,7 @@ documentation = "https://docs.rs/es-entity"
 version = "0.6.20-dev"
 edition = "2024"
 license = "Apache-2.0"
-categories = ["data-structures", "database", "event-sourcing"]
+categories = ["data-structures", "database"]
 
 [profile.mdbook-test]
 inherits = "dev"
