@@ -68,7 +68,7 @@ impl Users {
 }
 
 #[tokio::test]
-async fn executo() -> anyhow::Result<()> {
+async fn execute() -> anyhow::Result<()> {
     let pool = init_pool().await?;
 
     TestJob { pool }.execute().await?;
