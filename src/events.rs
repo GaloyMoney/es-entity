@@ -1,7 +1,8 @@
 //! Manage events and related operations for event-sourcing.
 
-use super::{error::EsEntityError, traits::*};
 use chrono::{DateTime, Utc};
+
+use super::{error::EsEntityError, traits::*};
 
 /// An alias for iterator over the persisted events
 pub type LastPersisted<'a, E> = std::slice::Iter<'a, PersistedEvent<E>>;
@@ -106,36 +107,6 @@ where
         self.new_events.extend(events);
     }
 
-    #[doc(hidden)]
-    pub fn mark_new_events_persisted_at(
-        &mut self,
-        recorded_at: chrono::DateTime<chrono::Utc>,
-    ) -> usize {
-        let n = self.new_events.len();
-        let offset = self.persisted_events.len() + 1;
-        self.persisted_events
-            .extend(
-                self.new_events
-                    .drain(..)
-                    .enumerate()
-                    .map(|(i, event)| PersistedEvent {
-                        entity_id: self.entity_id.clone(),
-                        recorded_at,
-                        sequence: i + offset,
-                        event,
-                    }),
-            );
-        n
-    }
-
-    /// Serializes all new (unpersisted) events to JSON format for database storage
-    pub fn serialize_new_events(&self) -> Vec<serde_json::Value> {
-        self.new_events
-            .iter()
-            .map(|event| serde_json::to_value(event).expect("Failed to serialize event"))
-            .collect()
-    }
-
     /// Returns true if there are any unpersisted events waiting to be saved
     pub fn any_new(&self) -> bool {
         !self.new_events.is_empty()
@@ -235,6 +206,36 @@ where
             ret.push(E::try_from_events(current)?);
         }
         Ok((ret, false))
+    }
+
+    #[doc(hidden)]
+    pub fn mark_new_events_persisted_at(
+        &mut self,
+        recorded_at: chrono::DateTime<chrono::Utc>,
+    ) -> usize {
+        let n = self.new_events.len();
+        let offset = self.persisted_events.len() + 1;
+        self.persisted_events
+            .extend(
+                self.new_events
+                    .drain(..)
+                    .enumerate()
+                    .map(|(i, event)| PersistedEvent {
+                        entity_id: self.entity_id.clone(),
+                        recorded_at,
+                        sequence: i + offset,
+                        event,
+                    }),
+            );
+        n
+    }
+
+    #[doc(hidden)]
+    pub fn serialize_new_events(&self) -> Vec<serde_json::Value> {
+        self.new_events
+            .iter()
+            .map(|event| serde_json::to_value(event).expect("Failed to serialize event"))
+            .collect()
     }
 }
 
