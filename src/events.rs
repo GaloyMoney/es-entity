@@ -1,7 +1,7 @@
 //! Manage events and related operations for event-sourcing.
 
-use chrono::{DateTime, Utc};
 use super::{error::EsEntityError, traits::*};
+use chrono::{DateTime, Utc};
 
 /// An alias for iterator over the persisted events
 pub type LastPersisted<'a, E> = std::slice::Iter<'a, PersistedEvent<E>>;
