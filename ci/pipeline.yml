@@ -8,8 +8,7 @@
 #@   "pipeline_tasks_resource",
 #@   "release_task_image_config",
 #@   "rust_task_image_config",
-#@   "charts_repo_resource",
-#@   "charts_repo_bot_branch",
+#@   "gh_release_resource",
 #@   "nix_task_image_config",
 #@ )
 
@@ -104,20 +103,11 @@ jobs:
       tag: artifacts/gh-release-tag
       repository: repo
       merge: true
-  - task: github-release
-    config:
-      image_resource: #@ rust_task_image_config()
-      platform: linux
-      inputs:
-      - name: version
-      - name: pipeline-tasks
-      - name: artifacts
-      outputs:
-      - name: artifacts
-      params:
-        BRANCH: #@ data.values.git_branch
-      run:
-        path: pipeline-tasks/ci/tasks/github-release.sh
+  - put: gh-release
+    params:
+      name: artifacts/gh-release-name
+      tag: artifacts/gh-release-tag
+      body: artifacts/gh-release-notes.md
   - put: version
     params:
       file: version/version
@@ -153,5 +143,6 @@ jobs:
 
 resources:
 - #@ repo_resource(True)
+- #@ gh_release_resource()
 - #@ pipeline_tasks_resource()
 - #@ version_resource()
