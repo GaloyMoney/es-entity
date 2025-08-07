@@ -1,0 +1,20 @@
+#@data/values
+---
+git_uri: git@github.com:GaloyMoney/es-entity.git
+git_branch: main
+github_private_key: ((github.private_key))
+github_token: ((github.api_token))
+github_app_id: ((github.github_app_id))
+github_app_private_key: ((github.github_app_private_key))
+
+gar_registry_user: ((gar-creds.username))
+gar_registry_password: ((gar-creds.password))
+
+git_version_branch: version
+gh_org: GaloyMoney
+gh_repository: es-entity
+
+crates_api_token: ((crates.token))
+
+cachix_auth_token: ((cachix-token.token))
+cachix_cache_name: es-entity-ci
