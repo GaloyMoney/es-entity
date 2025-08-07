@@ -227,7 +227,7 @@ pub struct Order {
     entity = "OrderItem",
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
-pub struct OrderItems {
+struct OrderItems {
     pool: PgPool,
 }
 
