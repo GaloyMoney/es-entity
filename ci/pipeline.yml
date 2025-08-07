@@ -10,7 +10,6 @@
 #@   "rust_task_image_config",
 #@   "charts_repo_resource",
 #@   "charts_repo_bot_branch",
-#@   "bats_test",
 #@   "nix_task_image_config",
 #@ )
 
@@ -19,13 +18,11 @@ groups:
   jobs:
   - check-code
   - tests
-  - bats-test
   - release
   - set-dev-version
 
 jobs:
 - #@ check_code()
-- #@ bats_test()
 
 - name: tests
   plan:
@@ -59,7 +56,6 @@ jobs:
       passed:
       - check-code
       - tests
-      - bats-test
     - get: pipeline-tasks
     - get: version
   - task: prep-release
