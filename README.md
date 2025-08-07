@@ -3,6 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/es-entity)](https://crates.io/crates/es-entity)
 [![Documentation](https://docs.rs/es-entity/badge.svg)](https://docs.rs/es-entity)
 [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Unsafe Rust forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 
 An Event Sourcing Entity Framework for Rust that simplifies building event-sourced applications with PostgreSQL. 
 
@@ -22,6 +23,7 @@ Persisted to postgres with:
 [GitHub repository](https://github.com/GaloyMoney/es-entity) |
 [Cargo package](https://crates.io/crates/es-entity)
 
+_Free of any unsafe code`#![forbid(unsafe_code)]` to ensure everything is implemented in 100% safe Rust._
 
 ## Quick Example
 
