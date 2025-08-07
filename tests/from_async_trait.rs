@@ -23,7 +23,7 @@ impl RunJob for TestJob {
     fn execute(&self) -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
         let pool = self.pool.clone();
         Box::pin(async move {
-            let name = uuid::Uuid::new_v4().to_string();
+            let name = uuid::Uuid::now_v7().to_string();
 
             let users = Users::new(pool.clone());
             let new_user = NewUser::builder()
@@ -35,7 +35,7 @@ impl RunJob for TestJob {
             let mut user = users.create(new_user).await?;
             let mut op = users.begin_op().await?;
 
-            let new_name = uuid::Uuid::new_v4().to_string();
+            let new_name = uuid::Uuid::now_v7().to_string();
             if user.update_name(new_name.clone()).did_execute() {
                 users.update_in_op(&mut op, &mut user).await?;
             }

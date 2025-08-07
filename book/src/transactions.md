@@ -94,7 +94,7 @@ async fn main() -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
     let _ = count_users(&mut tx).await?;
 
-    let some_existing_user_id = uuid::Uuid::new_v4();
+    let some_existing_user_id = uuid::Uuid::now_v7();
     let _ = delete_and_count(&mut tx, some_existing_user_id).await?;
 
     // Don't forget to commit the operation or the change won't become visible
