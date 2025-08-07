@@ -10,8 +10,6 @@ setup-db:
 reset-deps: clean-deps start-deps setup-db
 
 test-in-ci: setup-db
-	# Clean all es_entity builds to avoid multiple rlib candidates in CI
-	find $${CARGO_TARGET_DIR:-./target} -name "libes_entity*.rlib" -type f -delete 2>/dev/null || true
 	$(MAKE) test-book
 	cargo nextest run --workspace --verbose --locked
 	cargo test --doc --workspace
@@ -19,6 +17,7 @@ test-in-ci: setup-db
 
 clean-mdbook-test:
 	rm -rf $${CARGO_TARGET_DIR:-./target}/mdbook-test/*es[-_]entity*
+	rm -rf $${CARGO_TARGET_DIR:-./target}/mdbook-test/deps/*es[-_]entity*
 
 test-book: clean-mdbook-test
 	cargo build --profile mdbook-test --features mdbook-test --lib
