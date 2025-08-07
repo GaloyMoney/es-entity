@@ -2,14 +2,14 @@ clean-deps:
 	docker compose down
 
 start-deps:
-	docker compose up -d
+	@command -v docker >/dev/null 2>&1 && docker compose up -d || echo "Docker not found, skipping start-deps"
 
 setup-db:
 	cargo sqlx migrate run
 
 reset-deps: clean-deps start-deps setup-db
 
-test-in-ci: setup-db
+test-in-ci: start-deps setup-db
 	$(MAKE) test-book
 	cargo nextest run --workspace --verbose --locked
 	cargo test --doc --workspace
