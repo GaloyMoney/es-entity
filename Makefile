@@ -10,16 +10,13 @@ setup-db:
 reset-deps: clean-deps start-deps setup-db
 
 test-in-ci: start-deps setup-db
+	rm -rf $${CARGO_TARGET_DIR:-./target}/mdbook-test
 	$(MAKE) test-book
 	cargo nextest run --workspace --verbose --locked
 	cargo test --doc --workspace
 	cargo doc --no-deps --workspace
 
-clean-mdbook-test:
-	rm -rf $${CARGO_TARGET_DIR:-./target}/mdbook-test/*es[-_]entity*
-	rm -rf $${CARGO_TARGET_DIR:-./target}/mdbook-test/deps/*es[-_]entity*
-
-test-book: clean-mdbook-test
+test-book:
 	cargo build --profile mdbook-test --features mdbook-test --lib
 	CARGO_MANIFEST_DIR=$(shell pwd) mdbook test book -L $${CARGO_TARGET_DIR:-./target}/mdbook-test,$${CARGO_TARGET_DIR:-./target}/mdbook-test/deps
 
