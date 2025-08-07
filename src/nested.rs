@@ -78,12 +78,12 @@ pub trait PopulateNested<ID>: EsRepo {
     ) -> impl Future<Output = Result<(), <Self as EsRepo>::Err>> + Send
     where
         OP: AtomicOperation,
-        P: Parent<<Self as EsRepo>::Entity> + Send;
+        P: Parent<<Self as EsRepo>::Entity>;
 }
 
 /// Trait that entities implement for every field marked `#[es_entity(nested)]`
 /// Will be auto-implemented when `#[derive(EsEntity)] is used.
-pub trait Parent<T: EsEntity> {
+pub trait Parent<T: EsEntity>: Send {
     /// Access new child entities to persist them.
     fn new_children_mut(&mut self) -> &mut Vec<<T as EsEntity>::New>;
     /// Access existing children to update them incase they were mutated.

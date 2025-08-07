@@ -56,7 +56,7 @@ impl ToTokens for PopulateNested<'_> {
                 ) -> Result<(), #error>
                 where
                     OP: es_entity::AtomicOperation,
-                    P: Parent<<Self as EsRepo>::Entity> + Send
+                    P: Parent<<Self as EsRepo>::Entity>
                 {
                     let parent_ids: Vec<_> = lookup.keys().collect();
                     let rows = {
