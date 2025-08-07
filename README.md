@@ -1,33 +1,40 @@
+<div align="center">
+
 # es-entity
+
+**A type-safe event-sourcing entity framework for Rust**
 
 [![Crates.io](https://img.shields.io/crates/v/es-entity)](https://crates.io/crates/es-entity)
 [![Documentation](https://docs.rs/es-entity/badge.svg)](https://docs.rs/es-entity)
+[![Book](https://img.shields.io/badge/book-orange)](https://galoymoney.github.io/es-entity/)
 [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-A **type-safe** Event Sourcing Entity Framework for Rust that simplifies building event-sourced applications with PostgreSQL. 
+</div>
 
-## Features at a glance
+## Features
 
-- 🛡️ **Type-safe** - All SQL queries are checked at compile time via [sqlx]
-- 🏗️ **Minimal boilerplate** - Derive macros generate repository methods automatically
-- 🔄 **Event sourcing patterns** - Built-in support for events, entities, and aggregates
-- 🔒 **Optimistic concurrency** - Automatic handling via event sequences
-- 🎯 **Idempotency** - Built-in guards against duplicate operations
-- 📄 **Pagination** - Cursor-based pagination out of the box
-- 🔗 **GraphQL ready** - Optional integration with [async-graphql]
-- 🧪 **Testable** - Clean separation between domain logic and persistence
+- **Event Sourcing** - Store and construct entities from their event sequences to track mutations.
+- **Type Safety** - SQL queries verified at compile time with comprehensive type checking and errors.
+- **Auto Generation** - Automatic repository generation with configurable query patterns
+- **Idempotency** - Built-in idempotency checks with automatic duplicate detection and safe operation handling
+- **Pagination** - Efficient cursor-based pagination through large datasets with optimized query performance
+- **Flexible IDs** - Support for any ID type with custom ID implementations and type-safe ID handling
+- **Transactions** - Full ACID transaction support with atomic operations and rollback capabilities
+- **Code Generation** - Automatic code generation for common patterns for repository methods
 
 ## Quick Example
 
+#### Define the Entity
+
 ```rust
-use es_entity::*;
+use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use es_entity::*;
+ca
+// Define the entity ID
+es_entity::entity_id!{ UserId }
 
-// Define your entity ID
-es_entity::entity_id! { UserId }
-
-// Define your events
+// Define events
 #[derive(EsEvent, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[es_event(id = "UserId")]
@@ -36,42 +43,106 @@ pub enum UserEvent {
     NameUpdated { name: String },
 }
 
-// Define your entity
-#[derive(EsEntity)]
+// Define the entity
+#[derive(EsEntity, Builder)]
+#[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
 pub struct User {
     pub id: UserId,
     pub name: String,
     events: EntityEvents<UserEvent>,
 }
 
-// Define your repository - all CRUD operations are generated!
-#[derive(EsRepo)]
-#[es_repo(entity = "User", columns(name(ty = "String")))]
-pub struct Users {
-    pool: PgPool,
+impl User {
+    pub fn update_name(&mut self, new_name: impl Into<String>) -> Idempotent<()> {
+        let new_name = new_name.into();
+
+        idempotency_guard!(
+            self.events.iter_all().rev(),
+            UserEvent::NameUpdated { name } if name == &new_name,
+            => UserEvent::NameUpdated { .. }
+        );
+
+        self.name = new_name.clone();
+        self.events.push(UserEvent::NameUpdated { name: new_name });
+        Idempotent::Executed(())
+    }
 }
 
-// Use it!
+// Hydrate entity from events
+impl TryFromEvents<UserEvent> for User {
+    fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+        let mut builder = UserBuilder::default();
+        for event in events.iter_all() {
+            match event {
+                UserEvent::Initialized { id, name } => {
+                    builder = builder.id(*id).name(name.clone());
+                }
+                UserEvent::NameUpdated { name } => {
+                    builder = builder.name(name.clone());
+                }
+            }
+        }
+        builder.events(events).build()
+    }
+}
+
+// New entity for creation
+#[derive(Debug, Builder)]
+pub struct NewUser {
+    pub id: UserId,
+    pub name: String,
+}
+
+impl IntoEvents<UserEvent> for NewUser {
+    fn into_events(self) -> EntityEvents<UserEvent> {
+        EntityEvents::init(
+            self.id,
+            [UserEvent::Initialized { id: self.id, name: self.name }],
+        )
+    }
+}
+```
+
+#### Define the Repository
+
+```rust
+#[derive(EsRepo, Debug)]
+#[es_repo(
+    entity = "User",
+    columns(
+        name(ty = "String")
+    )
+)]
+pub struct Users {
+    pool: sqlx::PgPool,
+}
+```
+
+#### Usage
+
+```rust
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let pool = PgPool::connect("postgres://localhost/myapp").await?;
+async fn main() -> anyhow::Result<()> {
+    let pool = sqlx::PgPool::connect("postgres://user:password@localhost:5432/db").await?;
     let users = Users { pool };
-    
+
     // Create a new user
-    let user = users.create(NewUser {
-        id: UserId::new(),
-        name: "Alice".to_string(),
-    }).await?;
-    
-    // Query by indexed columns
-    let alice = users.find_by_name("Alice").await?;
-    
-    // Update with automatic idempotency
-    let mut user = users.find_by_id(user.id).await?;
-    if user.update_name("Alice Cooper").did_execute() {
+    let new_user = NewUser::builder()
+        .id(UserId::new())
+        .name("Frank")
+        .build()?;
+
+    let mut user = users.create(new_user).await?;
+
+    // Update the user
+    if user.update_name("Dweezil").did_execute() {
         users.update(&mut user).await?;
     }
-    
+
+    // Load the user
+    let loaded_user = users.find_by_id(user.id).await?;
+    assert_eq!(user.name, loaded_user.name);
+
     Ok(())
 }
 ```
@@ -84,24 +155,25 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-es-entity = "0.7"
-sqlx = { version = "0.8", features = ["postgres", "uuid", "chrono", "json"] }
-serde = { version = "1.0", features = ["derive"] }
+es-entity = "0.7.3"
+sqlx = { version = "0.8.3", features = ["runtime-tokio-rustls", "postgres", "macros"] }
+serde = { version = "1.0.219", features = ["derive"] }
+derive_builder = "0.20.1"
 ```
 
 ### Database Setup
 
-Each entity requires two tables:
+Create the required tables for your entity:
 
 ```sql
--- Index table for queries
+-- Index table for quick lookups (required)
 CREATE TABLE users (
   id UUID PRIMARY KEY,
   created_at TIMESTAMPTZ NOT NULL,
-  name VARCHAR UNIQUE  -- Add columns you want to query by
+  name VARCHAR UNIQUE
 );
 
--- Event storage table
+-- Events table for event sourcing (required)
 CREATE TABLE user_events (
   id UUID NOT NULL REFERENCES users(id),
   sequence INT NOT NULL,
@@ -112,180 +184,105 @@ CREATE TABLE user_events (
 );
 ```
 
-### Core Concepts
+## Feature Flags
 
-#### 1. **Entity ID**
-A strongly-typed identifier for your entities:
-```rust
-es_entity::entity_id! { UserId }
-// Or use your own type that implements required traits
+es-entity provides several optional features that can be enabled in your `Cargo.toml`:
+
+```toml
+[dependencies]
+es-entity = { version = "0.7.3", features = ["graphql", "json-schema", "sim-time"] }
 ```
 
-#### 2. **Events**
-Events represent state changes and must be serializable:
-```rust
-#[derive(EsEvent, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[es_event(id = "UserId")]
-pub enum UserEvent {
-    Initialized { id: UserId, name: String },
-    NameUpdated { name: String },
-}
-```
+### Available Features
 
-#### 3. **Entity**
-Your domain model that is built from events:
-```rust
-#[derive(EsEntity)]
-pub struct User {
-    pub id: UserId,
-    pub name: String,
-    events: EntityEvents<UserEvent>,  // Required field
-}
+- **`graphql`** - Enables GraphQL integration with `async-graphql` with compatible types
 
-impl TryFromEvents<UserEvent> for User {
-    fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
-        // Rebuild state from events
-    }
-}
-```
+- **`json-schema`** - Enables JSON Schema generation
 
-#### 4. **Repository**
-Handles all persistence operations:
-```rust
-#[derive(EsRepo)]
-#[es_repo(
-    entity = "User",
-    columns(name(ty = "String"))  // Define indexed columns
-)]
-pub struct Users {
-    pool: PgPool,
-}
-```
-
-## Generated Repository Methods
-
-The `EsRepo` derive macro generates a complete set of type-safe repository methods:
-
-```rust
-impl Users {
-    // Create operations
-    async fn create(&self, new: NewUser) -> Result<User, EsRepoError>;
-    async fn create_all(&self, new: Vec<NewUser>) -> Result<Vec<User>, EsRepoError>;
-    
-    // Query operations
-    async fn find_by_id(&self, id: UserId) -> Result<User, EsRepoError>;
-    async fn find_by_name(&self, name: &str) -> Result<User, EsRepoError>;
-    
-    // Update operations
-    async fn update(&self, entity: &mut User) -> Result<(), EsRepoError>;
-
-    // etc
-}
-```
+- **`sim-time`** - Enables simulation time support for testing and other operations
 
 ## Advanced Features
 
-### Idempotency
+### Transactions
 
-Protect against duplicate operations:
+All repository methods support transactions:
 
 ```rust
-impl User {
-    pub fn update_name(&mut self, new_name: String) -> Idempotent<()> {
-        idempotency_guard!(
-            self.events.iter_all().rev(),
-            UserEvent::NameUpdated { name } if name == &new_name,
-            => UserEvent::NameUpdated { .. }
-        );
-        
-        self.name = new_name.clone();
-        self.events.push(UserEvent::NameUpdated { name: new_name });
-        Idempotent::Executed(())
-    }
+let mut tx = pool.begin().await?;
+let user = users.find_by_id_in_op(&mut tx, user_id).await?;
+// ... more operations
+tx.commit().await?;
+```
+
+### Compile-time Query Verification
+
+es-entity uses `sqlx` for compile-time SQL verification:
+
+```rust
+let users = es_query!(
+    "SELECT name FROM users WHERE active = $1",
+    true
+)
+.fetch_all(&pool)
+.await?;
+```
+
+### Cursor-based Pagination
+
+Efficient pagination through large datasets:
+
+```rust
+let result = users.list_by_id(
+    PaginatedQueryArgs { first: 10, after: None },
+    ListDirection::Ascending
+).await?;
+
+if result.has_next_page {
+    let next_page = users.list_by_id(
+        PaginatedQueryArgs {
+            first: 10,
+            after: result.end_cursor
+        },
+        ListDirection::Ascending
+    ).await?;
 }
 ```
 
-### Nested Entities
+### Nested Aggregates
 
-Support for aggregates and child entities:
+Support for complex domain relationships:
+
+```rust
+#[derive(EsEntity)]
+pub struct Subscription {
+    pub id: SubscriptionId,
+    #[es_entity(nested)]
+    billing_periods: Nested<BillingPeriod>,
+}
+```
+
+### Highly Customizable
+
+es-entity is highly customizable using attributes. For example, you can customize the events field name:
 
 ```rust
 #[derive(EsEntity)]
 pub struct Order {
     pub id: OrderId,
-
-    #[es_entity(nested)]
-    items: Nested<OrderItem>,
-
-    events: EntityEvents<OrderEvent>,
-}
-
-// Child repo marks the parent foreign key
-#[derive(EsRepo, Debug)]
-#[es_repo(
-    entity = "OrderItem",
-    columns(order_id(ty = "OrderId", update(persist = false), parent))
-)]
-struct OrderItems {
-    pool: PgPool,
-}
-
-// Parent repo owns the child repo
-#[derive(EsRepo)]
-#[es_repo(
-    entity = "Order",
-)]
-pub struct Orders {
-    pool: PgPool,
-
-    #[es_repo(nested)]
-    items: OrderItems,
-}
-```
-
-### Transactions
-
-Atomic operations across multiple entities:
-
-```rust
-let mut tx = pool.begin().await?;
-users.create_in_op(&mut tx, new_user).await?;
-accounts.create_in_op(&mut tx, new_account).await?;
-tx.commit().await?;
-```
-
-## Testing
-
-The entity style is easily testable. Hydrate from events, mutate, assert.
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_user_update() {
-        let events = EntityEvents::init(
-            UserId::new(),
-            [UserEvent::Initialized { 
-                id: UserId::new(), 
-                name: "Alice".to_string() 
-            }],
-        );
-        
-        let mut user = User::try_from_events(events).unwrap();
-        assert_eq!(user.update_name("Bob"), Idempotent::Executed(()));
-        assert_eq!(user.update_name("Bob"), Idempotent::Ignored(()));
-    }
+    pub total: f64,
+    #[es_entity(events)] // Mark custom events field name if not named `events`
+    order_history: EntityEvents<OrderEvent>,
 }
 ```
 
 ## Documentation
 
-- [API Documentation](https://docs.rs/es-entity)
+- [API Documentation](https://docs.rs/es-entity) - Full public-api documentation
 - [Book](https://galoymoney.github.io/es-entity) - In-depth guide and patterns
+- [Examples](https://github.com/GaloyMoney/es-entity/tree/main/tests) - Working examples
 
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+es-entity is built and maintained by the [Galoy](https://galoy.io) team.
