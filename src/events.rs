@@ -1,11 +1,16 @@
-//! Manage events and operations for event-sourcing.
-
-use chrono::{DateTime, Utc};
+//! Manage events and related operations for event-sourcing.
 
 use super::{error::EsEntityError, traits::*};
+use chrono::{DateTime, Utc};
 
+/// An alias for iterator over the persisted events
 pub type LastPersisted<'a, E> = std::slice::Iter<'a, PersistedEvent<E>>;
 
+/// Represent the events in raw deserialized format when loaded from database
+///
+/// Events in the database are stored as JSON blobs and loaded initially as `GenericEvents<Id>` where `Id`
+/// belongs to the entity the events is a part of. Acts a bridge between database model and
+/// domain model when later converted to the `PersistedEvent` type internally
 pub struct GenericEvent<Id> {
     pub entity_id: Id,
     pub sequence: i32,
@@ -13,10 +18,19 @@ pub struct GenericEvent<Id> {
     pub recorded_at: DateTime<Utc>,
 }
 
+/// Strongly-typed event wrapper with metadata for successfully stored events.
+///
+/// Contains the event data along with persistence metadata (sequence, timestamp, entity_id).
+/// All `new_events` from [crate::EntityEvents] are converted to this structure once persisted to construct
+/// entities, enabling event sourcing operations and other database operations.
 pub struct PersistedEvent<E: EsEvent> {
+    /// The identifier of the entity which the event is used to construct
     pub entity_id: <E as EsEvent>::EntityId,
+    /// The timestamp which marks event persistence
     pub recorded_at: DateTime<Utc>,
+    /// The sequence number of the event in the event stream
     pub sequence: usize,
+    /// The event itself
     pub event: E,
 }
 
@@ -31,9 +45,16 @@ impl<E: Clone + EsEvent> Clone for PersistedEvent<E> {
     }
 }
 
+/// A [Vec] wrapper that manages event-stream of an entity with helpers for event-sourcing operations
+///
+/// Provides event sourcing operations for loading, appending, and persisting events in chronological
+/// sequence. Required field for all event-sourced entities to maintain their state change history.
 pub struct EntityEvents<T: EsEvent> {
+    /// The entity's id
     pub entity_id: <T as EsEvent>::EntityId,
+    /// Events that have been persisted in database and marked
     persisted_events: Vec<PersistedEvent<T>>,
+    /// New events that are yet to be persisted to track state changes
     new_events: Vec<T>,
 }
 
@@ -51,6 +72,7 @@ impl<T> EntityEvents<T>
 where
     T: EsEvent,
 {
+    /// Initializes a new `EntityEvents` instance with the given entity ID and initial events which is returned by [crate::IntoEvents] method
     pub fn init(id: <T as EsEvent>::EntityId, initial_events: impl IntoIterator<Item = T>) -> Self {
         Self {
             entity_id: id,
@@ -59,26 +81,33 @@ where
         }
     }
 
+    /// Returns a reference to the entity's identifier
     pub fn id(&self) -> &<T as EsEvent>::EntityId {
         &self.entity_id
     }
 
+    /// Returns the timestamp of the first persisted event, indicating when the entity was created
     pub fn entity_first_persisted_at(&self) -> Option<DateTime<Utc>> {
         self.persisted_events.first().map(|e| e.recorded_at)
     }
 
+    /// Returns the timestamp of the last persisted event, indicating when the entity was last modified
     pub fn entity_last_modified_at(&self) -> Option<DateTime<Utc>> {
         self.persisted_events.last().map(|e| e.recorded_at)
     }
 
+    /// Appends a single new event to the entity's event stream to be persisted later
     pub fn push(&mut self, event: T) {
         self.new_events.push(event);
     }
 
+    /// Appends multiple new events to the entity's event stream to be persisted later
     pub fn extend(&mut self, events: impl IntoIterator<Item = T>) {
         self.new_events.extend(events);
     }
 
+    /// Marks all new events as persisted with the given timestam and returns their count,
+    /// called internally after successful persistence.
     pub fn mark_new_events_persisted_at(
         &mut self,
         recorded_at: chrono::DateTime<chrono::Utc>,
@@ -100,6 +129,7 @@ where
         n
     }
 
+    /// Serializes all new (unpersisted) events to JSON format for database storage
     pub fn serialize_new_events(&self) -> Vec<serde_json::Value> {
         self.new_events
             .iter()
@@ -107,23 +137,28 @@ where
             .collect()
     }
 
+    /// Returns true if there are any unpersisted events waiting to be saved
     pub fn any_new(&self) -> bool {
         !self.new_events.is_empty()
     }
 
+    /// Returns the count of persisted events
     pub fn len_persisted(&self) -> usize {
         self.persisted_events.len()
     }
 
+    /// Returns an iterator over all persisted events
     pub fn iter_persisted(&self) -> impl DoubleEndedIterator<Item = &PersistedEvent<T>> {
         self.persisted_events.iter()
     }
 
+    /// Returns an iterator over the last `n` persisted events
     pub fn last_persisted(&self, n: usize) -> LastPersisted<T> {
         let start = self.persisted_events.len() - n;
         self.persisted_events[start..].iter()
     }
 
+    /// Returns an iterator over all events (both persisted and new) in chronological order
     pub fn iter_all(&self) -> impl DoubleEndedIterator<Item = &T> {
         self.persisted_events
             .iter()
@@ -131,6 +166,7 @@ where
             .chain(self.new_events.iter())
     }
 
+    /// Loads and reconstructs the first entity from a stream of GenericEvents, marking events as `peristed`
     pub fn load_first<E: EsEntity<Event = T>>(
         events: impl IntoIterator<Item = GenericEvent<<T as EsEvent>::EntityId>>,
     ) -> Result<E, EsEntityError> {
@@ -163,6 +199,8 @@ where
         }
     }
 
+    /// Loads and reconstructs up to `n` entities from a stream of GenericEvents.
+    /// Returns both the entities and a flag indicating whether more entities were available in the stream.
     pub fn load_n<E: EsEntity<Event = T>>(
         events: impl IntoIterator<Item = GenericEvent<<T as EsEvent>::EntityId>>,
         n: usize,
