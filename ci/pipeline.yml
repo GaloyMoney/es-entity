@@ -10,24 +10,47 @@
 #@   "rust_task_image_config",
 #@   "charts_repo_resource",
 #@   "charts_repo_bot_branch",
-#@   "integration_test",
 #@   "bats_test",
+#@   "nix_task_image_config",
 #@ )
 
 groups:
 - name: es-entity
   jobs:
   - check-code
-  - integration-test
+  - tests
   - bats-test
   - release
   - set-dev-version
 
 jobs:
 - #@ check_code()
-- #@ integration_test()
 - #@ bats_test()
 
+- name: tests
+  plan:
+    - in_parallel:
+      - get: repo
+        trigger: true
+      - { get: pipeline-tasks }
+    - task: tests
+      attempts: 2
+      privileged: true
+      config:
+        platform: linux
+        image_resource: #@ nix_task_image_config()
+        inputs:
+          - name: pipeline-tasks
+          - name: repo
+        caches:
+        - path: cargo-home/registry/index
+        - path: cargo-home/registry/cache
+        - path: cargo-target-dir
+        run:
+          path: pipeline-tasks/ci/tasks/test.sh
+        params:
+          CACHIX_AUTH_TOKEN: #@ data.values.cachix_auth_token
+          CACHIX_CACHE_NAME: #@ data.values.cachix_cache_name
 - name: release
   serial: true
   plan:
@@ -35,7 +58,7 @@ jobs:
     - get: repo
       passed:
       - check-code
-      - integration-test
+      - tests
       - bats-test
     - get: pipeline-tasks
     - get: version
