@@ -156,7 +156,7 @@ Handles all persistence operations:
 #[derive(EsRepo)]
 #[es_repo(
     entity = "User",
-    columns(name(ty = "String", unique))  // Define indexed columns
+    columns(name(ty = "String"))  // Define indexed columns
 )]
 pub struct Users {
     pool: PgPool,
