@@ -16,7 +16,7 @@ test-in-ci: setup-db test-book
 
 test-book:
 	cargo build --profile mdbook-test --features mdbook-test --lib
-	CARGO_MANIFEST_DIR=$(shell pwd) mdbook test book -L ./target/mdbook-test,./target/mdbook-test/deps
+	CARGO_MANIFEST_DIR=$(shell pwd) mdbook test book -L $${CARGO_TARGET_DIR:-./target}/mdbook-test,$${CARGO_TARGET_DIR:-./target}/mdbook-test/deps
 
 serve-book:
 	mdbook serve book --open
