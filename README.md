@@ -7,7 +7,6 @@
 [![Crates.io](https://img.shields.io/crates/v/es-entity)](https://crates.io/crates/es-entity)
 [![Documentation](https://docs.rs/es-entity/badge.svg)](https://docs.rs/es-entity)
 [![Book](https://img.shields.io/badge/book-orange)](https://galoymoney.github.io/es-entity/)
-[![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 </div>
 
@@ -282,8 +281,5 @@ pub struct Order {
 - [Book](https://galoymoney.github.io/es-entity) - In-depth guide and patterns
 - [Examples](https://github.com/GaloyMoney/es-entity/tree/main/tests) - Working examples
 
-## License
-
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
-
+##
 es-entity is built and maintained by the [Galoy](https://galoy.io) team.
