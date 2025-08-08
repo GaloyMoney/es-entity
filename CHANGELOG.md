@@ -1,3 +1,10 @@
+# [cala release v0.7.7](https://github.com/GaloyMoney/cala/releases/tag/0.7.7)
+
+
+### Miscellaneous Tasks
+
+- Add tx_mut fn to DbOp (#30)
+
 # [cala release v0.7.6](https://github.com/GaloyMoney/cala/releases/tag/0.7.6)
 
 
