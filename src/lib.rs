@@ -2,7 +2,7 @@
 //!
 //! This crate simplifies Event Sourcing persistence by automatically generating type-safe
 //! queries and operations for PostgreSQL. It decouples domain logic from persistence
-//! concerns while ensuring compile-time verification through [`sqlx`](https://crates.io/crates/sqlx).
+//! concerns while ensuring compile-time verification through [sqlx](https://crates.io/crates/sqlx).
 //!
 //! # Documentation
 //! - [Book](https://galoymoney.github.io/es-entity)

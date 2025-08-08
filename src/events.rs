@@ -22,7 +22,7 @@ pub struct GenericEvent<Id> {
 /// Strongly-typed event wrapper with metadata for successfully stored events.
 ///
 /// Contains the event data along with persistence metadata (sequence, timestamp, entity_id).
-/// All `new_events` from [crate::EntityEvents] are converted to this structure once persisted to construct
+/// All `new_events` from [`EntityEvents`] are converted to this structure once persisted to construct
 /// entities, enabling event sourcing operations and other database operations.
 pub struct PersistedEvent<E: EsEvent> {
     /// The identifier of the entity which the event is used to construct
@@ -46,7 +46,7 @@ impl<E: Clone + EsEvent> Clone for PersistedEvent<E> {
     }
 }
 
-/// A [Vec] wrapper that manages event-stream of an entity with helpers for event-sourcing operations
+/// A [`Vec`] wrapper that manages event-stream of an entity with helpers for event-sourcing operations
 ///
 /// Provides event sourcing operations for loading, appending, and persisting events in chronological
 /// sequence. Required field for all event-sourced entities to maintain their state change history.
@@ -73,7 +73,7 @@ impl<T> EntityEvents<T>
 where
     T: EsEvent,
 {
-    /// Initializes a new `EntityEvents` instance with the given entity ID and initial events which is returned by [crate::IntoEvents] method
+    /// Initializes a new `EntityEvents` instance with the given entity ID and initial events which is returned by [`IntoEvents`] method
     pub fn init(id: <T as EsEvent>::EntityId, initial_events: impl IntoIterator<Item = T>) -> Self {
         Self {
             entity_id: id,
