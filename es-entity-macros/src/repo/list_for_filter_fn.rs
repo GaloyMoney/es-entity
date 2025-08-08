@@ -21,13 +21,13 @@ impl<'a> Filter<'a> {
     pub fn ident(&self) -> syn::Ident {
         let entity_name = pluralizer::pluralize(&format!("{}", self.entity), 2, false);
         syn::Ident::new(
-            &format!("{entity_name}Filter").to_case(Case::UpperCamel),
+            &format!("{entity_name}_filter").to_case(Case::UpperCamel),
             Span::call_site(),
         )
     }
 
     fn tag(column: &Column) -> syn::Ident {
-        let tag_name = format!("With{}", column.name()).to_case(Case::UpperCamel);
+        let tag_name = format!("with_{}", column.name()).to_case(Case::UpperCamel);
         syn::Ident::new(&tag_name, Span::call_site())
     }
 
@@ -238,6 +238,7 @@ mod tests {
         let mut tokens = TokenStream::new();
         filter.to_tokens(&mut tokens);
 
+        // @ claude this unit test is failing - why?
         let expected = quote! {
             #[derive(Debug)]
             #[allow(clippy::enum_variant_names)]
@@ -271,13 +272,11 @@ mod tests {
             syn::parse_str("OrderStatus").unwrap(),
         );
 
-        // Create a Filter
         let filter = Filter {
             entity: &entity,
             columns: vec![&customer_id_column, &status_column],
         };
 
-        // Create list_for functions using test constructor
         let list_for_customer_id_by_id = ListForFn::new_test(
             &customer_id_column,
             &id_column,
@@ -301,7 +300,6 @@ mod tests {
         let list_for_fns = vec![list_for_customer_id_by_id, list_for_status_by_id];
         let by_columns = vec![&id_column, &customer_id_column, &status_column];
 
-        // Create cursor structs for combo cursor
         let id_cursor = CursorStruct {
             column: &id_column,
             id: &id,
@@ -323,7 +321,6 @@ mod tests {
             cursor_mod: &cursor_mod,
         };
 
-        // Create combo cursor using test constructor
         let combo_cursor =
             ComboCursor::new_test(&entity, vec![id_cursor, customer_cursor, status_cursor]);
 
