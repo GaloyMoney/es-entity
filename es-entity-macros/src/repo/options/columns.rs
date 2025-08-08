@@ -315,12 +315,12 @@ impl Column {
     }
 
     pub fn is_optional(&self) -> bool {
-        if let syn::Type::Path(type_path) = self.ty() {
-            if type_path.path.segments.len() == 1 {
-                let segment = &type_path.path.segments[0];
-                if segment.ident == "Option" {
-                    return true;
-                }
+        if let syn::Type::Path(type_path) = self.ty()
+            && type_path.path.segments.len() == 1
+        {
+            let segment = &type_path.path.segments[0];
+            if segment.ident == "Option" {
+                return true;
             }
         }
         false
@@ -335,10 +335,10 @@ impl Column {
     }
 
     pub fn ty_for_find_by(&self) -> syn::Type {
-        if let syn::Type::Path(type_path) = self.ty() {
-            if type_path.path.is_ident("String") {
-                return syn::parse_quote! { str };
-            }
+        if let syn::Type::Path(type_path) = self.ty()
+            && type_path.path.is_ident("String")
+        {
+            return syn::parse_quote! { str };
         }
         self.ty().clone()
     }

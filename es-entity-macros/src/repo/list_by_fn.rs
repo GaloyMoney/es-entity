@@ -28,10 +28,10 @@ impl CursorStruct<'_> {
 
     pub fn select_columns(&self, for_column: Option<&syn::Ident>) -> String {
         let mut for_column_str = String::new();
-        if let Some(for_column) = for_column {
-            if self.column.name() != for_column {
-                for_column_str = format!("{for_column}, ");
-            }
+        if let Some(for_column) = for_column
+            && self.column.name() != for_column
+        {
+            for_column_str = format!("{for_column}, ");
         }
         if self.column.is_id() {
             format!("{for_column_str}id")

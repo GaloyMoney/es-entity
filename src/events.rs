@@ -123,7 +123,7 @@ where
     }
 
     /// Returns an iterator over the last `n` persisted events
-    pub fn last_persisted(&self, n: usize) -> LastPersisted<T> {
+    pub fn last_persisted(&self, n: usize) -> LastPersisted<'_, T> {
         let start = self.persisted_events.len() - n;
         self.persisted_events[start..].iter()
     }

@@ -29,10 +29,10 @@ impl QueryInput {
 
     pub(super) fn table_name_without_prefix(&self) -> darling::Result<String> {
         let table_name = self.table_name()?;
-        if let Some(ignore_prefix) = &self.tbl_prefix {
-            if table_name.starts_with(ignore_prefix) {
-                return Ok(table_name[ignore_prefix.len() + 1..].to_string());
-            }
+        if let Some(ignore_prefix) = &self.tbl_prefix
+            && table_name.starts_with(ignore_prefix)
+        {
+            return Ok(table_name[ignore_prefix.len() + 1..].to_string());
         }
         Ok(table_name)
     }
@@ -50,15 +50,15 @@ impl QueryInput {
         use regex::Regex;
         let re = Regex::new(r"(?i)ORDER\s+BY\s+(.+?)(?:\s+(?:LIMIT|OFFSET)|\s*;?\s*$)").unwrap();
 
-        if let Some(captures) = re.captures(&self.sql.to_lowercase()) {
-            if let Some(order_by_clause) = captures.get(1) {
-                return order_by_clause
-                    .as_str()
-                    .split(',')
-                    .map(|s| format!("i.{}", s.trim()))
-                    .filter(|s| !s.is_empty())
-                    .collect();
-            }
+        if let Some(captures) = re.captures(&self.sql.to_lowercase())
+            && let Some(order_by_clause) = captures.get(1)
+        {
+            return order_by_clause
+                .as_str()
+                .split(',')
+                .map(|s| format!("i.{}", s.trim()))
+                .filter(|s| !s.is_empty())
+                .collect();
         }
 
         Vec::new()

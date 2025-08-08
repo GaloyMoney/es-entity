@@ -238,7 +238,7 @@ pub trait EsEntity: TryFromEvents<Self::Event> {
     fn events(&self) -> &EntityEvents<Self::Event>;
 
     /// Returns the last `n` persisted events
-    fn last_persisted(&self, n: usize) -> crate::events::LastPersisted<Self::Event> {
+    fn last_persisted(&self, n: usize) -> crate::events::LastPersisted<'_, Self::Event> {
         self.events().last_persisted(n)
     }
 

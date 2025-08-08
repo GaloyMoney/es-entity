@@ -20,18 +20,13 @@ impl Field {
     }
 
     fn extract_nested_entity_type(&self) -> &Type {
-        if let Type::Path(type_path) = &self.ty {
-            if let Some(segment) = type_path.path.segments.last() {
-                if segment.ident == "Nested" {
-                    if let syn::PathArguments::AngleBracketed(generic_args) = &segment.arguments {
-                        if let Some(syn::GenericArgument::Type(inner_type)) =
-                            generic_args.args.first()
-                        {
-                            return inner_type;
-                        }
-                    }
-                }
-            }
+        if let Type::Path(type_path) = &self.ty
+            && let Some(segment) = type_path.path.segments.last()
+            && segment.ident == "Nested"
+            && let syn::PathArguments::AngleBracketed(generic_args) = &segment.arguments
+            && let Some(syn::GenericArgument::Type(inner_type)) = generic_args.args.first()
+        {
+            return inner_type;
         }
         panic!("Field must be of type Nested<T>");
     }
