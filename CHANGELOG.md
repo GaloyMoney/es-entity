@@ -1,3 +1,10 @@
+# [cala release v0.7.8](https://github.com/GaloyMoney/cala/releases/tag/0.7.8)
+
+
+### Bug Fixes
+
+- Declare op as <'static>
+
 # [cala release v0.7.7](https://github.com/GaloyMoney/cala/releases/tag/0.7.7)
 
 
