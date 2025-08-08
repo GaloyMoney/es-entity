@@ -70,7 +70,7 @@ impl ToTokens for Nested<'_> {
                     #error: From<<#nested_repo_ty as es_entity::EsRepo>::Err>
             {
                 let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
-                #nested_repo_ty::populate_in_op(op, lookup).await?;
+                <#nested_repo_ty>::populate_in_op(op, lookup).await?;
                 Ok(())
             }
         });
@@ -139,7 +139,7 @@ mod tests {
                     es_entity::EsRepoError: From<<UserRepo as es_entity::EsRepo>::Err>
             {
                 let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
-                UserRepo::populate_in_op(op, lookup).await?;
+                <UserRepo>::populate_in_op(op, lookup).await?;
                 Ok(())
             }
         };

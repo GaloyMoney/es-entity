@@ -68,7 +68,7 @@ impl ToTokens for PopulateNested<'_> {
                     };
                     let n = rows.len();
                     let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(rows.into_iter(), n)?;
-                    #ident::load_all_nested_in_op(op, &mut res).await?;
+                    Self::load_all_nested_in_op(op, &mut res).await?;
                     for entity in res.into_iter() {
                         let parent = lookup.get_mut(&entity.#accessor).expect("parent not present");
                         parent.inject_children(std::iter::once(entity));
