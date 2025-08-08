@@ -4,7 +4,7 @@
 ///
 /// Distinguishes between operations that were executed versus those that were
 /// ignored due to idempotency checks.
-/// The [crate::idempotency_guard] macro provides an easy way to do such checks.
+/// The [`idempotency_guard`][crate::idempotency_guard] macro provides an easy way to do such checks.
 ///
 /// # Examples
 ///
@@ -79,9 +79,9 @@ impl<T> Idempotent<T> {
     }
 }
 
-/// Internal trait used by the [crate::idempotency_guard] macro.
+/// Internal trait used by the [`idempotency_guard`][crate::idempotency_guard] macro.
 ///
-/// This is internal-only trait is implemented on [crate::idempotency_guard] for it to create
+/// This is internal-only trait is implemented on [`idempotency_guard`][crate::idempotency_guard] for it to create
 /// both `Idempotent<T>` and `Result<Idempotent<T>, E>` return types for returning `Ignored` variant.
 pub trait FromIdempotentIgnored {
     /// Creates a value representing an ignored idempotent operation.

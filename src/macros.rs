@@ -1,7 +1,7 @@
 /// Prevent duplicate event processing by checking for idempotent operations.
 ///
 /// Guards against replaying the same mutation in event-sourced systems.
-/// Returns [crate::Idempotent::Ignored] early if matching events are found, allowing the caller
+/// Returns [`Ignored`][crate::Idempotent::Ignored] early if matching events are found, allowing the caller
 /// to skip redundant operations. Use break pattern to allow re-applying past operations.
 ///
 /// # Parameters

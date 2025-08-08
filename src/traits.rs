@@ -8,7 +8,7 @@ use super::{error::EsEntityError, events::EntityEvents, operation::AtomicOperati
 ///
 /// All `EntityEvent` enums implement this trait to ensure it satisfies basic requirements for
 /// es-entity compatibility. The trait ensures trait implementations and compile-time validation that required fields (like id) are present.
-/// Implemented by the [es_entity_macros::EsEvent] derive macro with `#[es_event]` attribute.
+/// Implemented by the [`EsEvent`][es_entity_macros::EsEvent] derive macro with `#[es_event]` attribute.
 ///
 /// # Example
 ///
@@ -202,7 +202,7 @@ pub trait TryFromEvents<E: EsEvent> {
 /// All `Entity` types implement this trait to satisfy the basic requirements for
 /// event sourcing. The trait ensures the entity implements traits like `IntoEvents`
 /// and has the required components like `EntityEvent`, with helper methods to access the events sequence.
-/// Implemented by the [es_entity_macros::EsEntity] derive macro.
+/// Implemented by the [`EsEntity`][es_entity_macros::EsEntity] derive macro.
 ///
 /// # Example
 ///
@@ -251,7 +251,7 @@ pub trait EsEntity: TryFromEvents<Self::Event> {
 /// All repositories implement this trait to satisfy the basic requirements for
 /// type-safe database operations with the associated entity. The trait ensures validation
 /// that required fields (like entity) are present with compile-time errors.
-/// Implemented by the [es_entity_macros::EsRepo] derive macro with `#[es_repo]` attributes.
+/// Implemented by the [`EsRepo`][es_entity_macros::EsRepo] derive macro with `#[es_repo]` attributes.
 ///
 /// # Example
 ///
