@@ -33,6 +33,30 @@ impl<'a> ListForFn<'a> {
         }
     }
 
+    #[cfg(test)]
+    pub fn new_test(
+        for_column: &'a Column,
+        by_column: &'a Column,
+        entity: &'a syn::Ident,
+        id: &'a syn::Ident,
+        table_name: &'a str,
+        error: &'a syn::Type,
+        cursor_mod: syn::Ident,
+    ) -> Self {
+        Self {
+            ignore_prefix: None,
+            for_column,
+            by_column,
+            entity,
+            id,
+            table_name,
+            error,
+            delete: DeleteOption::No,
+            cursor_mod,
+            any_nested: false,
+        }
+    }
+
     pub fn cursor(&'a self) -> CursorStruct<'a> {
         CursorStruct {
             column: self.by_column,

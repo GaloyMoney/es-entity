@@ -250,4 +250,192 @@ mod tests {
 
         assert_eq!(tokens.to_string(), expected.to_string());
     }
+
+    #[test]
+    fn find_many_function_generation() {
+        use crate::repo::{combo_cursor::ComboCursor, list_by_fn::CursorStruct};
+
+        let entity = Ident::new("Order", Span::call_site());
+        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
+        let id = syn::Ident::new("OrderId", proc_macro2::Span::call_site());
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        // Create columns
+        let id_column = Column::for_id(syn::parse_str("OrderId").unwrap());
+        let customer_id_column = Column::new(
+            syn::Ident::new("customer_id", proc_macro2::Span::call_site()),
+            syn::parse_str("CustomerId").unwrap(),
+        );
+        let status_column = Column::new(
+            syn::Ident::new("status", proc_macro2::Span::call_site()),
+            syn::parse_str("OrderStatus").unwrap(),
+        );
+
+        // Create a ManyFilter
+        let filter = ManyFilter {
+            entity: &entity,
+            columns: vec![&customer_id_column, &status_column],
+        };
+
+        // Create list_for functions using test constructor
+        let list_for_customer_id_by_id = ListForFn::new_test(
+            &customer_id_column,
+            &id_column,
+            &entity,
+            &id,
+            "orders",
+            &error,
+            cursor_mod.clone(),
+        );
+
+        let list_for_status_by_id = ListForFn::new_test(
+            &status_column,
+            &id_column,
+            &entity,
+            &id,
+            "orders",
+            &error,
+            cursor_mod.clone(),
+        );
+
+        let list_for_fns = vec![list_for_customer_id_by_id, list_for_status_by_id];
+        let by_columns = vec![&id_column, &customer_id_column, &status_column];
+
+        // Create cursor structs for combo cursor
+        let id_cursor = CursorStruct {
+            column: &id_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        let customer_cursor = CursorStruct {
+            column: &customer_id_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        let status_cursor = CursorStruct {
+            column: &status_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        // Create combo cursor using test constructor
+        let combo_cursor =
+            ComboCursor::new_test(&entity, vec![id_cursor, customer_cursor, status_cursor]);
+
+        let find_many_fn = FindManyFn {
+            filter,
+            entity: &entity,
+            error: &error,
+            list_for_fns: &list_for_fns,
+            by_columns,
+            cursor: &combo_cursor,
+            delete: DeleteOption::No,
+            cursor_mod: cursor_mod.clone(),
+        };
+
+        let mut tokens = TokenStream::new();
+        find_many_fn.to_tokens(&mut tokens);
+
+        let expected = quote! {
+            pub async fn find_many(
+                &self,
+                filter: FindManyOrders,
+                sort: es_entity::Sort<OrdersSortBy>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrdersCursor>,
+            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersCursor>, es_entity::EsRepoError>
+                where es_entity::EsRepoError: From<es_entity::CursorDestructureError>
+            {
+                let es_entity::Sort { by, direction } = sort;
+                let es_entity::PaginatedQueryArgs { first, after } = cursor;
+
+                use cursor_mod::OrdersCursor;
+                let res = match (filter, by) {
+                    (FindManyOrders::WithCustomerId(filter_value), OrdersSortBy::Id) => {
+                        let after = after.map(cursor_mod::OrdersByIdCursor::try_from).transpose()?;
+                        let query = es_entity::PaginatedQueryArgs { first, after };
+
+                        let es_entity::PaginatedQueryRet {
+                            entities,
+                            has_next_page,
+                            end_cursor,
+                        } = self.list_for_customer_id_by_id(filter_value, query, direction).await?;
+                        es_entity::PaginatedQueryRet {
+                            entities,
+                            has_next_page,
+                            end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                        }
+                    }
+                    (FindManyOrders::WithStatus(filter_value), OrdersSortBy::Id) => {
+                        let after = after.map(cursor_mod::OrdersByIdCursor::try_from).transpose()?;
+                        let query = es_entity::PaginatedQueryArgs { first, after };
+
+                        let es_entity::PaginatedQueryRet {
+                            entities,
+                            has_next_page,
+                            end_cursor,
+                        } = self.list_for_status_by_id(filter_value, query, direction).await?;
+                        es_entity::PaginatedQueryRet {
+                            entities,
+                            has_next_page,
+                            end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                        }
+                    }
+                    (FindManyOrders::NoFilter, OrdersSortBy::Id) => {
+                        let after = after.map(cursor_mod::OrdersByIdCursor::try_from).transpose()?;
+                        let query = es_entity::PaginatedQueryArgs { first, after };
+
+                        let es_entity::PaginatedQueryRet {
+                            entities,
+                            has_next_page,
+                            end_cursor,
+                        } = self.list_by_id(query, direction).await?;
+                        es_entity::PaginatedQueryRet {
+                            entities,
+                            has_next_page,
+                            end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                        }
+                    }
+                    (FindManyOrders::NoFilter, OrdersSortBy::CustomerId) => {
+                        let after = after.map(cursor_mod::OrdersByCustomerIdCursor::try_from).transpose()?;
+                        let query = es_entity::PaginatedQueryArgs { first, after };
+
+                        let es_entity::PaginatedQueryRet {
+                            entities,
+                            has_next_page,
+                            end_cursor,
+                        } = self.list_by_customer_id(query, direction).await?;
+                        es_entity::PaginatedQueryRet {
+                            entities,
+                            has_next_page,
+                            end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                        }
+                    }
+                    (FindManyOrders::NoFilter, OrdersSortBy::Status) => {
+                        let after = after.map(cursor_mod::OrdersByStatusCursor::try_from).transpose()?;
+                        let query = es_entity::PaginatedQueryArgs { first, after };
+
+                        let es_entity::PaginatedQueryRet {
+                            entities,
+                            has_next_page,
+                            end_cursor,
+                        } = self.list_by_status(query, direction).await?;
+                        es_entity::PaginatedQueryRet {
+                            entities,
+                            has_next_page,
+                            end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                        }
+                    }
+                };
+
+                Ok(res)
+            }
+        };
+
+        assert_eq!(tokens.to_string(), expected.to_string());
+    }
 }

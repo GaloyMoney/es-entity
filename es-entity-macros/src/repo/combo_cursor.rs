@@ -18,6 +18,11 @@ impl<'a> ComboCursor<'a> {
         }
     }
 
+    #[cfg(test)]
+    pub fn new_test(entity: &'a syn::Ident, cursors: Vec<CursorStruct<'a>>) -> Self {
+        Self { entity, cursors }
+    }
+
     pub fn ident(&self) -> syn::Ident {
         let entity_name = pluralizer::pluralize(&format!("{}", self.entity), 2, false);
         syn::Ident::new(
@@ -179,5 +184,154 @@ impl ToTokens for ComboCursor<'_> {
 
             #trait_impls
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repo::list_by_fn::CursorStruct;
+    use proc_macro2::Span;
+    use syn::Ident;
+
+    #[test]
+    fn combo_cursor_generation() {
+        let entity = Ident::new("User", Span::call_site());
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+        let id = syn::Ident::new("UserId", Span::call_site());
+
+        let id_column = Column::for_id(syn::parse_str("UserId").unwrap());
+        let name_column = Column::new(
+            syn::Ident::new("name", proc_macro2::Span::call_site()),
+            syn::parse_str("String").unwrap(),
+        );
+
+        let id_cursor = CursorStruct {
+            column: &id_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        let name_cursor = CursorStruct {
+            column: &name_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        let cursors = vec![id_cursor, name_cursor];
+
+        let combo_cursor = ComboCursor {
+            entity: &entity,
+            cursors,
+        };
+
+        let mut tokens = TokenStream::new();
+        combo_cursor.to_tokens(&mut tokens);
+
+        let expected = quote! {
+            #[derive(Debug, serde::Serialize, serde::Deserialize)]
+            #[allow(clippy::enum_variant_names)]
+            #[serde(tag = "type")]
+            pub enum UsersCursor {
+                Byid(UsersByIdCursor),
+                Byname(UsersByNameCursor),
+            }
+
+            impl From<UsersByIdCursor> for UsersCursor {
+                fn from(cursor: UsersByIdCursor) -> Self {
+                    Self::Byid(cursor)
+                }
+            }
+
+            impl TryFrom<UsersCursor> for UsersByIdCursor {
+                type Error = es_entity::CursorDestructureError;
+
+                fn try_from(cursor: UsersCursor) -> Result<Self, Self::Error> {
+                    match cursor {
+                        UsersCursor::Byid(cursor) => Ok(cursor),
+                        _ => Err(es_entity::CursorDestructureError::from((stringify!(UsersCursor), stringify!(UsersByIdCursor)))),
+                    }
+                }
+            }
+            impl From<UsersByNameCursor> for UsersCursor {
+                fn from(cursor: UsersByNameCursor) -> Self {
+                    Self::Byname(cursor)
+                }
+            }
+
+            impl TryFrom<UsersCursor> for UsersByNameCursor {
+                type Error = es_entity::CursorDestructureError;
+
+                fn try_from(cursor: UsersCursor) -> Result<Self, Self::Error> {
+                    match cursor {
+                        UsersCursor::Byname(cursor) => Ok(cursor),
+                        _ => Err(es_entity::CursorDestructureError::from((stringify!(UsersCursor), stringify!(UsersByNameCursor)))),
+                    }
+                }
+            }
+        };
+
+        assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn combo_cursor_sort_by_generation() {
+        let entity = Ident::new("Order", Span::call_site());
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+        let id = syn::Ident::new("OrderId", Span::call_site());
+
+        let id_column = Column::for_id(syn::parse_str("OrderId").unwrap());
+        let status_column = Column::new(
+            syn::Ident::new("status", proc_macro2::Span::call_site()),
+            syn::parse_str("String").unwrap(),
+        );
+        let created_at_column = Column::new(
+            syn::Ident::new("created_at", proc_macro2::Span::call_site()),
+            syn::parse_str("chrono::DateTime<chrono::Utc>").unwrap(),
+        );
+
+        let id_cursor = CursorStruct {
+            column: &id_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        let status_cursor = CursorStruct {
+            column: &status_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        let created_at_cursor = CursorStruct {
+            column: &created_at_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        let cursors = vec![id_cursor, status_cursor, created_at_cursor];
+
+        let combo_cursor = ComboCursor {
+            entity: &entity,
+            cursors,
+        };
+
+        let sort_by_tokens = combo_cursor.sort_by();
+
+        let expected = quote! {
+            #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+            pub enum OrdersSortBy {
+                #[default]
+                Id,
+                Status,
+                CreatedAt
+            }
+        };
+
+        assert_eq!(sort_by_tokens.to_string(), expected.to_string());
     }
 }
