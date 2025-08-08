@@ -1,3 +1,10 @@
+# [cala release v0.7.10](https://github.com/GaloyMoney/cala/releases/tag/0.7.10)
+
+
+### Bug Fixes
+
+- Use <#ty> to handle generic children in nested.rs
+
 # [cala release v0.7.9](https://github.com/GaloyMoney/cala/releases/tag/0.7.9)
 
 
