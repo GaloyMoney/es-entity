@@ -343,6 +343,16 @@ impl Column {
         self.ty().clone()
     }
 
+    pub fn is_as_ref(&self) -> bool {
+        if let syn::Type::Path(type_path) = self.ty()
+            && type_path.path.is_ident("String")
+        {
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn accessor(&self) -> proc_macro2::TokenStream {
         self.opts.update_accessor(&self.name)
     }

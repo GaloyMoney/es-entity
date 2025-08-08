@@ -33,6 +33,17 @@ impl ToTokens for FindByFn<'_> {
         let entity = self.entity;
         let column_name = &self.column.name();
         let column_type = &self.column.ty_for_find_by();
+        let (impl_expr, access_expr) = if self.column.is_as_ref() {
+            (
+                quote! { impl std::convert::AsRef<#column_type> },
+                quote! { as_ref() },
+            )
+        } else {
+            (
+                quote! { impl std::borrow::Borrow<#column_type> },
+                quote! { borrow() },
+            )
+        };
         let error = self.error;
         let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
         let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
@@ -97,7 +108,7 @@ impl ToTokens for FindByFn<'_> {
                 tokens.append_all(quote! {
                     pub async fn #fn_name(
                         &self,
-                        #column_name: impl std::borrow::Borrow<#column_type>
+                        #column_name: #impl_expr
                     ) -> Result<#result_type, #error> {
                         self.#fn_in_op(#query_fn_get_op, #column_name).await
                     }
@@ -105,12 +116,12 @@ impl ToTokens for FindByFn<'_> {
                     pub async fn #fn_in_op #query_fn_generics(
                         &self,
                         #query_fn_op_arg,
-                        #column_name: impl std::borrow::Borrow<#column_type>
+                        #column_name: #impl_expr
                     ) -> Result<#result_type, #error>
                         where
                             OP: #query_fn_op_traits
                     {
-                        let #column_name = #column_name.borrow();
+                        let #column_name = #column_name.#access_expr;
                         #es_query_call.#fetch_fn.await
                     }
                 });
@@ -194,6 +205,83 @@ mod tests {
                     entity = Entity,
                     "SELECT id FROM entities WHERE id = $1",
                     id as &EntityId,
+                )
+                .fetch_optional(op)
+                .await
+            }
+        };
+
+        assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn find_by_fn_string_arg() {
+        let column = Column::new(
+            syn::Ident::new("email", proc_macro2::Span::call_site()),
+            syn::parse_str("String").unwrap(),
+        );
+        let entity = Ident::new("Entity", Span::call_site());
+        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
+
+        let persist_fn = FindByFn {
+            prefix: None,
+            column: &column,
+            entity: &entity,
+            table_name: "entities",
+            error: &error,
+            delete: DeleteOption::No,
+            any_nested: false,
+        };
+
+        let mut tokens = TokenStream::new();
+        persist_fn.to_tokens(&mut tokens);
+
+        let expected = quote! {
+            pub async fn find_by_email(
+                &self,
+                email: impl std::convert::AsRef<str>
+            ) -> Result<Entity, es_entity::EsRepoError> {
+                self.find_by_email_in_op(self.pool(), email).await
+            }
+
+            pub async fn find_by_email_in_op<'a, OP>(
+                &self,
+                op: OP,
+                email: impl std::convert::AsRef<str>
+            ) -> Result<Entity, es_entity::EsRepoError>
+                where
+                    OP: IntoOneTimeExecutor<'a>
+            {
+                let email = email.as_ref();
+                es_entity::es_query!(
+                    entity = Entity,
+                    "SELECT id FROM entities WHERE email = $1",
+                    email as &str,
+                )
+                .fetch_one(op)
+                .await
+            }
+
+            pub async fn maybe_find_by_email(
+                &self,
+                email: impl std::convert::AsRef<str>
+            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+                self.maybe_find_by_email_in_op(self.pool(), email).await
+            }
+
+            pub async fn maybe_find_by_email_in_op<'a, OP>(
+                &self,
+                op: OP,
+                email: impl std::convert::AsRef<str>
+            ) -> Result<Option<Entity>, es_entity::EsRepoError>
+                where
+                    OP: IntoOneTimeExecutor<'a>
+            {
+                let email = email.as_ref();
+                es_entity::es_query!(
+                    entity = Entity,
+                    "SELECT id FROM entities WHERE email = $1",
+                    email as &str,
                 )
                 .fetch_optional(op)
                 .await
