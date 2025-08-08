@@ -210,3 +210,44 @@ impl ToTokens for FindManyFn<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proc_macro2::Span;
+    use syn::Ident;
+
+    #[test]
+    fn many_filter_enum() {
+        let entity = Ident::new("Order", Span::call_site());
+        let customer_id_column = Column::new(
+            syn::Ident::new("customer_id", proc_macro2::Span::call_site()),
+            syn::parse_str("CustomerId").unwrap(),
+        );
+        let status_column = Column::new(
+            syn::Ident::new("status", proc_macro2::Span::call_site()),
+            syn::parse_str("OrderStatus").unwrap(),
+        );
+
+        // Create a minimal ManyFilter manually
+        let filter = ManyFilter {
+            entity: &entity,
+            columns: vec![&customer_id_column, &status_column],
+        };
+
+        let mut tokens = TokenStream::new();
+        filter.to_tokens(&mut tokens);
+
+        let expected = quote! {
+            #[derive(Debug)]
+            #[allow(clippy::enum_variant_names)]
+            pub enum FindManyOrders {
+                NoFilter,
+                WithCustomerId(CustomerId),
+                WithStatus(OrderStatus),
+            }
+        };
+
+        assert_eq!(tokens.to_string(), expected.to_string());
+    }
+}
