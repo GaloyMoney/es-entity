@@ -1,3 +1,11 @@
+# [cala release v0.7.9](https://github.com/GaloyMoney/cala/releases/tag/0.7.9)
+
+
+### Miscellaneous Tasks
+
+- Use AsRef<str> for String columns
+- Support AsRef<str> in find_by
+
 # [cala release v0.7.8](https://github.com/GaloyMoney/cala/releases/tag/0.7.8)
 
 
