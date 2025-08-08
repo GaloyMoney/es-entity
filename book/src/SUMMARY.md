@@ -22,6 +22,7 @@
     - [find_by](./repo-find-by.md)
     - [list_by](./repo-list-by.md)
     - [list_for](./repo-list-for.md)
+    - [list_for_filter](./repo-list-for-filter.md)
     - [delete](./repo-delete.md)
 
 - [Transactions](./transactions.md)
