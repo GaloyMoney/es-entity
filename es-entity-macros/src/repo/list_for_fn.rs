@@ -86,7 +86,7 @@ impl ToTokens for ListForFn<'_> {
             &format!("filter_{}", self.for_column.name()),
             Span::call_site(),
         );
-        let for_column_type = self.for_column.ty_for_find_by();
+        let (for_column_type, for_impl_expr, for_access_expr) = self.for_column.ty_for_find_by();
 
         let destructure_tokens = self.cursor().destructure_tokens();
         let select_columns = cursor.select_columns(Some(for_column_name));
@@ -182,7 +182,7 @@ impl ToTokens for ListForFn<'_> {
             tokens.append_all(quote! {
                 pub async fn #fn_name(
                     &self,
-                    #filter_arg_name: impl std::borrow::Borrow<#for_column_type>,
+                    #filter_arg_name: #for_impl_expr,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
@@ -192,14 +192,14 @@ impl ToTokens for ListForFn<'_> {
                 pub async fn #fn_in_op #query_fn_generics(
                     &self,
                     #query_fn_op_arg,
-                    #filter_arg_name: impl std::borrow::Borrow<#for_column_type>,
+                    #filter_arg_name: #for_impl_expr,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
                     where
                         OP: #query_fn_op_traits
                 {
-                    let #filter_arg_name = #filter_arg_name.borrow();
+                    let #filter_arg_name = #filter_arg_name.#for_access_expr;
                     #destructure_tokens
 
                     let (entities, has_next_page) = match direction {
@@ -356,7 +356,7 @@ mod tests {
         let expected = quote! {
             pub async fn list_for_email_by_email(
                 &self,
-                filter_email: impl std::borrow::Borrow<str>,
+                filter_email: impl std::convert::AsRef<str>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByEmailCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, es_entity::EsRepoError> {
@@ -366,14 +366,14 @@ mod tests {
             pub async fn list_for_email_by_email_in_op<'a, OP>(
                 &self,
                 op: OP,
-                filter_email: impl std::borrow::Borrow<str>,
+                filter_email: impl std::convert::AsRef<str>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByEmailCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, es_entity::EsRepoError>
                 where
                     OP: IntoOneTimeExecutor<'a>
             {
-                let filter_email = filter_email.borrow();
+                let filter_email = filter_email.as_ref();
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
                 let (id, email) = if let Some(after) = after {
                     (Some(after.id), Some(after.email))

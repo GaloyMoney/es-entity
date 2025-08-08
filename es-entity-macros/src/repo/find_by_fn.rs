@@ -32,18 +32,7 @@ impl ToTokens for FindByFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let entity = self.entity;
         let column_name = &self.column.name();
-        let column_type = &self.column.ty_for_find_by();
-        let (impl_expr, access_expr) = if self.column.is_as_ref() {
-            (
-                quote! { impl std::convert::AsRef<#column_type> },
-                quote! { as_ref() },
-            )
-        } else {
-            (
-                quote! { impl std::borrow::Borrow<#column_type> },
-                quote! { borrow() },
-            )
-        };
+        let (column_type, impl_expr, access_expr) = &self.column.ty_for_find_by();
         let error = self.error;
         let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
         let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);

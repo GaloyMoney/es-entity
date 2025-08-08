@@ -334,22 +334,28 @@ impl Column {
         &self.opts.ty
     }
 
-    pub fn ty_for_find_by(&self) -> syn::Type {
+    pub fn ty_for_find_by(
+        &self,
+    ) -> (
+        syn::Type,
+        proc_macro2::TokenStream,
+        proc_macro2::TokenStream,
+    ) {
         if let syn::Type::Path(type_path) = self.ty()
             && type_path.path.is_ident("String")
         {
-            return syn::parse_quote! { str };
-        }
-        self.ty().clone()
-    }
-
-    pub fn is_as_ref(&self) -> bool {
-        if let syn::Type::Path(type_path) = self.ty()
-            && type_path.path.is_ident("String")
-        {
-            true
+            (
+                syn::parse_quote! { str },
+                quote! { impl std::convert::AsRef<str> },
+                quote! { as_ref() },
+            )
         } else {
-            false
+            let ty = &self.ty();
+            (
+                self.ty().clone(),
+                quote! { impl std::borrow::Borrow<#ty> },
+                quote! { borrow() },
+            )
         }
     }
 
