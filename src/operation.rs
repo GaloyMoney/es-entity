@@ -63,6 +63,10 @@ impl<'c> DbOp<'c> {
         self.tx.commit().await?;
         Ok(())
     }
+
+    pub fn tx_mut(&mut self) -> &mut Transaction<'c, Postgres> {
+        &mut self.tx
+    }
 }
 
 impl<'o> AtomicOperation for DbOp<'o> {
