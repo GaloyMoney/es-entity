@@ -104,9 +104,9 @@ impl ToTokens for EsEntity {
                         self.#field.load(children)
                     }
 
-                    fn iter_persisted_children_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut #ty>
-                    where
-                        #ty: 'a
+                    fn iter_persisted_children_mut(
+                        &mut self
+                    ) -> std::collections::hash_map::ValuesMut<'_, <<#ty as EsEntity>::Event as EsEvent>::EntityId, #ty>
                     {
                         self.#field.iter_persisted_mut()
                     }
@@ -228,9 +228,9 @@ mod tests {
                     self.children.load(children)
                 }
 
-                fn iter_persisted_children_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut ChildEntity>
-                where
-                    ChildEntity: 'a
+                fn iter_persisted_children_mut(
+                    &mut self
+                ) -> std::collections::hash_map::ValuesMut<'_, <<ChildEntity as EsEntity>::Event as EsEvent>::EntityId, ChildEntity>
                 {
                     self.children.iter_persisted_mut()
                 }

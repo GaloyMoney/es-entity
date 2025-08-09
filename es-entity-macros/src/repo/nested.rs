@@ -44,7 +44,7 @@ impl ToTokens for Nested<'_> {
                 }
 
                 let new_children = new_children.drain(..).collect();
-                let children = self.#repo_field.create_all_in_op(&mut *op, new_children).await?;
+                let children = self.#repo_field.create_all_in_op(op, new_children).await?;
                 entity.inject_children(children);
                 Ok(())
             }
@@ -56,9 +56,9 @@ impl ToTokens for Nested<'_> {
                     #additional_op_constraint
             {
                 for entity in entity.iter_persisted_children_mut() {
-                    self.#repo_field.update_in_op(&mut *op, entity).await?;
+                    self.#repo_field.update_in_op(op, entity).await?;
                 }
-                self.#create_fn_name(&mut *op, entity).await?;
+                self.#create_fn_name(op, entity).await?;
                 Ok(())
             }
 
@@ -114,7 +114,7 @@ mod tests {
                 }
 
                 let new_children = new_children.drain(..).collect();
-                let children = self.users.create_all_in_op(&mut *op, new_children).await?;
+                let children = self.users.create_all_in_op(op, new_children).await?;
                 entity.inject_children(children);
                 Ok(())
             }
@@ -125,9 +125,9 @@ mod tests {
                     OP: es_entity::AtomicOperation,
             {
                 for entity in entity.iter_persisted_children_mut() {
-                    self.users.update_in_op(&mut *op, entity).await?;
+                    self.users.update_in_op(op, entity).await?;
                 }
-                self.create_nested_users_in_op(&mut *op, entity).await?;
+                self.create_nested_users_in_op(op, entity).await?;
                 Ok(())
             }
 

@@ -1,68 +1,73 @@
 mod entities;
 mod helpers;
 
-use entities::user::*;
 use es_entity::*;
 use helpers::init_pool;
 use sqlx::PgPool;
+
+use entities::order::*;
 
 // This test is mainly here to check if the library compiles and can be used from within
 // async_trait fns.
 // When initially writing the AtomicOperation / OneTimeExecutor stuff it was very painful
 // to find a combination of generics that made the compiler happy and were ergonomic to use.
 
+#[async_trait::async_trait]
 trait RunJob {
-    fn execute(&self) -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>;
+    async fn execute(&self) -> anyhow::Result<()>;
 }
 
 struct TestJob {
     pool: PgPool,
 }
 
+#[async_trait::async_trait]
 impl RunJob for TestJob {
-    fn execute(&self) -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+    async fn execute(&self) -> anyhow::Result<()> {
         let pool = self.pool.clone();
-        Box::pin(async move {
-            let name = uuid::Uuid::now_v7().to_string();
 
-            let users = Users::new(pool.clone());
-            let new_user = NewUser::builder()
-                .id(UserId::new())
-                .name(name)
-                .build()
-                .unwrap();
+        let orders = Orders::new(pool);
+        let order_id = OrderId::new();
+        let new_order = NewOrderBuilder::default().id(order_id).build().unwrap();
 
-            let mut user = users.create(new_user).await?;
-            let mut op = users.begin_op().await?;
+        let _ = orders.create(new_order).await?;
+        let mut op = orders.begin_op().await?;
+        let mut order = orders.find_by_id_in_op(&mut op, order_id).await?;
+        orders.update_in_op(&mut op, &mut order).await?;
+        op.commit().await?;
 
-            let new_name = uuid::Uuid::now_v7().to_string();
-            if user.update_name(new_name.clone()).did_execute() {
-                users.update_in_op(&mut op, &mut user).await?;
-            }
-            let user = users.maybe_find_by_name_in_op(&pool, &*new_name).await?;
-            assert!(user.is_none());
-
-            let user = users.maybe_find_by_name_in_op(&mut op, &*new_name).await?;
-            assert!(user.is_some());
-
-            op.commit().await?;
-
-            let user = users.maybe_find_by_name(new_name).await?;
-            assert!(user.is_some());
-
-            Ok(())
-        })
+        Ok(())
     }
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "User", columns(name(ty = "String")))]
-struct Users {
+#[es_repo(entity = "Order")]
+pub struct Orders {
+    pool: PgPool,
+    #[es_repo(nested)]
+    items: OrderItems,
+}
+
+impl Orders {
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            pool: pool.clone(),
+            items: OrderItems::new(pool),
+        }
+    }
+}
+
+#[derive(EsRepo, Debug)]
+#[es_repo(
+    entity = "OrderItem",
+    columns(order_id(ty = "OrderId", update(persist = false), parent))
+)]
+pub struct OrderItems {
     pool: PgPool,
 }
 
-impl Users {
-    fn new(pool: PgPool) -> Self {
+impl OrderItems {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }

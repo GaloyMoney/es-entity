@@ -54,7 +54,10 @@ impl<T: EsEntity> Nested<T> {
         self.entities.len()
     }
 
-    pub fn iter_persisted_mut(&mut self) -> impl Iterator<Item = &mut T> {
+    pub fn iter_persisted_mut(
+        &mut self,
+    ) -> std::collections::hash_map::ValuesMut<'_, <<T as EsEntity>::Event as EsEvent>::EntityId, T>
+    {
         self.entities.values_mut()
     }
 
@@ -87,9 +90,9 @@ pub trait Parent<T: EsEntity>: Send {
     /// Access new child entities to persist them.
     fn new_children_mut(&mut self) -> &mut Vec<<T as EsEntity>::New>;
     /// Access existing children to update them incase they were mutated.
-    fn iter_persisted_children_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut T>
-    where
-        T: 'a;
+    fn iter_persisted_children_mut(
+        &mut self,
+    ) -> std::collections::hash_map::ValuesMut<'_, <<T as EsEntity>::Event as EsEvent>::EntityId, T>;
     /// Inject hydrated children while loading the parent.
     fn inject_children(&mut self, entities: impl IntoIterator<Item = T>);
 }

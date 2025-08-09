@@ -230,7 +230,7 @@ pub trait TryFromEvents<E: EsEvent> {
 ///     events: EntityEvents<UserEvent>,
 /// }
 /// ```
-pub trait EsEntity: TryFromEvents<Self::Event> {
+pub trait EsEntity: TryFromEvents<Self::Event> + Send {
     type Event: EsEvent;
     type New: IntoEvents<Self::Event>;
 
@@ -270,7 +270,7 @@ pub trait EsEntity: TryFromEvents<Self::Event> {
 ///    }
 /// }
 /// ```
-pub trait EsRepo {
+pub trait EsRepo: Send {
     type Entity: EsEntity;
     type Err: From<EsEntityError> + From<sqlx::Error>;
     type EsQueryFlavor;
