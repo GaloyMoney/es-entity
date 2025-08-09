@@ -1,3 +1,10 @@
+# [cala release v0.7.11](https://github.com/GaloyMoney/cala/releases/tag/0.7.11)
+
+
+### Bug Fixes
+
+- Make #[es_repo(nested)] work under async_trait
+
 # [cala release v0.7.10](https://github.com/GaloyMoney/cala/releases/tag/0.7.10)
 
 
