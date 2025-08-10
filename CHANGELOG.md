@@ -1,3 +1,10 @@
+# [cala release v0.7.12](https://github.com/GaloyMoney/cala/releases/tag/0.7.12)
+
+
+### Miscellaneous Tasks
+
+- One_time_executor and operation
+
 # [cala release v0.7.11](https://github.com/GaloyMoney/cala/releases/tag/0.7.11)
 
 
