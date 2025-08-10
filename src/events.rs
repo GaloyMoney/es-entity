@@ -170,6 +170,8 @@ where
     }
 
     /// Loads and reconstructs up to `n` entities from a stream of GenericEvents.
+    /// Assumes the events are grouped by `id` and ordered by `sequence` per `id`.
+    ///
     /// Returns both the entities and a flag indicating whether more entities were available in the stream.
     pub fn load_n<E: EsEntity<Event = T>>(
         events: impl IntoIterator<Item = GenericEvent<<T as EsEvent>::EntityId>>,

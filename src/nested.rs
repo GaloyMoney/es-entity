@@ -85,7 +85,8 @@ pub trait PopulateNested<ID>: EsRepo {
 }
 
 /// Trait that entities implement for every field marked `#[es_entity(nested)]`
-/// Will be auto-implemented when `#[derive(EsEntity)] is used.
+///
+/// Will be auto-implemented when [`#[derive(EsEntity)]`](`EsEntity`) is used.
 pub trait Parent<T: EsEntity>: Send {
     /// Access new child entities to persist them.
     fn new_children_mut(&mut self) -> &mut Vec<<T as EsEntity>::New>;

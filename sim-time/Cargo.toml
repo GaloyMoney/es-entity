@@ -16,4 +16,4 @@ fail-on-warnings = []
 serde = { workspace = true }
 serde_with = { workspace = true }
 chrono = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
