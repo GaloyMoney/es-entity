@@ -7,6 +7,8 @@ use crate::operation::AtomicOperation;
 /// Calling one of the `fetch_` `fn`s will consume it
 /// thus garuanteeing a 1 time usage.
 ///
+/// It is not used directly but passed via the [`IntoOneTimeExecutor`] trait.
+///
 /// In order to make the consumption of the executor work we have to pass the query to the
 /// executor:
 /// ```rust
@@ -80,7 +82,8 @@ impl<'c, T> IntoOneTimeExecutor<'c> for T where T: IntoOneTimeExecutorAt<'c> + '
 
 /// A trait to signify that we can use an argument for 1 round trip to the database
 ///
-/// Auto implemented on all [`&mut AtomicOperation`](`AtomicOperation`) types and &sqlx::PgPool.
+/// Auto implemented on all [`&mut AtomicOperation`](`AtomicOperation`) types and
+/// [`&sqlx::PgPool`](`sqlx::PgPool`).
 pub trait IntoOneTimeExecutorAt<'c> {
     /// The concrete executor type.
     type Executor: sqlx::PgExecutor<'c>;
