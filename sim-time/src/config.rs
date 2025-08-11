@@ -2,34 +2,31 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
-/// Configuration of sim-time
+/// Top level configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimeConfig {
     /// Setting `realtime: true` deactivates sim-time.
-    /// Only if its set to `false` will the [`SimTimeConfig`] take effect.
+    /// Only if its set to `false` will the [`SimulationConfig`] take effect.
     pub realtime: bool,
     /// Configuration of how the simulation should behave
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sim_time: Option<SimTimeConfig>,
+    pub simulation: Option<SimulationConfig>,
 }
 
 impl Default for TimeConfig {
     fn default() -> Self {
         Self {
             realtime: true,
-            sim_time: None,
+            simulation: None,
         }
     }
 }
 
-/// Configuration of how time simulation should behave.
-///
-/// ```rust
-/// ```
+/// Configuration of how the simulation should behave.
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SimTimeConfig {
-    /// What date should the simulation start.
+pub struct SimulationConfig {
+    /// What date should the simulation start at.
     #[serde(default = "Utc::now")]
     pub start_at: DateTime<Utc>,
     /// How long between 'ticks' of the simulation (in real milliseconds).

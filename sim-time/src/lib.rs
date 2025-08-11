@@ -40,7 +40,7 @@ impl Time {
         let elapsed_ms = self.elapsed_ms.clone();
         let sim_config = self
             .config
-            .sim_time
+            .simulation
             .as_ref()
             .expect("sim_time required when realtime is false");
         let tick_interval_ms = sim_config.tick_interval_ms;
@@ -63,7 +63,7 @@ impl Time {
         } else {
             let sim_config = self
                 .config
-                .sim_time
+                .simulation
                 .as_ref()
                 .expect("sim_time required when realtime is false");
             let elapsed_ms = self.elapsed_ms.load(Ordering::Relaxed);
@@ -85,7 +85,7 @@ impl Time {
         } else {
             let sim_config = self
                 .config
-                .sim_time
+                .simulation
                 .as_ref()
                 .expect("sim_time required when realtime is false");
 
@@ -136,7 +136,7 @@ impl Time {
 /// Returns a future that will return when the simulation has caught up to the current time.
 ///
 /// Assumes that the simulation was configured to start in the past and has
-/// [`SimTimeConfig.transform_to_realtime`] set to `true`.
+/// [`SimulationConfig::transform_to_realtime`](`config::SimulationConfig::transform_to_realtime`) set to `true`.
 pub async fn wait_until_realtime() {
     INSTANCE
         .get_or_init(|| Time::new(TimeConfig::default()))
@@ -150,7 +150,7 @@ pub fn init(config: TimeConfig) {
     INSTANCE.get_or_init(|| Time::new(config));
 }
 
-/// Returns the current time in the simulation>
+/// Returns the current time in the simulation
 pub fn now() -> DateTime<Utc> {
     INSTANCE
         .get_or_init(|| Time::new(TimeConfig::default()))
@@ -185,7 +185,7 @@ mod tests {
         // Configure time where 10ms = 10 days of simulated time
         let config = TimeConfig {
             realtime: false,
-            sim_time: Some(SimTimeConfig {
+            simulation: Some(SimulationConfig {
                 start_at: Utc::now(),
                 tick_interval_ms: 10,
                 tick_duration_secs: StdDuration::from_secs(10 * 24 * 60 * 60), // 10 days in seconds
