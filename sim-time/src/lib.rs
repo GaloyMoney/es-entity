@@ -133,6 +133,10 @@ impl Time {
     }
 }
 
+/// Returns a future that will return when the simulation has caught up to the current time.
+///
+/// Assumes that the simulation was configured to start in the past and has
+/// [`SimTimeConfig.transform_to_realtime`] set to `true`.
 pub async fn wait_until_realtime() {
     INSTANCE
         .get_or_init(|| Time::new(TimeConfig::default()))
@@ -140,22 +144,27 @@ pub async fn wait_until_realtime() {
         .await
 }
 
+/// Pass the [`TimeConfig`] to configure `sim-time` globally.
+/// Must be called before any other `fn`s otherwise `sim-time` will initialize with defaults.
 pub fn init(config: TimeConfig) {
     INSTANCE.get_or_init(|| Time::new(config));
 }
 
+/// Returns the current time in the simulation>
 pub fn now() -> DateTime<Utc> {
     INSTANCE
         .get_or_init(|| Time::new(TimeConfig::default()))
         .now()
 }
 
+/// Will sleep for the simulated duration.
 pub fn sleep(duration: Duration) -> tokio::time::Sleep {
     INSTANCE
         .get_or_init(|| Time::new(TimeConfig::default()))
         .sleep(duration)
 }
 
+/// Will timeout for the simulated duration.
 pub fn timeout<F>(duration: Duration, future: F) -> tokio::time::Timeout<F::IntoFuture>
 where
     F: core::future::IntoFuture,
