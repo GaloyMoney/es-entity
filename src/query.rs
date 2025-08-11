@@ -7,12 +7,22 @@ use crate::{
     traits::*,
 };
 
+/// Type-safe wrapper around the [`EsRepo`]-generated or user-written [sqlx] query with execution helpers.
+///
+/// Provides separate `fetch` implementations for query execution on nested and flat entities decided by the
+/// marker types internaly ( [`EsQueryFlavorFlat`] or [`EsQueryFlavorNested`] ), both of which
+/// internally call [`fetch_all`][crate::OneTimeExecutor::fetch_all] and subsequently load the entities
+/// from their events to return them.
 pub struct EsQuery<'q, Repo, Flavor, F, A> {
     inner: sqlx::query::Map<'q, sqlx::Postgres, F, A>,
     _repo: std::marker::PhantomData<Repo>,
     _flavor: std::marker::PhantomData<Flavor>,
 }
+
+/// Marker type for query execution on flat entities (entities without nested relationships).
 pub struct EsQueryFlavorFlat;
+
+/// Marker type for query execution on nested entities (entities with nested relationships).
 pub struct EsQueryFlavorNested;
 
 impl<'q, Repo, Flavor, F, A> EsQuery<'q, Repo, Flavor, F, A>
@@ -27,6 +37,7 @@ where
         > + Send,
     A: 'q + Send + sqlx::IntoArguments<'q, sqlx::Postgres>,
 {
+    /// Creates a new [`EsQuery`] wrapper around the provided sqlx query.
     pub fn new(query: sqlx::query::Map<'q, sqlx::Postgres, F, A>) -> Self {
         Self {
             inner: query,
@@ -80,6 +91,7 @@ where
         > + Send,
     A: 'q + Send + sqlx::IntoArguments<'q, sqlx::Postgres>,
 {
+    /// Executes the query and returns an optional flat entity.
     pub async fn fetch_optional(
         self,
         op: impl IntoOneTimeExecutor<'_>,
@@ -87,6 +99,7 @@ where
         self.fetch_optional_inner(op).await
     }
 
+    /// Executes the query and returns a single flat entity.
     pub async fn fetch_one(
         self,
         op: impl IntoOneTimeExecutor<'_>,
@@ -94,6 +107,7 @@ where
         self.fetch_one_inner(op).await
     }
 
+    /// Executes the query and returns up to `first` flat paginated entities.
     pub async fn fetch_n(
         self,
         op: impl IntoOneTimeExecutor<'_>,
@@ -115,6 +129,7 @@ where
         > + Send,
     A: 'q + Send + sqlx::IntoArguments<'q, sqlx::Postgres>,
 {
+    /// Executes the query and returns an optional nested entity with all relationships loaded.
     pub async fn fetch_optional<OP>(
         self,
         op: &mut OP,
@@ -131,6 +146,7 @@ where
         Ok(Some(entity))
     }
 
+    /// Executes the query and returns a single nested entity with all relationships loaded.
     pub async fn fetch_one<OP>(
         self,
         op: &mut OP,
@@ -145,6 +161,7 @@ where
         Ok(entity)
     }
 
+    /// Executes the query and returns up to `first` nested entities with all relationships loaded.
     pub async fn fetch_n<OP>(
         self,
         op: &mut OP,
