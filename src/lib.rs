@@ -45,6 +45,9 @@ pub mod prelude {
 
     #[cfg(feature = "json-schema")]
     pub use schemars;
+
+    #[cfg(feature = "sim-time")]
+    pub use sim_time;
 }
 
 #[doc(inline)]

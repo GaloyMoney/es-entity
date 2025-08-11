@@ -243,11 +243,11 @@ impl RepositoryOptions {
     pub fn query_fn_op_traits(nested: bool) -> proc_macro2::TokenStream {
         if nested {
             quote! {
-                AtomicOperation
+                es_entity::AtomicOperation
             }
         } else {
             quote! {
-                IntoOneTimeExecutor<'a>
+                es_entity::IntoOneTimeExecutor<'a>
             }
         }
     }

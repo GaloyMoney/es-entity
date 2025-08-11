@@ -162,7 +162,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: IntoOneTimeExecutor<'a>
+                    OP: es_entity::IntoOneTimeExecutor<'a>
             {
                 let id = id.borrow();
                 es_entity::es_query!(
@@ -187,7 +187,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: IntoOneTimeExecutor<'a>
+                    OP: es_entity::IntoOneTimeExecutor<'a>
             {
                 let id = id.borrow();
                 es_entity::es_query!(
@@ -239,7 +239,7 @@ mod tests {
                 email: impl std::convert::AsRef<str>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: IntoOneTimeExecutor<'a>
+                    OP: es_entity::IntoOneTimeExecutor<'a>
             {
                 let email = email.as_ref();
                 es_entity::es_query!(
@@ -264,7 +264,7 @@ mod tests {
                 email: impl std::convert::AsRef<str>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: IntoOneTimeExecutor<'a>
+                    OP: es_entity::IntoOneTimeExecutor<'a>
             {
                 let email = email.as_ref();
                 es_entity::es_query!(
@@ -313,7 +313,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: IntoOneTimeExecutor<'a>
+                    OP: es_entity::IntoOneTimeExecutor<'a>
             {
                 let id = id.borrow();
                 es_entity::es_query!(
@@ -338,7 +338,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: IntoOneTimeExecutor<'a>
+                    OP: es_entity::IntoOneTimeExecutor<'a>
             {
                 let id = id.borrow();
                 es_entity::es_query!(
@@ -363,7 +363,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: IntoOneTimeExecutor<'a>
+                    OP: es_entity::IntoOneTimeExecutor<'a>
             {
                 let id = id.borrow();
                 es_entity::es_query!(
@@ -388,7 +388,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: IntoOneTimeExecutor<'a>
+                    OP: es_entity::IntoOneTimeExecutor<'a>
             {
                 let id = id.borrow();
                 es_entity::es_query!(
@@ -437,7 +437,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, es_entity::EsRepoError>
                 where
-                    OP: AtomicOperation
+                    OP: es_entity::AtomicOperation
             {
                 let id = id.borrow();
                 es_entity::es_query!(
@@ -462,7 +462,7 @@ mod tests {
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, es_entity::EsRepoError>
                 where
-                    OP: AtomicOperation
+                    OP: es_entity::AtomicOperation
             {
                 let id = id.borrow();
                 es_entity::es_query!(

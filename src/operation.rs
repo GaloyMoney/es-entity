@@ -25,7 +25,7 @@ impl<'c> DbOp<'c> {
         let tx = pool.begin().await?;
 
         #[cfg(feature = "sim-time")]
-        let time = Some(sim_time::now());
+        let time = Some(crate::prelude::sim_time::now());
         #[cfg(not(feature = "sim-time"))]
         let time = None;
 

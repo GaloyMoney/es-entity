@@ -280,7 +280,7 @@ mod tests {
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError>
                 where
-                    OP: IntoOneTimeExecutor<'a>
+                    OP: es_entity::IntoOneTimeExecutor<'a>
             {
                 let filter_customer_id = filter_customer_id.borrow();
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;
@@ -371,7 +371,7 @@ mod tests {
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, es_entity::EsRepoError>
                 where
-                    OP: IntoOneTimeExecutor<'a>
+                    OP: es_entity::IntoOneTimeExecutor<'a>
             {
                 let filter_email = filter_email.as_ref();
                 let es_entity::PaginatedQueryArgs { first, after } = cursor;

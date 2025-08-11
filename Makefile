@@ -17,14 +17,14 @@ test-in-ci: start-deps setup-db
 	cargo doc --no-deps --workspace
 
 test-book:
-	cargo build --profile mdbook-test --features mdbook-test --lib
+	cargo build --profile mdbook-test --features mdbook-test,sim-time --lib
 	CARGO_MANIFEST_DIR=$(shell pwd) mdbook test book -L $${CARGO_TARGET_DIR:-./target}/mdbook-test,$${CARGO_TARGET_DIR:-./target}/mdbook-test/deps
 
 serve-book:
 	mdbook serve book --open
 
 test-chapter:
-	cargo build --profile mdbook-test --features mdbook-test --lib
+	cargo build --profile mdbook-test --features mdbook-test,sim-time --lib
 	CARGO_MANIFEST_DIR=$(shell pwd) mdbook test book -L ./target/mdbook-test,./target/mdbook-test/deps --chapter "$(CHAPTER)"
 
 check-code:
