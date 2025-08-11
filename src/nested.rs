@@ -8,6 +8,22 @@ use std::collections::HashMap;
 ///
 /// Provides operations for loading, managing, and persisting nested entities while maintaining
 /// event sourcing semantics. Required field for all parent entities to have nested children.
+///
+/// # Examples
+///
+/// ```ignore
+/// #[derive(EsEntity, Builder)]
+/// #[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
+/// pub struct Order {
+///    pub id: OrderId,
+///     events: EntityEvents<OrderEvent>,
+///     // Assuming an OrderItem entity exists, marking it as a nested(child) entity in `Order`
+///     // and giving the nested entity the `Nested<T>` required type
+///     #[es_entity(nested)]
+///     #[builder(default)]
+///     items: Nested<OrderItem>,
+/// }
+/// ```
 pub struct Nested<T: EsEntity> {
     entities: HashMap<<<T as EsEntity>::Event as EsEvent>::EntityId, T>,
     new_entities: Vec<<T as EsEntity>::New>,
