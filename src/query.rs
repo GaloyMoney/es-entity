@@ -79,6 +79,7 @@ where
     }
 }
 
+/// Query execution implementation for `nested` entities, shown by [`EsQueryFlavorFlat`]
 impl<'q, Repo, F, A> EsQuery<'q, Repo, EsQueryFlavorFlat, F, A>
 where
     Repo: EsRepo,
@@ -117,6 +118,7 @@ where
     }
 }
 
+/// Query execution implementation for `nested` entities, shown by [`EsQueryFlavorNested`]
 impl<'q, Repo, F, A> EsQuery<'q, Repo, EsQueryFlavorNested, F, A>
 where
     Repo: EsRepo,
