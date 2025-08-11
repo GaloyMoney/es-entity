@@ -10,7 +10,7 @@ use crate::{
 /// Type-safe wrapper around the [`EsRepo`]-generated or user-written [sqlx] query with execution helpers.
 ///
 /// Provides separate `fetch` implementations for query execution on nested and flat entities decided by the
-/// marker types internaly ( [`EsQueryFlavorFlat`] or [`EsQueryFlavorNested`] ), both of which
+/// marker types internally ( [`EsQueryFlavorFlat`] or [`EsQueryFlavorNested`] ), both of which
 /// internally call [`fetch_all`][crate::OneTimeExecutor::fetch_all] and subsequently load the entities
 /// from their events to return them.
 pub struct EsQuery<'q, Repo, Flavor, F, A> {
