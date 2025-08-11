@@ -9,10 +9,22 @@ use crate::{
 
 /// Type-safe wrapper around the [`EsRepo`]-generated or user-written [sqlx] query with execution helpers.
 ///
-/// Provides separate `fetch` implementations for query execution on nested and flat entities decided by the
-/// marker types internally ( [`EsQueryFlavorFlat`] or [`EsQueryFlavorNested`] ), both of which
-/// internally call [`fetch_all`][crate::OneTimeExecutor::fetch_all] and subsequently load the entities
-/// from their events to return them.
+/// Holds the query in a [`Map`][sqlx::query::Map] and provides `fetch` implementations for query execution on
+/// nested and flat entities separately depending on the internal markers ([`EsQueryFlavorFlat`] or [`EsQueryFlavorNested`]), both of which
+/// internally call [`fetch_all`][crate::OneTimeExecutor::fetch_all] and subsequently load the entities from events.
+///
+/// # Examples
+///
+/// ```ignore
+/// // The es_query macro returns the 'EsQuery' struct which provides helpers to execute the query.
+/// let query = es_query!("SELECT * FROM users WHERE id = $1", id as UserId);
+/// // Using fetch_one helper method from `EsQuery` itself.
+/// let result = query.fetch_one(self.pool()).await?;
+///
+/// // The generated `find_by_id` fn accomplishes what the above lines do by
+/// // utilizing the `EsQuery` struct and its features under the hood.
+/// let result = users.find_by_id(id);
+/// ```
 pub struct EsQuery<'q, Repo, Flavor, F, A> {
     inner: sqlx::query::Map<'q, sqlx::Postgres, F, A>,
     _repo: std::marker::PhantomData<Repo>,
