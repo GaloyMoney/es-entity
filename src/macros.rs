@@ -419,7 +419,7 @@ macro_rules! entity_id {
 /// ```rust
 /// use es_entity::entity_id;
 ///
-/// entity_id!(UserId, OrderId);
+/// entity_id! { UserId, OrderId }
 ///
 /// // Creates:
 /// // pub struct UserId(Uuid);
@@ -429,13 +429,13 @@ macro_rules! entity_id {
 /// ```rust
 /// use es_entity::entity_id;
 ///
-/// entity_id!(
+/// entity_id! {
 ///     UserId,
 ///     AdminUserId;
 ///     UserId => AdminUserId
-/// );
+/// }
 ///
-/// // Creates UserId and AdminUserId with automatic conversion between them
+/// // Creates UserId and AdminUserId with `impl From` conversion between them
 /// ```
 #[cfg(all(not(feature = "json-schema"), not(feature = "graphql")))]
 #[macro_export]
