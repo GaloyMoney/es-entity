@@ -39,8 +39,15 @@ impl EventContext {
         EventContext { data }
     }
 
-    pub fn fork() -> Self {
-        Self::current()
+    pub fn seed(mut ctx: EventContext) -> EventContext {
+        let data = std::mem::replace(&mut ctx.data, HashMap::new());
+        CONTEXT_STACK.with(|c| {
+            let mut stack = c.borrow_mut();
+            stack.push(data.clone());
+        });
+        // Prevent the incoming context from popping when dropped
+        std::mem::forget(ctx);
+        EventContext { data }
     }
 
     pub fn insert<T: Serialize>(
@@ -83,7 +90,7 @@ mod tests {
     }
 
     fn inner(value: &serde_json::Value) {
-        let mut ctx = EventContext::fork();
+        let mut ctx = EventContext::current();
         ctx.insert("new_data", &value).unwrap();
         assert_current(serde_json::json!({ "data": value, "new_data": value}));
     }
@@ -91,5 +98,35 @@ mod tests {
     fn assert_current(expected: serde_json::Value) {
         let ctx = EventContext::current();
         assert_eq!(ctx.as_json().unwrap(), expected);
+    }
+
+    #[test]
+    fn thread_isolation() {
+        // Verify main thread starts with one context on stack after current()
+        let mut ctx = EventContext::current();
+        let value = serde_json::json!({ "main": "thread" });
+        ctx.insert("data", &value).unwrap();
+
+        let handle = std::thread::spawn(move || {
+            {
+                let mut ctx = EventContext::seed(ctx);
+                ctx.insert("thread", &serde_json::json!("local")).unwrap();
+                assert_current(
+                    serde_json::json!({ "data": { "main": "thread" }, "thread": "local" }),
+                );
+            }
+            // Verify the thread's stack is now empty after the context dropped
+            CONTEXT_STACK.with(|c| {
+                assert!(
+                    c.borrow().is_empty(),
+                    "Thread stack should be empty after context drops"
+                );
+            });
+        });
+
+        assert_current(serde_json::json!({ "data": value }));
+        handle.join().unwrap();
+
+        assert_current(serde_json::json!({ "data": value }));
     }
 }
