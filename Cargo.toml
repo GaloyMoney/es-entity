@@ -31,6 +31,7 @@ serde =  { workspace = true }
 serde_json =  { workspace = true }
 derive_builder = { workspace = true }
 uuid = { workspace = true }
+im = { workspace = true }
 async-graphql = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 
@@ -68,3 +69,4 @@ sqlx = { version = "0.8.3", default-features = false, features = ["macros", "run
 tokio = { version = "1.46", features = ["rt-multi-thread", "macros"] }
 thiserror = "2.0.12"
 uuid = { version = "1.17", features = ["serde", "v7"] }
+im = { version = "15.1.0", features = ["serde"] }

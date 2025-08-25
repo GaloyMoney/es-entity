@@ -23,6 +23,7 @@
 #![cfg_attr(feature = "fail-on-warnings", deny(clippy::all))]
 #![forbid(unsafe_code)]
 
+pub mod context;
 pub mod error;
 pub mod events;
 pub mod idempotent;
