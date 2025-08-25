@@ -3,7 +3,22 @@ use serde::Serialize;
 
 use std::cell::RefCell;
 
-type ContextData = HashMap<&'static str, serde_json::Value>;
+#[derive(Debug, Clone)]
+pub struct ContextData(HashMap<&'static str, serde_json::Value>);
+
+impl ContextData {
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    fn update(&self, key: &'static str, value: serde_json::Value) -> Self {
+        Self(self.0.update(key, value))
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&'static str, &serde_json::Value)> {
+        self.0.iter().map(|(&k, v)| (k, v))
+    }
+}
 
 thread_local! {
     static CONTEXT_STACK: RefCell<Vec<ContextData>> = RefCell::new(Vec::new());
@@ -29,7 +44,7 @@ impl EventContext {
         let data = CONTEXT_STACK.with(|c| {
             let mut stack = c.borrow_mut();
             if stack.is_empty() {
-                stack.push(HashMap::new());
+                stack.push(ContextData::new());
             } else {
                 let current_data = stack.last().unwrap().clone();
                 stack.push(current_data);
@@ -39,15 +54,16 @@ impl EventContext {
         EventContext { data }
     }
 
-    pub fn seed(mut ctx: EventContext) -> EventContext {
-        let data = std::mem::replace(&mut ctx.data, HashMap::new());
+    pub fn seed(data: ContextData) -> EventContext {
         CONTEXT_STACK.with(|c| {
             let mut stack = c.borrow_mut();
             stack.push(data.clone());
         });
-        // Prevent the incoming context from popping when dropped
-        std::mem::forget(ctx);
         EventContext { data }
+    }
+
+    pub fn data(&self) -> &ContextData {
+        &self.data
     }
 
     pub fn insert<T: Serialize>(
@@ -102,20 +118,19 @@ mod tests {
 
     #[test]
     fn thread_isolation() {
-        // Verify main thread starts with one context on stack after current()
         let mut ctx = EventContext::current();
         let value = serde_json::json!({ "main": "thread" });
         ctx.insert("data", &value).unwrap();
 
+        let ctx_data = ctx.data().clone();
         let handle = std::thread::spawn(move || {
             {
-                let mut ctx = EventContext::seed(ctx);
+                let mut ctx = EventContext::seed(ctx_data);
                 ctx.insert("thread", &serde_json::json!("local")).unwrap();
                 assert_current(
                     serde_json::json!({ "data": { "main": "thread" }, "thread": "local" }),
                 );
             }
-            // Verify the thread's stack is now empty after the context dropped
             CONTEXT_STACK.with(|c| {
                 assert!(
                     c.borrow().is_empty(),
