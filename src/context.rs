@@ -1,7 +1,7 @@
 use im::HashMap;
 use serde::Serialize;
 
-use std::cell::RefCell;
+use std::{cell::RefCell, marker::PhantomData, rc::Rc};
 
 #[derive(Debug, Clone)]
 pub struct ContextData(HashMap<&'static str, serde_json::Value>);
@@ -26,6 +26,7 @@ thread_local! {
 
 pub struct EventContext {
     data: ContextData,
+    _not_send: PhantomData<Rc<()>>,
 }
 
 impl Drop for EventContext {
@@ -40,6 +41,13 @@ impl Drop for EventContext {
 }
 
 impl EventContext {
+    fn new(data: ContextData) -> Self {
+        Self {
+            data,
+            _not_send: PhantomData,
+        }
+    }
+
     pub fn current() -> Self {
         let data = CONTEXT_STACK.with(|c| {
             let mut stack = c.borrow_mut();
@@ -51,15 +59,15 @@ impl EventContext {
             }
             stack.last().unwrap().clone()
         });
-        EventContext { data }
+        EventContext::new(data)
     }
 
-    pub fn seed(data: ContextData) -> EventContext {
+    pub fn seed(data: ContextData) -> Self {
         CONTEXT_STACK.with(|c| {
             let mut stack = c.borrow_mut();
             stack.push(data.clone());
         });
-        EventContext { data }
+        EventContext::new(data)
     }
 
     pub fn data(&self) -> &ContextData {
