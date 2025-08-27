@@ -51,6 +51,7 @@ pub mod prelude {
     pub use sim_time;
 }
 
+pub use context::*;
 #[doc(inline)]
 pub use error::*;
 pub use es_entity_macros::EsEntity;

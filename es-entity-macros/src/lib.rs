@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod entity;
+mod es_event_context;
 mod event;
 mod query;
 mod repo;
@@ -24,6 +25,15 @@ pub fn es_event_derive(input: TokenStream) -> TokenStream {
 pub fn retry_on_concurrent_modification(args: TokenStream, input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as syn::ItemFn);
     match retry_on_concurrent_modification::make(args, ast) {
+        Ok(tokens) => tokens.into(),
+        Err(e) => e.write_errors().into(),
+    }
+}
+
+#[proc_macro_attribute]
+pub fn es_event_context(args: TokenStream, input: TokenStream) -> TokenStream {
+    let ast = parse_macro_input!(input as syn::ItemFn);
+    match es_event_context::make(args, ast) {
         Ok(tokens) => tokens.into(),
         Err(e) => e.write_errors().into(),
     }
