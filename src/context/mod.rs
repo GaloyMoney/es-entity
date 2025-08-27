@@ -243,4 +243,31 @@ mod tests {
 
         assert_eq!(current_json(), serde_json::json!({ "data": value }));
     }
+
+    #[tokio::test]
+    async fn async_context() {
+        async fn inner_async() {
+            let mut ctx = EventContext::current();
+            ctx.insert("async_inner", &serde_json::json!("value"))
+                .unwrap();
+            assert_eq!(
+                current_json(),
+                serde_json::json!({ "async_data": { "test": "async" }, "async_inner": "value" })
+            );
+        }
+
+        let mut ctx = EventContext::current();
+        assert_eq!(current_json(), serde_json::json!({}));
+
+        let value = serde_json::json!({ "test": "async" });
+        ctx.insert("async_data", &value).unwrap();
+        assert_eq!(current_json(), serde_json::json!({ "async_data": value }));
+
+        inner_async().await;
+
+        assert_eq!(
+            current_json(),
+            serde_json::json!({ "async_data": value, "async_inner": "value" })
+        );
+    }
 }
