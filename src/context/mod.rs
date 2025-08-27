@@ -1,6 +1,5 @@
 mod with_event_context;
 
-use im::HashMap;
 use serde::Serialize;
 
 use std::{cell::RefCell, rc::Rc};
@@ -8,11 +7,11 @@ use std::{cell::RefCell, rc::Rc};
 pub use with_event_context::*;
 
 #[derive(Debug, Clone)]
-pub struct ContextData(HashMap<&'static str, serde_json::Value>);
+pub struct ContextData(im::HashMap<&'static str, serde_json::Value>);
 
 impl ContextData {
     fn new() -> Self {
-        Self(HashMap::new())
+        Self(im::HashMap::new())
     }
 
     fn update(&self, key: &'static str, value: serde_json::Value) -> Self {
