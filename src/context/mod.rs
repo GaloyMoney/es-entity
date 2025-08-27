@@ -26,7 +26,7 @@ struct StackEntry {
 }
 
 thread_local! {
-    static CONTEXT_STACK: RefCell<Vec<StackEntry>> = RefCell::new(Vec::new());
+    static CONTEXT_STACK: RefCell<Vec<StackEntry>> = const { RefCell::new(Vec::new()) };
 }
 
 pub struct EventContext {

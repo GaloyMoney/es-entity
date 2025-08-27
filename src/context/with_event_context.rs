@@ -15,7 +15,7 @@ pub trait WithEventContext: Future {
     {
         EventContextFuture {
             future: self,
-            context_data: context_data,
+            context_data,
         }
     }
 }
