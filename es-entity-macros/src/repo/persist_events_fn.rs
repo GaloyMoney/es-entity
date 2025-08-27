@@ -9,6 +9,7 @@ pub struct PersistEventsFn<'a> {
     event: &'a syn::Ident,
     error: &'a syn::Type,
     events_table_name: &'a str,
+    event_ctx: bool,
 }
 
 impl<'a> From<&'a RepositoryOptions> for PersistEventsFn<'a> {
@@ -18,16 +19,29 @@ impl<'a> From<&'a RepositoryOptions> for PersistEventsFn<'a> {
             event: opts.event(),
             error: opts.err(),
             events_table_name: opts.events_table_name(),
+            event_ctx: opts.event_ctx,
         }
     }
 }
 
 impl ToTokens for PersistEventsFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
+        let context = self.event_ctx;
         let query = format!(
-            "INSERT INTO {} (id, recorded_at, sequence, event_type, event) SELECT $1, COALESCE($2, NOW()), ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event FROM UNNEST($4::text[], $5::jsonb[]) AS unnested(event_type, event) RETURNING recorded_at",
+            "INSERT INTO {} (id, recorded_at, sequence, event_type, event{}) SELECT $1, COALESCE($2, NOW()), ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event{} FROM UNNEST($4::text[], $5::jsonb[]) AS unnested(event_type, event) RETURNING recorded_at",
             self.events_table_name,
+            if context { ", context" } else { "" },
+            if context { ", $6" } else { "" }
         );
+        let (context, ctx_arg) = if context {
+            (
+                quote! { Some(es_entity::EventContext::current().as_json().expect("Couldn't serialize context")) },
+                quote! { Self::current_context() },
+            )
+        } else {
+            (quote! { None }, quote! {})
+        };
+
         let id_type = &self.id;
         let event_type = &self.event;
         let error = self.error;
@@ -36,6 +50,10 @@ impl ToTokens for PersistEventsFn<'_> {
         };
 
         tokens.append_all(quote! {
+            fn current_context() -> Option<serde_json::Value> {
+                #context
+            }
+
             fn extract_concurrent_modification<T>(res: Result<T, sqlx::Error>) -> Result<T, #error> {
                 match res {
                     Ok(entity) => Ok(entity),
@@ -68,6 +86,7 @@ impl ToTokens for PersistEventsFn<'_> {
                         offset as i32,
                         &events_types,
                         &serialized_events,
+                        #ctx_arg
                     ).fetch_all(op.as_executor()).await)?;
 
                 let recorded_at = rows[0].recorded_at;
@@ -93,12 +112,17 @@ mod tests {
             event: &event,
             error: &error,
             events_table_name: "entity_events",
+            event_ctx: false,
         };
 
         let mut tokens = TokenStream::new();
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
+            fn current_context() -> Option<serde_json::Value> {
+                None
+            }
+
             fn extract_concurrent_modification<T>(res: Result<T, sqlx::Error>) -> Result<T, es_entity::EsRepoError> {
                 match res {
                     Ok(entity) => Ok(entity),
