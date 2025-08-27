@@ -1,0 +1,42 @@
+use pin_project::pin_project;
+
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
+
+use super::{ContextData, EventContext};
+
+pub trait WithEsEventContext: Future {
+    fn with_event_context(self, context_data: ContextData) -> EventContextFuture<Self>
+    where
+        Self: Sized,
+    {
+        EventContextFuture {
+            future: self,
+            context_data: context_data,
+        }
+    }
+}
+
+impl<F: Future> WithEsEventContext for F {}
+
+#[pin_project]
+pub struct EventContextFuture<F> {
+    #[pin]
+    future: F,
+    context_data: ContextData,
+}
+
+impl<F: Future> Future for EventContextFuture<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let _guard = EventContext::seed(this.context_data.clone());
+        let res = this.future.poll(cx);
+        *this.context_data = EventContext::current().data();
+        res
+    }
+}

@@ -1,4 +1,5 @@
 mod id;
+mod with_es_context;
 
 use im::HashMap;
 use serde::Serialize;
@@ -9,6 +10,7 @@ use std::{
 };
 
 use id::ContextId;
+pub use with_es_context::*;
 
 #[derive(Debug, Clone)]
 pub struct ContextData {
@@ -71,11 +73,8 @@ impl EventContext {
     pub fn current() -> Self {
         CONTEXT_STACK.with(|c| {
             let mut stack = c.borrow_mut();
-
-            // Try to find an existing context from the end
             for i in (0..stack.len()).rev() {
                 if let Some(strong_id) = stack[i].id.upgrade() {
-                    // Found a valid context, return it
                     return EventContext {
                         id: strong_id,
                         data: stack[i].data.clone(),
@@ -83,7 +82,6 @@ impl EventContext {
                 }
             }
 
-            // No valid context found, create a new one
             let id = Rc::new(ContextId::next());
             let data = ContextData::new(*id);
             stack.push(StackEntry {
@@ -98,16 +96,6 @@ impl EventContext {
     pub fn seed(data: ContextData) -> Self {
         CONTEXT_STACK.with(|c| {
             let mut stack = c.borrow_mut();
-            for entry in stack.iter() {
-                if let Some(strong_id) = entry.id.upgrade() {
-                    if *strong_id == data.id {
-                        return EventContext {
-                            id: strong_id,
-                            data: entry.data.clone(),
-                        };
-                    }
-                }
-            }
             let id = Rc::new(data.id);
             stack.push(StackEntry {
                 id: Rc::downgrade(&id),
@@ -118,8 +106,8 @@ impl EventContext {
         })
     }
 
-    pub fn data(&self) -> &ContextData {
-        &self.data
+    pub fn data(&self) -> ContextData {
+        self.data.clone()
     }
 
     pub fn insert<T: Serialize>(
@@ -135,16 +123,12 @@ impl EventContext {
                 if let Some(strong_id) = entry.id.upgrade() {
                     if Rc::ptr_eq(&strong_id, &self.id) {
                         self.data = entry.data.update(key, json_value);
-                        entry.data = self.data.clone();
+                        entry.data = self.data();
                         return;
                     }
                 }
             }
-            self.data = self.data.update(key, json_value);
-            stack.push(StackEntry {
-                id: Rc::downgrade(&self.id),
-                data: self.data.clone(),
-            });
+            unreachable!("EventContext missing on CONTEXT_STACK")
         });
 
         Ok(())
@@ -226,7 +210,7 @@ mod tests {
         ctx.insert("data", &value).unwrap();
         assert_eq!(stack_depth(), 1);
 
-        let ctx_data = ctx.data().clone();
+        let ctx_data = ctx.data();
         let handle = std::thread::spawn(move || {
             assert_eq!(stack_depth(), 0);
             let mut ctx = EventContext::seed(ctx_data);
@@ -269,5 +253,70 @@ mod tests {
             current_json(),
             serde_json::json!({ "async_data": value, "async_inner": "value" })
         );
+    }
+
+    #[tokio::test]
+    async fn with_event_context_spawned() {
+        let mut ctx = EventContext::current();
+        ctx.insert("parent", &serde_json::json!("context")).unwrap();
+
+        let handle = tokio::spawn(
+            async {
+                assert_eq!(stack_depth(), 2);
+
+                EventContext::current()
+                    .insert("spawned", &serde_json::json!("value"))
+                    .unwrap();
+
+                assert_eq!(
+                    current_json(),
+                    serde_json::json!({ "parent": "context", "spawned": "value" })
+                );
+                tokio::task::yield_now().await;
+                current_json()
+            }
+            .with_event_context(ctx.data()),
+        );
+
+        let result = handle.await.unwrap();
+        assert_eq!(
+            result,
+            serde_json::json!({ "parent": "context", "spawned": "value" })
+        );
+
+        assert_eq!(current_json(), serde_json::json!({ "parent": "context" }));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn with_event_context_spawned_multi_thread() {
+        let mut ctx = EventContext::current();
+        ctx.insert("parent", &serde_json::json!("context")).unwrap();
+
+        let handle = tokio::spawn(
+            async {
+                assert_eq!(stack_depth(), 1);
+
+                EventContext::current()
+                    .insert("spawned", &serde_json::json!("value"))
+                    .unwrap();
+
+                assert_eq!(
+                    current_json(),
+                    serde_json::json!({ "parent": "context", "spawned": "value" })
+                );
+                let data = EventContext::current().data();
+                tokio::task::yield_now().with_event_context(data).await;
+                current_json()
+            }
+            .with_event_context(ctx.data()),
+        );
+
+        let result = handle.await.unwrap();
+        assert_eq!(
+            result,
+            serde_json::json!({ "parent": "context", "spawned": "value" })
+        );
+
+        assert_eq!(current_json(), serde_json::json!({ "parent": "context" }));
     }
 }
