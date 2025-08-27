@@ -6,7 +6,8 @@ use std::{cell::RefCell, rc::Rc};
 
 pub use with_event_context::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
 pub struct ContextData(im::HashMap<&'static str, serde_json::Value>);
 
 impl ContextData {
@@ -14,12 +15,8 @@ impl ContextData {
         Self(im::HashMap::new())
     }
 
-    fn update(&self, key: &'static str, value: serde_json::Value) -> Self {
-        Self(self.0.update(key, value))
-    }
-
-    fn iter(&self) -> impl Iterator<Item = (&'static str, &serde_json::Value)> {
-        self.0.iter().map(|(&k, v)| (k, v))
+    fn insert(&mut self, key: &'static str, value: serde_json::Value) {
+        self.0 = self.0.update(key, value);
     }
 }
 
@@ -98,7 +95,7 @@ impl EventContext {
             let mut stack = c.borrow_mut();
             for entry in stack.iter_mut().rev() {
                 if Rc::ptr_eq(&entry.id, &self.id) {
-                    entry.data = entry.data.update(key, json_value);
+                    entry.data.insert(key, json_value);
                     return;
                 }
             }
@@ -122,11 +119,7 @@ impl EventContext {
 
     pub fn as_json(&self) -> Result<serde_json::Value, serde_json::Error> {
         let data = self.data();
-        let mut map = serde_json::Map::new();
-        for (k, v) in data.iter() {
-            map.insert(k.to_string(), v.clone());
-        }
-        Ok(serde_json::Value::Object(map))
+        serde_json::to_value(&data)
     }
 
     pub fn fork() -> Self {
