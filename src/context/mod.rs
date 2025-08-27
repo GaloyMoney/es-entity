@@ -1,4 +1,3 @@
-mod id;
 mod with_es_context;
 
 use im::HashMap;
@@ -9,37 +8,27 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use id::ContextId;
 pub use with_es_context::*;
 
 #[derive(Debug, Clone)]
-pub struct ContextData {
-    id: ContextId,
-    data: HashMap<&'static str, serde_json::Value>,
-}
+pub struct ContextData(HashMap<&'static str, serde_json::Value>);
 
 impl ContextData {
-    fn new(id: ContextId) -> Self {
-        Self {
-            id,
-            data: HashMap::new(),
-        }
+    fn new() -> Self {
+        Self(HashMap::new())
     }
 
     fn update(&self, key: &'static str, value: serde_json::Value) -> Self {
-        Self {
-            id: self.id,
-            data: self.data.update(key, value),
-        }
+        Self(self.0.update(key, value))
     }
 
     fn iter(&self) -> impl Iterator<Item = (&'static str, &serde_json::Value)> {
-        self.data.iter().map(|(&k, v)| (k, v))
+        self.0.iter().map(|(&k, v)| (k, v))
     }
 }
 
 struct StackEntry {
-    id: Weak<ContextId>,
+    id: Weak<()>,
     data: ContextData,
 }
 
@@ -48,7 +37,7 @@ thread_local! {
 }
 
 pub struct EventContext {
-    id: Rc<ContextId>,
+    id: Rc<()>,
 }
 
 impl Drop for EventContext {
@@ -78,8 +67,8 @@ impl EventContext {
                 }
             }
 
-            let id = Rc::new(ContextId::next());
-            let data = ContextData::new(*id);
+            let id = Rc::new(());
+            let data = ContextData::new();
             stack.push(StackEntry {
                 id: Rc::downgrade(&id),
                 data,
@@ -92,10 +81,10 @@ impl EventContext {
     pub fn seed(data: ContextData) -> Self {
         CONTEXT_STACK.with(|c| {
             let mut stack = c.borrow_mut();
-            let id = Rc::new(data.id);
+            let id = Rc::new(());
             stack.push(StackEntry {
                 id: Rc::downgrade(&id),
-                data: data.clone(),
+                data,
             });
 
             EventContext { id }
