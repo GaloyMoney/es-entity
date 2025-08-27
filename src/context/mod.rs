@@ -49,7 +49,6 @@ thread_local! {
 
 pub struct EventContext {
     id: Rc<ContextId>,
-    data: ContextData,
 }
 
 impl Drop for EventContext {
@@ -75,10 +74,7 @@ impl EventContext {
             let mut stack = c.borrow_mut();
             for i in (0..stack.len()).rev() {
                 if let Some(strong_id) = stack[i].id.upgrade() {
-                    return EventContext {
-                        id: strong_id,
-                        data: stack[i].data.clone(),
-                    };
+                    return EventContext { id: strong_id };
                 }
             }
 
@@ -86,10 +82,10 @@ impl EventContext {
             let data = ContextData::new(*id);
             stack.push(StackEntry {
                 id: Rc::downgrade(&id),
-                data: data.clone(),
+                data,
             });
 
-            EventContext { id, data }
+            EventContext { id }
         })
     }
 
@@ -102,12 +98,8 @@ impl EventContext {
                 data: data.clone(),
             });
 
-            EventContext { id, data }
+            EventContext { id }
         })
-    }
-
-    pub fn data(&self) -> ContextData {
-        self.data.clone()
     }
 
     pub fn insert<T: Serialize>(
@@ -122,21 +114,35 @@ impl EventContext {
             for entry in stack.iter_mut().rev() {
                 if let Some(strong_id) = entry.id.upgrade() {
                     if Rc::ptr_eq(&strong_id, &self.id) {
-                        self.data = entry.data.update(key, json_value);
-                        entry.data = self.data();
+                        entry.data = entry.data.update(key, json_value);
                         return;
                     }
                 }
             }
-            unreachable!("EventContext missing on CONTEXT_STACK")
+            panic!("EventContext missing on CONTEXT_STACK")
         });
 
         Ok(())
     }
 
+    pub fn data(&self) -> ContextData {
+        CONTEXT_STACK.with(|c| {
+            let stack = c.borrow();
+            for entry in stack.iter().rev() {
+                if let Some(strong_id) = entry.id.upgrade() {
+                    if Rc::ptr_eq(&strong_id, &self.id) {
+                        return entry.data.clone();
+                    }
+                }
+            }
+            panic!("EventContext missing on CONTEXT_STACK")
+        })
+    }
+
     pub fn as_json(&self) -> Result<serde_json::Value, serde_json::Error> {
+        let data = self.data();
         let mut map = serde_json::Map::new();
-        for (k, v) in self.data.iter() {
+        for (k, v) in data.iter() {
             map.insert(k.to_string(), v.clone());
         }
         Ok(serde_json::Value::Object(map))

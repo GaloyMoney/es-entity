@@ -34,9 +34,9 @@ impl<F: Future> Future for EventContextFuture<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
-        let _guard = EventContext::seed(this.context_data.clone());
+        let ctx = EventContext::seed(this.context_data.clone());
         let res = this.future.poll(cx);
-        *this.context_data = EventContext::current().data();
+        *this.context_data = ctx.data();
         res
     }
 }
