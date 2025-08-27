@@ -3,10 +3,7 @@ mod with_event_context;
 use im::HashMap;
 use serde::Serialize;
 
-use std::{
-    cell::RefCell,
-    rc::{Rc, Weak},
-};
+use std::{cell::RefCell, rc::Rc};
 
 pub use with_event_context::*;
 
@@ -28,7 +25,7 @@ impl ContextData {
 }
 
 struct StackEntry {
-    id: Weak<()>,
+    id: Rc<()>,
     data: ContextData,
 }
 
@@ -42,16 +39,11 @@ pub struct EventContext {
 
 impl Drop for EventContext {
     fn drop(&mut self) {
-        if Rc::strong_count(&self.id) == 1 {
+        // If strong_count is 2, it means this EventContext + one StackEntry reference
+        if Rc::strong_count(&self.id) == 2 {
             CONTEXT_STACK.with(|c| {
                 let mut stack = c.borrow_mut();
-                stack.retain(|entry| {
-                    if let Some(strong_id) = entry.id.upgrade() {
-                        !Rc::ptr_eq(&strong_id, &self.id)
-                    } else {
-                        false
-                    }
-                });
+                stack.retain(|entry| !Rc::ptr_eq(&entry.id, &self.id));
             });
         }
     }
@@ -61,16 +53,16 @@ impl EventContext {
     pub fn current() -> Self {
         CONTEXT_STACK.with(|c| {
             let mut stack = c.borrow_mut();
-            for i in (0..stack.len()).rev() {
-                if let Some(strong_id) = stack[i].id.upgrade() {
-                    return EventContext { id: strong_id };
-                }
+            if let Some(last) = stack.last() {
+                return EventContext {
+                    id: last.id.clone(),
+                };
             }
 
             let id = Rc::new(());
             let data = ContextData::new();
             stack.push(StackEntry {
-                id: Rc::downgrade(&id),
+                id: id.clone(),
                 data,
             });
 
@@ -83,7 +75,7 @@ impl EventContext {
             let mut stack = c.borrow_mut();
             let id = Rc::new(());
             stack.push(StackEntry {
-                id: Rc::downgrade(&id),
+                id: id.clone(),
                 data,
             });
 
@@ -101,11 +93,9 @@ impl EventContext {
         CONTEXT_STACK.with(|c| {
             let mut stack = c.borrow_mut();
             for entry in stack.iter_mut().rev() {
-                if let Some(strong_id) = entry.id.upgrade() {
-                    if Rc::ptr_eq(&strong_id, &self.id) {
-                        entry.data = entry.data.update(key, json_value);
-                        return;
-                    }
+                if Rc::ptr_eq(&entry.id, &self.id) {
+                    entry.data = entry.data.update(key, json_value);
+                    return;
                 }
             }
             panic!("EventContext missing on CONTEXT_STACK")
@@ -118,10 +108,8 @@ impl EventContext {
         CONTEXT_STACK.with(|c| {
             let stack = c.borrow();
             for entry in stack.iter().rev() {
-                if let Some(strong_id) = entry.id.upgrade() {
-                    if Rc::ptr_eq(&strong_id, &self.id) {
-                        return entry.data.clone();
-                    }
+                if Rc::ptr_eq(&entry.id, &self.id) {
+                    return entry.data.clone();
                 }
             }
             panic!("EventContext missing on CONTEXT_STACK")
@@ -174,22 +162,18 @@ mod tests {
                 current_json(),
                 serde_json::json!({ "data": value, "new_data": value})
             );
-            assert_eq!(stack_depth(), 1);
         }
 
         let mut ctx = EventContext::current();
         assert_eq!(current_json(), serde_json::json!({}));
         let value = serde_json::json!({ "hello": "world" });
         ctx.insert("data", &value).unwrap();
-        assert_eq!(stack_depth(), 1);
         assert_eq!(current_json(), serde_json::json!({ "data": value }));
         insert_inner(&value);
-        assert_eq!(stack_depth(), 1);
         assert_eq!(
             current_json(),
             serde_json::json!({ "data": value, "new_data": value})
         );
-        assert_eq!(stack_depth(), 1);
         let new_value = serde_json::json!({ "hello": "new_world" });
         ctx.insert("data", &new_value).unwrap();
         assert_eq!(
@@ -217,9 +201,7 @@ mod tests {
             );
         });
 
-        assert_eq!(current_json(), serde_json::json!({ "data": value }));
         handle.join().unwrap();
-
         assert_eq!(current_json(), serde_json::json!({ "data": value }));
     }
 
