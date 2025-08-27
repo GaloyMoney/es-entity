@@ -33,10 +33,8 @@ pub fn make_internal(args: TokenStream2, input: ItemFn) -> darling::Result<Token
         block,
     } = input;
 
-    // Check if the function is async
     let is_async = sig.asyncness.is_some();
 
-    // Generate insert statements once for both branches
     let insert_stmts: Vec<_> = macro_args
         .args
         .iter()
@@ -48,23 +46,18 @@ pub fn make_internal(args: TokenStream2, input: ItemFn) -> darling::Result<Token
         })
         .collect();
 
-    let has_args = !macro_args.args.is_empty();
-
-    // Generate the wrapped body based on whether it's async or not
-    let wrapped_body = if is_async {
-        // For async functions, use WithEventContext
-        // Arguments are inserted inside the async block
-        let inserts = if has_args {
-            quote::quote! {
-                {
-                    let mut ctx = es_entity::context::EventContext::current();
-                    #(#insert_stmts)*
-                }
+    let inserts = if !insert_stmts.is_empty() {
+        quote::quote! {
+            {
+                let mut ctx = es_entity::context::EventContext::current();
+                #(#insert_stmts)*
             }
-        } else {
-            quote::quote! {}
-        };
+        }
+    } else {
+        quote::quote! {}
+    };
 
+    let wrapped_body = if is_async {
         quote::quote! {
             use es_entity::context::WithEventContext;
             let data = es_entity::context::EventContext::current().data();
@@ -74,18 +67,6 @@ pub fn make_internal(args: TokenStream2, input: ItemFn) -> darling::Result<Token
             }.with_event_context(data).await
         }
     } else {
-        // For sync functions, use fork() to create a new context layer
-        let inserts = if has_args {
-            quote::quote! {
-                {
-                    let mut ctx = es_entity::context::EventContext::current();
-                    #(#insert_stmts)*
-                }
-            }
-        } else {
-            quote::quote! {}
-        };
-
         quote::quote! {
             let __es_event_context_guard = es_entity::context::EventContext::fork();
             #inserts
