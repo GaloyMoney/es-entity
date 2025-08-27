@@ -47,33 +47,13 @@ pub fn make_internal(args: TokenStream2, input: ItemFn) -> darling::Result<Token
             }
         })
         .collect();
-    
+
     let has_args = !macro_args.args.is_empty();
 
     // Generate the wrapped body based on whether it's async or not
     let wrapped_body = if is_async {
         // For async functions, use WithEventContext
-        let data_capture = if has_args {
-            quote::quote! {
-                let data = {
-                    let mut ctx = es_entity::context::EventContext::current();
-                    #(#insert_stmts)*
-                    ctx.data()
-                };
-            }
-        } else {
-            quote::quote! {
-                let data = es_entity::context::EventContext::current().data();
-            }
-        };
-
-        quote::quote! {
-            use es_entity::context::WithEventContext;
-            #data_capture
-            async #block.with_event_context(data).await
-        }
-    } else {
-        // For sync functions, use the original approach
+        // Arguments are inserted inside the async block
         let inserts = if has_args {
             quote::quote! {
                 {
@@ -86,7 +66,28 @@ pub fn make_internal(args: TokenStream2, input: ItemFn) -> darling::Result<Token
         };
 
         quote::quote! {
-            let __es_event_context_guard = es_entity::context::EventContext::current();
+            use es_entity::context::WithEventContext;
+            let data = es_entity::context::EventContext::current().data();
+            async {
+                #inserts
+                #block
+            }.with_event_context(data).await
+        }
+    } else {
+        // For sync functions, use fork() to create a new context layer
+        let inserts = if has_args {
+            quote::quote! {
+                {
+                    let mut ctx = es_entity::context::EventContext::current();
+                    #(#insert_stmts)*
+                }
+            }
+        } else {
+            quote::quote! {}
+        };
+
+        quote::quote! {
+            let __es_event_context_guard = es_entity::context::EventContext::fork();
             #inserts
             #block
         }
@@ -121,7 +122,7 @@ mod tests {
 
         let expected = quote! {
             pub fn no_async_no_args(&self, a: u32) {
-                let __es_event_context_guard = es_entity::context::EventContext::current();
+                let __es_event_context_guard = es_entity::context::EventContext::fork();
                 {
                     unimplemented!()
                 }
@@ -146,7 +147,7 @@ mod tests {
 
         let expected = quote! {
             pub fn no_async_with_args(&self, arg_one: u32, arg_two: u64) {
-                let __es_event_context_guard = es_entity::context::EventContext::current();
+                let __es_event_context_guard = es_entity::context::EventContext::fork();
                 {
                     let mut ctx = es_entity::context::EventContext::current();
                     let _ = ctx.insert("arg_one", &arg_one);
@@ -179,7 +180,9 @@ mod tests {
                 use es_entity::context::WithEventContext;
                 let data = es_entity::context::EventContext::current().data();
                 async {
-                    unimplemented!()
+                    {
+                        unimplemented!()
+                    }
                 }.with_event_context(data).await
             }
         };
@@ -203,14 +206,16 @@ mod tests {
         let expected = quote! {
             pub async fn async_with_args(&self, arg_one: u32, arg_two: u64) {
                 use es_entity::context::WithEventContext;
-                let data = {
-                    let mut ctx = es_entity::context::EventContext::current();
-                    let _ = ctx.insert("arg_one", &arg_one);
-                    let _ = ctx.insert("arg_two", &arg_two);
-                    ctx.data()
-                };
+                let data = es_entity::context::EventContext::current().data();
                 async {
-                    unimplemented!()
+                    {
+                        let mut ctx = es_entity::context::EventContext::current();
+                        let _ = ctx.insert("arg_one", &arg_one);
+                        let _ = ctx.insert("arg_two", &arg_two);
+                    }
+                    {
+                        unimplemented!()
+                    }
                 }.with_event_context(data).await
             }
         };

@@ -42,7 +42,12 @@ impl Drop for EventContext {
         if Rc::strong_count(&self.id) == 2 {
             CONTEXT_STACK.with(|c| {
                 let mut stack = c.borrow_mut();
-                stack.retain(|entry| !Rc::ptr_eq(&entry.id, &self.id));
+                for i in (0..stack.len()).rev() {
+                    if Rc::ptr_eq(&stack[i].id, &self.id) {
+                        stack.remove(i);
+                        break;
+                    }
+                }
             });
         }
     }
@@ -122,6 +127,12 @@ impl EventContext {
             map.insert(k.to_string(), v.clone());
         }
         Ok(serde_json::Value::Object(map))
+    }
+
+    pub fn fork() -> Self {
+        let current = Self::current();
+        let data = current.data();
+        Self::seed(data)
     }
 }
 
@@ -229,6 +240,29 @@ mod tests {
             current_json(),
             serde_json::json!({ "async_data": value, "async_inner": "value" })
         );
+    }
+
+    #[test]
+    fn fork() {
+        let mut ctx = EventContext::current();
+        ctx.insert("original", &serde_json::json!("value")).unwrap();
+        assert_eq!(stack_depth(), 1);
+        assert_eq!(current_json(), serde_json::json!({ "original": "value" }));
+
+        let mut forked = EventContext::fork();
+        assert_eq!(stack_depth(), 2);
+        assert_eq!(current_json(), serde_json::json!({ "original": "value" }));
+
+        forked.insert("forked", &serde_json::json!("data")).unwrap();
+        assert_eq!(
+            current_json(),
+            serde_json::json!({ "original": "value", "forked": "data" })
+        );
+
+        drop(forked);
+
+        assert_eq!(stack_depth(), 1);
+        assert_eq!(current_json(), serde_json::json!({ "original": "value" }));
     }
 
     #[tokio::test]
