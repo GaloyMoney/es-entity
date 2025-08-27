@@ -1,4 +1,4 @@
-mod with_es_context;
+mod with_event_context;
 
 use im::HashMap;
 use serde::Serialize;
@@ -8,7 +8,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-pub use with_es_context::*;
+pub use with_event_context::*;
 
 #[derive(Debug, Clone)]
 pub struct ContextData(HashMap<&'static str, serde_json::Value>);

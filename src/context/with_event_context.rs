@@ -8,7 +8,7 @@ use std::{
 
 use super::{ContextData, EventContext};
 
-pub trait WithEsEventContext: Future {
+pub trait WithEventContext: Future {
     fn with_event_context(self, context_data: ContextData) -> EventContextFuture<Self>
     where
         Self: Sized,
@@ -20,7 +20,7 @@ pub trait WithEsEventContext: Future {
     }
 }
 
-impl<F: Future> WithEsEventContext for F {}
+impl<F: Future> WithEventContext for F {}
 
 #[pin_project]
 pub struct EventContextFuture<F> {
