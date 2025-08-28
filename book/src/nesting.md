@@ -325,7 +325,7 @@ pub struct Subscription {
     // The `#[es_entity(nested)]` attribute marks this field as containing nested entities.
     // It must be of type `Nested<T>`.
     // The #[builder(default)] will initialize it as empty.
-    // The Repository will load the children after the parent as been hydrated.
+    // The Repository will load the children after the parent has been hydrated.
     #[es_entity(nested)]
     #[builder(default)]
     billing_periods: Nested<BillingPeriod>,
