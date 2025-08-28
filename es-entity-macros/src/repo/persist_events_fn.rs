@@ -50,7 +50,7 @@ impl ToTokens for PersistEventsFn<'_> {
         };
 
         tokens.append_all(quote! {
-            fn current_context() -> Option<serde_json::Value> {
+            fn current_context() -> Option<es_entity::prelude::serde_json::Value> {
                 #context
             }
 
@@ -119,7 +119,7 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            fn current_context() -> Option<serde_json::Value> {
+            fn current_context() -> Option<es_entity::prelude::serde_json::Value> {
                 None
             }
 
@@ -184,7 +184,7 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            fn current_context() -> Option<serde_json::Value> {
+            fn current_context() -> Option<es_entity::prelude::serde_json::Value> {
                 Some(es_entity::EventContext::current().as_json().expect("Couldn't serialize context"))
             }
 
