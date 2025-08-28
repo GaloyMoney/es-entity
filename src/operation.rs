@@ -54,7 +54,6 @@ impl<'c> DbOp<'c> {
     /// SELECT NOW()
     /// ```
     /// from the database (unless a time was already cached from sim-time).
-    #[allow(unused_mut)]
     pub async fn with_db_time(mut self) -> Result<DbOpWithTime<'c>, sqlx::Error> {
         let time = if let Some(time) = self.now {
             time
