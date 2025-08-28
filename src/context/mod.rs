@@ -363,9 +363,7 @@ impl EventContext {
         #[cfg(feature = "tracing")]
         {
             // Only inject if not already present
-            if !data.0.contains_key("tracing")
-                && let Some(tracing_ctx) = tracing::extract_current_tracing_context()
-            {
+            if !data.0.contains_key("tracing") {
                 data.insert("tracing", serde_json::to_value(&tracing_ctx)?);
             }
         }
