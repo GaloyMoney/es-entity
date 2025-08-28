@@ -63,6 +63,8 @@ pub struct RepositoryOptions {
     pub begin: Option<syn::Ident>,
     #[darling(default)]
     pub delete: DeleteOption,
+    #[darling(default)]
+    pub event_ctx: bool,
 
     data: darling::ast::Data<(), RepoField>,
 

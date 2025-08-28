@@ -6,7 +6,7 @@ use es_entity::*;
 use sqlx::PgPool;
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
+#[es_repo(entity = "User", columns(name(ty = "String", list_for)), event_ctx)]
 pub struct Users {
     pool: PgPool,
 }
@@ -19,6 +19,8 @@ impl Users {
 
 #[tokio::test]
 async fn create() -> anyhow::Result<()> {
+    let mut ctx = es_entity::EventContext::current();
+    ctx.insert("test", &"create").unwrap();
     let pool = helpers::init_pool().await?;
 
     let users = Users::new(pool);
@@ -32,6 +34,7 @@ async fn create() -> anyhow::Result<()> {
     let mut user = users.create(new_user).await?;
 
     if user.update_name("Dweezil").did_execute() {
+        ctx.insert("test", &"update").unwrap();
         users.update(&mut user).await?;
     }
 

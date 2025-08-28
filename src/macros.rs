@@ -89,6 +89,18 @@ macro_rules! idempotency_guard {
 /// joining with events table to hydrate entities, essentially giving the
 /// illusion of working with just the index table.
 ///
+/// **Important**: This macro only works inside functions (`fn`) that are defined
+/// within structs that have `#[derive(EsRepo)]` applied. The macro relies on
+/// the repository context to properly hydrate entities.
+///
+/// # Returns
+///
+/// Returns an [`EsQuery`](crate::query::EsQuery) struct that provides methods
+/// like [`fetch_one()`](crate::query::EsQuery::fetch_one),
+/// [`fetch_optional()`](crate::query::EsQuery::fetch_optional), and
+/// [`fetch_n()`](crate::query::EsQuery::fetch_n) for executing the
+/// query and retrieving hydrated entities.
+///
 /// # Parameters
 ///
 /// - `tbl_prefix`: Table prefix to ignore when deriving entity names from table names (optional)

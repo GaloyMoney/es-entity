@@ -23,6 +23,7 @@
 #![cfg_attr(feature = "fail-on-warnings", deny(clippy::all))]
 #![forbid(unsafe_code)]
 
+pub mod context;
 pub mod error;
 pub mod events;
 pub mod idempotent;
@@ -51,10 +52,13 @@ pub mod prelude {
 }
 
 #[doc(inline)]
+pub use context::*;
+#[doc(inline)]
 pub use error::*;
 pub use es_entity_macros::EsEntity;
 pub use es_entity_macros::EsEvent;
 pub use es_entity_macros::EsRepo;
+pub use es_entity_macros::es_event_context;
 pub use es_entity_macros::expand_es_query;
 pub use es_entity_macros::retry_on_concurrent_modification;
 #[doc(inline)]
