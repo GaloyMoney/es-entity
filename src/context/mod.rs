@@ -1,3 +1,73 @@
+//! Thread-local system for adding context data to persisted events.
+//!
+//! This module provides a context propagation system for event sourcing that allows
+//! attaching metadata (like request IDs, user IDs, or audit information) to events
+//! as they are created and persisted to the database.
+//!
+//! # Core Components
+//!
+//! - [`EventContext`]: Thread-local context manager (`!Send`) that maintains a stack
+//!   of contexts within a single thread
+//! - [`ContextData`]: Immutable, thread-safe (`Send`) snapshot of context data that
+//!   can be passed across thread boundaries
+//! - [`WithEventContext`]: Extension trait for `Future` types to propagate context
+//!   across async boundaries
+//!
+//! # Usage Patterns
+//!
+//! ## Same Thread Context
+//! ```rust
+//! use es_entity::context::EventContext;
+//!
+//! let mut ctx = EventContext::current();
+//! ctx.insert("request_id", &"req-123").unwrap();
+//!
+//! // Fork for isolated scope
+//! {
+//!     let mut child = EventContext::fork();
+//!     child.insert("operation", &"update").unwrap();
+//!     // Both request_id and operation are available
+//! }
+//! // Only request_id remains in parent
+//! ```
+//!
+//! ## Async Task Context
+//! ```rust
+//! use es_entity::context::{EventContext, WithEventContext};
+//!
+//! async fn spawn_with_context() {
+//!     let mut ctx = EventContext::current();
+//!     ctx.insert("user_id", &"user-456").unwrap();
+//!
+//!     let data = ctx.data();
+//!     tokio::spawn(async move {
+//!         // Context is available in spawned task
+//!         let ctx = EventContext::current();
+//!         // Has user_id from parent
+//!     }.with_event_context(data)).await.unwrap();
+//! }
+//! ```
+//!
+//! ## Cross-Thread Context
+//! ```rust
+//! use es_entity::context::EventContext;
+//!
+//! let mut ctx = EventContext::current();
+//! ctx.insert("trace_id", &"trace-789").unwrap();
+//! let data = ctx.data();
+//!
+//! std::thread::spawn(move || {
+//!     let ctx = EventContext::seed(data);
+//!     // New thread has trace_id
+//! });
+//! ```
+//!
+//! # Database Integration
+//!
+//! When events are persisted using repositories with `event_ctx: true`, the current
+//! context is automatically serialized to JSON and stored in a `context` column
+//! alongside the event data, enabling comprehensive audit trails and debugging.
+
 mod with_event_context;
 
 use serde::Serialize;
@@ -6,6 +76,15 @@ use std::{cell::RefCell, rc::Rc};
 
 pub use with_event_context::*;
 
+/// Immutable context data that can be safely shared across thread boundaries.
+///
+/// This struct holds key-value pairs of context information that gets attached
+/// to events when they are persisted. It uses an immutable HashMap internally
+/// for efficient cloning and thread-safe sharing of data snapshots.
+///
+/// `ContextData` is `Send` and can be passed between threads, unlike [`EventContext`]
+/// which is thread-local. This makes it suitable for transferring context across
+/// async boundaries via the [`WithEventContext`] trait.
 #[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
 pub struct ContextData(im::HashMap<&'static str, serde_json::Value>);
@@ -29,6 +108,41 @@ thread_local! {
     static CONTEXT_STACK: RefCell<Vec<StackEntry>> = const { RefCell::new(Vec::new()) };
 }
 
+/// Thread-local event context for tracking metadata throughout event sourcing operations.
+///
+/// `EventContext` provides a way to attach contextual information (like request IDs, audit info,
+/// or operation metadata) to events as they are created and persisted. The context is managed
+/// as a thread-local stack, allowing for nested contexts within the same thread.
+///
+/// # Thread Safety
+///
+/// This struct is deliberately `!Send` to ensure thread-local safety. It uses `Rc` for reference
+/// counting which is not thread-safe. For propagating context across async boundaries or threads,
+/// use the [`WithEventContext`] trait which safely transfers context data.
+///
+/// # Usage Patterns
+///
+/// - **Same thread**: Use [`fork()`](Self::fork) to create isolated child contexts
+/// - **Async tasks**: Use [`with_event_context()`](WithEventContext::with_event_context) from the [`WithEventContext`] trait
+/// - **New threads**: Use [`seed()`](Self::seed) with data from [`data()`](Self::data) to transfer context
+///
+/// # Examples
+///
+/// ```rust
+/// use es_entity::context::EventContext;
+///
+/// // Create or get current context
+/// let mut ctx = EventContext::current();
+/// ctx.insert("user_id", &"123").unwrap();
+///
+/// // Fork for isolated scope
+/// {
+///     let mut child = EventContext::fork();
+///     child.insert("operation", &"update").unwrap();
+///     // Both user_id and operation are available here
+/// }
+/// // Only user_id remains in parent context
+/// ```
 pub struct EventContext {
     id: Rc<()>,
 }
@@ -51,6 +165,20 @@ impl Drop for EventContext {
 }
 
 impl EventContext {
+    /// Gets the current event context or creates a new one if none exists.
+    ///
+    /// This function is thread-local and will return a handle to the topmost context
+    /// on the current thread's context stack. If no context exists, it will create
+    /// a new empty context and push it onto the stack.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use es_entity::context::EventContext;
+    ///
+    /// let ctx = EventContext::current();
+    /// // Context is now available for the current thread
+    /// ```
     pub fn current() -> Self {
         CONTEXT_STACK.with(|c| {
             let mut stack = c.borrow_mut();
@@ -71,6 +199,25 @@ impl EventContext {
         })
     }
 
+    /// Creates a new event context seeded with the provided data.
+    ///
+    /// This creates a completely new context stack entry with the given context data,
+    /// independent of any existing context. This is useful for starting fresh contexts
+    /// in new threads or async tasks.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The initial context data for the new context
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use es_entity::context::{EventContext, ContextData};
+    ///
+    /// let data = EventContext::current().data();
+    /// let new_ctx = EventContext::seed(data);
+    /// // new_ctx now has its own independent context stack
+    /// ```
     pub fn seed(data: ContextData) -> Self {
         CONTEXT_STACK.with(|c| {
             let mut stack = c.borrow_mut();
@@ -84,6 +231,58 @@ impl EventContext {
         })
     }
 
+    /// Creates a new isolated context that inherits data from the current context.
+    ///
+    /// This method creates a child context that starts with a copy of the current
+    /// context's data. Changes made to the forked context will not affect the parent
+    /// context, and when the forked context is dropped, the parent context remains
+    /// unchanged. This is useful for creating isolated scopes within the same thread.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use es_entity::context::EventContext;
+    ///
+    /// let mut parent = EventContext::current();
+    /// parent.insert("shared", &"value").unwrap();
+    ///
+    /// {
+    ///     let mut child = EventContext::fork();
+    ///     child.insert("child_only", &"data").unwrap();
+    ///     // child context has both "shared" and "child_only"
+    /// }
+    /// // parent context only has "shared" - "child_only" is gone
+    /// ```
+    pub fn fork() -> Self {
+        let current = Self::current();
+        let data = current.data();
+        Self::seed(data)
+    }
+
+    /// Inserts a key-value pair into the current context.
+    ///
+    /// The value will be serialized to JSON and stored in the context data.
+    /// This data will be available to all code running within this context
+    /// and any child contexts created via `fork()`.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - A static string key to identify the value
+    /// * `value` - Any serializable value to store in the context
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success or a `serde_json::Error` if serialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use es_entity::context::EventContext;
+    ///
+    /// let mut ctx = EventContext::current();
+    /// ctx.insert("user_id", &"12345").unwrap();
+    /// ctx.insert("operation", &"transfer").unwrap();
+    /// ```
     pub fn insert<T: Serialize>(
         &mut self,
         key: &'static str,
@@ -105,6 +304,23 @@ impl EventContext {
         Ok(())
     }
 
+    /// Returns a copy of the current context data.
+    ///
+    /// This method returns a snapshot of all key-value pairs stored in this context.
+    /// The returned [`ContextData`] can be used to seed new contexts or passed to
+    /// async tasks to maintain context across thread boundaries.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use es_entity::context::EventContext;
+    ///
+    /// let mut ctx = EventContext::current();
+    /// ctx.insert("request_id", &"abc123").unwrap();
+    ///
+    /// let data = ctx.data();
+    /// // data now contains a copy of the context with request_id
+    /// ```
     pub fn data(&self) -> ContextData {
         CONTEXT_STACK.with(|c| {
             let stack = c.borrow();
@@ -117,15 +333,31 @@ impl EventContext {
         })
     }
 
+    /// Serializes the current context data to JSON.
+    ///
+    /// This method is primarily used internally by the event persistence system
+    /// to store context data alongside events in the database. It converts all
+    /// context key-value pairs into a single JSON object.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `serde_json::Value` containing all context data, or an error
+    /// if serialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use es_entity::context::EventContext;
+    ///
+    /// let mut ctx = EventContext::current();
+    /// ctx.insert("user_id", &"12345").unwrap();
+    ///
+    /// let json = ctx.as_json().unwrap();
+    /// // json is now: {"user_id": "12345"}
+    /// ```
     pub fn as_json(&self) -> Result<serde_json::Value, serde_json::Error> {
         let data = self.data();
         serde_json::to_value(&data)
-    }
-
-    pub fn fork() -> Self {
-        let current = Self::current();
-        let data = current.data();
-        Self::seed(data)
     }
 }
 
