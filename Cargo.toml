@@ -14,6 +14,7 @@ inherits = "dev"
 [features]
 
 fail-on-warnings = []
+tracing = ["dep:tracing", "dep:tracing-opentelemetry", "dep:opentelemetry"]
 graphql = ["es-entity-macros/graphql", "dep:async-graphql", "dep:base64"]
 json-schema = ["dep:schemars"]
 sim-time = [ "dep:sim-time" ]
@@ -36,6 +37,11 @@ pin-project = { workspace = true }
 async-graphql = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 
+tracing = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+opentelemetry = { workspace = true, optional = true }
+
+# For book tests
 tokio = { workspace = true, optional = true }
 anyhow = { workspace = true, optional = true }
 
@@ -72,3 +78,6 @@ thiserror = "2.0.12"
 uuid = { version = "1.17", features = ["serde", "v7"] }
 im = { version = "15.1.0", features = ["serde"] }
 pin-project = "1.1.10"
+tracing = { version = "0.1.41", default-features = false }
+tracing-opentelemetry = { version = "0.31.0", default-features = false }
+opentelemetry = { version = "0.30.0", default-features = false }

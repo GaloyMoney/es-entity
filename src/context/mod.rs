@@ -64,10 +64,12 @@
 //!
 //! # Database Integration
 //!
-//! When events are persisted using repositories with `event_ctx: true`, the current
+//! When events are persisted using repositories with `event_context = true`, the current
 //! context is automatically serialized to JSON and stored in a `context` column
 //! alongside the event data, enabling comprehensive audit trails and debugging.
 
+#[cfg(feature = "tracing")]
+mod tracing;
 mod with_event_context;
 
 use serde::Serialize;
@@ -355,8 +357,18 @@ impl EventContext {
     /// let json = ctx.as_json().unwrap();
     /// // json is now: {"user_id": "12345"}
     /// ```
+    #[allow(unused_mut)]
     pub fn as_json(&self) -> Result<serde_json::Value, serde_json::Error> {
-        let data = self.data();
+        let mut data = self.data();
+        #[cfg(feature = "tracing")]
+        {
+            // Only inject if not already present
+            if !data.0.contains_key("tracing")
+                && let Some(tracing_ctx) = tracing::extract_current_tracing_context()
+            {
+                data.insert("tracing", serde_json::to_value(&tracing_ctx)?);
+            }
+        }
         serde_json::to_value(&data)
     }
 }

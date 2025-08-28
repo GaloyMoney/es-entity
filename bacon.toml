@@ -37,7 +37,7 @@ need_stdout = false
 #    ]
 # need_stdout = false
 [jobs.clippy-all]
-command = [ "cargo", "clippy", "--workspace", "--all-targets", "--color", "always"]
+command = [ "cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--color", "always"]
 need_stdout = false
 
 # This job lets you run
@@ -52,7 +52,7 @@ command = [
 need_stdout = true
 
 [jobs.nextest]
-command = ["cargo", "nextest", "run", "--workspace", "--color", "always", "--hide-progress-bar", "--failure-output", "final"]
+command = ["cargo", "nextest", "run", "--workspace", "--features", "tracing", "--color", "always", "--hide-progress-bar", "--failure-output", "final"]
 need_stdout = true
 analyzer = "nextest"
 

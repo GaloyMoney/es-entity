@@ -9,7 +9,7 @@ pub struct PersistEventsFn<'a> {
     event: &'a syn::Ident,
     error: &'a syn::Type,
     events_table_name: &'a str,
-    event_ctx: bool,
+    event_context: bool,
 }
 
 impl<'a> From<&'a RepositoryOptions> for PersistEventsFn<'a> {
@@ -19,14 +19,14 @@ impl<'a> From<&'a RepositoryOptions> for PersistEventsFn<'a> {
             event: opts.event(),
             error: opts.err(),
             events_table_name: opts.events_table_name(),
-            event_ctx: opts.event_ctx,
+            event_context: opts.event_context,
         }
     }
 }
 
 impl ToTokens for PersistEventsFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let context = self.event_ctx;
+        let context = self.event_context;
         let query = format!(
             "INSERT INTO {} (id, recorded_at, sequence, event_type, event{}) SELECT $1, COALESCE($2, NOW()), ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event{} FROM UNNEST($4::text[], $5::jsonb[]) AS unnested(event_type, event) RETURNING recorded_at",
             self.events_table_name,
@@ -112,7 +112,7 @@ mod tests {
             event: &event,
             error: &error,
             events_table_name: "entity_events",
-            event_ctx: false,
+            event_context: false,
         };
 
         let mut tokens = TokenStream::new();
@@ -177,7 +177,7 @@ mod tests {
             event: &event,
             error: &error,
             events_table_name: "entity_events",
-            event_ctx: true,
+            event_context: true,
         };
 
         let mut tokens = TokenStream::new();
