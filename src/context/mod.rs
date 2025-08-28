@@ -64,7 +64,7 @@
 //!
 //! # Database Integration
 //!
-//! When events are persisted using repositories with `event_ctx: true`, the current
+//! When events are persisted using repositories with `event_context = true`, the current
 //! context is automatically serialized to JSON and stored in a `context` column
 //! alongside the event data, enabling comprehensive audit trails and debugging.
 

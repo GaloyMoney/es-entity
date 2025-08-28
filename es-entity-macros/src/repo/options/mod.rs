@@ -64,7 +64,7 @@ pub struct RepositoryOptions {
     #[darling(default)]
     pub delete: DeleteOption,
     #[darling(default)]
-    pub event_ctx: bool,
+    pub event_context: bool,
 
     data: darling::ast::Data<(), RepoField>,
 
