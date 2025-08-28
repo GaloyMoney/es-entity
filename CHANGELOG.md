@@ -1,3 +1,25 @@
+# [cala release v0.7.13](https://github.com/GaloyMoney/cala/releases/tag/0.7.13)
+
+
+### Documentation
+
+- Small re-wording for entity_id
+
+### Features
+
+- Event context (#33)
+
+### Miscellaneous Tasks
+
+- Bump flake
+- Add sim-time
+- Document sim-time
+- One_time_executor details
+
+### Refactor
+
+- SimTimeConfig -> SimulationConfig
+
 # [cala release v0.7.12](https://github.com/GaloyMoney/cala/releases/tag/0.7.12)
 
 
