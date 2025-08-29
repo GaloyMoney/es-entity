@@ -364,7 +364,8 @@ impl EventContext {
         {
             // Only inject if not already present
             if !data.0.contains_key("tracing") {
-                data.insert("tracing", serde_json::to_value(&tracing_ctx)?);
+                let tracing = tracing::extract_current_tracing_context();
+                data.insert("tracing", serde_json::to_value(&tracing)?);
             }
         }
         serde_json::to_value(&data)
