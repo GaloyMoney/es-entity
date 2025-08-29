@@ -23,15 +23,15 @@ pub(super) fn extract_current_tracing_context() -> Option<TracingContext> {
         return None;
     }
 
-    let trace_id = span_context.trace_id().to_string();
-    let span_id = span_context.span_id().to_string();
-    let trace_flags = span_context.trace_flags().to_u8();
-
+    let trace_id = span_context.trace_id();
+    let span_id = span_context.span_id();
+    let trace_flags =
+        (span_context.trace_flags() & opentelemetry::trace::TraceFlags::SAMPLED).to_u8();
     let traceparent = format!("00-{}-{}-{:02x}", trace_id, span_id, trace_flags);
 
     Some(TracingContext {
-        trace_id,
-        span_id,
+        trace_id: trace_id.to_string(),
+        span_id: span_id.to_string(),
         trace_flags,
         traceparent,
     })

@@ -63,8 +63,6 @@ pub struct RepositoryOptions {
     pub begin: Option<syn::Ident>,
     #[darling(default)]
     pub delete: DeleteOption,
-    #[darling(default)]
-    pub event_context: bool,
 
     data: darling::ast::Data<(), RepoField>,
 
@@ -86,6 +84,8 @@ pub struct RepositoryOptions {
     op_ty: Option<syn::Type>,
     #[darling(default, rename = "additional_op_traits")]
     additional_op_traits: Option<String>,
+    #[darling(default, rename = "event_context")]
+    event_ctx: Option<bool>,
 }
 
 impl RepositoryOptions {
@@ -157,6 +157,17 @@ impl RepositoryOptions {
 
     pub fn op(&self) -> &syn::Type {
         self.op_ty.as_ref().expect("Op type is not set")
+    }
+
+    pub fn event_context(&self) -> bool {
+        #[cfg(feature = "event-context")]
+        {
+            self.event_ctx.unwrap_or(true)
+        }
+        #[cfg(not(feature = "event-context"))]
+        {
+            self.event_ctx.unwrap_or(false)
+        }
     }
 
     pub fn additional_op_constraint(&self) -> proc_macro2::TokenStream {
