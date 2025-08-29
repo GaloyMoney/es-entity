@@ -1,3 +1,10 @@
+# [cala release v0.7.15](https://github.com/GaloyMoney/cala/releases/tag/0.7.15)
+
+
+### Miscellaneous Tasks
+
+- Add tracing to event-context (#35)
+
 # [cala release v0.7.14](https://github.com/GaloyMoney/cala/releases/tag/0.7.14)
 
 
