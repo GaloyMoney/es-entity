@@ -16,6 +16,7 @@ inherits = "dev"
 fail-on-warnings = []
 tracing = ["dep:tracing", "dep:tracing-opentelemetry", "dep:opentelemetry"]
 graphql = ["es-entity-macros/graphql", "dep:async-graphql", "dep:base64"]
+event-context = ["es-entity-macros/event-context"]
 json-schema = ["dep:schemars"]
 sim-time = [ "dep:sim-time" ]
 mdbook-test = ["dep:tokio", "dep:anyhow"]
