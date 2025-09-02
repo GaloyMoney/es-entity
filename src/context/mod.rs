@@ -100,6 +100,16 @@ impl ContextData {
     fn insert(&mut self, key: &'static str, value: serde_json::Value) {
         self.0 = self.0.update(Cow::Borrowed(key), value);
     }
+
+    pub fn lookup<T: serde::de::DeserializeOwned>(
+        &self,
+        key: &'static str,
+    ) -> Result<Option<T>, serde_json::Error> {
+        let Some(val) = self.0.get(key) else {
+            return Ok(None);
+        };
+        serde_json::from_value(val.clone()).map(Some)
+    }
 }
 
 struct StackEntry {
