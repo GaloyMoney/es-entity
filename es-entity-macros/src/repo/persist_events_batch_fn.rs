@@ -99,7 +99,7 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                 let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
 
                 for events in all_events.iter_mut() {
-                    events.mark_new_events_persisted_at(recorded_at);
+                    events.mark_new_events_persisted_at(recorded_at, Self::load_event_context());
                 }
 
                 Ok(n_events_map)
@@ -179,7 +179,7 @@ mod tests {
                 let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
 
                 for events in all_events.iter_mut() {
-                    events.mark_new_events_persisted_at(recorded_at);
+                    events.mark_new_events_persisted_at(recorded_at, Self::load_event_context());
                 }
 
                 Ok(n_events_map)
@@ -257,7 +257,7 @@ mod tests {
                 let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
 
                 for events in all_events.iter_mut() {
-                    events.mark_new_events_persisted_at(recorded_at);
+                    events.mark_new_events_persisted_at(recorded_at, Self::load_event_context());
                 }
 
                 Ok(n_events_map)

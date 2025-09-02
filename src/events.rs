@@ -221,10 +221,15 @@ where
     pub fn mark_new_events_persisted_at(
         &mut self,
         recorded_at: chrono::DateTime<chrono::Utc>,
+        record_context: bool,
     ) -> usize {
         let n = self.new_events.len();
         let offset = self.persisted_events.len() + 1;
-        let context = Some(crate::EventContext::current().data());
+        let context = if record_context {
+            Some(crate::EventContext::current().data())
+        } else {
+            None
+        };
         self.persisted_events
             .extend(
                 self.new_events

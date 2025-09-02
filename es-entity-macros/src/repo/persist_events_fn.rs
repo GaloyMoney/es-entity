@@ -90,7 +90,7 @@ impl ToTokens for PersistEventsFn<'_> {
                     ).fetch_all(op.as_executor()).await)?;
 
                 let recorded_at = rows[0].recorded_at;
-                let n_events = events.mark_new_events_persisted_at(recorded_at);
+                let n_events = events.mark_new_events_persisted_at(recorded_at, Self::load_event_context());
 
                 Ok(n_events)
             }
@@ -158,7 +158,7 @@ mod tests {
                     ).fetch_all(op.as_executor()).await)?;
 
                 let recorded_at = rows[0].recorded_at;
-                let n_events = events.mark_new_events_persisted_at(recorded_at);
+                let n_events = events.mark_new_events_persisted_at(recorded_at, Self::load_event_context());
 
                 Ok(n_events)
             }
@@ -224,7 +224,7 @@ mod tests {
                     ).fetch_all(op.as_executor()).await)?;
 
                 let recorded_at = rows[0].recorded_at;
-                let n_events = events.mark_new_events_persisted_at(recorded_at);
+                let n_events = events.mark_new_events_persisted_at(recorded_at, Self::load_event_context());
 
                 Ok(n_events)
             }
