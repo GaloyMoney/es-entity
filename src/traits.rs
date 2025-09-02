@@ -275,6 +275,10 @@ pub trait EsRepo: Send {
     type Err: From<EsEntityError> + From<sqlx::Error>;
     type EsQueryFlavor;
 
+    fn load_event_context() -> bool {
+        false
+    }
+
     /// Loads all nested entities for a given set of parent entities within an atomic operation.
     fn load_all_nested_in_op<OP>(
         op: &mut OP,

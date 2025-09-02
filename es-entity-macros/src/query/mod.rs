@@ -56,10 +56,11 @@ impl ToTokens for EsQuery {
 
         let events_table = syn::Ident::new(&format!("{singular}_events"), Span::call_site());
         let args = &self.input.arg_exprs;
+        let context_arg = format!("${}", args.len() + 1);
 
         let query = format!(
-            r#"WITH entities AS ({}) SELECT i.id AS "entity_id: Repo__Id", e.sequence, e.event, NULL::jsonb as "context: es_entity::ContextData", e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY {} e.sequence"#,
-            self.input.sql, events_table, order_by
+            "WITH entities AS ({}) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, CASE WHEN {} THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY {} e.sequence",
+            self.input.sql, context_arg, events_table, order_by
         );
 
         tokens.append_all(quote! {
@@ -70,7 +71,8 @@ impl ToTokens for EsQuery {
                     sqlx::query_as!(
                         Repo__DbEvent,
                         #query,
-                        #(#args),*
+                        #(#args,)*
+                        <Self as es_entity::EsRepo>::load_event_context(),
                     )
                 )
             }
@@ -102,8 +104,9 @@ mod tests {
                 es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
                     sqlx::query_as!(
                         Repo__DbEvent,
-                        "WITH entities AS (SELECT * FROM users WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, NULL::jsonb as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN user_events e ON i.id = e.id ORDER BY i.id, e.sequence",
-                        id as UserId
+                        "WITH entities AS (SELECT * FROM users WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN user_events e ON i.id = e.id ORDER BY i.id, e.sequence",
+                        id as UserId,
+                        <Self as es_entity::EsRepo>::load_event_context(),
                     )
                 )
             }
@@ -131,8 +134,9 @@ mod tests {
                 es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
                     sqlx::query_as!(
                         Repo__DbEvent,
-                        "WITH entities AS (SELECT * FROM my_custom_table WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, NULL::jsonb as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN my_custom_table_events e ON i.id = e.id ORDER BY i.id, e.sequence",
-                        id as MyCustomEntityId
+                        "WITH entities AS (SELECT * FROM my_custom_table WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN my_custom_table_events e ON i.id = e.id ORDER BY i.id, e.sequence",
+                        id as MyCustomEntityId,
+                        <Self as es_entity::EsRepo>::load_event_context(),
                     )
                 )
             }
@@ -163,10 +167,11 @@ mod tests {
                 es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
                     sqlx::query_as!(
                         Repo__DbEvent,
-                        "WITH entities AS (SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, NULL::jsonb as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN entity_events e ON i.id = e.id ORDER BY i.name, i.id, i.id, e.sequence",
+                        "WITH entities AS (SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, CASE WHEN $4 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN entity_events e ON i.id = e.id ORDER BY i.name, i.id, i.id, e.sequence",
                         (first + 1) as i64,
                         id as Option<MyCustomEntityId>,
-                        name as Option<String>
+                        name as Option<String>,
+                        <Self as es_entity::EsRepo>::load_event_context(),
                     )
                 )
             }

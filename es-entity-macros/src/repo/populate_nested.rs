@@ -13,6 +13,7 @@ pub struct PopulateNested<'a> {
     table_name: &'a str,
     events_table_name: &'a str,
     repo_types_mod: syn::Ident,
+    load_event_context: bool,
 }
 
 impl<'a> PopulateNested<'a> {
@@ -26,6 +27,7 @@ impl<'a> PopulateNested<'a> {
             table_name: opts.table_name(),
             events_table_name: opts.events_table_name(),
             repo_types_mod: opts.repo_types_mod(),
+            load_event_context: opts.load_event_context(),
         }
     }
 }
@@ -38,11 +40,18 @@ impl ToTokens for PopulateNested<'_> {
         let repo_types_mod = &self.repo_types_mod;
         let accessor = self.column.parent_accessor();
 
+        let context_select = if self.load_event_context {
+            "e.context"
+        } else {
+            "NULL::jsonb"
+        };
+
         let query = format!(
-            r#"WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1))) SELECT i.id AS "entity_id: {}", e.sequence, e.event, NULL::jsonb as "context: es_entity::ContextData", e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY e.id, e.sequence"#,
+            "WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1))) SELECT i.id AS \"entity_id: {}\", e.sequence, e.event, {} as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY e.id, e.sequence",
             self.table_name,
             self.column.name(),
             self.id,
+            context_select,
             self.events_table_name,
         );
 

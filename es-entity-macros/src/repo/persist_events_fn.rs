@@ -19,7 +19,7 @@ impl<'a> From<&'a RepositoryOptions> for PersistEventsFn<'a> {
             event: opts.event(),
             error: opts.err(),
             events_table_name: opts.events_table_name(),
-            event_context: opts.event_context(),
+            event_context: opts.persist_event_context(),
         }
     }
 }

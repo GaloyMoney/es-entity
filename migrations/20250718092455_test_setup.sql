@@ -27,6 +27,7 @@ CREATE TABLE user_document_events (
   sequence INT NOT NULL,
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
+  context JSONB DEFAULT NULL,
   recorded_at TIMESTAMPTZ NOT NULL,
   UNIQUE(id, sequence)
 );
@@ -43,6 +44,7 @@ CREATE TABLE ignore_prefix_user_events (
   sequence INT NOT NULL,
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
+  context JSONB DEFAULT NULL,
   recorded_at TIMESTAMPTZ NOT NULL,
   UNIQUE(id, sequence)
 );
@@ -59,6 +61,7 @@ CREATE TABLE custom_name_for_user_events (
   sequence INT NOT NULL,
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
+  context JSONB DEFAULT NULL,
   recorded_at TIMESTAMPTZ NOT NULL,
   UNIQUE(id, sequence)
 );
@@ -74,6 +77,7 @@ CREATE TABLE order_events (
   sequence INT NOT NULL,
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
+  context JSONB DEFAULT NULL,
   recorded_at TIMESTAMPTZ NOT NULL,
   UNIQUE(id, sequence)
 );
@@ -89,6 +93,7 @@ CREATE TABLE order_item_events (
   sequence INT NOT NULL,
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
+  context JSONB DEFAULT NULL,
   recorded_at TIMESTAMPTZ NOT NULL,
   UNIQUE(id, sequence)
 );
@@ -104,6 +109,7 @@ CREATE TABLE subscription_events (
   sequence INT NOT NULL,
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
+  context JSONB DEFAULT NULL,
   recorded_at TIMESTAMPTZ NOT NULL,
   UNIQUE(id, sequence)
 );
@@ -119,6 +125,7 @@ CREATE TABLE billing_period_events (
   sequence INT NOT NULL,
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
+  context JSONB DEFAULT NULL,
   recorded_at TIMESTAMPTZ NOT NULL,
   UNIQUE(id, sequence)
 );

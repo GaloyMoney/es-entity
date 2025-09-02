@@ -159,7 +159,18 @@ impl RepositoryOptions {
         self.op_ty.as_ref().expect("Op type is not set")
     }
 
-    pub fn event_context(&self) -> bool {
+    pub fn persist_event_context(&self) -> bool {
+        #[cfg(feature = "event-context")]
+        {
+            self.event_ctx.unwrap_or(true)
+        }
+        #[cfg(not(feature = "event-context"))]
+        {
+            self.event_ctx.unwrap_or(false)
+        }
+    }
+
+    pub fn load_event_context(&self) -> bool {
         #[cfg(feature = "event-context")]
         {
             self.event_ctx.unwrap_or(true)
