@@ -16,7 +16,7 @@ pub struct GenericEvent<Id> {
     pub entity_id: Id,
     pub sequence: i32,
     pub event: serde_json::Value,
-    pub context: Option<serde_json::Value>,
+    pub context: Option<crate::ContextData>,
     pub recorded_at: DateTime<Utc>,
 }
 

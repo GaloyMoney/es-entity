@@ -68,11 +68,12 @@
 //! context is automatically serialized to JSON and stored in a `context` column
 //! alongside the event data, enabling comprehensive audit trails and debugging.
 
+mod sqlx;
 #[cfg(feature = "tracing")]
 mod tracing;
 mod with_event_context;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use std::{borrow::Cow, cell::RefCell, rc::Rc};
 
@@ -87,7 +88,7 @@ pub use with_event_context::*;
 /// `ContextData` is `Send` and can be passed between threads, unlike [`EventContext`]
 /// which is thread-local. This makes it suitable for transferring context across
 /// async boundaries via the [`WithEventContext`] trait.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ContextData(im::HashMap<Cow<'static, str>, serde_json::Value>);
 
