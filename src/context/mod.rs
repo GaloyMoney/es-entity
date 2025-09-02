@@ -74,7 +74,7 @@ mod with_event_context;
 
 use serde::Serialize;
 
-use std::{cell::RefCell, rc::Rc};
+use std::{borrow::Cow, cell::RefCell, rc::Rc};
 
 pub use with_event_context::*;
 
@@ -89,7 +89,7 @@ pub use with_event_context::*;
 /// async boundaries via the [`WithEventContext`] trait.
 #[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
-pub struct ContextData(im::HashMap<&'static str, serde_json::Value>);
+pub struct ContextData(im::HashMap<Cow<'static, str>, serde_json::Value>);
 
 impl ContextData {
     fn new() -> Self {
@@ -97,7 +97,7 @@ impl ContextData {
     }
 
     fn insert(&mut self, key: &'static str, value: serde_json::Value) {
-        self.0 = self.0.update(key, value);
+        self.0 = self.0.update(Cow::Borrowed(key), value);
     }
 }
 
@@ -363,7 +363,7 @@ impl EventContext {
         #[cfg(feature = "tracing")]
         {
             // Only inject if not already present
-            if !data.0.contains_key("tracing") {
+            if !data.0.contains_key(&Cow::Borrowed("tracing")) {
                 let tracing = tracing::extract_current_tracing_context();
                 data.insert("tracing", serde_json::to_value(&tracing)?);
             }
