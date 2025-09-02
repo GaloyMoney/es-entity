@@ -39,7 +39,7 @@ impl ToTokens for PopulateNested<'_> {
         let accessor = self.column.parent_accessor();
 
         let query = format!(
-            r#"WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1))) SELECT i.id AS "entity_id: {}", e.sequence, e.event, e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY e.id, e.sequence"#,
+            r#"WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1))) SELECT i.id AS "entity_id: {}", e.sequence, e.event, NULL::jsonb as context, e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY e.id, e.sequence"#,
             self.table_name,
             self.column.name(),
             self.id,
