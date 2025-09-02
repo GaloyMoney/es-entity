@@ -34,6 +34,9 @@ pub struct PersistedEvent<E: EsEvent> {
     pub sequence: usize,
     /// The event itself
     pub event: E,
+    /// The context when the event was persisted
+    /// It is only popluated if 'event_context' set on EsRepo
+    pub context: Option<crate::ContextData>,
 }
 
 impl<E: Clone + EsEvent> Clone for PersistedEvent<E> {
@@ -43,6 +46,7 @@ impl<E: Clone + EsEvent> Clone for PersistedEvent<E> {
             recorded_at: self.recorded_at,
             sequence: self.sequence,
             event: self.event.clone(),
+            context: self.context.clone(),
         }
     }
 }
@@ -161,6 +165,7 @@ where
                 recorded_at: e.recorded_at,
                 sequence: e.sequence as usize,
                 event: serde_json::from_value(e.event)?,
+                context: e.context,
             });
         }
         if let Some(current) = current {
@@ -203,6 +208,7 @@ where
                 recorded_at: e.recorded_at,
                 sequence: e.sequence as usize,
                 event: serde_json::from_value(e.event)?,
+                context: e.context,
             });
         }
         if let Some(current) = current.take() {
@@ -218,6 +224,7 @@ where
     ) -> usize {
         let n = self.new_events.len();
         let offset = self.persisted_events.len() + 1;
+        let context = Some(crate::EventContext::current().data());
         self.persisted_events
             .extend(
                 self.new_events
@@ -228,6 +235,7 @@ where
                         recorded_at,
                         sequence: i + offset,
                         event,
+                        context: context.clone(),
                     }),
             );
         n
