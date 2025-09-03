@@ -1,3 +1,10 @@
+# [cala release v0.7.16](https://github.com/GaloyMoney/cala/releases/tag/0.7.16)
+
+
+### Features
+
+- Load context (#36)
+
 # [cala release v0.7.15](https://github.com/GaloyMoney/cala/releases/tag/0.7.15)
 
 
