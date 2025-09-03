@@ -376,7 +376,7 @@ mod tests {
     }
 
     fn current_json() -> serde_json::Value {
-        serde_json::to_value(&EventContext::current().data()).unwrap()
+        serde_json::to_value(EventContext::current().data()).unwrap()
     }
 
     #[test]
