@@ -54,6 +54,8 @@ pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
         + std::hash::Hash
         + Send
         + Sync;
+
+    fn event_context() -> bool;
 }
 
 /// Required trait for converting new entities into their initial events before persistence.

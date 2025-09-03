@@ -8,11 +8,22 @@ The events table always has the same fields:
 
 ```sql
 CREATE TABLE user_events (
+  -- The entity id
   id UUID NOT NULL REFERENCES users(id),
+  -- The sequence number of the event
+  -- Starting at 1 and incrementing by 1 each event
   sequence INT NOT NULL,
+  -- The 'type' of the event (corresponding to the enum variant)
   event_type VARCHAR NOT NULL,
+  -- The event data serialized as a JSON blob
   event JSONB NOT NULL,
+  -- The 'event context'
+  -- additional metadata that can be collected out of band
+  -- only populated if 'event_context' attribute is set on the EsEvent
+  context JSONB DEFAULT NULL,
+  -- The time the event was recorded
   recorded_at TIMESTAMPTZ NOT NULL,
+  -- Unique constraint to ensure there are no duplicate sequence numbers
   UNIQUE(id, sequence)
 );
 ```

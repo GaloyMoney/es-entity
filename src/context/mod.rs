@@ -68,13 +68,14 @@
 //! context is automatically serialized to JSON and stored in a `context` column
 //! alongside the event data, enabling comprehensive audit trails and debugging.
 
+mod sqlx;
 #[cfg(feature = "tracing")]
 mod tracing;
 mod with_event_context;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use std::{cell::RefCell, rc::Rc};
+use std::{borrow::Cow, cell::RefCell, rc::Rc};
 
 pub use with_event_context::*;
 
@@ -87,9 +88,9 @@ pub use with_event_context::*;
 /// `ContextData` is `Send` and can be passed between threads, unlike [`EventContext`]
 /// which is thread-local. This makes it suitable for transferring context across
 /// async boundaries via the [`WithEventContext`] trait.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ContextData(im::HashMap<&'static str, serde_json::Value>);
+pub struct ContextData(im::HashMap<Cow<'static, str>, serde_json::Value>);
 
 impl ContextData {
     fn new() -> Self {
@@ -97,7 +98,27 @@ impl ContextData {
     }
 
     fn insert(&mut self, key: &'static str, value: serde_json::Value) {
-        self.0 = self.0.update(key, value);
+        self.0 = self.0.update(Cow::Borrowed(key), value);
+    }
+
+    #[cfg(feature = "tracing")]
+    pub(crate) fn with_tracing_info(mut self) -> Self {
+        let tracing = tracing::extract_current_tracing_context();
+        self.insert(
+            "tracing",
+            serde_json::to_value(&tracing).expect("Could not inject tracing"),
+        );
+        self
+    }
+
+    pub fn lookup<T: serde::de::DeserializeOwned>(
+        &self,
+        key: &'static str,
+    ) -> Result<Option<T>, serde_json::Error> {
+        let Some(val) = self.0.get(key) else {
+            return Ok(None);
+        };
+        serde_json::from_value(val.clone()).map(Some)
     }
 }
 
@@ -335,40 +356,14 @@ impl EventContext {
         })
     }
 
-    /// Serializes the current context data to JSON.
-    ///
-    /// This method is primarily used internally by the event persistence system
-    /// to store context data alongside events in the database. It converts all
-    /// context key-value pairs into a single JSON object.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `serde_json::Value` containing all context data, or an error
-    /// if serialization fails.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use es_entity::context::EventContext;
-    ///
-    /// let mut ctx = EventContext::current();
-    /// ctx.insert("user_id", &"12345").unwrap();
-    ///
-    /// let json = ctx.as_json().unwrap();
-    /// // json is now: {"user_id": "12345"}
-    /// ```
     #[allow(unused_mut)]
-    pub fn as_json(&self) -> Result<serde_json::Value, serde_json::Error> {
-        let mut data = self.data();
+    pub(crate) fn data_for_storing() -> ContextData {
+        let mut data = Self::current().data();
         #[cfg(feature = "tracing")]
         {
-            // Only inject if not already present
-            if !data.0.contains_key("tracing") {
-                let tracing = tracing::extract_current_tracing_context();
-                data.insert("tracing", serde_json::to_value(&tracing)?);
-            }
+            data = data.with_tracing_info();
         }
-        serde_json::to_value(&data)
+        data
     }
 }
 
@@ -381,7 +376,7 @@ mod tests {
     }
 
     fn current_json() -> serde_json::Value {
-        EventContext::current().as_json().unwrap()
+        serde_json::to_value(&EventContext::current().data()).unwrap()
     }
 
     #[test]

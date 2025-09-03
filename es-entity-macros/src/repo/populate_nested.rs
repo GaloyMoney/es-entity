@@ -39,7 +39,7 @@ impl ToTokens for PopulateNested<'_> {
         let accessor = self.column.parent_accessor();
 
         let query = format!(
-            r#"WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1))) SELECT i.id AS "entity_id: {}", e.sequence, e.event, e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY e.id, e.sequence"#,
+            "WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1))) SELECT i.id AS \"entity_id: {}\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY e.id, e.sequence",
             self.table_name,
             self.column.name(),
             self.id,
@@ -64,6 +64,7 @@ impl ToTokens for PopulateNested<'_> {
                             #repo_types_mod::Repo__DbEvent,
                             #query,
                             parent_ids.as_slice() as &[&#ty],
+                            <#repo_types_mod::Repo__Event as EsEvent>::event_context(),
                         ).fetch_all(op.as_executor()).await?
                     };
                     let n = rows.len();
