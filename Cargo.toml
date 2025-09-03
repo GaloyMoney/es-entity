@@ -3,7 +3,7 @@ name = "es-entity"
 description = "Event Sourcing Entity Framework"
 repository = "https://github.com/GaloyMoney/es-entity"
 documentation = "https://docs.rs/es-entity"
-version = "0.7.16"
+version = "0.7.17-dev"
 edition = "2024"
 license = "Apache-2.0"
 categories = ["data-structures", "database"]
@@ -60,8 +60,8 @@ members = [
 
 [workspace.dependencies]
 
-es-entity-macros = { path = "es-entity-macros", version = "0.7.16" }
-sim-time = { path = "sim-time", version = "0.7.16" }
+es-entity-macros = { path = "es-entity-macros", version = "0.7.17-dev" }
+sim-time = { path = "sim-time", version = "0.7.17-dev" }
 
 anyhow = "1.0.98"
 async-graphql = { version = "7.0.17", default-features = false }
