@@ -56,7 +56,16 @@ impl QueryInput {
             return order_by_clause
                 .as_str()
                 .split(',')
-                .map(|s| format!("i.{}", s.trim()))
+                .map(|s| {
+                    let trimmed = s.trim();
+                    // Strip any existing alias prefix (e.g., "a.id" -> "id")
+                    let column = if let Some(dot_pos) = trimmed.rfind('.') {
+                        &trimmed[dot_pos + 1..]
+                    } else {
+                        trimmed
+                    };
+                    format!("i.{}", column)
+                })
                 .filter(|s| !s.is_empty())
                 .collect();
         }
@@ -154,6 +163,7 @@ mod tests {
                 "select id from entities ORDER BY id offset 10",
                 vec!["i.id"],
             ),
+            ("select a.id from entities a ORDER BY a.id", vec!["i.id"]),
             ("SELECT id FROM entities orDer bY id;", vec!["i.id"]),
             (
                 "SELECT * FROM users WHERE age > 18 ORDER BY last_name, first_name DESC LIMIT 10",
