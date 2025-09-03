@@ -72,7 +72,7 @@ impl ToTokens for EsQuery {
                         Repo__DbEvent,
                         #query,
                         #(#args,)*
-                        <Self as es_entity::EsRepo>::load_event_context(),
+                        <<<Self as es_entity::EsRepo>::Entity as EsEntity>::Event>::event_context(),
                     )
                 )
             }
@@ -106,7 +106,7 @@ mod tests {
                         Repo__DbEvent,
                         "WITH entities AS (SELECT * FROM users WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN user_events e ON i.id = e.id ORDER BY i.id, e.sequence",
                         id as UserId,
-                        <Self as es_entity::EsRepo>::load_event_context(),
+                        <<<Self as es_entity::EsRepo>::Entity as EsEntity>::Event>::event_context(),
                     )
                 )
             }
@@ -136,7 +136,7 @@ mod tests {
                         Repo__DbEvent,
                         "WITH entities AS (SELECT * FROM my_custom_table WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN my_custom_table_events e ON i.id = e.id ORDER BY i.id, e.sequence",
                         id as MyCustomEntityId,
-                        <Self as es_entity::EsRepo>::load_event_context(),
+                        <<<Self as es_entity::EsRepo>::Entity as EsEntity>::Event>::event_context(),
                     )
                 )
             }
@@ -171,7 +171,7 @@ mod tests {
                         (first + 1) as i64,
                         id as Option<MyCustomEntityId>,
                         name as Option<String>,
-                        <Self as es_entity::EsRepo>::load_event_context(),
+                        <<<Self as es_entity::EsRepo>::Entity as EsEntity>::Event>::event_context(),
                     )
                 )
             }

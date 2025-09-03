@@ -7,14 +7,14 @@ struct TestStruct;
 impl TestStruct {
     #[es_event_context(value, count)]
     async fn test_arg_capture(&self, value: &str, count: u32) -> serde_json::Value {
-        EventContext::current().as_json().unwrap()
+        serde_json::to_value(&EventContext::current().data()).unwrap()
     }
 
     #[es_event_context]
     async fn test_no_args(&self) -> serde_json::Value {
         let mut ctx = EventContext::current();
         ctx.insert("method", &json!("no_args")).unwrap();
-        ctx.as_json().unwrap()
+        serde_json::to_value(&ctx.data()).unwrap()
     }
 }
 
@@ -22,7 +22,10 @@ impl TestStruct {
 async fn es_event_context_macro_integration() {
     let mut ctx = EventContext::current();
     ctx.insert("initial", &json!("data")).unwrap();
-    assert_eq!(ctx.as_json().unwrap(), json!({ "initial": "data" }));
+    assert_eq!(
+        serde_json::to_value(&ctx.data()).unwrap(),
+        json!({ "initial": "data" })
+    );
 
     let test_struct = TestStruct;
     let result = test_struct.test_arg_capture("hello", 42).await;
@@ -36,7 +39,7 @@ async fn es_event_context_macro_integration() {
     );
 
     assert_eq!(
-        EventContext::current().as_json().unwrap(),
+        serde_json::to_value(&EventContext::current().data()).unwrap(),
         json!({ "initial": "data" })
     );
 
@@ -50,7 +53,7 @@ async fn es_event_context_macro_integration() {
     );
 
     assert_eq!(
-        EventContext::current().as_json().unwrap(),
+        serde_json::to_value(&EventContext::current().data()).unwrap(),
         json!({ "initial": "data" })
     );
 }

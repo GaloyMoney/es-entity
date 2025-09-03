@@ -35,7 +35,7 @@ pub struct PersistedEvent<E: EsEvent> {
     /// The event itself
     pub event: E,
     /// The context when the event was persisted
-    /// It is only popluated if 'event_context' set on EsRepo
+    /// It is only popluated if 'event_context' set on EsEvent
     pub context: Option<crate::ContextData>,
 }
 
@@ -45,6 +45,20 @@ impl<E: Clone + EsEvent> Clone for PersistedEvent<E> {
             entity_id: self.entity_id.clone(),
             recorded_at: self.recorded_at,
             sequence: self.sequence,
+            event: self.event.clone(),
+            context: self.context.clone(),
+        }
+    }
+}
+
+pub struct EventWithContext<E: EsEvent> {
+    pub event: E,
+    pub context: Option<crate::ContextData>,
+}
+
+impl<E: Clone + EsEvent> Clone for EventWithContext<E> {
+    fn clone(&self) -> Self {
+        EventWithContext {
             event: self.event.clone(),
             context: self.context.clone(),
         }
@@ -61,7 +75,7 @@ pub struct EntityEvents<T: EsEvent> {
     /// Events that have been persisted in database and marked
     persisted_events: Vec<PersistedEvent<T>>,
     /// New events that are yet to be persisted to track state changes
-    new_events: Vec<T>,
+    new_events: Vec<EventWithContext<T>>,
 }
 
 impl<T: Clone + EsEvent> Clone for EntityEvents<T> {
@@ -80,10 +94,22 @@ where
 {
     /// Initializes a new `EntityEvents` instance with the given entity ID and initial events which is returned by [`IntoEvents`] method
     pub fn init(id: <T as EsEvent>::EntityId, initial_events: impl IntoIterator<Item = T>) -> Self {
+        let context = if <T as EsEvent>::event_context() {
+            Some(crate::EventContext::data_for_storing())
+        } else {
+            None
+        };
+        let new_events = initial_events
+            .into_iter()
+            .map(|event| EventWithContext {
+                event,
+                context: context.clone(),
+            })
+            .collect();
         Self {
             entity_id: id,
             persisted_events: Vec::new(),
-            new_events: initial_events.into_iter().collect(),
+            new_events,
         }
     }
 
@@ -104,12 +130,26 @@ where
 
     /// Appends a single new event to the entity's event stream to be persisted later
     pub fn push(&mut self, event: T) {
-        self.new_events.push(event);
+        let context = if <T as EsEvent>::event_context() {
+            Some(crate::EventContext::data_for_storing())
+        } else {
+            None
+        };
+        self.new_events.push(EventWithContext { event, context });
     }
 
     /// Appends multiple new events to the entity's event stream to be persisted later
     pub fn extend(&mut self, events: impl IntoIterator<Item = T>) {
-        self.new_events.extend(events);
+        let context = if <T as EsEvent>::event_context() {
+            Some(crate::EventContext::data_for_storing())
+        } else {
+            None
+        };
+        self.new_events
+            .extend(events.into_iter().map(|event| EventWithContext {
+                event,
+                context: context.clone(),
+            }));
     }
 
     /// Returns true if there are any unpersisted events waiting to be saved
@@ -138,7 +178,7 @@ where
         self.persisted_events
             .iter()
             .map(|e| &e.event)
-            .chain(self.new_events.iter())
+            .chain(self.new_events.iter().map(|e| &e.event))
     }
 
     /// Loads and reconstructs the first entity from a stream of GenericEvents, marking events as `peristed`
@@ -221,15 +261,9 @@ where
     pub fn mark_new_events_persisted_at(
         &mut self,
         recorded_at: chrono::DateTime<chrono::Utc>,
-        record_context: bool,
     ) -> usize {
         let n = self.new_events.len();
         let offset = self.persisted_events.len() + 1;
-        let context = if record_context {
-            Some(crate::EventContext::current().data())
-        } else {
-            None
-        };
         self.persisted_events
             .extend(
                 self.new_events
@@ -239,19 +273,34 @@ where
                         entity_id: self.entity_id.clone(),
                         recorded_at,
                         sequence: i + offset,
-                        event,
-                        context: context.clone(),
+                        event: event.event,
+                        context: event.context,
                     }),
             );
         n
     }
 
     #[doc(hidden)]
-    pub fn serialize_new_events(&self) -> Vec<serde_json::Value> {
-        self.new_events
+    pub fn serialize_new_events(
+        &self,
+    ) -> (Vec<serde_json::Value>, Option<Vec<crate::ContextData>>) {
+        let contexts = if <T as EsEvent>::event_context() {
+            let contexts = self
+                .new_events
+                .iter()
+                .map(|event| event.context.clone().expect("Missing context"))
+                .collect();
+
+            Some(contexts)
+        } else {
+            None
+        };
+        let event_data = self
+            .new_events
             .iter()
-            .map(|event| serde_json::to_value(event).expect("Failed to serialize event"))
-            .collect()
+            .map(|event| serde_json::to_value(&event.event).expect("Failed to serialize event"))
+            .collect();
+        (event_data, contexts)
     }
 }
 
@@ -267,6 +316,9 @@ mod tests {
 
     impl EsEvent for DummyEntityEvent {
         type EntityId = Uuid;
+        fn event_context() -> bool {
+            true
+        }
     }
 
     struct DummyEntity {

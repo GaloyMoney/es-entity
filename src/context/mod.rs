@@ -101,6 +101,16 @@ impl ContextData {
         self.0 = self.0.update(Cow::Borrowed(key), value);
     }
 
+    #[cfg(feature = "tracing")]
+    pub(crate) fn with_tracing_info(mut self) -> Self {
+        let tracing = tracing::extract_current_tracing_context();
+        self.insert(
+            "tracing",
+            serde_json::to_value(&tracing).expect("Could not inject tracing"),
+        );
+        self
+    }
+
     pub fn lookup<T: serde::de::DeserializeOwned>(
         &self,
         key: &'static str,
@@ -346,40 +356,14 @@ impl EventContext {
         })
     }
 
-    /// Serializes the current context data to JSON.
-    ///
-    /// This method is primarily used internally by the event persistence system
-    /// to store context data alongside events in the database. It converts all
-    /// context key-value pairs into a single JSON object.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `serde_json::Value` containing all context data, or an error
-    /// if serialization fails.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use es_entity::context::EventContext;
-    ///
-    /// let mut ctx = EventContext::current();
-    /// ctx.insert("user_id", &"12345").unwrap();
-    ///
-    /// let json = ctx.as_json().unwrap();
-    /// // json is now: {"user_id": "12345"}
-    /// ```
     #[allow(unused_mut)]
-    pub fn as_json(&self) -> Result<serde_json::Value, serde_json::Error> {
-        let mut data = self.data();
+    pub(crate) fn data_for_storing() -> ContextData {
+        let mut data = Self::current().data();
         #[cfg(feature = "tracing")]
         {
-            // Only inject if not already present
-            if !data.0.contains_key(&Cow::Borrowed("tracing")) {
-                let tracing = tracing::extract_current_tracing_context();
-                data.insert("tracing", serde_json::to_value(&tracing)?);
-            }
+            data = data.with_tracing_info();
         }
-        serde_json::to_value(&data)
+        data
     }
 }
 
@@ -392,7 +376,7 @@ mod tests {
     }
 
     fn current_json() -> serde_json::Value {
-        EventContext::current().as_json().unwrap()
+        serde_json::to_value(&EventContext::current().data()).unwrap()
     }
 
     #[test]

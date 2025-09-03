@@ -163,11 +163,6 @@ impl ToTokens for EsRepo<'_> {
         } else {
             quote! { es_entity::EsQueryFlavorNested }
         };
-        let load_event_context = if self.opts.load_event_context() {
-            quote! { true }
-        } else {
-            quote! { false }
-        };
 
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
 
@@ -229,11 +224,6 @@ impl ToTokens for EsRepo<'_> {
                 type Entity = #entity;
                 type Err = #error;
                 type EsQueryFlavor = #es_query_flavor;
-
-               #[inline(always)]
-               fn load_event_context() -> bool {
-                   #load_event_context
-               }
 
                #[inline(always)]
                async fn load_all_nested_in_op<OP>(

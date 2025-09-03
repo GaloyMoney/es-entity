@@ -19,6 +19,7 @@ CREATE TABLE user_events (
   event JSONB NOT NULL,
   -- The 'event context'
   -- additional metadata that can be collected out of band
+  -- only populated if 'event_context' attribute is set on the EsEvent
   context JSONB DEFAULT NULL,
   -- The time the event was recorded
   recorded_at TIMESTAMPTZ NOT NULL,

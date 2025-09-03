@@ -54,6 +54,8 @@ pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
         + std::hash::Hash
         + Send
         + Sync;
+
+    fn event_context() -> bool;
 }
 
 /// Required trait for converting new entities into their initial events before persistence.
@@ -274,10 +276,6 @@ pub trait EsRepo: Send {
     type Entity: EsEntity;
     type Err: From<EsEntityError> + From<sqlx::Error>;
     type EsQueryFlavor;
-
-    fn load_event_context() -> bool {
-        false
-    }
 
     /// Loads all nested entities for a given set of parent entities within an atomic operation.
     fn load_all_nested_in_op<OP>(

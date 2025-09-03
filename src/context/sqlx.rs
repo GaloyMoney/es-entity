@@ -1,6 +1,6 @@
 use sqlx::{
     Postgres,
-    postgres::{PgArgumentBuffer, PgTypeInfo, PgValueRef},
+    postgres::{PgArgumentBuffer, PgHasArrayType, PgTypeInfo, PgValueRef},
 };
 
 use super::ContextData;
@@ -28,5 +28,11 @@ impl<'r> sqlx::Decode<'r, Postgres> for ContextData {
         let json_value = <serde_json::Value as sqlx::Decode<Postgres>>::decode(value)?;
         let res: ContextData = serde_json::from_value(json_value)?;
         Ok(res)
+    }
+}
+
+impl PgHasArrayType for ContextData {
+    fn array_type_info() -> PgTypeInfo {
+        <serde_json::Value as sqlx::postgres::PgHasArrayType>::array_type_info()
     }
 }

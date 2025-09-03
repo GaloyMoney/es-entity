@@ -9,7 +9,7 @@ es_entity::entity_id! { UserId }
 
 #[derive(EsEvent, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-#[es_event(id = "UserId")]
+#[es_event(id = "UserId", event_context)]
 pub enum UserEvent {
     Initialized { id: UserId, name: String },
     NameUpdated { name: String },
