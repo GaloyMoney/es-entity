@@ -12,7 +12,7 @@ reset-deps: clean-deps start-deps setup-db
 test-in-ci: start-deps setup-db
 	rm -rf $${CARGO_TARGET_DIR:-./target}/mdbook-test
 	$(MAKE) test-book
-	cargo nextest run --workspace --verbose --locked
+	cargo nextest run --workspace --verbose
 	cargo test --doc --workspace
 	cargo doc --no-deps --workspace
 

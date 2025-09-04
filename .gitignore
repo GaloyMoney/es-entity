@@ -18,3 +18,5 @@ target/
 
 # mdBook generated files
 book/book/
+
+Cargo.lock
