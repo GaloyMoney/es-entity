@@ -76,7 +76,7 @@ serde_with = "3.14.0"
 sqlx = { version = "0.8.6", default-features = false, features = ["macros", "runtime-tokio-rustls", "postgres", "uuid", "chrono", "json" ] }
 tokio = { version = "1.47", features = ["rt-multi-thread", "macros"] }
 thiserror = "2.0.12"
-uuid = { version = "1.17", features = ["serde", "v7"] }
+uuid = { version = "1.18", features = ["serde", "v7"] }
 im = { version = "15.1.0", features = ["serde"] }
 pin-project = "1.1.10"
 tracing = { version = "0.1.41", default-features = false }
