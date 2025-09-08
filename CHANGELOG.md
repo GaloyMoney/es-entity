@@ -1,3 +1,18 @@
+# [cala release v0.7.18](https://github.com/GaloyMoney/cala/releases/tag/0.7.18)
+
+
+### Documentation
+
+- Fix readme events table
+
+### Miscellaneous Tasks
+
+- Remove Cargo.lock (#37)
+
+### Performance
+
+- Add persist_event_context to disable sending redundant data
+
 # [cala release v0.7.17](https://github.com/GaloyMoney/cala/releases/tag/0.7.17)
 
 
