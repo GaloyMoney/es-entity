@@ -84,6 +84,9 @@ pub struct RepositoryOptions {
     op_ty: Option<syn::Type>,
     #[darling(default, rename = "additional_op_traits")]
     additional_op_traits: Option<String>,
+
+    #[darling(default)]
+    persist_event_context: Option<bool>,
 }
 
 impl RepositoryOptions {
@@ -151,6 +154,17 @@ impl RepositoryOptions {
         self.event_ident
             .as_ref()
             .expect("Event identifier is not set")
+    }
+
+    pub fn event_context_enabled(&self) -> bool {
+        #[cfg(feature = "event-context-enabled")]
+        {
+            self.persist_event_context.unwrap_or(true)
+        }
+        #[cfg(not(feature = "event-context-enabled"))]
+        {
+            self.persist_event_context.unwrap_or(false)
+        }
     }
 
     pub fn op(&self) -> &syn::Type {

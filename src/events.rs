@@ -281,10 +281,16 @@ where
     }
 
     #[doc(hidden)]
-    pub fn serialize_new_events(
-        &self,
-    ) -> (Vec<serde_json::Value>, Option<Vec<crate::ContextData>>) {
-        let contexts = if <T as EsEvent>::event_context() {
+    pub fn serialize_new_events(&self) -> Vec<serde_json::Value> {
+        self.new_events
+            .iter()
+            .map(|event| serde_json::to_value(&event.event).expect("Failed to serialize event"))
+            .collect()
+    }
+
+    #[doc(hidden)]
+    pub fn serialize_new_event_contexts(&self) -> Option<Vec<crate::ContextData>> {
+        if <T as EsEvent>::event_context() {
             let contexts = self
                 .new_events
                 .iter()
@@ -294,13 +300,7 @@ where
             Some(contexts)
         } else {
             None
-        };
-        let event_data = self
-            .new_events
-            .iter()
-            .map(|event| serde_json::to_value(&event.event).expect("Failed to serialize event"))
-            .collect();
-        (event_data, contexts)
+        }
     }
 }
 

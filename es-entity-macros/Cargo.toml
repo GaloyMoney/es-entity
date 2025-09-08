@@ -11,16 +11,17 @@ categories = ["data-structures", "database"]
 
 fail-on-warnings = []
 graphql = []
-event-context = []
+event-context = ["event-context-enabled"]
+event-context-enabled = []
 
 [lib]
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1.0.95"
-syn = "2.0.104"
-quote = "1.0.40"
-darling = "0.20.11"
-pluralizer = "0.5.0"
-convert_case = "0.8.0"
+proc-macro2 = "1.0"
+syn = "2.0"
+quote = "1.0"
+darling = "0.20"
+pluralizer = "0.5"
+convert_case = "0.8"
 regex = "1.11"
