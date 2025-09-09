@@ -289,17 +289,17 @@ where
     }
 
     #[doc(hidden)]
-    pub fn serialize_new_event_contexts(&self) -> Option<Vec<crate::ContextData>> {
+    pub fn serialize_new_event_contexts(&self) -> Vec<Option<crate::ContextData>> {
         if <T as EsEvent>::event_context() {
             let contexts = self
                 .new_events
                 .iter()
-                .map(|event| event.context.clone().expect("Missing context"))
+                .map(|event| Some(event.context.clone().expect("Missing context")))
                 .collect();
 
-            Some(contexts)
+            contexts
         } else {
-            None
+            vec![None; self.new_events.len()]
         }
     }
 }

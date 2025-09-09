@@ -30,43 +30,65 @@ impl ToTokens for PersistEventsBatchFn<'_> {
         let event_type = &self.event;
         let error = self.error;
 
-        let query = format!(
-            "INSERT INTO {} (id, recorded_at, sequence, event_type, event{}) \
-             SELECT unnested.id, COALESCE($1, NOW()), unnested.sequence, unnested.event_type, unnested.event{} \
-             FROM UNNEST($2, $3::INT[], $4::TEXT[], $5::JSONB[]{}) \
-             AS unnested(id, sequence, event_type, event{}) RETURNING recorded_at",
+        let copy_query = format!(
+            "COPY {} (id, sequence, event_type, event{}) FROM STDIN WITH (FORMAT text)",
             self.events_table_name,
-            if self.event_ctx { ", context" } else { "" },
-            if self.event_ctx {
-                ", unnested.context"
-            } else {
-                ""
-            },
-            if self.event_ctx { ", $6::JSONB[]" } else { "" },
             if self.event_ctx { ", context" } else { "" }
         );
 
-        let (ctx_var, ctx_extend, ctx_bind) = if self.event_ctx {
-            (
-                quote! {
-                    let mut all_contexts: Vec<es_entity::ContextData> = Vec::new();
-                },
-                quote! {
+        let copy_data_generation = if self.event_ctx {
+            quote! {
+                for events in all_events.iter_mut() {
+                    let id = events.id();
+                    let offset = events.len_persisted();
+                    let serialized = events.serialize_new_events();
                     let contexts = events.serialize_new_event_contexts();
-                    if let Some(contexts) = contexts {
-                        all_contexts.extend(contexts);
+                    
+                    for (idx, (event, context)) in serialized.into_iter().zip(contexts.unwrap_or_default().into_iter()).enumerate() {
+                        let event_type = event
+                            .get("type")
+                            .and_then(es_entity::prelude::serde_json::Value::as_str)
+                            .expect("Could not read event type");
+                        let row = format!(
+                            "{}\t{}\t{}\t{}\t{}\n",
+                            id,
+                            offset + idx + 1,
+                            event_type,
+                            es_entity::prelude::serde_json::to_string(&event).expect("event to string")
+                                .replace("\\", "\\\\"),
+                            match context {
+                                Some(ctx) => es_entity::prelude::serde_json::to_string(&ctx).expect("context to string"),
+                                None => "\\N".to_string(),
+                            }
+                        );
+                        copy.send(row.as_bytes()).await?;
                     }
-                },
-                quote! {
-                    .bind(&if all_contexts.is_empty() {
-                        None
-                    } else {
-                         Some(all_contexts)
-                    })
-                },
-            )
+                }
+            }
         } else {
-            (quote! {}, quote! {}, quote! {})
+            quote! {
+                for events in all_events.iter_mut() {
+                    let id = events.id();
+                    let offset = events.len_persisted();
+                    let serialized = events.serialize_new_events();
+                    
+                    for (idx, event) in serialized.into_iter().enumerate() {
+                        let event_type = event
+                            .get("type")
+                            .and_then(es_entity::prelude::serde_json::Value::as_str)
+                            .expect("Could not read event type");
+                        let row = format!(
+                            "{}\t{}\t{}\t{}\n",
+                            id,
+                            offset + idx + 1,
+                            event_type,
+                            es_entity::prelude::serde_json::to_string(&event).expect("event to string")
+                                .replace("\\", "\\\\")
+                        );
+                        copy.send(row.as_bytes()).await?;
+                    }
+                }
+            }
         };
 
         tokens.append_all(quote! {
@@ -78,52 +100,41 @@ impl ToTokens for PersistEventsBatchFn<'_> {
             where
                 OP: es_entity::AtomicOperation
             {
-                use es_entity::prelude::sqlx::Row;
-
-                let mut all_serialized = Vec::new();
-                #ctx_var
-                let mut all_types = Vec::new();
-                let mut all_ids: Vec<&#id_type> = Vec::new();
-                let mut all_sequences = Vec::new();
-                let now = op.now();
-
-                let mut n_events_map = std::collections::HashMap::new();
-                for events in all_events.iter_mut() {
-                    let id = events.id();
-                    let offset = events.len_persisted() + 1;
-                    let serialized = events.serialize_new_events();
-                    #ctx_extend
-                    let types = serialized.iter()
-                        .map(|e| e.get("type")
-                            .and_then(es_entity::prelude::serde_json::Value::as_str)
-                            .expect("Could not read event type")
-                            .to_owned())
-                        .collect::<Vec<_>>();
-
-                    let n_events = serialized.len();
-                    all_serialized.extend(serialized);
-                    all_types.extend(types);
-                    all_ids.extend(std::iter::repeat(id).take(n_events));
-                    all_sequences.extend((offset..).take(n_events).map(|i| i as i32));
-                    n_events_map.insert(id.clone(), n_events);
+                // Check if there are any events to persist
+                let total_events: usize = all_events.iter().map(|e| e.serialize_new_events().len()).sum();
+                if total_events == 0 {
+                    return Ok(std::collections::HashMap::new());
                 }
 
-                let rows = Self::extract_concurrent_modification(
-                    sqlx::query(#query)
-                        .bind(now)
-                        .bind(&all_ids)
-                        .bind(&all_sequences)
-                        .bind(&all_types)
-                        .bind(&all_serialized)
-                        #ctx_bind
-                        .fetch_all(op.as_executor())
-                        .await
-                )?;
+                let mut n_events_map = std::collections::HashMap::new();
+                
+                // Collect event counts for return value
+                for events in all_events.iter() {
+                    let id = events.id();
+                    let n_events = events.serialize_new_events().len();
+                    if n_events > 0 {
+                        n_events_map.insert(id.clone(), n_events);
+                    }
+                }
 
-                let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
+                // Perform the COPY operation
+                let _rows_copied = Self::extract_concurrent_modification({
+                    let mut copy = op
+                        .as_executor()
+                        .copy_in_raw(#copy_query)
+                        .await?;
 
+                    #copy_data_generation
+
+                    copy.finish().await
+                })?;
+
+                // Mark all events as persisted with current timestamp
+                let recorded_at = es_entity::prelude::chrono::Utc::now();
                 for events in all_events.iter_mut() {
-                    events.mark_new_events_persisted_at(recorded_at);
+                    if !events.serialize_new_events().is_empty() {
+                        events.mark_new_events_persisted_at(recorded_at);
+                    }
                 }
 
                 Ok(n_events_map)
@@ -161,59 +172,66 @@ mod tests {
             where
                 OP: es_entity::AtomicOperation
             {
-                use es_entity::prelude::sqlx::Row;
-
-                let mut all_serialized = Vec::new();
-                let mut all_contexts: Vec<es_entity::ContextData> = Vec::new();
-                let mut all_types = Vec::new();
-                let mut all_ids: Vec<&EntityId> = Vec::new();
-                let mut all_sequences = Vec::new();
-                let now = op.now();
-
-                let mut n_events_map = std::collections::HashMap::new();
-                for events in all_events.iter_mut() {
-                    let id = events.id();
-                    let offset = events.len_persisted() + 1;
-                    let serialized = events.serialize_new_events();
-                    let contexts = events.serialize_new_event_contexts();
-                    if let Some(contexts) = contexts {
-                        all_contexts.extend(contexts);
-                    }
-                    let types = serialized.iter()
-                        .map(|e| e.get("type")
-                            .and_then(es_entity::prelude::serde_json::Value::as_str)
-                            .expect("Could not read event type")
-                            .to_owned())
-                        .collect::<Vec<_>>();
-
-                    let n_events = serialized.len();
-                    all_serialized.extend(serialized);
-                    all_types.extend(types);
-                    all_ids.extend(std::iter::repeat(id).take(n_events));
-                    all_sequences.extend((offset..).take(n_events).map(|i| i as i32));
-                    n_events_map.insert(id.clone(), n_events);
+                // Check if there are any events to persist
+                let total_events: usize = all_events.iter().map(|e| e.serialize_new_events().len()).sum();
+                if total_events == 0 {
+                    return Ok(std::collections::HashMap::new());
                 }
 
-                let rows = Self::extract_concurrent_modification(
-                    sqlx::query("INSERT INTO entity_events (id, recorded_at, sequence, event_type, event, context) SELECT unnested.id, COALESCE($1, NOW()), unnested.sequence, unnested.event_type, unnested.event, unnested.context FROM UNNEST($2, $3::INT[], $4::TEXT[], $5::JSONB[], $6::JSONB[]) AS unnested(id, sequence, event_type, event, context) RETURNING recorded_at")
-                        .bind(now)
-                        .bind(&all_ids)
-                        .bind(&all_sequences)
-                        .bind(&all_types)
-                        .bind(&all_serialized)
-                        .bind(&if all_contexts.is_empty() {
-                            None
-                        } else {
-                             Some(all_contexts)
-                        })
-                        .fetch_all(op.as_executor())
-                        .await
-                )?;
+                let mut n_events_map = std::collections::HashMap::new();
+                
+                // Collect event counts for return value
+                for events in all_events.iter() {
+                    let id = events.id();
+                    let n_events = events.serialize_new_events().len();
+                    if n_events > 0 {
+                        n_events_map.insert(id.clone(), n_events);
+                    }
+                }
 
-                let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
+                // Perform the COPY operation
+                let _rows_copied = Self::extract_concurrent_modification({
+                    let mut copy = op
+                        .as_executor()
+                        .copy_in_raw("COPY entity_events (id, sequence, event_type, event, context) FROM STDIN WITH (FORMAT text)")
+                        .await?;
 
+                    for events in all_events.iter_mut() {
+                        let id = events.id();
+                        let offset = events.len_persisted();
+                        let serialized = events.serialize_new_events();
+                        let contexts = events.serialize_new_event_contexts();
+                        
+                        for (idx, (event, context)) in serialized.into_iter().zip(contexts.unwrap_or_default().into_iter()).enumerate() {
+                            let event_type = event
+                                .get("type")
+                                .and_then(es_entity::prelude::serde_json::Value::as_str)
+                                .expect("Could not read event type");
+                            let row = format!(
+                                "{}\t{}\t{}\t{}\t{}\n",
+                                id,
+                                offset + idx + 1,
+                                event_type,
+                                es_entity::prelude::serde_json::to_string(&event).expect("event to string")
+                                    .replace("\\", "\\\\"),
+                                match context {
+                                    Some(ctx) => es_entity::prelude::serde_json::to_string(&ctx).expect("context to string"),
+                                    None => "\\N".to_string(),
+                                }
+                            );
+                            copy.send(row.as_bytes()).await?;
+                        }
+                    }
+
+                    copy.finish().await
+                })?;
+
+                // Mark all events as persisted with current timestamp
+                let recorded_at = es_entity::prelude::chrono::Utc::now();
                 for events in all_events.iter_mut() {
-                    events.mark_new_events_persisted_at(recorded_at);
+                    if !events.serialize_new_events().is_empty() {
+                        events.mark_new_events_persisted_at(recorded_at);
+                    }
                 }
 
                 Ok(n_events_map)
@@ -248,49 +266,61 @@ mod tests {
             where
                 OP: es_entity::AtomicOperation
             {
-                use es_entity::prelude::sqlx::Row;
-
-                let mut all_serialized = Vec::new();
-                let mut all_types = Vec::new();
-                let mut all_ids: Vec<&EntityId> = Vec::new();
-                let mut all_sequences = Vec::new();
-                let now = op.now();
-
-                let mut n_events_map = std::collections::HashMap::new();
-                for events in all_events.iter_mut() {
-                    let id = events.id();
-                    let offset = events.len_persisted() + 1;
-                    let serialized = events.serialize_new_events();
-                    let types = serialized.iter()
-                        .map(|e| e.get("type")
-                            .and_then(es_entity::prelude::serde_json::Value::as_str)
-                            .expect("Could not read event type")
-                            .to_owned())
-                        .collect::<Vec<_>>();
-
-                    let n_events = serialized.len();
-                    all_serialized.extend(serialized);
-                    all_types.extend(types);
-                    all_ids.extend(std::iter::repeat(id).take(n_events));
-                    all_sequences.extend((offset..).take(n_events).map(|i| i as i32));
-                    n_events_map.insert(id.clone(), n_events);
+                // Check if there are any events to persist
+                let total_events: usize = all_events.iter().map(|e| e.serialize_new_events().len()).sum();
+                if total_events == 0 {
+                    return Ok(std::collections::HashMap::new());
                 }
 
-                let rows = Self::extract_concurrent_modification(
-                    sqlx::query("INSERT INTO entity_events (id, recorded_at, sequence, event_type, event) SELECT unnested.id, COALESCE($1, NOW()), unnested.sequence, unnested.event_type, unnested.event FROM UNNEST($2, $3::INT[], $4::TEXT[], $5::JSONB[]) AS unnested(id, sequence, event_type, event) RETURNING recorded_at")
-                        .bind(now)
-                        .bind(&all_ids)
-                        .bind(&all_sequences)
-                        .bind(&all_types)
-                        .bind(&all_serialized)
-                        .fetch_all(op.as_executor())
-                        .await
-                )?;
+                let mut n_events_map = std::collections::HashMap::new();
+                
+                // Collect event counts for return value
+                for events in all_events.iter() {
+                    let id = events.id();
+                    let n_events = events.serialize_new_events().len();
+                    if n_events > 0 {
+                        n_events_map.insert(id.clone(), n_events);
+                    }
+                }
 
-                let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
+                // Perform the COPY operation
+                let _rows_copied = Self::extract_concurrent_modification({
+                    let mut copy = op
+                        .as_executor()
+                        .copy_in_raw("COPY entity_events (id, sequence, event_type, event) FROM STDIN WITH (FORMAT text)")
+                        .await?;
 
+                    for events in all_events.iter_mut() {
+                        let id = events.id();
+                        let offset = events.len_persisted();
+                        let serialized = events.serialize_new_events();
+                        
+                        for (idx, event) in serialized.into_iter().enumerate() {
+                            let event_type = event
+                                .get("type")
+                                .and_then(es_entity::prelude::serde_json::Value::as_str)
+                                .expect("Could not read event type");
+                            let row = format!(
+                                "{}\t{}\t{}\t{}\n",
+                                id,
+                                offset + idx + 1,
+                                event_type,
+                                es_entity::prelude::serde_json::to_string(&event).expect("event to string")
+                                    .replace("\\", "\\\\")
+                            );
+                            copy.send(row.as_bytes()).await?;
+                        }
+                    }
+
+                    copy.finish().await
+                })?;
+
+                // Mark all events as persisted with current timestamp
+                let recorded_at = es_entity::prelude::chrono::Utc::now();
                 for events in all_events.iter_mut() {
-                    events.mark_new_events_persisted_at(recorded_at);
+                    if !events.serialize_new_events().is_empty() {
+                        events.mark_new_events_persisted_at(recorded_at);
+                    }
                 }
 
                 Ok(n_events_map)

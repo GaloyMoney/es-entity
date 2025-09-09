@@ -1,37 +1,9 @@
 mod helpers;
 
+use chrono::Utc;
 use es_entity::*;
 use serde::{Deserialize, Serialize};
-
-// async fn persist_events<OP>(
-//     &self,
-//     op: &mut OP,
-//     events: &mut es_entity::EntityEvents<EntityEvent>
-// ) -> Result<usize, es_entity::EsRepoError>
-// where
-//     OP: es_entity::AtomicOperation
-// {
-//     let id = events.id();
-//     let offset = events.len_persisted();
-//     let serialized_events = events.serialize_new_events();
-//     let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
-//     let now = op.now();
-
-//     let rows =
-//         sqlx::query!(
-//             "INSERT INTO entity_events (id, recorded_at, sequence, event_type, event) SELECT $1, COALESCE($2, NOW()), ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event FROM UNNEST($4::TEXT[], $5::JSONB[]) AS unnested(event_type, event) RETURNING recorded_at",
-//             id as &EntityId,
-//             now,
-//             offset as i32,
-//             &events_types,
-//             &serialized_events,
-//         ).fetch_all(op.as_executor()).await?;
-
-//     let recorded_at = rows[0].recorded_at;
-//     let n_events = events.mark_new_events_persisted_at(recorded_at);
-
-//     Ok(n_events)
-// }
+use uuid::Uuid;
 
 #[derive(EsEvent, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -41,28 +13,81 @@ pub enum UserEvent {
     NameUpdated { name: String },
 }
 
-#[tokio::test]
+// #[tokio::test]
 async fn copy_events() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
-    let mut tx = pool.begin().await?;
     let id = uuid::Uuid::now_v7();
     let mut events = EntityEvents::init(
         id,
-        [UserEvent::Initialized {
-            id,
-            name: "name".to_string(),
-        }],
+        [
+            UserEvent::Initialized {
+                id,
+                name: "name".to_string(),
+            },
+            UserEvent::NameUpdated {
+                name: "new_name".to_string(),
+            },
+        ],
     );
-    persist_events(&mut tx, &mut events).await?;
-    tx.commit().await?;
+    persist_events(&pool, &mut events).await?;
     Ok(())
 }
 
+use sqlx::postgres::PgPool;
+
 async fn persist_events(
-    op: &mut impl es_entity::AtomicOperation,
+    pool: &sqlx::PgPool,
     events: &mut es_entity::EntityEvents<UserEvent>,
-) -> anyhow::Result<usize> {
-    // @ claude - I want to attempt to reformulate the fn above using copy.
-    // start by creating the smallest possible possible POC that demonstrates that
-    Ok(0)
+) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+
+    // Perform the COPY operation in a way that releases the borrow
+    let rows_copied = extract_concurrent_modification({
+        let mut copy = tx
+            .copy_in_raw(
+                "COPY user_events (id, sequence, event_type, event, recorded_at) 
+                 FROM STDIN WITH (FORMAT text)",
+            )
+            .await?;
+        let id = events.id();
+        let offset = events.len_persisted();
+        let serialized_events = events.serialize_new_events();
+
+        for (idx, event) in serialized_events.into_iter().enumerate() {
+            let event_type = event
+                .get("type")
+                .and_then(es_entity::prelude::serde_json::Value::as_str)
+                .expect("Could not read event type")
+                .to_owned();
+            let row = format!(
+                "{}\t{}\t{}\t{}\t{}\n",
+                id,
+                offset + 1 + idx,
+                event_type,
+                serde_json::to_string(&event).expect("event to string"),
+                Utc::now(),
+            );
+
+            copy.send(row.as_bytes()).await?;
+        }
+
+        copy.finish().await
+    })?;
+
+    // Now we can safely commit
+    tx.commit().await?;
+
+    println!("Copied {} rows", rows_copied);
+    Ok(())
+}
+fn extract_concurrent_modification<T>(
+    res: Result<T, sqlx::Error>,
+) -> Result<T, es_entity::EsRepoError> {
+    match res {
+        Ok(entity) => Ok(entity),
+        Err(sqlx::Error::Database(db_error)) if db_error.is_unique_violation() => Err(
+            es_entity::EsRepoError::from(es_entity::EsEntityError::ConcurrentModification),
+        ),
+        Err(err) => Err(es_entity::EsRepoError::from(err)),
+    }
 }

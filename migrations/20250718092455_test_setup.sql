@@ -7,12 +7,12 @@ CREATE TABLE users (
 CREATE INDEX idx_users_name ON users (name);
 
 CREATE TABLE user_events (
-  id UUID NOT NULL REFERENCES users(id),
+  id UUID NOT NULL,
   sequence INT NOT NULL,
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
   context JSONB DEFAULT NULL,
-  recorded_at TIMESTAMPTZ NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(id, sequence)
 );
 
@@ -28,7 +28,7 @@ CREATE TABLE user_document_events (
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
   context JSONB DEFAULT NULL,
-  recorded_at TIMESTAMPTZ NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(id, sequence)
 );
 
@@ -45,7 +45,7 @@ CREATE TABLE ignore_prefix_user_events (
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
   context JSONB DEFAULT NULL,
-  recorded_at TIMESTAMPTZ NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(id, sequence)
 );
 
@@ -62,7 +62,7 @@ CREATE TABLE custom_name_for_user_events (
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
   context JSONB DEFAULT NULL,
-  recorded_at TIMESTAMPTZ NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(id, sequence)
 );
 
@@ -78,7 +78,7 @@ CREATE TABLE order_events (
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
   context JSONB DEFAULT NULL,
-  recorded_at TIMESTAMPTZ NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(id, sequence)
 );
 
@@ -94,7 +94,7 @@ CREATE TABLE order_item_events (
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
   context JSONB DEFAULT NULL,
-  recorded_at TIMESTAMPTZ NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(id, sequence)
 );
 
@@ -110,7 +110,7 @@ CREATE TABLE subscription_events (
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
   context JSONB DEFAULT NULL,
-  recorded_at TIMESTAMPTZ NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(id, sequence)
 );
 
@@ -126,6 +126,6 @@ CREATE TABLE billing_period_events (
   event_type VARCHAR NOT NULL,
   event JSONB NOT NULL,
   context JSONB DEFAULT NULL,
-  recorded_at TIMESTAMPTZ NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(id, sequence)
 );
