@@ -54,6 +54,13 @@ impl<T: EsEntity> Nested<T> {
         self.entities.len()
     }
 
+    pub fn iter_persisted(
+        &self,
+    ) -> std::collections::hash_map::Values<'_, <<T as EsEntity>::Event as EsEvent>::EntityId, T>
+    {
+        self.entities.values()
+    }
+
     pub fn iter_persisted_mut(
         &mut self,
     ) -> std::collections::hash_map::ValuesMut<'_, <<T as EsEntity>::Event as EsEvent>::EntityId, T>
