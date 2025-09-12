@@ -14,7 +14,7 @@ inherits = "dev"
 [features]
 
 fail-on-warnings = []
-tracing = ["dep:tracing", "dep:tracing-opentelemetry", "dep:opentelemetry"]
+tracing-context = ["dep:tracing", "dep:tracing-opentelemetry", "dep:opentelemetry"]
 graphql = ["es-entity-macros/graphql", "dep:async-graphql", "dep:base64"]
 event-context = ["es-entity-macros/event-context", "event-context-enabled"]
 event-context-enabled = ["es-entity-macros/event-context-enabled"]

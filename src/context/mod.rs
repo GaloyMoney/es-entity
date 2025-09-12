@@ -69,7 +69,7 @@
 //! alongside the event data, enabling comprehensive audit trails and debugging.
 
 mod sqlx;
-#[cfg(feature = "tracing")]
+#[cfg(feature = "tracing-context")]
 mod tracing;
 mod with_event_context;
 
@@ -101,7 +101,7 @@ impl ContextData {
         self.0 = self.0.update(Cow::Borrowed(key), value);
     }
 
-    #[cfg(feature = "tracing")]
+    #[cfg(feature = "tracing-context")]
     pub(crate) fn with_tracing_info(mut self) -> Self {
         let tracing = tracing::extract_current_tracing_context();
         self.insert(
@@ -359,7 +359,7 @@ impl EventContext {
     #[allow(unused_mut)]
     pub(crate) fn data_for_storing() -> ContextData {
         let mut data = Self::current().data();
-        #[cfg(feature = "tracing")]
+        #[cfg(feature = "tracing-context")]
         {
             data = data.with_tracing_info();
         }
