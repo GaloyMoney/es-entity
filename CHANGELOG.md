@@ -1,3 +1,10 @@
+# [cala release v0.8.0](https://github.com/GaloyMoney/cala/releases/tag/0.8.0)
+
+
+### Refactor
+
+- Rename tracing feature to tracing-context
+
 # [cala release v0.7.19](https://github.com/GaloyMoney/cala/releases/tag/0.7.19)
 
 
