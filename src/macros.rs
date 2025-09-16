@@ -326,6 +326,7 @@ macro_rules! entity_id {
                 $crate::prelude::schemars::JsonSchema,
             )]
             #[schemars(crate = "es_entity::prelude::schemars")]
+            #[serde(crate = "es_entity::prelude::serde")]
             #[serde(transparent)]
             #[sqlx(transparent)]
             pub struct $name($crate::prelude::uuid::Uuid);
@@ -359,6 +360,7 @@ macro_rules! entity_id {
                 $crate::prelude::serde::Deserialize,
                 $crate::prelude::serde::Serialize,
             )]
+            #[serde(crate = "es_entity::prelude::serde")]
             #[serde(transparent)]
             #[sqlx(transparent)]
             pub struct $name($crate::prelude::uuid::Uuid);
@@ -394,6 +396,7 @@ macro_rules! entity_id {
                 $crate::prelude::schemars::JsonSchema,
             )]
             #[schemars(crate = "es_entity::prelude::schemars")]
+            #[serde(crate = "es_entity::prelude::serde")]
             #[serde(transparent)]
             #[sqlx(transparent)]
             pub struct $name($crate::prelude::uuid::Uuid);
@@ -473,6 +476,7 @@ macro_rules! entity_id {
                 $crate::prelude::serde::Deserialize,
                 $crate::prelude::serde::Serialize,
             )]
+            #[serde(crate = "es_entity::prelude::serde")]
             #[serde(transparent)]
             #[sqlx(transparent)]
             pub struct $name($crate::prelude::uuid::Uuid);
