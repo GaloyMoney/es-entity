@@ -194,7 +194,7 @@ pub trait AtomicOperation: Send {
     fn as_executor(&mut self) -> &mut sqlx::PgConnection;
 }
 
-impl<'c> AtomicOperation for sqlx::PgTransaction<'c> {
+impl<'c> AtomicOperation for sqlx::Transaction<'c, Postgres> {
     fn as_executor(&mut self) -> &mut sqlx::PgConnection {
         &mut *self
     }
