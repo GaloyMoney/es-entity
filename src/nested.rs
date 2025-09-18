@@ -43,6 +43,13 @@ impl<T: EsEntity> Nested<T> {
         self.entities.values().find(predicate)
     }
 
+    pub fn find_map_persisted<B, F>(&self, f: F) -> Option<B>
+    where
+        F: FnMut(&T) -> Option<B>,
+    {
+        self.entities.values().find_map(f)
+    }
+
     pub fn find_persisted_mut<P>(&mut self, predicate: P) -> Option<&mut T>
     where
         P: FnMut(&&mut T) -> bool,
@@ -66,6 +73,20 @@ impl<T: EsEntity> Nested<T> {
     ) -> std::collections::hash_map::ValuesMut<'_, <<T as EsEntity>::Event as EsEvent>::EntityId, T>
     {
         self.entities.values_mut()
+    }
+
+    pub fn find_new<P>(&self, predicate: P) -> Option<&<T as EsEntity>::New>
+    where
+        P: FnMut(&&<T as EsEntity>::New) -> bool,
+    {
+        self.new_entities.iter().find(predicate)
+    }
+
+    pub fn find_map_new<B, F>(&self, f: F) -> Option<B>
+    where
+        F: FnMut(&<T as EsEntity>::New) -> Option<B>,
+    {
+        self.new_entities.iter().find_map(f)
     }
 
     pub fn new_entities_mut(&mut self) -> &mut Vec<<T as EsEntity>::New> {
