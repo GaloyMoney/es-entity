@@ -54,7 +54,7 @@ To persist the entity we need to setup a pattern with 5 components:
 Here's a complete working example:
 ```toml
 [dependencies]
-es-entity = "0.8"
+es-entity = "0.9"
 sqlx = "0.8" # Needs to be in scope for entity_id! macro
 serde = { version = "1.0.219", features = ["derive"] } # To serialize the `EntityEvent`
 derive_builder = "0.20.1" # For hydrating and building the entity state (optional)

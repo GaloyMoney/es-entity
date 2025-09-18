@@ -179,7 +179,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-es-entity = "0.7"
+es-entity = "0.9"
 sqlx = "0.8.3" # Needs to be in scope for entity_id! macro
 serde = { version = "1.0.219", features = ["derive"] } # To serialize the `EntityEvent`
 derive_builder = "0.20.1" # For hydrating and building the entity state (optional)
