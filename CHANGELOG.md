@@ -1,3 +1,10 @@
+# [cala release v0.9.2](https://github.com/GaloyMoney/cala/releases/tag/0.9.2)
+
+
+### Miscellaneous Tasks
+
+- Add len_new
+
 # [cala release v0.9.1](https://github.com/GaloyMoney/cala/releases/tag/0.9.1)
 
 
