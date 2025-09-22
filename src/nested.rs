@@ -25,6 +25,28 @@ impl<T: EsEntity> Nested<T> {
         &self.new_entities[len]
     }
 
+    pub fn len_new(&self) -> usize {
+        self.new_entities.len()
+    }
+
+    pub fn find_new<P>(&self, predicate: P) -> Option<&<T as EsEntity>::New>
+    where
+        P: FnMut(&&<T as EsEntity>::New) -> bool,
+    {
+        self.new_entities.iter().find(predicate)
+    }
+
+    pub fn find_map_new<B, F>(&self, f: F) -> Option<B>
+    where
+        F: FnMut(&<T as EsEntity>::New) -> Option<B>,
+    {
+        self.new_entities.iter().find_map(f)
+    }
+
+    pub fn new_entities_mut(&mut self) -> &mut Vec<<T as EsEntity>::New> {
+        &mut self.new_entities
+    }
+
     pub fn get_persisted(&self, id: &<<T as EsEntity>::Event as EsEvent>::EntityId) -> Option<&T> {
         self.entities.get(id)
     }
@@ -73,24 +95,6 @@ impl<T: EsEntity> Nested<T> {
     ) -> std::collections::hash_map::ValuesMut<'_, <<T as EsEntity>::Event as EsEvent>::EntityId, T>
     {
         self.entities.values_mut()
-    }
-
-    pub fn find_new<P>(&self, predicate: P) -> Option<&<T as EsEntity>::New>
-    where
-        P: FnMut(&&<T as EsEntity>::New) -> bool,
-    {
-        self.new_entities.iter().find(predicate)
-    }
-
-    pub fn find_map_new<B, F>(&self, f: F) -> Option<B>
-    where
-        F: FnMut(&<T as EsEntity>::New) -> Option<B>,
-    {
-        self.new_entities.iter().find_map(f)
-    }
-
-    pub fn new_entities_mut(&mut self) -> &mut Vec<<T as EsEntity>::New> {
-        &mut self.new_entities
     }
 
     pub fn load(&mut self, entities: impl IntoIterator<Item = T>) {
