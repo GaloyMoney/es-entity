@@ -38,11 +38,7 @@ impl Time {
 
     fn spawn_ticker(&self) {
         let elapsed_ms = self.elapsed_ms.clone();
-        let sim_config = self
-            .config
-            .simulation
-            .as_ref()
-            .expect("sim_time required when realtime is false");
+        let sim_config = &self.config.simulation;
         let tick_interval_ms = sim_config.tick_interval_ms;
         let tick_duration = sim_config.tick_duration_secs;
         self.ticker_task.get_or_init(|| {
@@ -61,11 +57,7 @@ impl Time {
         if self.config.realtime {
             Utc::now()
         } else {
-            let sim_config = self
-                .config
-                .simulation
-                .as_ref()
-                .expect("sim_time required when realtime is false");
+            let sim_config = &self.config.simulation;
             let elapsed_ms = self.elapsed_ms.load(Ordering::Relaxed);
 
             let simulated_time =
@@ -83,11 +75,7 @@ impl Time {
         if self.config.realtime {
             duration
         } else {
-            let sim_config = self
-                .config
-                .simulation
-                .as_ref()
-                .expect("sim_time required when realtime is false");
+            let sim_config = &self.config.simulation;
 
             let current_time = self.now();
             let real_now = Utc::now();
@@ -185,12 +173,12 @@ mod tests {
         // Configure time where 10ms = 10 days of simulated time
         let config = TimeConfig {
             realtime: false,
-            simulation: Some(SimulationConfig {
+            simulation: SimulationConfig {
                 start_at: Utc::now(),
                 tick_interval_ms: 10,
                 tick_duration_secs: StdDuration::from_secs(10 * 24 * 60 * 60), // 10 days in seconds
                 transform_to_realtime: false,
-            }),
+            },
         };
 
         init(config);

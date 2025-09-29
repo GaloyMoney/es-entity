@@ -25,7 +25,7 @@ use std::time::Duration;
 async fn main() {
     let config = sim_time::TimeConfig {
         realtime: false,
-        simulation: Some(sim_time::SimulationConfig {
+        simulation: sim_time::SimulationConfig {
             // Start the simulation at a specific time
             start_at: chrono::Utc::now(),
             
@@ -37,7 +37,7 @@ async fn main() {
             
             // Whether to switch to real-time when catching up to present
             transform_to_realtime: false,
-        }),
+        },
     };
 
     // Initialize sim-time with the configuration
@@ -74,12 +74,12 @@ use std::time::Duration;
 #     // Initialize sim-time with the example configuration
 #     let config = sim_time::TimeConfig {
 #         realtime: false,
-#         simulation: Some(sim_time::SimulationConfig {
+#         simulation: sim_time::SimulationConfig {
 #             start_at: chrono::Utc::now(),
 #             tick_interval_ms: 10,
 #             tick_duration_secs: Duration::from_secs(86400), // 1 day per 10ms
 #             transform_to_realtime: false,
-#         }),
+#         },
 #     };
 #     sim_time::init(config);
 #
@@ -201,13 +201,13 @@ async fn main() -> anyhow::Result<()> {
     // Configure time to run 30 days per second
     let config = sim_time::TimeConfig {
         realtime: false,
-        simulation: Some(sim_time::SimulationConfig {
+        simulation: sim_time::SimulationConfig {
             // Start simulation one year in the past
             start_at: chrono::Utc::now() - chrono::Duration::days(365),
             tick_interval_ms: 33,  // ~30 ticks per second
             tick_duration_secs: Duration::from_secs(86400), // 1 day per tick
             transform_to_realtime: false,
-        }),
+        },
     };
 
     let start_time = chrono::Utc::now() - chrono::Duration::days(365);
