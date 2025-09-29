@@ -1,3 +1,10 @@
+# [cala release v0.9.3](https://github.com/GaloyMoney/cala/releases/tag/0.9.3)
+
+
+### Miscellaneous Tasks
+
+- Making simulation config mandatory (#52)
+
 # [cala release v0.9.2](https://github.com/GaloyMoney/cala/releases/tag/0.9.2)
 
 
