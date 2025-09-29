@@ -173,12 +173,12 @@ mod tests {
         // Configure time where 10ms = 10 days of simulated time
         let config = TimeConfig {
             realtime: false,
-            simulation: Some(SimulationConfig {
+            simulation: SimulationConfig {
                 start_at: Utc::now(),
                 tick_interval_ms: 10,
                 tick_duration_secs: StdDuration::from_secs(10 * 24 * 60 * 60), // 10 days in seconds
                 transform_to_realtime: false,
-            }),
+            },
         };
 
         init(config);
