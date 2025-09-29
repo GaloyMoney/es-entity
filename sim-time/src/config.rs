@@ -9,15 +9,15 @@ pub struct TimeConfig {
     /// Only if its set to `false` will the [`SimulationConfig`] take effect.
     pub realtime: bool,
     /// Configuration of how the simulation should behave
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub simulation: Option<SimulationConfig>,
+    #[serde(default)]
+    pub simulation: SimulationConfig,
 }
 
 impl Default for TimeConfig {
     fn default() -> Self {
         Self {
             realtime: true,
-            simulation: None,
+            simulation: SimulationConfig::default(),
         }
     }
 }
@@ -37,4 +37,17 @@ pub struct SimulationConfig {
     /// Should the simulation transition to real time when it has reached the current time.
     #[serde(default)]
     pub transform_to_realtime: bool,
+}
+
+impl Default for SimulationConfig {
+    fn default() -> Self {
+        Self {
+            start_at: chrono::DateTime::parse_from_rfc3339("2021-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            tick_interval_ms: 1,
+            tick_duration_secs: std::time::Duration::from_secs(1000),
+            transform_to_realtime: false,
+        }
+    }
 }
