@@ -181,7 +181,7 @@ where
             .chain(self.new_events.iter().map(|e| &e.event))
     }
 
-    /// Loads and reconstructs the first entity from a stream of GenericEvents, marking events as `peristed`
+    /// Loads and reconstructs the first entity from a stream of GenericEvents, marking events as `persisted`
     pub fn load_first<E: EsEntity<Event = T>>(
         events: impl IntoIterator<Item = GenericEvent<<T as EsEvent>::EntityId>>,
     ) -> Result<E, EsEntityError> {
