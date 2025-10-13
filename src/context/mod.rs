@@ -77,6 +77,8 @@ use serde::{Deserialize, Serialize};
 
 use std::{borrow::Cow, cell::RefCell, rc::Rc};
 
+#[cfg(feature = "tracing-context")]
+pub use tracing::*;
 pub use with_event_context::*;
 
 /// Immutable context data that can be safely shared across thread boundaries.
@@ -103,7 +105,7 @@ impl ContextData {
 
     #[cfg(feature = "tracing-context")]
     pub(crate) fn with_tracing_info(mut self) -> Self {
-        let tracing = tracing::extract_current_tracing_context();
+        let tracing = TracingContext::current();
         self.insert(
             "tracing",
             serde_json::to_value(&tracing).expect("Could not inject tracing"),
