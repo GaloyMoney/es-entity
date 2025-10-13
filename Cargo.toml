@@ -83,5 +83,5 @@ im = { version = "15.1.0", features = ["serde"] }
 pin-project = "1.1.10"
 tracing = { version = "0.1.41", default-features = false }
 tracing-opentelemetry = { version = "0.31.0", default-features = false }
-opentelemetry = { version = "0.30.0", default-features = false }
+opentelemetry = { version = "0.31.0", default-features = false }
 opentelemetry_sdk = { version = "0.30.0", features = ["rt-tokio"] }
