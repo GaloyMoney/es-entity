@@ -27,25 +27,29 @@
       };
       rustVersion = pkgs.pkgsBuildHost.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
       rustToolchain = rustVersion.override {
-        extensions = ["rust-analyzer" "rust-src"];
-      };
-      nativeBuildInputs = with pkgs;
-        [
-          rustToolchain
-          alejandra
-          sqlx-cli
-          cargo-nextest
-          cargo-audit
-          cargo-deny
-          mdbook
-          bacon
-          postgresql
-          docker-compose
-          ytt
-          podman
-          podman-compose
-          curl
+        extensions = [
+          "rust-analyzer"
+          "rust-src"
+          "rustfmt"
+          "clippy"
         ];
+      };
+      nativeBuildInputs = with pkgs; [
+        rustToolchain
+        alejandra
+        sqlx-cli
+        cargo-nextest
+        cargo-audit
+        cargo-deny
+        mdbook
+        bacon
+        postgresql
+        docker-compose
+        ytt
+        podman
+        podman-compose
+        curl
+      ];
       devEnvVars = rec {
         PGDATABASE = "pg";
         PGUSER = "user";
