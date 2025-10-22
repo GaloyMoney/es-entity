@@ -47,6 +47,6 @@ impl TracingContext {
 
         let propagator = TraceContextPropagator::new();
         let extracted_context = propagator.extract(&carrier);
-        tracing::Span::current().set_parent(extracted_context);
+        let _ = tracing::Span::current().set_parent(extracted_context);
     }
 }

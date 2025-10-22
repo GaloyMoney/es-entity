@@ -3,7 +3,7 @@ name = "es-entity"
 description = "Event Sourcing Entity Framework"
 repository = "https://github.com/GaloyMoney/es-entity"
 documentation = "https://docs.rs/es-entity"
-version = "0.9.5-dev"
+version = "0.9.4"
 edition = "2024"
 license = "Apache-2.0"
 categories = ["data-structures", "database"]
@@ -62,26 +62,26 @@ members = [
 
 [workspace.dependencies]
 
-es-entity-macros = { path = "es-entity-macros", version = "0.9.5-dev" }
-sim-time = { path = "sim-time", version = "0.9.5-dev" }
+es-entity-macros = { path = "es-entity-macros", version = "0.9.4" }
+sim-time = { path = "sim-time", version = "0.9.4" }
 
-anyhow = "1.0.98"
+anyhow = "1.0.100"
 async-graphql = { version = "7.0.17", default-features = false }
-async-trait = "0.1.88"
+async-trait = "0.1.89"
 base64 = { version = "0.22.1" }
-chrono = { version = "0.4.41", features = ["clock", "serde"], default-features = false }
-derive_builder = "0.20.1"
+chrono = { version = "0.4.42", features = ["clock", "serde"], default-features = false }
+derive_builder = "0.20.2"
 schemars = { version = "1.0", features = ["uuid1"] }
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
-serde_with = "3.14.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+serde_with = "3.15.1"
 sqlx = { version = "0.8", default-features = false, features = ["macros", "runtime-tokio-rustls", "postgres", "uuid", "chrono", "json" ] }
-tokio = { version = "1.47", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.48", features = ["rt-multi-thread", "macros"] }
 thiserror = "2.0"
 uuid = { version = "1.18", features = ["serde", "v7"] }
 im = { version = "15.1.0", features = ["serde"] }
 pin-project = "1.1.10"
 tracing = { version = "0.1.41", default-features = false }
-tracing-opentelemetry = { version = "0.31.0", default-features = false }
-opentelemetry = { version = "0.30.0", default-features = false }
-opentelemetry_sdk = { version = "0.30.0", features = ["rt-tokio"] }
+tracing-opentelemetry = { version = "0.32.0", default-features = false }
+opentelemetry = { version = "0.31.0", default-features = false }
+opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
