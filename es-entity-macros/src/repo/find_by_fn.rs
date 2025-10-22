@@ -38,6 +38,7 @@ impl ToTokens for FindByFn<'_> {
         let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
         let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
         let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
+
         for maybe in ["", "maybe_"] {
             let (result_type, fetch_fn) = if maybe.is_empty() {
                 (quote! { #entity }, quote! { fetch_one(op) })
@@ -94,6 +95,20 @@ impl ToTokens for FindByFn<'_> {
                     }
                 };
 
+                #[cfg(feature = "instrument")]
+                let instrument_attr_in_op = quote! {
+                    #[tracing::instrument(skip(self, op, #column_name), fields(#column_name = tracing::field::Empty), err)]
+                };
+                #[cfg(not(feature = "instrument"))]
+                let instrument_attr_in_op = quote! {};
+
+                #[cfg(feature = "instrument")]
+                let record_field = quote! {
+                    tracing::Span::current().record(stringify!(#column_name), tracing::field::debug(&#column_name));
+                };
+                #[cfg(not(feature = "instrument"))]
+                let record_field = quote! {};
+
                 tokens.append_all(quote! {
                     pub async fn #fn_name(
                         &self,
@@ -102,6 +117,7 @@ impl ToTokens for FindByFn<'_> {
                         self.#fn_in_op(#query_fn_get_op, #column_name).await
                     }
 
+                    #instrument_attr_in_op
                     pub async fn #fn_in_op #query_fn_generics(
                         &self,
                         #query_fn_op_arg,
@@ -111,6 +127,7 @@ impl ToTokens for FindByFn<'_> {
                             OP: #query_fn_op_traits
                     {
                         let #column_name = #column_name.#access_expr;
+                        #record_field
                         #es_query_call.#fetch_fn.await
                     }
                 });
