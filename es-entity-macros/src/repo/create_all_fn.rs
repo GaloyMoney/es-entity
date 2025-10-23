@@ -66,6 +66,16 @@ impl ToTokens for CreateAllFn<'_> {
             column_names.join(", "),
         );
 
+        #[cfg(feature = "instrument")]
+        let instrument_attr = {
+            let entity_name = entity.to_string();
+            quote! {
+                #[tracing::instrument(skip_all, fields(entity = #entity_name, count = new_entities.len()), err)]
+            }
+        };
+        #[cfg(not(feature = "instrument"))]
+        let instrument_attr = quote! {};
+
         tokens.append_all(quote! {
             pub async fn create_all(
                 &self,
@@ -77,6 +87,7 @@ impl ToTokens for CreateAllFn<'_> {
                 Ok(res)
             }
 
+            #instrument_attr
             pub async fn create_all_in_op<OP>(
                 &self,
                 op: &mut OP,

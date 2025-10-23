@@ -64,6 +64,23 @@ impl ToTokens for UpdateFn<'_> {
             None
         };
 
+        #[cfg(feature = "instrument")]
+        let instrument_attr = {
+            let entity_name = entity.to_string();
+            quote! {
+                #[tracing::instrument(skip_all, fields(entity = #entity_name, id = tracing::field::Empty), err)]
+            }
+        };
+        #[cfg(not(feature = "instrument"))]
+        let instrument_attr = quote! {};
+
+        #[cfg(feature = "instrument")]
+        let record_id = quote! {
+            tracing::Span::current().record("id", tracing::field::debug(&entity.id));
+        };
+        #[cfg(not(feature = "instrument"))]
+        let record_id = quote! {};
+
         tokens.append_all(quote! {
             #[inline(always)]
             fn extract_events<Entity, Event>(entity: &mut Entity) -> &mut es_entity::EntityEvents<Event>
@@ -84,6 +101,7 @@ impl ToTokens for UpdateFn<'_> {
                 Ok(res)
             }
 
+            #instrument_attr
             pub async fn update_in_op<OP>(
                 &self,
                 op: &mut OP,
@@ -93,6 +111,7 @@ impl ToTokens for UpdateFn<'_> {
                 OP: es_entity::AtomicOperation
                 #additional_op_constraint
             {
+                #record_id
                 #(#nested)*
 
                 if !Self::extract_events(entity).any_new() {

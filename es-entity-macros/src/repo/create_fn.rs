@@ -63,6 +63,23 @@ impl ToTokens for CreateFn<'_> {
             column_names.len() + 1,
         );
 
+        #[cfg(feature = "instrument")]
+        let instrument_attr = {
+            let entity_name = entity.to_string();
+            quote! {
+                #[tracing::instrument(skip_all, fields(entity = #entity_name, id = tracing::field::Empty), err)]
+            }
+        };
+        #[cfg(not(feature = "instrument"))]
+        let instrument_attr = quote! {};
+
+        #[cfg(feature = "instrument")]
+        let record_id = quote! {
+            tracing::Span::current().record("id", tracing::field::debug(&id));
+        };
+        #[cfg(not(feature = "instrument"))]
+        let record_id = quote! {};
+
         tokens.append_all(quote! {
             #[inline(always)]
             fn convert_new<Entity, Event>(item: Entity) -> es_entity::EntityEvents<Event>
@@ -93,6 +110,7 @@ impl ToTokens for CreateFn<'_> {
                 Ok(res)
             }
 
+            #instrument_attr
             pub async fn create_in_op<OP>(
                 &self,
                 op: &mut OP,
@@ -103,6 +121,7 @@ impl ToTokens for CreateFn<'_> {
                 #additional_op_constraint
             {
                 #assignments
+                #record_id
 
                  sqlx::query!(
                      #query,

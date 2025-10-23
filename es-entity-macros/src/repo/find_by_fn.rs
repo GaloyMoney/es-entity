@@ -96,8 +96,11 @@ impl ToTokens for FindByFn<'_> {
                 };
 
                 #[cfg(feature = "instrument")]
-                let instrument_attr_in_op = quote! {
-                    #[tracing::instrument(skip(self, op, #column_name), fields(#column_name = tracing::field::Empty), err)]
+                let instrument_attr_in_op = {
+                    let entity_name = entity.to_string();
+                    quote! {
+                        #[tracing::instrument(skip(self, op, #column_name), fields(entity = #entity_name, #column_name = tracing::field::Empty), err)]
+                    }
                 };
                 #[cfg(not(feature = "instrument"))]
                 let instrument_attr_in_op = quote! {};

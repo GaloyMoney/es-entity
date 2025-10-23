@@ -66,6 +66,16 @@ impl ToTokens for FindAllFn<'_> {
             quote! { op: impl #query_fn_op_traits }
         };
 
+        #[cfg(feature = "instrument")]
+        let instrument_attr = {
+            let entity_name = entity.to_string();
+            quote! {
+                #[tracing::instrument(skip_all, fields(entity = #entity_name, count = ids.len(), ids = tracing::field::debug(ids)), err)]
+            }
+        };
+        #[cfg(not(feature = "instrument"))]
+        let instrument_attr = quote! {};
+
         tokens.append_all(quote! {
             pub async fn find_all<Out: From<#entity>>(
                 &self,
@@ -74,6 +84,7 @@ impl ToTokens for FindAllFn<'_> {
                 self.find_all_in_op(#query_fn_get_op, ids).await
             }
 
+            #instrument_attr
             pub async fn find_all_in_op #generics(
                 &self,
                 #op_param,

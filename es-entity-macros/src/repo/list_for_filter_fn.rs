@@ -183,7 +183,34 @@ impl ToTokens for ListForFilterFn<'_> {
                 &format!("list_for_filter{}", delete.include_deletion_fn_postfix()),
                 Span::call_site(),
             );
+
+            #[cfg(feature = "instrument")]
+            let instrument_attr = {
+                let entity_name = self.entity.to_string();
+                quote! {
+                    #[tracing::instrument(skip_all, fields(entity = #entity_name, filter = tracing::field::debug(&filter), sort_by = tracing::field::debug(&sort.by), direction = tracing::field::debug(&sort.direction), first, ids = tracing::field::Empty), err)]
+                }
+            };
+            #[cfg(not(feature = "instrument"))]
+            let instrument_attr = quote! {};
+
+            #[cfg(feature = "instrument")]
+            let record_first = quote! {
+                tracing::Span::current().record("first", first);
+            };
+            #[cfg(not(feature = "instrument"))]
+            let record_first = quote! {};
+
+            #[cfg(feature = "instrument")]
+            let record_ids = quote! {
+                let result_ids: Vec<_> = res.entities.iter().map(|e| &e.id).collect();
+                tracing::Span::current().record("ids", tracing::field::debug(&result_ids));
+            };
+            #[cfg(not(feature = "instrument"))]
+            let record_ids = quote! {};
+
             tokens.append_all(quote! {
+                #instrument_attr
                 pub async fn #fn_name(
                     &self,
                     filter: #filter_name,
@@ -194,11 +221,14 @@ impl ToTokens for ListForFilterFn<'_> {
                 {
                     let es_entity::Sort { by, direction } = sort;
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
+                    #record_first
 
                     use #cursor_mod::#cursor_ident;
                     let res = match (filter, by) {
                         #(#variants)*
                     };
+
+                    #record_ids
 
                     Ok(res)
                 }

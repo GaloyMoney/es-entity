@@ -179,6 +179,32 @@ impl ToTokens for ListForFn<'_> {
                 }
             };
 
+            #[cfg(feature = "instrument")]
+            let instrument_attr = {
+                let entity_name = entity.to_string();
+                quote! {
+                    #[tracing::instrument(skip(self, op, #filter_arg_name, cursor), fields(entity = #entity_name, #filter_arg_name = tracing::field::Empty, first, direction = tracing::field::debug(&direction), ids = tracing::field::Empty), err)]
+                }
+            };
+            #[cfg(not(feature = "instrument"))]
+            let instrument_attr = quote! {};
+
+            #[cfg(feature = "instrument")]
+            let record_fields = quote! {
+                tracing::Span::current().record(stringify!(#filter_arg_name), tracing::field::debug(&#filter_arg_name));
+                tracing::Span::current().record("first", first);
+            };
+            #[cfg(not(feature = "instrument"))]
+            let record_fields = quote! {};
+
+            #[cfg(feature = "instrument")]
+            let record_ids = quote! {
+                let result_ids: Vec<_> = entities.iter().map(|e| &e.id).collect();
+                tracing::Span::current().record("ids", tracing::field::debug(&result_ids));
+            };
+            #[cfg(not(feature = "instrument"))]
+            let record_ids = quote! {};
+
             tokens.append_all(quote! {
                 pub async fn #fn_name(
                     &self,
@@ -189,6 +215,7 @@ impl ToTokens for ListForFn<'_> {
                     self.#fn_in_op(#query_fn_get_op, #filter_arg_name, cursor, direction).await
                 }
 
+                #instrument_attr
                 pub async fn #fn_in_op #query_fn_generics(
                     &self,
                     #query_fn_op_arg,
@@ -201,6 +228,7 @@ impl ToTokens for ListForFn<'_> {
                 {
                     let #filter_arg_name = #filter_arg_name.#for_access_expr;
                     #destructure_tokens
+                    #record_fields
 
                     let (entities, has_next_page) = match direction {
                         es_entity::ListDirection::Ascending => {
@@ -210,6 +238,8 @@ impl ToTokens for ListForFn<'_> {
                             #es_query_desc_call.fetch_n(op, first).await?
                         }
                     };
+
+                    #record_ids
 
                     let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
 
