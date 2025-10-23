@@ -195,6 +195,13 @@ impl ToTokens for ListForFilterFn<'_> {
             let instrument_attr = quote! {};
 
             #[cfg(feature = "instrument")]
+            let extract_has_cursor = quote! {
+                let has_cursor = cursor.after.is_some();
+            };
+            #[cfg(not(feature = "instrument"))]
+            let extract_has_cursor = quote! {};
+
+            #[cfg(feature = "instrument")]
             let record_fields = quote! {
                 tracing::Span::current().record("first", first);
                 tracing::Span::current().record("has_cursor", has_cursor);
@@ -222,7 +229,7 @@ impl ToTokens for ListForFilterFn<'_> {
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
                     where #error: From<es_entity::CursorDestructureError>
                 {
-                    let has_cursor = cursor.after.is_some();
+                    #extract_has_cursor
                     let es_entity::Sort { by, direction } = sort;
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
                     #record_fields

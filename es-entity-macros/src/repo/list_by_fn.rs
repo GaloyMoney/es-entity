@@ -349,6 +349,13 @@ impl ToTokens for ListByFn<'_> {
             let instrument_attr = quote! {};
 
             #[cfg(feature = "instrument")]
+            let extract_has_cursor = quote! {
+                let has_cursor = cursor.after.is_some();
+            };
+            #[cfg(not(feature = "instrument"))]
+            let extract_has_cursor = quote! {};
+
+            #[cfg(feature = "instrument")]
             let record_fields = quote! {
                 tracing::Span::current().record("first", first);
                 tracing::Span::current().record("has_cursor", has_cursor);
@@ -385,7 +392,7 @@ impl ToTokens for ListByFn<'_> {
                    where
                        OP: #query_fn_op_traits
                  {
-                    let has_cursor = cursor.after.is_some();
+                    #extract_has_cursor
                     #destructure_tokens
                     #record_fields
 
