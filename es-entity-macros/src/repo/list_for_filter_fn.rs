@@ -188,26 +188,29 @@ impl ToTokens for ListForFilterFn<'_> {
             let instrument_attr = {
                 let entity_name = self.entity.to_string();
                 quote! {
-                    #[tracing::instrument(skip_all, fields(entity = #entity_name, filter = tracing::field::debug(&filter), sort_by = tracing::field::debug(&sort.by), direction = tracing::field::debug(&sort.direction), first, ids = tracing::field::Empty), err)]
+                    #[tracing::instrument(skip_all, fields(entity = #entity_name, filter = tracing::field::debug(&filter), sort_by = tracing::field::debug(&sort.by), direction = tracing::field::debug(&sort.direction), first, has_cursor, count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err)]
                 }
             };
             #[cfg(not(feature = "instrument"))]
             let instrument_attr = quote! {};
 
             #[cfg(feature = "instrument")]
-            let record_first = quote! {
+            let record_fields = quote! {
                 tracing::Span::current().record("first", first);
+                tracing::Span::current().record("has_cursor", has_cursor);
             };
             #[cfg(not(feature = "instrument"))]
-            let record_first = quote! {};
+            let record_fields = quote! {};
 
             #[cfg(feature = "instrument")]
-            let record_ids = quote! {
+            let record_results = quote! {
                 let result_ids: Vec<_> = res.entities.iter().map(|e| &e.id).collect();
+                tracing::Span::current().record("count", result_ids.len());
+                tracing::Span::current().record("has_next_page", res.has_next_page);
                 tracing::Span::current().record("ids", tracing::field::debug(&result_ids));
             };
             #[cfg(not(feature = "instrument"))]
-            let record_ids = quote! {};
+            let record_results = quote! {};
 
             tokens.append_all(quote! {
                 #instrument_attr
@@ -219,16 +222,17 @@ impl ToTokens for ListForFilterFn<'_> {
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
                     where #error: From<es_entity::CursorDestructureError>
                 {
+                    let has_cursor = cursor.after.is_some();
                     let es_entity::Sort { by, direction } = sort;
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
-                    #record_first
+                    #record_fields
 
                     use #cursor_mod::#cursor_ident;
                     let res = match (filter, by) {
                         #(#variants)*
                     };
 
-                    #record_ids
+                    #record_results
 
                     Ok(res)
                 }

@@ -183,7 +183,7 @@ impl ToTokens for ListForFn<'_> {
             let instrument_attr = {
                 let entity_name = entity.to_string();
                 quote! {
-                    #[tracing::instrument(skip(self, op, #filter_arg_name, cursor), fields(entity = #entity_name, #filter_arg_name = tracing::field::Empty, first, direction = tracing::field::debug(&direction), ids = tracing::field::Empty), err)]
+                    #[tracing::instrument(skip(self, op, #filter_arg_name, cursor), fields(entity = #entity_name, #filter_arg_name = tracing::field::Empty, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err)]
                 }
             };
             #[cfg(not(feature = "instrument"))]
@@ -193,17 +193,20 @@ impl ToTokens for ListForFn<'_> {
             let record_fields = quote! {
                 tracing::Span::current().record(stringify!(#filter_arg_name), tracing::field::debug(&#filter_arg_name));
                 tracing::Span::current().record("first", first);
+                tracing::Span::current().record("has_cursor", has_cursor);
             };
             #[cfg(not(feature = "instrument"))]
             let record_fields = quote! {};
 
             #[cfg(feature = "instrument")]
-            let record_ids = quote! {
+            let record_results = quote! {
                 let result_ids: Vec<_> = entities.iter().map(|e| &e.id).collect();
+                tracing::Span::current().record("count", result_ids.len());
+                tracing::Span::current().record("has_next_page", has_next_page);
                 tracing::Span::current().record("ids", tracing::field::debug(&result_ids));
             };
             #[cfg(not(feature = "instrument"))]
-            let record_ids = quote! {};
+            let record_results = quote! {};
 
             tokens.append_all(quote! {
                 pub async fn #fn_name(
@@ -226,6 +229,7 @@ impl ToTokens for ListForFn<'_> {
                     where
                         OP: #query_fn_op_traits
                 {
+                    let has_cursor = cursor.after.is_some();
                     let #filter_arg_name = #filter_arg_name.#for_access_expr;
                     #destructure_tokens
                     #record_fields
@@ -239,7 +243,7 @@ impl ToTokens for ListForFn<'_> {
                         }
                     };
 
-                    #record_ids
+                    #record_results
 
                     let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
 
