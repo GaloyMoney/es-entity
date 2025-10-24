@@ -11,8 +11,6 @@ pub struct CreateFn<'a> {
     error: &'a syn::Type,
     nested_fn_names: Vec<syn::Ident>,
     additional_op_constraint: proc_macro2::TokenStream,
-    #[cfg(feature = "instrument")]
-    repo_name_snake: String,
 }
 
 impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
@@ -27,8 +25,6 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
                 .collect(),
             columns: &opts.columns,
             additional_op_constraint: opts.additional_op_constraint(),
-            #[cfg(feature = "instrument")]
-            repo_name_snake: opts.repo_name_snake_case(),
         }
     }
 }
@@ -70,8 +66,7 @@ impl ToTokens for CreateFn<'_> {
         #[cfg(feature = "instrument")]
         let (instrument_attr, record_id) = {
             let entity_name = entity.to_string();
-            let repo_name = &self.repo_name_snake;
-            let span_name = format!("{}.create", repo_name);
+            let span_name = format!("{}.create", entity_name.to_lowercase());
             (
                 quote! {
                     #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, id = tracing::field::Empty), err(level = "warn"))]
@@ -169,8 +164,6 @@ mod tests {
             columns: &columns,
             nested_fn_names: Vec::new(),
             additional_op_constraint: quote! {},
-            #[cfg(feature = "instrument")]
-            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
@@ -254,8 +247,6 @@ mod tests {
             columns: &columns,
             nested_fn_names: Vec::new(),
             additional_op_constraint: quote! {},
-            #[cfg(feature = "instrument")]
-            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();

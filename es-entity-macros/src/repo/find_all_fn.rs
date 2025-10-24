@@ -11,8 +11,6 @@ pub struct FindAllFn<'a> {
     table_name: &'a str,
     error: &'a syn::Type,
     any_nested: bool,
-    #[cfg(feature = "instrument")]
-    repo_name_snake: String,
 }
 
 impl<'a> From<&'a RepositoryOptions> for FindAllFn<'a> {
@@ -24,8 +22,6 @@ impl<'a> From<&'a RepositoryOptions> for FindAllFn<'a> {
             table_name: opts.table_name(),
             error: opts.err(),
             any_nested: opts.any_nested(),
-            #[cfg(feature = "instrument")]
-            repo_name_snake: opts.repo_name_snake_case(),
         }
     }
 }
@@ -73,10 +69,9 @@ impl ToTokens for FindAllFn<'_> {
         #[cfg(feature = "instrument")]
         let instrument_attr = {
             let entity_name = entity.to_string();
-            let repo_name = &self.repo_name_snake;
-            let span_name = format!("{}.find_all", repo_name);
+            let span_name = format!("{}.find_all", entity_name.to_lowercase());
             quote! {
-                #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, count = ids.len(), ids = tracing::field::debug(ids)), err)]
+                #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, count = ids.len(), ids = tracing::field::debug(ids)), err(level = "warn"))]
             }
         };
         #[cfg(not(feature = "instrument"))]
@@ -122,8 +117,6 @@ mod tests {
             table_name: "entities",
             error: &error,
             any_nested: false,
-            #[cfg(feature = "instrument")]
-            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();

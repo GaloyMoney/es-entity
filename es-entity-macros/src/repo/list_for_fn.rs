@@ -15,8 +15,6 @@ pub struct ListForFn<'a> {
     delete: DeleteOption,
     cursor_mod: syn::Ident,
     any_nested: bool,
-    #[cfg(feature = "instrument")]
-    repo_name_snake: String,
 }
 
 impl<'a> ListForFn<'a> {
@@ -32,8 +30,6 @@ impl<'a> ListForFn<'a> {
             delete: opts.delete,
             cursor_mod: opts.cursor_mod(),
             any_nested: opts.any_nested(),
-            #[cfg(feature = "instrument")]
-            repo_name_snake: opts.repo_name_snake_case(),
         }
     }
 
@@ -58,8 +54,6 @@ impl<'a> ListForFn<'a> {
             delete: DeleteOption::No,
             cursor_mod,
             any_nested: false,
-            #[cfg(feature = "instrument")]
-            repo_name_snake: "test_repo".to_string(),
         }
     }
 
@@ -188,10 +182,11 @@ impl ToTokens for ListForFn<'_> {
             #[cfg(feature = "instrument")]
             let (instrument_attr, extract_has_cursor, record_fields, record_results) = {
                 let entity_name = entity.to_string();
-                let repo_name = &self.repo_name_snake;
                 let span_name = format!(
                     "{}.list_for_{}_by_{}",
-                    repo_name, for_column_name, by_column_name
+                    entity_name.to_lowercase(),
+                    for_column_name,
+                    by_column_name
                 );
                 (
                     quote! {
@@ -300,8 +295,6 @@ mod tests {
             delete: DeleteOption::No,
             cursor_mod,
             any_nested: false,
-            #[cfg(feature = "instrument")]
-            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
@@ -393,8 +386,6 @@ mod tests {
             delete: DeleteOption::No,
             cursor_mod,
             any_nested: false,
-            #[cfg(feature = "instrument")]
-            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();

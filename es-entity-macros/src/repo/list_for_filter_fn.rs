@@ -75,8 +75,6 @@ pub struct ListForFilterFn<'a> {
     cursor: &'a ComboCursor<'a>,
     delete: DeleteOption,
     cursor_mod: syn::Ident,
-    #[cfg(feature = "instrument")]
-    repo_name_snake: String,
 }
 
 impl<'a> ListForFilterFn<'a> {
@@ -96,8 +94,6 @@ impl<'a> ListForFilterFn<'a> {
             cursor,
             delete: opts.delete,
             cursor_mod: opts.cursor_mod(),
-            #[cfg(feature = "instrument")]
-            repo_name_snake: opts.repo_name_snake_case(),
         }
     }
 }
@@ -191,8 +187,7 @@ impl ToTokens for ListForFilterFn<'_> {
             #[cfg(feature = "instrument")]
             let (instrument_attr, extract_has_cursor, record_fields, record_results) = {
                 let entity_name = self.entity.to_string();
-                let repo_name = &self.repo_name_snake;
-                let span_name = format!("{}.list_for_filter", repo_name);
+                let span_name = format!("{}.list_for_filter", entity_name.to_lowercase());
                 (
                     quote! {
                         #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, filter = tracing::field::debug(&filter), sort_by = tracing::field::debug(&sort.by), direction = tracing::field::debug(&sort.direction), first, has_cursor, count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err(level = "warn"))]
@@ -371,8 +366,6 @@ mod tests {
             cursor: &combo_cursor,
             delete: DeleteOption::No,
             cursor_mod: cursor_mod.clone(),
-            #[cfg(feature = "instrument")]
-            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
