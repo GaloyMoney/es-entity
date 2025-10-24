@@ -215,6 +215,8 @@ pub struct ListByFn<'a> {
     delete: DeleteOption,
     cursor_mod: syn::Ident,
     any_nested: bool,
+    #[cfg(feature = "instrument")]
+    repo_name_snake: String,
 }
 
 impl<'a> ListByFn<'a> {
@@ -229,6 +231,8 @@ impl<'a> ListByFn<'a> {
             delete: opts.delete,
             cursor_mod: opts.cursor_mod(),
             any_nested: opts.any_nested(),
+            #[cfg(feature = "instrument")]
+            repo_name_snake: opts.repo_name_snake_case(),
         }
     }
 
@@ -341,7 +345,8 @@ impl ToTokens for ListByFn<'_> {
             #[cfg(feature = "instrument")]
             let (instrument_attr, extract_has_cursor, record_fields, record_results) = {
                 let entity_name = entity.to_string();
-                let span_name = format!("{}.list_by_{}", entity_name.to_lowercase(), column_name);
+                let repo_name = &self.repo_name_snake;
+                let span_name = format!("{}.list_by_{}", repo_name, column_name);
                 (
                     quote! {
                         #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err(level = "warn"))]
@@ -515,6 +520,8 @@ mod tests {
             delete: DeleteOption::Soft,
             cursor_mod,
             any_nested: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
@@ -654,6 +661,8 @@ mod tests {
             delete: DeleteOption::No,
             cursor_mod,
             any_nested: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
@@ -743,6 +752,8 @@ mod tests {
             delete: DeleteOption::No,
             cursor_mod,
             any_nested: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
