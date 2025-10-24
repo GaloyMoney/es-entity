@@ -341,7 +341,11 @@ impl ToTokens for ListByFn<'_> {
             #[cfg(feature = "instrument")]
             let (instrument_attr, extract_has_cursor, record_fields, record_results) = {
                 let entity_name = entity.to_string();
-                let span_name = format!("{}.list_by_{}", entity_name.to_lowercase(), column_name);
+                let span_name = format!(
+                    "es.{}.list_by_{}",
+                    entity_name.to_case(Case::Snake),
+                    column_name
+                );
                 (
                     quote! {
                         #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err(level = "warn"))]

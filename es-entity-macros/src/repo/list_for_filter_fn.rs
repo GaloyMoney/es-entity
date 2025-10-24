@@ -187,7 +187,7 @@ impl ToTokens for ListForFilterFn<'_> {
             #[cfg(feature = "instrument")]
             let (instrument_attr, extract_has_cursor, record_fields, record_results) = {
                 let entity_name = self.entity.to_string();
-                let span_name = format!("{}.list_for_filter", entity_name.to_lowercase());
+                let span_name = format!("es.{}.list_for_filter", entity_name.to_case(Case::Snake));
                 (
                     quote! {
                         #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, filter = tracing::field::debug(&filter), sort_by = tracing::field::debug(&sort.by), direction = tracing::field::debug(&sort.direction), first, has_cursor, count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err(level = "warn"))]

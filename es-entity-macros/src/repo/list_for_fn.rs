@@ -2,6 +2,9 @@ use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
 use quote::{TokenStreamExt, quote};
 
+#[cfg(feature = "instrument")]
+use convert_case::{Case, Casing};
+
 use super::{list_by_fn::CursorStruct, options::*};
 
 pub struct ListForFn<'a> {
@@ -183,8 +186,8 @@ impl ToTokens for ListForFn<'_> {
             let (instrument_attr, extract_has_cursor, record_fields, record_results) = {
                 let entity_name = entity.to_string();
                 let span_name = format!(
-                    "{}.list_for_{}_by_{}",
-                    entity_name.to_lowercase(),
+                    "es.{}.list_for_{}_by_{}",
+                    entity_name.to_case(Case::Snake),
                     for_column_name,
                     by_column_name
                 );

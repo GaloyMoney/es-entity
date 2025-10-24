@@ -2,6 +2,9 @@ use darling::ToTokens;
 use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
+#[cfg(feature = "instrument")]
+use convert_case::{Case, Casing};
+
 use super::options::*;
 
 pub struct FindAllFn<'a> {
@@ -69,7 +72,7 @@ impl ToTokens for FindAllFn<'_> {
         #[cfg(feature = "instrument")]
         let instrument_attr = {
             let entity_name = entity.to_string();
-            let span_name = format!("{}.find_all", entity_name.to_lowercase());
+            let span_name = format!("es.{}.find_all", entity_name.to_case(Case::Snake));
             quote! {
                 #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, count = ids.len(), ids = tracing::field::debug(ids)), err(level = "warn"))]
             }

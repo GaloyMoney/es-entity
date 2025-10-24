@@ -2,6 +2,9 @@ use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
 use quote::{TokenStreamExt, quote};
 
+#[cfg(feature = "instrument")]
+use convert_case::{Case, Casing};
+
 use super::options::*;
 
 pub struct FindByFn<'a> {
@@ -99,9 +102,8 @@ impl ToTokens for FindByFn<'_> {
                 let (instrument_attr_in_op, record_field) = {
                     let entity_name = entity.to_string();
                     let span_name = format!(
-                        "{}.{}find_by_{}",
-                        entity_name.to_lowercase(),
-                        maybe,
+                        "es.{}.find_by_{}",
+                        entity_name.to_case(Case::Snake),
                         column_name
                     );
                     (

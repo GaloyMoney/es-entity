@@ -2,6 +2,9 @@ use darling::ToTokens;
 use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
+#[cfg(feature = "instrument")]
+use convert_case::{Case, Casing};
+
 use super::options::*;
 
 pub struct CreateFn<'a> {
@@ -66,7 +69,7 @@ impl ToTokens for CreateFn<'_> {
         #[cfg(feature = "instrument")]
         let (instrument_attr, record_id) = {
             let entity_name = entity.to_string();
-            let span_name = format!("{}.create", entity_name.to_lowercase());
+            let span_name = format!("es.{}.create", entity_name.to_case(Case::Snake));
             (
                 quote! {
                     #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, id = tracing::field::Empty), err(level = "warn"))]
