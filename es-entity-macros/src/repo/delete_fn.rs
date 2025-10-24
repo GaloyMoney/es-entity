@@ -53,7 +53,7 @@ impl ToTokens for DeleteFn<'_> {
             let entity_name = entity.to_string();
             (
                 quote! {
-                    #[tracing::instrument(skip_all, fields(entity = #entity_name, id = tracing::field::Empty), err)]
+                    #[tracing::instrument(skip_all, fields(entity = #entity_name, id = tracing::field::Empty), err(level = "warn"))]
                 },
                 quote! {
                     tracing::Span::current().record("id", tracing::field::debug(&entity.id));

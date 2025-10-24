@@ -343,7 +343,7 @@ impl ToTokens for ListByFn<'_> {
                 let entity_name = entity.to_string();
                 (
                     quote! {
-                        #[tracing::instrument(skip_all, fields(entity = #entity_name, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err)]
+                        #[tracing::instrument(skip_all, fields(entity = #entity_name, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err(level = "warn"))]
                     },
                     quote! {
                         let has_cursor = cursor.after.is_some();

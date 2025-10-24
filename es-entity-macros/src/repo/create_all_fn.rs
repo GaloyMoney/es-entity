@@ -70,7 +70,7 @@ impl ToTokens for CreateAllFn<'_> {
         let instrument_attr = {
             let entity_name = entity.to_string();
             quote! {
-                #[tracing::instrument(skip_all, fields(entity = #entity_name, count = new_entities.len()), err)]
+                #[tracing::instrument(skip_all, fields(entity = #entity_name, count = new_entities.len()), err(level = "warn"))]
             }
         };
         #[cfg(not(feature = "instrument"))]

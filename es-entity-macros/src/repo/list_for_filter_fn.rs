@@ -189,7 +189,7 @@ impl ToTokens for ListForFilterFn<'_> {
                 let entity_name = self.entity.to_string();
                 (
                     quote! {
-                        #[tracing::instrument(skip_all, fields(entity = #entity_name, filter = tracing::field::debug(&filter), sort_by = tracing::field::debug(&sort.by), direction = tracing::field::debug(&sort.direction), first, has_cursor, count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err)]
+                        #[tracing::instrument(skip_all, fields(entity = #entity_name, filter = tracing::field::debug(&filter), sort_by = tracing::field::debug(&sort.by), direction = tracing::field::debug(&sort.direction), first, has_cursor, count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err(level = "warn"))]
                     },
                     quote! {
                         let has_cursor = cursor.after.is_some();
