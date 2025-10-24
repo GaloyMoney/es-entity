@@ -2,9 +2,6 @@ use darling::ToTokens;
 use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
-#[cfg(feature = "instrument")]
-use convert_case::{Case, Casing};
-
 use super::options::*;
 
 pub struct DeleteFn<'a> {
@@ -14,6 +11,8 @@ pub struct DeleteFn<'a> {
     columns: &'a Columns,
     delete_option: &'a DeleteOption,
     additional_op_constraint: proc_macro2::TokenStream,
+    #[cfg(feature = "instrument")]
+    repo_name_snake: String,
 }
 
 impl<'a> DeleteFn<'a> {
@@ -25,6 +24,8 @@ impl<'a> DeleteFn<'a> {
             table_name: opts.table_name(),
             delete_option: &opts.delete,
             additional_op_constraint: opts.additional_op_constraint(),
+            #[cfg(feature = "instrument")]
+            repo_name_snake: opts.repo_name_snake_case(),
         }
     }
 }
@@ -54,7 +55,8 @@ impl ToTokens for DeleteFn<'_> {
         #[cfg(feature = "instrument")]
         let (instrument_attr, record_id) = {
             let entity_name = entity.to_string();
-            let span_name = format!("es.{}.delete", entity_name.to_case(Case::Snake));
+            let repo_name = &self.repo_name_snake;
+            let span_name = format!("{}.delete", repo_name);
             (
                 quote! {
                     #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, id = tracing::field::Empty), err(level = "warn"))]
@@ -138,6 +140,8 @@ mod tests {
             columns: &columns,
             delete_option: &DeleteOption::Soft,
             additional_op_constraint: quote! {},
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
@@ -213,6 +217,8 @@ mod tests {
             columns: &columns,
             delete_option: &DeleteOption::Soft,
             additional_op_constraint: quote! {},
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
