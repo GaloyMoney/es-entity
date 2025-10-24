@@ -12,6 +12,8 @@ pub struct FindByFn<'a> {
     error: &'a syn::Type,
     delete: DeleteOption,
     any_nested: bool,
+    #[cfg(feature = "instrument")]
+    repo_name_snake: String,
 }
 
 impl<'a> FindByFn<'a> {
@@ -24,6 +26,8 @@ impl<'a> FindByFn<'a> {
             error: opts.err(),
             delete: opts.delete,
             any_nested: opts.any_nested(),
+            #[cfg(feature = "instrument")]
+            repo_name_snake: opts.repo_name_snake_case(),
         }
     }
 }
@@ -38,6 +42,7 @@ impl ToTokens for FindByFn<'_> {
         let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
         let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
         let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
+
         for maybe in ["", "maybe_"] {
             let (result_type, fetch_fn) = if maybe.is_empty() {
                 (quote! { #entity }, quote! { fetch_one(op) })
@@ -94,6 +99,23 @@ impl ToTokens for FindByFn<'_> {
                     }
                 };
 
+                #[cfg(feature = "instrument")]
+                let (instrument_attr_in_op, record_field) = {
+                    let entity_name = entity.to_string();
+                    let repo_name = &self.repo_name_snake;
+                    let span_name = format!("{}.{}find_by_{}", repo_name, maybe, column_name);
+                    (
+                        quote! {
+                            #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #column_name = tracing::field::Empty), err(level = "warn"))]
+                        },
+                        quote! {
+                            tracing::Span::current().record(stringify!(#column_name), tracing::field::debug(&#column_name));
+                        },
+                    )
+                };
+                #[cfg(not(feature = "instrument"))]
+                let (instrument_attr_in_op, record_field) = (quote! {}, quote! {});
+
                 tokens.append_all(quote! {
                     pub async fn #fn_name(
                         &self,
@@ -102,6 +124,7 @@ impl ToTokens for FindByFn<'_> {
                         self.#fn_in_op(#query_fn_get_op, #column_name).await
                     }
 
+                    #instrument_attr_in_op
                     pub async fn #fn_in_op #query_fn_generics(
                         &self,
                         #query_fn_op_arg,
@@ -111,6 +134,7 @@ impl ToTokens for FindByFn<'_> {
                             OP: #query_fn_op_traits
                     {
                         let #column_name = #column_name.#access_expr;
+                        #record_field
                         #es_query_call.#fetch_fn.await
                     }
                 });
@@ -143,6 +167,8 @@ mod tests {
             error: &error,
             delete: DeleteOption::No,
             any_nested: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
@@ -220,6 +246,8 @@ mod tests {
             error: &error,
             delete: DeleteOption::No,
             any_nested: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
@@ -294,6 +322,8 @@ mod tests {
             error: &error,
             delete: DeleteOption::Soft,
             any_nested: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
@@ -418,6 +448,8 @@ mod tests {
             error: &error,
             delete: DeleteOption::No,
             any_nested: true,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();

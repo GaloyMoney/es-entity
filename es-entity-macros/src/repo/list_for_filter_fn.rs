@@ -75,6 +75,8 @@ pub struct ListForFilterFn<'a> {
     cursor: &'a ComboCursor<'a>,
     delete: DeleteOption,
     cursor_mod: syn::Ident,
+    #[cfg(feature = "instrument")]
+    repo_name_snake: String,
 }
 
 impl<'a> ListForFilterFn<'a> {
@@ -94,6 +96,8 @@ impl<'a> ListForFilterFn<'a> {
             cursor,
             delete: opts.delete,
             cursor_mod: opts.cursor_mod(),
+            #[cfg(feature = "instrument")]
+            repo_name_snake: opts.repo_name_snake_case(),
         }
     }
 }
@@ -183,7 +187,37 @@ impl ToTokens for ListForFilterFn<'_> {
                 &format!("list_for_filter{}", delete.include_deletion_fn_postfix()),
                 Span::call_site(),
             );
+
+            #[cfg(feature = "instrument")]
+            let (instrument_attr, extract_has_cursor, record_fields, record_results) = {
+                let entity_name = self.entity.to_string();
+                let repo_name = &self.repo_name_snake;
+                let span_name = format!("{}.list_for_filter", repo_name);
+                (
+                    quote! {
+                        #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, filter = tracing::field::debug(&filter), sort_by = tracing::field::debug(&sort.by), direction = tracing::field::debug(&sort.direction), first, has_cursor, count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err(level = "warn"))]
+                    },
+                    quote! {
+                        let has_cursor = cursor.after.is_some();
+                    },
+                    quote! {
+                        tracing::Span::current().record("first", first);
+                        tracing::Span::current().record("has_cursor", has_cursor);
+                    },
+                    quote! {
+                        let result_ids: Vec<_> = res.entities.iter().map(|e| &e.id).collect();
+                        tracing::Span::current().record("count", result_ids.len());
+                        tracing::Span::current().record("has_next_page", res.has_next_page);
+                        tracing::Span::current().record("ids", tracing::field::debug(&result_ids));
+                    },
+                )
+            };
+            #[cfg(not(feature = "instrument"))]
+            let (instrument_attr, extract_has_cursor, record_fields, record_results) =
+                (quote! {}, quote! {}, quote! {}, quote! {});
+
             tokens.append_all(quote! {
+                #instrument_attr
                 pub async fn #fn_name(
                     &self,
                     filter: #filter_name,
@@ -192,13 +226,17 @@ impl ToTokens for ListForFilterFn<'_> {
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
                     where #error: From<es_entity::CursorDestructureError>
                 {
+                    #extract_has_cursor
                     let es_entity::Sort { by, direction } = sort;
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
+                    #record_fields
 
                     use #cursor_mod::#cursor_ident;
                     let res = match (filter, by) {
                         #(#variants)*
                     };
+
+                    #record_results
 
                     Ok(res)
                 }
@@ -333,6 +371,8 @@ mod tests {
             cursor: &combo_cursor,
             delete: DeleteOption::No,
             cursor_mod: cursor_mod.clone(),
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();

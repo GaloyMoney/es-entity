@@ -21,6 +21,7 @@ event-context-enabled = ["es-entity-macros/event-context-enabled"]
 json-schema = ["dep:schemars"]
 sim-time = [ "dep:sim-time" ]
 mdbook-test = ["dep:tokio", "dep:anyhow"]
+instrument = ["es-entity-macros/instrument", "dep:tracing"]
 
 [dependencies]
 es-entity-macros = { workspace = true }

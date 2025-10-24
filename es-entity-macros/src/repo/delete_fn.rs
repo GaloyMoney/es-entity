@@ -11,6 +11,8 @@ pub struct DeleteFn<'a> {
     columns: &'a Columns,
     delete_option: &'a DeleteOption,
     additional_op_constraint: proc_macro2::TokenStream,
+    #[cfg(feature = "instrument")]
+    repo_name_snake: String,
 }
 
 impl<'a> DeleteFn<'a> {
@@ -22,6 +24,8 @@ impl<'a> DeleteFn<'a> {
             table_name: opts.table_name(),
             delete_option: &opts.delete,
             additional_op_constraint: opts.additional_op_constraint(),
+            #[cfg(feature = "instrument")]
+            repo_name_snake: opts.repo_name_snake_case(),
         }
     }
 }
@@ -48,6 +52,23 @@ impl ToTokens for DeleteFn<'_> {
         );
         let args = self.columns.update_query_args();
 
+        #[cfg(feature = "instrument")]
+        let (instrument_attr, record_id) = {
+            let entity_name = entity.to_string();
+            let repo_name = &self.repo_name_snake;
+            let span_name = format!("{}.delete", repo_name);
+            (
+                quote! {
+                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, id = tracing::field::Empty), err(level = "warn"))]
+                },
+                quote! {
+                    tracing::Span::current().record("id", tracing::field::debug(&entity.id));
+                },
+            )
+        };
+        #[cfg(not(feature = "instrument"))]
+        let (instrument_attr, record_id) = (quote! {}, quote! {});
+
         tokens.append_all(quote! {
             pub async fn delete(
                 &self,
@@ -59,6 +80,7 @@ impl ToTokens for DeleteFn<'_> {
                 Ok(res)
             }
 
+            #instrument_attr
             pub async fn delete_in_op<OP>(&self,
                 op: &mut OP,
                 mut entity: #entity
@@ -68,6 +90,7 @@ impl ToTokens for DeleteFn<'_> {
                 #additional_op_constraint
             {
                 #assignments
+                #record_id
 
                 sqlx::query!(
                     #query,
@@ -117,6 +140,8 @@ mod tests {
             columns: &columns,
             delete_option: &DeleteOption::Soft,
             additional_op_constraint: quote! {},
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
@@ -192,6 +217,8 @@ mod tests {
             columns: &columns,
             delete_option: &DeleteOption::Soft,
             additional_op_constraint: quote! {},
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();

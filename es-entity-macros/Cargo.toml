@@ -13,6 +13,7 @@ fail-on-warnings = []
 graphql = []
 event-context = ["event-context-enabled"]
 event-context-enabled = []
+instrument = []
 
 [lib]
 proc-macro = true

@@ -47,6 +47,17 @@ use super::{error::EsEntityError, events::EntityEvents, operation::AtomicOperati
 /// }
 /// ```
 pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
+    #[cfg(feature = "instrument")]
+    type EntityId: Clone
+        + PartialEq
+        + sqlx::Type<sqlx::Postgres>
+        + Eq
+        + std::hash::Hash
+        + Send
+        + Sync
+        + std::fmt::Debug;
+
+    #[cfg(not(feature = "instrument"))]
     type EntityId: Clone
         + PartialEq
         + sqlx::Type<sqlx::Postgres>
