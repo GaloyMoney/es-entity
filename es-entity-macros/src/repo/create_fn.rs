@@ -64,21 +64,19 @@ impl ToTokens for CreateFn<'_> {
         );
 
         #[cfg(feature = "instrument")]
-        let instrument_attr = {
+        let (instrument_attr, record_id) = {
             let entity_name = entity.to_string();
-            quote! {
-                #[tracing::instrument(skip_all, fields(entity = #entity_name, id = tracing::field::Empty), err)]
-            }
+            (
+                quote! {
+                    #[tracing::instrument(skip_all, fields(entity = #entity_name, id = tracing::field::Empty), err)]
+                },
+                quote! {
+                    tracing::Span::current().record("id", tracing::field::debug(&id));
+                },
+            )
         };
         #[cfg(not(feature = "instrument"))]
-        let instrument_attr = quote! {};
-
-        #[cfg(feature = "instrument")]
-        let record_id = quote! {
-            tracing::Span::current().record("id", tracing::field::debug(&id));
-        };
-        #[cfg(not(feature = "instrument"))]
-        let record_id = quote! {};
+        let (instrument_attr, record_id) = (quote! {}, quote! {});
 
         tokens.append_all(quote! {
             #[inline(always)]

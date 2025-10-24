@@ -180,40 +180,35 @@ impl ToTokens for ListForFn<'_> {
             };
 
             #[cfg(feature = "instrument")]
-            let instrument_attr = {
+            let (instrument_attr, extract_has_cursor, record_fields, record_results) = {
                 let entity_name = entity.to_string();
-                quote! {
-                    #[tracing::instrument(skip(self, op, #filter_arg_name, cursor), fields(entity = #entity_name, #filter_arg_name = tracing::field::Empty, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err)]
-                }
+                (
+                    quote! {
+                        #[tracing::instrument(skip(self, op, #filter_arg_name, cursor), fields(entity = #entity_name, #filter_arg_name = tracing::field::Empty, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err)]
+                    },
+                    quote! {
+                        let has_cursor = cursor.after.is_some();
+                    },
+                    quote! {
+                        tracing::Span::current().record(stringify!(#filter_arg_name), tracing::field::debug(&#filter_arg_name));
+                        tracing::Span::current().record("first", first);
+                        tracing::Span::current().record("has_cursor", has_cursor);
+                    },
+                    quote! {
+                        let result_ids: Vec<_> = entities.iter().map(|e| &e.id).collect();
+                        tracing::Span::current().record("count", result_ids.len());
+                        tracing::Span::current().record("has_next_page", has_next_page);
+                        tracing::Span::current().record("ids", tracing::field::debug(&result_ids));
+                    },
+                )
             };
             #[cfg(not(feature = "instrument"))]
-            let instrument_attr = quote! {};
-
-            #[cfg(feature = "instrument")]
-            let extract_has_cursor = quote! {
-                let has_cursor = cursor.after.is_some();
-            };
-            #[cfg(not(feature = "instrument"))]
-            let extract_has_cursor = quote! {};
-
-            #[cfg(feature = "instrument")]
-            let record_fields = quote! {
-                tracing::Span::current().record(stringify!(#filter_arg_name), tracing::field::debug(&#filter_arg_name));
-                tracing::Span::current().record("first", first);
-                tracing::Span::current().record("has_cursor", has_cursor);
-            };
-            #[cfg(not(feature = "instrument"))]
-            let record_fields = quote! {};
-
-            #[cfg(feature = "instrument")]
-            let record_results = quote! {
-                let result_ids: Vec<_> = entities.iter().map(|e| &e.id).collect();
-                tracing::Span::current().record("count", result_ids.len());
-                tracing::Span::current().record("has_next_page", has_next_page);
-                tracing::Span::current().record("ids", tracing::field::debug(&result_ids));
-            };
-            #[cfg(not(feature = "instrument"))]
-            let record_results = quote! {};
+            let (instrument_attr, extract_has_cursor, record_fields, record_results) = (
+                quote! {},
+                quote! {},
+                quote! {},
+                quote! {},
+            );
 
             tokens.append_all(quote! {
                 pub async fn #fn_name(

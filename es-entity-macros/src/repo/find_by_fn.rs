@@ -96,21 +96,19 @@ impl ToTokens for FindByFn<'_> {
                 };
 
                 #[cfg(feature = "instrument")]
-                let instrument_attr_in_op = {
+                let (instrument_attr_in_op, record_field) = {
                     let entity_name = entity.to_string();
-                    quote! {
-                        #[tracing::instrument(skip(self, op, #column_name), fields(entity = #entity_name, #column_name = tracing::field::Empty), err)]
-                    }
+                    (
+                        quote! {
+                            #[tracing::instrument(skip(self, op, #column_name), fields(entity = #entity_name, #column_name = tracing::field::Empty), err)]
+                        },
+                        quote! {
+                            tracing::Span::current().record(stringify!(#column_name), tracing::field::debug(&#column_name));
+                        },
+                    )
                 };
                 #[cfg(not(feature = "instrument"))]
-                let instrument_attr_in_op = quote! {};
-
-                #[cfg(feature = "instrument")]
-                let record_field = quote! {
-                    tracing::Span::current().record(stringify!(#column_name), tracing::field::debug(&#column_name));
-                };
-                #[cfg(not(feature = "instrument"))]
-                let record_field = quote! {};
+                let (instrument_attr_in_op, record_field) = (quote! {}, quote! {});
 
                 tokens.append_all(quote! {
                     pub async fn #fn_name(
