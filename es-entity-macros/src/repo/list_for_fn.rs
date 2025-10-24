@@ -184,7 +184,7 @@ impl ToTokens for ListForFn<'_> {
                 let entity_name = entity.to_string();
                 (
                     quote! {
-                        #[tracing::instrument(skip(self, op, #filter_arg_name, cursor), fields(entity = #entity_name, #filter_arg_name = tracing::field::Empty, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err)]
+                        #[tracing::instrument(skip_all, fields(entity = #entity_name, #filter_arg_name = tracing::field::Empty, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err)]
                     },
                     quote! {
                         let has_cursor = cursor.after.is_some();
@@ -203,12 +203,8 @@ impl ToTokens for ListForFn<'_> {
                 )
             };
             #[cfg(not(feature = "instrument"))]
-            let (instrument_attr, extract_has_cursor, record_fields, record_results) = (
-                quote! {},
-                quote! {},
-                quote! {},
-                quote! {},
-            );
+            let (instrument_attr, extract_has_cursor, record_fields, record_results) =
+                (quote! {}, quote! {}, quote! {}, quote! {});
 
             tokens.append_all(quote! {
                 pub async fn #fn_name(
