@@ -2,9 +2,6 @@ use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
 use quote::{TokenStreamExt, quote};
 
-#[cfg(feature = "instrument")]
-use convert_case::{Case, Casing};
-
 use super::options::*;
 
 pub struct FindByFn<'a> {
@@ -15,6 +12,8 @@ pub struct FindByFn<'a> {
     error: &'a syn::Type,
     delete: DeleteOption,
     any_nested: bool,
+    #[cfg(feature = "instrument")]
+    repo_name_snake: String,
 }
 
 impl<'a> FindByFn<'a> {
@@ -27,6 +26,8 @@ impl<'a> FindByFn<'a> {
             error: opts.err(),
             delete: opts.delete,
             any_nested: opts.any_nested(),
+            #[cfg(feature = "instrument")]
+            repo_name_snake: opts.repo_name_snake_case(),
         }
     }
 }
@@ -101,11 +102,8 @@ impl ToTokens for FindByFn<'_> {
                 #[cfg(feature = "instrument")]
                 let (instrument_attr_in_op, record_field) = {
                     let entity_name = entity.to_string();
-                    let span_name = format!(
-                        "es.{}.find_by_{}",
-                        entity_name.to_case(Case::Snake),
-                        column_name
-                    );
+                    let repo_name = &self.repo_name_snake;
+                    let span_name = format!("{}.{}find_by_{}", repo_name, maybe, column_name);
                     (
                         quote! {
                             #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #column_name = tracing::field::Empty), err(level = "warn"))]
@@ -169,6 +167,8 @@ mod tests {
             error: &error,
             delete: DeleteOption::No,
             any_nested: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
@@ -246,6 +246,8 @@ mod tests {
             error: &error,
             delete: DeleteOption::No,
             any_nested: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
@@ -320,6 +322,8 @@ mod tests {
             error: &error,
             delete: DeleteOption::Soft,
             any_nested: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
@@ -444,6 +448,8 @@ mod tests {
             error: &error,
             delete: DeleteOption::No,
             any_nested: true,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();

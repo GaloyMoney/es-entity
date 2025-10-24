@@ -2,9 +2,6 @@ use darling::ToTokens;
 use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
-#[cfg(feature = "instrument")]
-use convert_case::{Case, Casing};
-
 use super::options::*;
 
 pub struct CreateAllFn<'a> {
@@ -14,6 +11,8 @@ pub struct CreateAllFn<'a> {
     error: &'a syn::Type,
     nested_fn_names: Vec<syn::Ident>,
     additional_op_constraint: proc_macro2::TokenStream,
+    #[cfg(feature = "instrument")]
+    repo_name_snake: String,
 }
 
 impl<'a> From<&'a RepositoryOptions> for CreateAllFn<'a> {
@@ -28,6 +27,8 @@ impl<'a> From<&'a RepositoryOptions> for CreateAllFn<'a> {
                 .collect(),
             columns: &opts.columns,
             additional_op_constraint: opts.additional_op_constraint(),
+            #[cfg(feature = "instrument")]
+            repo_name_snake: opts.repo_name_snake_case(),
         }
     }
 }
@@ -72,7 +73,8 @@ impl ToTokens for CreateAllFn<'_> {
         #[cfg(feature = "instrument")]
         let instrument_attr = {
             let entity_name = entity.to_string();
-            let span_name = format!("es.{}.create_all", entity_name.to_case(Case::Snake));
+            let repo_name = &self.repo_name_snake;
+            let span_name = format!("{}.create_all", repo_name);
             quote! {
                 #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, count = new_entities.len()), err(level = "warn"))]
             }
@@ -157,6 +159,8 @@ mod tests {
             columns: &columns,
             nested_fn_names: Vec::new(),
             additional_op_constraint: quote! {},
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
