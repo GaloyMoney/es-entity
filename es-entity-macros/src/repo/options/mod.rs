@@ -200,11 +200,6 @@ impl RepositoryOptions {
         syn::Ident::new(&name, proc_macro2::Span::call_site())
     }
 
-    #[cfg(feature = "instrument")]
-    pub fn repo_name_snake_case(&self) -> String {
-        self.ident.to_string().to_case(Case::Snake)
-    }
-
     pub fn pool_field(&self) -> &syn::Ident {
         let field = match &self.data {
             darling::ast::Data::Struct(fields) => fields.iter().find_map(|field| {
