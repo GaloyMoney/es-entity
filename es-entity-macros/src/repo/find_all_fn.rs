@@ -69,8 +69,9 @@ impl ToTokens for FindAllFn<'_> {
         #[cfg(feature = "instrument")]
         let instrument_attr = {
             let entity_name = entity.to_string();
+            let span_name = format!("{}.find_all", entity_name.to_lowercase());
             quote! {
-                #[tracing::instrument(skip_all, fields(entity = #entity_name, count = ids.len(), ids = tracing::field::debug(ids)), err(level = "warn"))]
+                #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, count = ids.len(), ids = tracing::field::debug(ids)), err(level = "warn"))]
             }
         };
         #[cfg(not(feature = "instrument"))]

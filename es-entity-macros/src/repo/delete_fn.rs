@@ -51,9 +51,10 @@ impl ToTokens for DeleteFn<'_> {
         #[cfg(feature = "instrument")]
         let (instrument_attr, record_id) = {
             let entity_name = entity.to_string();
+            let span_name = format!("{}.delete", entity_name.to_lowercase());
             (
                 quote! {
-                    #[tracing::instrument(skip_all, fields(entity = #entity_name, id = tracing::field::Empty), err(level = "warn"))]
+                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, id = tracing::field::Empty), err(level = "warn"))]
                 },
                 quote! {
                     tracing::Span::current().record("id", tracing::field::debug(&entity.id));
