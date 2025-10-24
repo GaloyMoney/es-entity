@@ -98,7 +98,12 @@ impl ToTokens for FindByFn<'_> {
                 #[cfg(feature = "instrument")]
                 let (instrument_attr_in_op, record_field) = {
                     let entity_name = entity.to_string();
-                    let span_name = format!("{}.{}find_by_{}", entity_name.to_lowercase(), maybe, column_name);
+                    let span_name = format!(
+                        "{}.{}find_by_{}",
+                        entity_name.to_lowercase(),
+                        maybe,
+                        column_name
+                    );
                     (
                         quote! {
                             #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #column_name = tracing::field::Empty), err(level = "warn"))]
