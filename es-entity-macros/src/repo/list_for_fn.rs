@@ -193,15 +193,17 @@ impl ToTokens for ListForFn<'_> {
                     "{}.list_for_{}_by_{}",
                     repo_name, for_column_name, by_column_name
                 );
+                let filter_field_name = format!("query_{}", filter_arg_name);
+                let filter_field_ident = syn::Ident::new(&filter_field_name, proc_macro2::Span::call_site());
                 (
                     quote! {
-                        #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #filter_arg_name = tracing::field::Empty, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err(level = "warn"))]
+                        #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #filter_field_ident = tracing::field::Empty, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err(level = "warn"))]
                     },
                     quote! {
                         let has_cursor = cursor.after.is_some();
                     },
                     quote! {
-                        tracing::Span::current().record(stringify!(#filter_arg_name), tracing::field::debug(&#filter_arg_name));
+                        tracing::Span::current().record(#filter_field_name, tracing::field::debug(&#filter_arg_name));
                         tracing::Span::current().record("first", first);
                         tracing::Span::current().record("has_cursor", has_cursor);
                     },

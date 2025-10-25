@@ -104,12 +104,14 @@ impl ToTokens for FindByFn<'_> {
                     let entity_name = entity.to_string();
                     let repo_name = &self.repo_name_snake;
                     let span_name = format!("{}.{}find_by_{}", repo_name, maybe, column_name);
+                    let field_name = format!("query_{}", column_name);
+                    let field_ident = syn::Ident::new(&field_name, proc_macro2::Span::call_site());
                     (
                         quote! {
-                            #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #column_name = tracing::field::Empty), err(level = "warn"))]
+                            #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #field_ident = tracing::field::Empty), err(level = "warn"))]
                         },
                         quote! {
-                            tracing::Span::current().record(stringify!(#column_name), tracing::field::debug(&#column_name));
+                            tracing::Span::current().record(#field_name, tracing::field::debug(&#column_name));
                         },
                     )
                 };
