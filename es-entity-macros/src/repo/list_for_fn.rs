@@ -194,7 +194,8 @@ impl ToTokens for ListForFn<'_> {
                     repo_name, for_column_name, by_column_name
                 );
                 let filter_field_name = format!("query_{}", filter_arg_name);
-                let filter_field_ident = syn::Ident::new(&filter_field_name, proc_macro2::Span::call_site());
+                let filter_field_ident =
+                    syn::Ident::new(&filter_field_name, proc_macro2::Span::call_site());
                 (
                     quote! {
                         #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #filter_field_ident = tracing::field::Empty, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err(level = "warn"))]
