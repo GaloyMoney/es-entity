@@ -1,3 +1,10 @@
+# [cala release v0.10.3](https://github.com/GaloyMoney/cala/releases/tag/0.10.3)
+
+
+### Miscellaneous Tasks
+
+- Fix instrumentation for retry (#61)
+
 # [cala release v0.10.2](https://github.com/GaloyMoney/cala/releases/tag/0.10.2)
 
 
