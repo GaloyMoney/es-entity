@@ -31,10 +31,10 @@ pub fn make(
         .iter()
         .filter(|attr| {
             // Keep non-tracing attributes on outer function
-            !attr.path().is_ident("instrument")
-                && !(attr.path().segments.len() == 2
+            !(attr.path().is_ident("instrument")
+                || (attr.path().segments.len() == 2
                     && attr.path().segments[0].ident == "tracing"
-                    && attr.path().segments[1].ident == "instrument")
+                    && attr.path().segments[1].ident == "instrument"))
         })
         .collect();
 
