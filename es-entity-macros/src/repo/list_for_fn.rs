@@ -2,9 +2,6 @@ use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
 use quote::{TokenStreamExt, quote};
 
-#[cfg(feature = "instrument")]
-use convert_case::{Case, Casing};
-
 use super::{list_by_fn::CursorStruct, options::*};
 
 pub struct ListForFn<'a> {
@@ -18,6 +15,8 @@ pub struct ListForFn<'a> {
     delete: DeleteOption,
     cursor_mod: syn::Ident,
     any_nested: bool,
+    #[cfg(feature = "instrument")]
+    repo_name_snake: String,
 }
 
 impl<'a> ListForFn<'a> {
@@ -33,6 +32,8 @@ impl<'a> ListForFn<'a> {
             delete: opts.delete,
             cursor_mod: opts.cursor_mod(),
             any_nested: opts.any_nested(),
+            #[cfg(feature = "instrument")]
+            repo_name_snake: opts.repo_name_snake_case(),
         }
     }
 
@@ -57,6 +58,8 @@ impl<'a> ListForFn<'a> {
             delete: DeleteOption::No,
             cursor_mod,
             any_nested: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         }
     }
 
@@ -185,21 +188,23 @@ impl ToTokens for ListForFn<'_> {
             #[cfg(feature = "instrument")]
             let (instrument_attr, extract_has_cursor, record_fields, record_results) = {
                 let entity_name = entity.to_string();
+                let repo_name = &self.repo_name_snake;
                 let span_name = format!(
-                    "es.{}.list_for_{}_by_{}",
-                    entity_name.to_case(Case::Snake),
-                    for_column_name,
-                    by_column_name
+                    "{}.list_for_{}_by_{}",
+                    repo_name, for_column_name, by_column_name
                 );
+                let filter_field_name = format!("query_{}", filter_arg_name);
+                let filter_field_ident =
+                    syn::Ident::new(&filter_field_name, proc_macro2::Span::call_site());
                 (
                     quote! {
-                        #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #filter_arg_name = tracing::field::Empty, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err(level = "warn"))]
+                        #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #filter_field_ident = tracing::field::Empty, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err(level = "warn"))]
                     },
                     quote! {
                         let has_cursor = cursor.after.is_some();
                     },
                     quote! {
-                        tracing::Span::current().record(stringify!(#filter_arg_name), tracing::field::debug(&#filter_arg_name));
+                        tracing::Span::current().record(#filter_field_name, tracing::field::debug(&#filter_arg_name));
                         tracing::Span::current().record("first", first);
                         tracing::Span::current().record("has_cursor", has_cursor);
                     },
@@ -298,6 +303,8 @@ mod tests {
             delete: DeleteOption::No,
             cursor_mod,
             any_nested: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
@@ -389,6 +396,8 @@ mod tests {
             delete: DeleteOption::No,
             cursor_mod,
             any_nested: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
         };
 
         let mut tokens = TokenStream::new();
