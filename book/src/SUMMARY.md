@@ -10,7 +10,8 @@
   - [Entity Event](./entity-event.md)
   - [New Entity](./new-entity.md)
   - [Entity Type](./entity-type.md)
-  - [Idempotency](./idempotency.md)
+
+- [Idempotency](./idempotency.md)
 
 - [Repository](./repository.md)
   - [Database Tables](./database-tables.md)
