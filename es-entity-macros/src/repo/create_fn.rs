@@ -68,21 +68,27 @@ impl ToTokens for CreateFn<'_> {
         );
 
         #[cfg(feature = "instrument")]
-        let (instrument_attr, record_id) = {
+        let (instrument_attr, record_id, error_recording) = {
             let entity_name = entity.to_string();
             let repo_name = &self.repo_name_snake;
             let span_name = format!("{}.create", repo_name);
             (
                 quote! {
-                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, id = tracing::field::Empty), err(level = "warn"))]
+                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, id = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
                 },
                 quote! {
                     tracing::Span::current().record("id", tracing::field::debug(&id));
                 },
+                quote! {
+                    if let Err(ref e) = __result {
+                        tracing::Span::current().record("exception.message", tracing::field::display(e));
+                        tracing::Span::current().record("exception.type", std::any::type_name_of_val(e));
+                    }
+                },
             )
         };
         #[cfg(not(feature = "instrument"))]
-        let (instrument_attr, record_id) = (quote! {}, quote! {});
+        let (instrument_attr, record_id, error_recording) = (quote! {}, quote! {}, quote! {});
 
         tokens.append_all(quote! {
             #[inline(always)]
@@ -124,25 +130,30 @@ impl ToTokens for CreateFn<'_> {
                 OP: es_entity::AtomicOperation
                 #additional_op_constraint
             {
-                #assignments
-                #record_id
+                let __result: Result<#entity, #error> = async {
+                    #assignments
+                    #record_id
 
-                 sqlx::query!(
-                     #query,
-                     #(#args)*
-                     op.now()
-                )
-                .execute(op.as_executor())
-                .await?;
+                     sqlx::query!(
+                         #query,
+                         #(#args)*
+                         op.now()
+                    )
+                    .execute(op.as_executor())
+                    .await?;
 
-                let mut events = Self::convert_new(new_entity);
-                let n_events = self.persist_events(op, &mut events).await?;
-                let #maybe_mut_entity = Self::hydrate_entity(events)?;
+                    let mut events = Self::convert_new(new_entity);
+                    let n_events = self.persist_events(op, &mut events).await?;
+                    let #maybe_mut_entity = Self::hydrate_entity(events)?;
 
-                #(#nested)*
+                    #(#nested)*
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
-                Ok(entity)
+                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    Ok(entity)
+                }.await;
+
+                #error_recording
+                __result
             }
         });
     }
@@ -214,21 +225,25 @@ mod tests {
             where
                 OP: es_entity::AtomicOperation
             {
-                let id = &new_entity.id;
+                let __result: Result<Entity, es_entity::EsRepoError> = async {
+                    let id = &new_entity.id;
 
-                sqlx::query!("INSERT INTO entities (id, created_at) VALUES ($1, COALESCE($2, NOW()))",
-                    id as &EntityId,
-                    op.now()
-                )
-                .execute(op.as_executor())
-                .await?;
+                    sqlx::query!("INSERT INTO entities (id, created_at) VALUES ($1, COALESCE($2, NOW()))",
+                        id as &EntityId,
+                        op.now()
+                    )
+                    .execute(op.as_executor())
+                    .await?;
 
-                let mut events = Self::convert_new(new_entity);
-                let n_events = self.persist_events(op, &mut events).await?;
-                let entity = Self::hydrate_entity(events)?;
+                    let mut events = Self::convert_new(new_entity);
+                    let n_events = self.persist_events(op, &mut events).await?;
+                    let entity = Self::hydrate_entity(events)?;
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
-                Ok(entity)
+                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    Ok(entity)
+                }.await;
+
+                __result
             }
         };
 
@@ -299,23 +314,27 @@ mod tests {
             where
                 OP: es_entity::AtomicOperation
             {
-                let id = &new_entity.id;
-                let name = &new_entity.name();
+                let __result: Result<Entity, es_entity::EsRepoError> = async {
+                    let id = &new_entity.id;
+                    let name = &new_entity.name();
 
-                sqlx::query!("INSERT INTO entities (id, name, created_at) VALUES ($1, $2, COALESCE($3, NOW()))",
-                    id as &EntityId,
-                    name as &String,
-                    op.now()
-                )
-                .execute(op.as_executor())
-                .await?;
+                    sqlx::query!("INSERT INTO entities (id, name, created_at) VALUES ($1, $2, COALESCE($3, NOW()))",
+                        id as &EntityId,
+                        name as &String,
+                        op.now()
+                    )
+                    .execute(op.as_executor())
+                    .await?;
 
-                let mut events = Self::convert_new(new_entity);
-                let n_events = self.persist_events(op, &mut events).await?;
-                let entity = Self::hydrate_entity(events)?;
+                    let mut events = Self::convert_new(new_entity);
+                    let n_events = self.persist_events(op, &mut events).await?;
+                    let entity = Self::hydrate_entity(events)?;
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
-                Ok(entity)
+                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    Ok(entity)
+                }.await;
+
+                __result
             }
         };
 

@@ -343,13 +343,19 @@ impl ToTokens for ListByFn<'_> {
             };
 
             #[cfg(feature = "instrument")]
-            let (instrument_attr, extract_has_cursor, record_fields, record_results) = {
+            let (
+                instrument_attr,
+                extract_has_cursor,
+                record_fields,
+                record_results,
+                error_recording,
+            ) = {
                 let entity_name = entity.to_string();
                 let repo_name = &self.repo_name_snake;
                 let span_name = format!("{}.list_by_{}", repo_name, column_name);
                 (
                     quote! {
-                        #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err(level = "warn"))]
+                        #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
                     },
                     quote! {
                         let has_cursor = cursor.after.is_some();
@@ -364,11 +370,22 @@ impl ToTokens for ListByFn<'_> {
                         tracing::Span::current().record("has_next_page", has_next_page);
                         tracing::Span::current().record("ids", tracing::field::debug(&result_ids));
                     },
+                    quote! {
+                        if let Err(ref e) = __result {
+                            tracing::Span::current().record("exception.message", tracing::field::display(e));
+                            tracing::Span::current().record("exception.type", std::any::type_name_of_val(e));
+                        }
+                    },
                 )
             };
             #[cfg(not(feature = "instrument"))]
-            let (instrument_attr, extract_has_cursor, record_fields, record_results) =
-                (quote! {}, quote! {}, quote! {}, quote! {});
+            let (
+                instrument_attr,
+                extract_has_cursor,
+                record_fields,
+                record_results,
+                error_recording,
+            ) = (quote! {}, quote! {}, quote! {}, quote! {}, quote! {});
 
             tokens.append_all(quote! {
                 pub async fn #fn_name(
@@ -389,28 +406,33 @@ impl ToTokens for ListByFn<'_> {
                    where
                        OP: #query_fn_op_traits
                  {
-                    #extract_has_cursor
-                    #destructure_tokens
-                    #record_fields
+                    let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> = async {
+                        #extract_has_cursor
+                        #destructure_tokens
+                        #record_fields
 
-                    let (entities, has_next_page) = match direction {
-                        es_entity::ListDirection::Ascending => {
-                            #es_query_asc_call.fetch_n(op, first).await?
-                        },
-                        es_entity::ListDirection::Descending => {
-                            #es_query_desc_call.fetch_n(op, first).await?
-                        },
-                    };
+                        let (entities, has_next_page) = match direction {
+                            es_entity::ListDirection::Ascending => {
+                                #es_query_asc_call.fetch_n(op, first).await?
+                            },
+                            es_entity::ListDirection::Descending => {
+                                #es_query_desc_call.fetch_n(op, first).await?
+                            },
+                        };
 
-                    #record_results
+                        #record_results
 
-                    let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
+                        let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
 
-                    Ok(es_entity::PaginatedQueryRet {
-                        entities,
-                        has_next_page,
-                        end_cursor,
-                    })
+                        Ok(es_entity::PaginatedQueryRet {
+                            entities,
+                            has_next_page,
+                            end_cursor,
+                        })
+                    }.await;
+
+                    #error_recording
+                    __result
                 }
             });
 
@@ -545,42 +567,46 @@ mod tests {
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let es_entity::PaginatedQueryArgs { first, after } = cursor;
-                let id = if let Some(after) = after {
-                    Some(after.id)
-                } else {
-                    None
-                };
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> = async {
+                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
+                    let id = if let Some(after) = after {
+                        Some(after.id)
+                    } else {
+                        None
+                    };
 
-                let (entities, has_next_page) = match direction {
-                    es_entity::ListDirection::Ascending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT id FROM entities WHERE (COALESCE(id > $2, true)) AND deleted = FALSE ORDER BY id ASC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                    es_entity::ListDirection::Descending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT id FROM entities WHERE (COALESCE(id < $2, true)) AND deleted = FALSE ORDER BY id DESC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                };
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT id FROM entities WHERE (COALESCE(id > $2, true)) AND deleted = FALSE ORDER BY id ASC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        es_entity::ListDirection::Descending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT id FROM entities WHERE (COALESCE(id < $2, true)) AND deleted = FALSE ORDER BY id DESC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                    };
 
-                let end_cursor = entities.last().map(cursor_mod::EntitiesByIdCursor::from);
-                Ok(es_entity::PaginatedQueryRet {
-                    entities,
-                    has_next_page,
-                    end_cursor,
-                })
+                    let end_cursor = entities.last().map(cursor_mod::EntitiesByIdCursor::from);
+                    Ok(es_entity::PaginatedQueryRet {
+                        entities,
+                        has_next_page,
+                        end_cursor,
+                    })
+                }.await;
+
+                __result
             }
 
             pub async fn list_by_id_include_deleted(
@@ -600,40 +626,44 @@ mod tests {
             where
                 OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let es_entity::PaginatedQueryArgs { first, after } = cursor;
-                let id = if let Some(after) = after {
-                    Some(after.id)
-                } else {
-                    None
-                };
-                let (entities, has_next_page) = match direction {
-                    es_entity::ListDirection::Ascending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT id FROM entities WHERE (COALESCE(id > $2, true)) ORDER BY id ASC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                    es_entity::ListDirection::Descending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT id FROM entities WHERE (COALESCE(id < $2, true)) ORDER BY id DESC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                };
-                let end_cursor = entities.last().map(cursor_mod::EntitiesByIdCursor::from);
-                Ok(es_entity::PaginatedQueryRet {
-                    entities,
-                    has_next_page,
-                    end_cursor,
-                })
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> = async {
+                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
+                    let id = if let Some(after) = after {
+                        Some(after.id)
+                    } else {
+                        None
+                    };
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT id FROM entities WHERE (COALESCE(id > $2, true)) ORDER BY id ASC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        es_entity::ListDirection::Descending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT id FROM entities WHERE (COALESCE(id < $2, true)) ORDER BY id DESC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                    };
+                    let end_cursor = entities.last().map(cursor_mod::EntitiesByIdCursor::from);
+                    Ok(es_entity::PaginatedQueryRet {
+                        entities,
+                        has_next_page,
+                        end_cursor,
+                    })
+                }.await;
+
+                __result
             }
         };
 
@@ -686,45 +716,49 @@ mod tests {
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let es_entity::PaginatedQueryArgs { first, after } = cursor;
-                let (id, name) = if let Some(after) = after {
-                    (Some(after.id), Some(after.name))
-                } else {
-                    (None, None)
-                };
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, es_entity::EsRepoError> = async {
+                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
+                    let (id, name) = if let Some(after) = after {
+                        (Some(after.id), Some(after.name))
+                    } else {
+                        (None, None)
+                    };
 
-                let (entities, has_next_page) = match direction {
-                    es_entity::ListDirection::Ascending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT name, id FROM entities WHERE (COALESCE((name, id) > ($3, $2), $2 IS NULL)) ORDER BY name ASC, id ASC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                            name as Option<String>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                    es_entity::ListDirection::Descending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT name, id FROM entities WHERE (COALESCE((name, id) < ($3, $2), $2 IS NULL)) ORDER BY name DESC, id DESC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                            name as Option<String>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                };
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT name, id FROM entities WHERE (COALESCE((name, id) > ($3, $2), $2 IS NULL)) ORDER BY name ASC, id ASC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                                name as Option<String>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        es_entity::ListDirection::Descending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT name, id FROM entities WHERE (COALESCE((name, id) < ($3, $2), $2 IS NULL)) ORDER BY name DESC, id DESC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                                name as Option<String>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                    };
 
-                let end_cursor = entities.last().map(cursor_mod::EntitiesByNameCursor::from);
+                    let end_cursor = entities.last().map(cursor_mod::EntitiesByNameCursor::from);
 
-                Ok(es_entity::PaginatedQueryRet {
-                    entities,
-                    has_next_page,
-                    end_cursor,
-                })
+                    Ok(es_entity::PaginatedQueryRet {
+                        entities,
+                        has_next_page,
+                        end_cursor,
+                    })
+                }.await;
+
+                __result
             }
         };
 
@@ -777,45 +811,49 @@ mod tests {
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let es_entity::PaginatedQueryArgs { first, after } = cursor;
-                let (id, value) = if let Some(after) = after {
-                    (Some(after.id), after.value)
-                } else {
-                    (None, None)
-                };
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, es_entity::EsRepoError> = async {
+                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
+                    let (id, value) = if let Some(after) = after {
+                        (Some(after.id), after.value)
+                    } else {
+                        (None, None)
+                    };
 
-                let (entities, has_next_page) = match direction {
-                    es_entity::ListDirection::Ascending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id > $2, true) OR COALESCE(value > $3, value IS NOT NULL)) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                            value as Option<rust_decimal::Decimal>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                    es_entity::ListDirection::Descending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id < $2, true) OR COALESCE(value < $3, value IS NOT NULL)) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                            value as Option<rust_decimal::Decimal>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                };
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id > $2, true) OR COALESCE(value > $3, value IS NOT NULL)) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                                value as Option<rust_decimal::Decimal>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        es_entity::ListDirection::Descending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id < $2, true) OR COALESCE(value < $3, value IS NOT NULL)) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                                value as Option<rust_decimal::Decimal>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                    };
 
-                let end_cursor = entities.last().map(cursor_mod::EntitiesByValueCursor::from);
+                    let end_cursor = entities.last().map(cursor_mod::EntitiesByValueCursor::from);
 
-                Ok(es_entity::PaginatedQueryRet {
-                    entities,
-                    has_next_page,
-                    end_cursor,
-                })
+                    Ok(es_entity::PaginatedQueryRet {
+                        entities,
+                        has_next_page,
+                        end_cursor,
+                    })
+                }.await;
+
+                __result
             }
         };
 

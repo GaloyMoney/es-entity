@@ -69,21 +69,27 @@ impl ToTokens for UpdateFn<'_> {
         };
 
         #[cfg(feature = "instrument")]
-        let (instrument_attr, record_id) = {
+        let (instrument_attr, record_id, error_recording) = {
             let entity_name = entity.to_string();
             let repo_name = &self.repo_name_snake;
             let span_name = format!("{}.update", repo_name);
             (
                 quote! {
-                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, id = tracing::field::Empty), err(level = "warn"))]
+                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, id = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
                 },
                 quote! {
                     tracing::Span::current().record("id", tracing::field::debug(&entity.id));
                 },
+                quote! {
+                    if let Err(ref e) = __result {
+                        tracing::Span::current().record("exception.message", tracing::field::display(e));
+                        tracing::Span::current().record("exception.type", std::any::type_name_of_val(e));
+                    }
+                },
             )
         };
         #[cfg(not(feature = "instrument"))]
-        let (instrument_attr, record_id) = (quote! {}, quote! {});
+        let (instrument_attr, record_id, error_recording) = (quote! {}, quote! {}, quote! {});
 
         tokens.append_all(quote! {
             #[inline(always)]
@@ -115,22 +121,27 @@ impl ToTokens for UpdateFn<'_> {
                 OP: es_entity::AtomicOperation
                 #additional_op_constraint
             {
-                #record_id
-                #(#nested)*
+                let __result: Result<usize, #error> = async {
+                    #record_id
+                    #(#nested)*
 
-                if !Self::extract_events(entity).any_new() {
-                    return Ok(0);
-                }
+                    if !Self::extract_events(entity).any_new() {
+                        return Ok(0);
+                    }
 
-                #update_tokens
-                let n_events = {
-                    let events = Self::extract_events(entity);
-                    self.persist_events(op, events).await?
-                };
+                    #update_tokens
+                    let n_events = {
+                        let events = Self::extract_events(entity);
+                        self.persist_events(op, events).await?
+                    };
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
 
-                Ok(n_events)
+                    Ok(n_events)
+                }.await;
+
+                #error_recording
+                __result
             }
         });
     }
@@ -198,28 +209,32 @@ mod tests {
             where
                 OP: es_entity::AtomicOperation
             {
-                if !Self::extract_events(entity).any_new() {
-                    return Ok(0);
-                }
+                let __result: Result<usize, es_entity::EsRepoError> = async {
+                    if !Self::extract_events(entity).any_new() {
+                        return Ok(0);
+                    }
 
-                let id = &entity.id;
-                let name = &entity.name;
-                sqlx::query!(
-                    "UPDATE entities SET name = $2 WHERE id = $1",
-                    id as &EntityId,
-                    name as &String
-                )
-                    .execute(op.as_executor())
-                    .await?;
+                    let id = &entity.id;
+                    let name = &entity.name;
+                    sqlx::query!(
+                        "UPDATE entities SET name = $2 WHERE id = $1",
+                        id as &EntityId,
+                        name as &String
+                    )
+                        .execute(op.as_executor())
+                        .await?;
 
-                let n_events = {
-                    let events = Self::extract_events(entity);
-                    self.persist_events(op, events).await?
-                };
+                    let n_events = {
+                        let events = Self::extract_events(entity);
+                        self.persist_events(op, events).await?
+                    };
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
 
-                Ok(n_events)
+                    Ok(n_events)
+                }.await;
+
+                __result
             }
         };
 
@@ -277,18 +292,22 @@ mod tests {
             where
                 OP: es_entity::AtomicOperation
             {
-                if !Self::extract_events(entity).any_new() {
-                    return Ok(0);
-                }
+                let __result: Result<usize, es_entity::EsRepoError> = async {
+                    if !Self::extract_events(entity).any_new() {
+                        return Ok(0);
+                    }
 
-                let n_events = {
-                    let events = Self::extract_events(entity);
-                    self.persist_events(op, events).await?
-                };
+                    let n_events = {
+                        let events = Self::extract_events(entity);
+                        self.persist_events(op, events).await?
+                    };
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
 
-                Ok(n_events)
+                    Ok(n_events)
+                }.await;
+
+                __result
             }
         };
 

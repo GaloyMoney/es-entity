@@ -198,19 +198,22 @@ async fn main() -> anyhow::Result<()> {
 #     let pool = sqlx::PgPool::connect(&db_url).await.unwrap();
 #     let repo = SubscriptionRepo { pool };
 #     
+    // Start simulation at a fixed date in the past (middle of month to avoid boundary issue for the month/year, ie if test is run last day of the month/year)
+    let start_time = chrono::DateTime::parse_from_rfc3339("2023-06-15T12:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    
     // Configure time to run 30 days per second
     let config = sim_time::TimeConfig {
         realtime: false,
         simulation: sim_time::SimulationConfig {
-            // Start simulation one year in the past
-            start_at: chrono::Utc::now() - chrono::Duration::days(365),
+            start_at: start_time,
             tick_interval_ms: 33,  // ~30 ticks per second
             tick_duration_secs: Duration::from_secs(86400), // 1 day per tick
             transform_to_realtime: false,
         },
     };
 
-    let start_time = chrono::Utc::now() - chrono::Duration::days(365);
     sim_time::init(config);
 
     // Create a subscription that expires in 30 days
