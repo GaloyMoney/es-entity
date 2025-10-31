@@ -1,3 +1,14 @@
+# [cala release v0.10.4](https://github.com/GaloyMoney/cala/releases/tag/0.10.4)
+
+
+### Documentation
+
+- Fix idempotency chapter indentation
+
+### Miscellaneous Tasks
+
+- Trace fine tuning (#62)
+
 # [cala release v0.10.3](https://github.com/GaloyMoney/cala/releases/tag/0.10.3)
 
 
