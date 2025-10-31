@@ -139,7 +139,7 @@ impl ToTokens for UpdateFn<'_> {
 
                     Ok(n_events)
                 }.await;
-                
+
                 #error_recording
                 __result
             }

@@ -189,7 +189,13 @@ impl ToTokens for ListForFilterFn<'_> {
             );
 
             #[cfg(feature = "instrument")]
-            let (instrument_attr, extract_has_cursor, record_fields, record_results, error_recording) = {
+            let (
+                instrument_attr,
+                extract_has_cursor,
+                record_fields,
+                record_results,
+                error_recording,
+            ) = {
                 let entity_name = self.entity.to_string();
                 let repo_name = &self.repo_name_snake;
                 let span_name = format!("{}.list_for_filter", repo_name);
@@ -219,8 +225,13 @@ impl ToTokens for ListForFilterFn<'_> {
                 )
             };
             #[cfg(not(feature = "instrument"))]
-            let (instrument_attr, extract_has_cursor, record_fields, record_results, error_recording) =
-                (quote! {}, quote! {}, quote! {}, quote! {}, quote! {});
+            let (
+                instrument_attr,
+                extract_has_cursor,
+                record_fields,
+                record_results,
+                error_recording,
+            ) = (quote! {}, quote! {}, quote! {}, quote! {}, quote! {});
 
             tokens.append_all(quote! {
                 #instrument_attr
@@ -247,7 +258,7 @@ impl ToTokens for ListForFilterFn<'_> {
 
                         Ok(res)
                     }.await;
-                    
+
                     #error_recording
                     __result
                 }

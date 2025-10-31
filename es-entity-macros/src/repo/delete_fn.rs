@@ -122,7 +122,7 @@ impl ToTokens for DeleteFn<'_> {
 
                     Ok(())
                 }.await;
-                
+
                 #error_recording
                 __result
             }

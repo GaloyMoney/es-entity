@@ -142,7 +142,7 @@ impl ToTokens for CreateAllFn<'_> {
 
                     Ok(res)
                 }.await;
-                
+
                 #error_recording
                 __result
             }

@@ -151,7 +151,7 @@ impl ToTokens for CreateFn<'_> {
                     self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
                     Ok(entity)
                 }.await;
-                
+
                 #error_recording
                 __result
             }
