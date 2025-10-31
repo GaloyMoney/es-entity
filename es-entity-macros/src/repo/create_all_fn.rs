@@ -71,16 +71,24 @@ impl ToTokens for CreateAllFn<'_> {
         );
 
         #[cfg(feature = "instrument")]
-        let instrument_attr = {
+        let (instrument_attr, error_recording) = {
             let entity_name = entity.to_string();
             let repo_name = &self.repo_name_snake;
             let span_name = format!("{}.create_all", repo_name);
-            quote! {
-                #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, count = new_entities.len()), err(level = "warn"))]
-            }
+            (
+                quote! {
+                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, count = new_entities.len(), exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
+                },
+                quote! {
+                    if let Err(ref e) = __result {
+                        tracing::Span::current().record("exception.message", tracing::field::display(e));
+                        tracing::Span::current().record("exception.type", std::any::type_name_of_val(e));
+                    }
+                },
+            )
         };
         #[cfg(not(feature = "instrument"))]
-        let instrument_attr = quote! {};
+        let (instrument_attr, error_recording) = (quote! {}, quote! {});
 
         tokens.append_all(quote! {
             pub async fn create_all(
@@ -103,35 +111,40 @@ impl ToTokens for CreateAllFn<'_> {
                 OP: es_entity::AtomicOperation
                 #additional_op_constraint
             {
-                let mut res = Vec::new();
-                if new_entities.is_empty() {
-                    return Ok(res);
-                }
+                let __result: Result<Vec<#entity>, #error> = async {
+                    let mut res = Vec::new();
+                    if new_entities.is_empty() {
+                        return Ok(res);
+                    }
 
-                #arg_collection
+                    #arg_collection
 
-                let now = op.now();
-                sqlx::query(#query)
-                   .bind(now)
-                   #(#bindings)*
-                   .fetch_all(op.as_executor())
-                   .await?;
+                    let now = op.now();
+                    sqlx::query(#query)
+                       .bind(now)
+                       #(#bindings)*
+                       .fetch_all(op.as_executor())
+                       .await?;
 
 
-                let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event>> = new_entities.into_iter().map(Self::convert_new).collect();
-                let mut n_persisted = self.persist_events_batch(op, &mut all_events).await?;
+                    let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event>> = new_entities.into_iter().map(Self::convert_new).collect();
+                    let mut n_persisted = self.persist_events_batch(op, &mut all_events).await?;
 
-                for events in all_events.into_iter() {
-                    let n_events = n_persisted.remove(events.id()).expect("n_events exists");
-                    let #maybe_mut_entity = Self::hydrate_entity(events)?;
+                    for events in all_events.into_iter() {
+                        let n_events = n_persisted.remove(events.id()).expect("n_events exists");
+                        let #maybe_mut_entity = Self::hydrate_entity(events)?;
 
-                    #(#nested)*
+                        #(#nested)*
 
-                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
-                    res.push(entity);
-                }
+                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                        res.push(entity);
+                    }
 
-                Ok(res)
+                    Ok(res)
+                }.await;
+                
+                #error_recording
+                __result
             }
         });
     }

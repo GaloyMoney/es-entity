@@ -100,7 +100,7 @@ impl ToTokens for FindByFn<'_> {
                 };
 
                 #[cfg(feature = "instrument")]
-                let (instrument_attr_in_op, record_field) = {
+                let (instrument_attr_in_op, record_field, error_recording) = {
                     let entity_name = entity.to_string();
                     let repo_name = &self.repo_name_snake;
                     let span_name = format!("{}.{}find_by_{}", repo_name, maybe, column_name);
@@ -108,15 +108,22 @@ impl ToTokens for FindByFn<'_> {
                     let field_ident = syn::Ident::new(&field_name, proc_macro2::Span::call_site());
                     (
                         quote! {
-                            #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #field_ident = tracing::field::Empty), err(level = "warn"))]
+                            #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #field_ident = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
                         },
                         quote! {
                             tracing::Span::current().record(#field_name, tracing::field::debug(&#column_name));
                         },
+                        quote! {
+                            if let Err(ref e) = __result {
+                                tracing::Span::current().record("exception.message", tracing::field::display(e));
+                                tracing::Span::current().record("exception.type", std::any::type_name_of_val(e));
+                            }
+                        },
                     )
                 };
                 #[cfg(not(feature = "instrument"))]
-                let (instrument_attr_in_op, record_field) = (quote! {}, quote! {});
+                let (instrument_attr_in_op, record_field, error_recording) =
+                    (quote! {}, quote! {}, quote! {});
 
                 tokens.append_all(quote! {
                     pub async fn #fn_name(
@@ -135,9 +142,14 @@ impl ToTokens for FindByFn<'_> {
                         where
                             OP: #query_fn_op_traits
                     {
-                        let #column_name = #column_name.#access_expr;
-                        #record_field
-                        #es_query_call.#fetch_fn.await
+                        let __result: Result<#result_type, #error> = async {
+                            let #column_name = #column_name.#access_expr;
+                            #record_field
+                            #es_query_call.#fetch_fn.await
+                        }.await;
+
+                        #error_recording
+                        __result
                     }
                 });
 

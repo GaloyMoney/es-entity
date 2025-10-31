@@ -53,21 +53,27 @@ impl ToTokens for DeleteFn<'_> {
         let args = self.columns.update_query_args();
 
         #[cfg(feature = "instrument")]
-        let (instrument_attr, record_id) = {
+        let (instrument_attr, record_id, error_recording) = {
             let entity_name = entity.to_string();
             let repo_name = &self.repo_name_snake;
             let span_name = format!("{}.delete", repo_name);
             (
                 quote! {
-                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, id = tracing::field::Empty), err(level = "warn"))]
+                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, id = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
                 },
                 quote! {
                     tracing::Span::current().record("id", tracing::field::debug(&entity.id));
                 },
+                quote! {
+                    if let Err(ref e) = __result {
+                        tracing::Span::current().record("exception.message", tracing::field::display(e));
+                        tracing::Span::current().record("exception.type", std::any::type_name_of_val(e));
+                    }
+                },
             )
         };
         #[cfg(not(feature = "instrument"))]
-        let (instrument_attr, record_id) = (quote! {}, quote! {});
+        let (instrument_attr, record_id, error_recording) = (quote! {}, quote! {}, quote! {});
 
         tokens.append_all(quote! {
             pub async fn delete(
@@ -89,31 +95,36 @@ impl ToTokens for DeleteFn<'_> {
                 OP: es_entity::AtomicOperation
                 #additional_op_constraint
             {
-                #assignments
-                #record_id
+                let __result: Result<(), #error> = async {
+                    #assignments
+                    #record_id
 
-                sqlx::query!(
-                    #query,
-                    #(#args),*
-                )
-                    .execute(op.as_executor())
-                    .await?;
+                    sqlx::query!(
+                        #query,
+                        #(#args),*
+                    )
+                        .execute(op.as_executor())
+                        .await?;
 
-                let new_events = {
-                    let events = Self::extract_events(&mut entity);
-                    events.any_new()
-                };
-
-                if new_events {
-                    let n_events = {
+                    let new_events = {
                         let events = Self::extract_events(&mut entity);
-                        self.persist_events(op, events).await?
+                        events.any_new()
                     };
 
-                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
-                }
+                    if new_events {
+                        let n_events = {
+                            let events = Self::extract_events(&mut entity);
+                            self.persist_events(op, events).await?
+                        };
 
-                Ok(())
+                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    }
+
+                    Ok(())
+                }.await;
+                
+                #error_recording
+                __result
             }
         });
     }

@@ -186,7 +186,7 @@ impl ToTokens for ListForFn<'_> {
             };
 
             #[cfg(feature = "instrument")]
-            let (instrument_attr, extract_has_cursor, record_fields, record_results) = {
+            let (instrument_attr, extract_has_cursor, record_fields, record_results, error_recording) = {
                 let entity_name = entity.to_string();
                 let repo_name = &self.repo_name_snake;
                 let span_name = format!(
@@ -198,7 +198,7 @@ impl ToTokens for ListForFn<'_> {
                     syn::Ident::new(&filter_field_name, proc_macro2::Span::call_site());
                 (
                     quote! {
-                        #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #filter_field_ident = tracing::field::Empty, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty), err(level = "warn"))]
+                        #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #filter_field_ident = tracing::field::Empty, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
                     },
                     quote! {
                         let has_cursor = cursor.after.is_some();
@@ -214,11 +214,17 @@ impl ToTokens for ListForFn<'_> {
                         tracing::Span::current().record("has_next_page", has_next_page);
                         tracing::Span::current().record("ids", tracing::field::debug(&result_ids));
                     },
+                    quote! {
+                        if let Err(ref e) = __result {
+                            tracing::Span::current().record("exception.message", tracing::field::display(e));
+                            tracing::Span::current().record("exception.type", std::any::type_name_of_val(e));
+                        }
+                    },
                 )
             };
             #[cfg(not(feature = "instrument"))]
-            let (instrument_attr, extract_has_cursor, record_fields, record_results) =
-                (quote! {}, quote! {}, quote! {}, quote! {});
+            let (instrument_attr, extract_has_cursor, record_fields, record_results, error_recording) =
+                (quote! {}, quote! {}, quote! {}, quote! {}, quote! {});
 
             tokens.append_all(quote! {
                 pub async fn #fn_name(
@@ -241,29 +247,34 @@ impl ToTokens for ListForFn<'_> {
                     where
                         OP: #query_fn_op_traits
                 {
-                    #extract_has_cursor
-                    let #filter_arg_name = #filter_arg_name.#for_access_expr;
-                    #destructure_tokens
-                    #record_fields
+                    let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> = async {
+                        #extract_has_cursor
+                        let #filter_arg_name = #filter_arg_name.#for_access_expr;
+                        #destructure_tokens
+                        #record_fields
 
-                    let (entities, has_next_page) = match direction {
-                        es_entity::ListDirection::Ascending => {
-                            #es_query_asc_call.fetch_n(op, first).await?
-                        },
-                        es_entity::ListDirection::Descending => {
-                            #es_query_desc_call.fetch_n(op, first).await?
-                        }
-                    };
+                        let (entities, has_next_page) = match direction {
+                            es_entity::ListDirection::Ascending => {
+                                #es_query_asc_call.fetch_n(op, first).await?
+                            },
+                            es_entity::ListDirection::Descending => {
+                                #es_query_desc_call.fetch_n(op, first).await?
+                            }
+                        };
 
-                    #record_results
+                        #record_results
 
-                    let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
+                        let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
 
-                    Ok(es_entity::PaginatedQueryRet {
-                        entities,
-                        has_next_page,
-                        end_cursor,
-                    })
+                        Ok(es_entity::PaginatedQueryRet {
+                            entities,
+                            has_next_page,
+                            end_cursor,
+                        })
+                    }.await;
+                    
+                    #error_recording
+                    __result
                 }
             });
 
