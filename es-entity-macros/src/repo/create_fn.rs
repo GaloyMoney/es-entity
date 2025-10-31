@@ -225,21 +225,25 @@ mod tests {
             where
                 OP: es_entity::AtomicOperation
             {
-                let id = &new_entity.id;
+                let __result: Result<Entity, es_entity::EsRepoError> = async {
+                    let id = &new_entity.id;
 
-                sqlx::query!("INSERT INTO entities (id, created_at) VALUES ($1, COALESCE($2, NOW()))",
-                    id as &EntityId,
-                    op.now()
-                )
-                .execute(op.as_executor())
-                .await?;
+                    sqlx::query!("INSERT INTO entities (id, created_at) VALUES ($1, COALESCE($2, NOW()))",
+                        id as &EntityId,
+                        op.now()
+                    )
+                    .execute(op.as_executor())
+                    .await?;
 
-                let mut events = Self::convert_new(new_entity);
-                let n_events = self.persist_events(op, &mut events).await?;
-                let entity = Self::hydrate_entity(events)?;
+                    let mut events = Self::convert_new(new_entity);
+                    let n_events = self.persist_events(op, &mut events).await?;
+                    let entity = Self::hydrate_entity(events)?;
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
-                Ok(entity)
+                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    Ok(entity)
+                }.await;
+
+                __result
             }
         };
 
@@ -310,23 +314,27 @@ mod tests {
             where
                 OP: es_entity::AtomicOperation
             {
-                let id = &new_entity.id;
-                let name = &new_entity.name();
+                let __result: Result<Entity, es_entity::EsRepoError> = async {
+                    let id = &new_entity.id;
+                    let name = &new_entity.name();
 
-                sqlx::query!("INSERT INTO entities (id, name, created_at) VALUES ($1, $2, COALESCE($3, NOW()))",
-                    id as &EntityId,
-                    name as &String,
-                    op.now()
-                )
-                .execute(op.as_executor())
-                .await?;
+                    sqlx::query!("INSERT INTO entities (id, name, created_at) VALUES ($1, $2, COALESCE($3, NOW()))",
+                        id as &EntityId,
+                        name as &String,
+                        op.now()
+                    )
+                    .execute(op.as_executor())
+                    .await?;
 
-                let mut events = Self::convert_new(new_entity);
-                let n_events = self.persist_events(op, &mut events).await?;
-                let entity = Self::hydrate_entity(events)?;
+                    let mut events = Self::convert_new(new_entity);
+                    let n_events = self.persist_events(op, &mut events).await?;
+                    let entity = Self::hydrate_entity(events)?;
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
-                Ok(entity)
+                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    Ok(entity)
+                }.await;
+
+                __result
             }
         };
 

@@ -209,28 +209,32 @@ mod tests {
             where
                 OP: es_entity::AtomicOperation
             {
-                if !Self::extract_events(entity).any_new() {
-                    return Ok(0);
-                }
+                let __result: Result<usize, es_entity::EsRepoError> = async {
+                    if !Self::extract_events(entity).any_new() {
+                        return Ok(0);
+                    }
 
-                let id = &entity.id;
-                let name = &entity.name;
-                sqlx::query!(
-                    "UPDATE entities SET name = $2 WHERE id = $1",
-                    id as &EntityId,
-                    name as &String
-                )
-                    .execute(op.as_executor())
-                    .await?;
+                    let id = &entity.id;
+                    let name = &entity.name;
+                    sqlx::query!(
+                        "UPDATE entities SET name = $2 WHERE id = $1",
+                        id as &EntityId,
+                        name as &String
+                    )
+                        .execute(op.as_executor())
+                        .await?;
 
-                let n_events = {
-                    let events = Self::extract_events(entity);
-                    self.persist_events(op, events).await?
-                };
+                    let n_events = {
+                        let events = Self::extract_events(entity);
+                        self.persist_events(op, events).await?
+                    };
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
 
-                Ok(n_events)
+                    Ok(n_events)
+                }.await;
+
+                __result
             }
         };
 
@@ -288,18 +292,22 @@ mod tests {
             where
                 OP: es_entity::AtomicOperation
             {
-                if !Self::extract_events(entity).any_new() {
-                    return Ok(0);
-                }
+                let __result: Result<usize, es_entity::EsRepoError> = async {
+                    if !Self::extract_events(entity).any_new() {
+                        return Ok(0);
+                    }
 
-                let n_events = {
-                    let events = Self::extract_events(entity);
-                    self.persist_events(op, events).await?
-                };
+                    let n_events = {
+                        let events = Self::extract_events(entity);
+                        self.persist_events(op, events).await?
+                    };
 
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
 
-                Ok(n_events)
+                    Ok(n_events)
+                }.await;
+
+                __result
             }
         };
 

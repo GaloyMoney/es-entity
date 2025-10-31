@@ -567,42 +567,46 @@ mod tests {
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let es_entity::PaginatedQueryArgs { first, after } = cursor;
-                let id = if let Some(after) = after {
-                    Some(after.id)
-                } else {
-                    None
-                };
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> = async {
+                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
+                    let id = if let Some(after) = after {
+                        Some(after.id)
+                    } else {
+                        None
+                    };
 
-                let (entities, has_next_page) = match direction {
-                    es_entity::ListDirection::Ascending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT id FROM entities WHERE (COALESCE(id > $2, true)) AND deleted = FALSE ORDER BY id ASC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                    es_entity::ListDirection::Descending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT id FROM entities WHERE (COALESCE(id < $2, true)) AND deleted = FALSE ORDER BY id DESC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                };
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT id FROM entities WHERE (COALESCE(id > $2, true)) AND deleted = FALSE ORDER BY id ASC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        es_entity::ListDirection::Descending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT id FROM entities WHERE (COALESCE(id < $2, true)) AND deleted = FALSE ORDER BY id DESC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                    };
 
-                let end_cursor = entities.last().map(cursor_mod::EntitiesByIdCursor::from);
-                Ok(es_entity::PaginatedQueryRet {
-                    entities,
-                    has_next_page,
-                    end_cursor,
-                })
+                    let end_cursor = entities.last().map(cursor_mod::EntitiesByIdCursor::from);
+                    Ok(es_entity::PaginatedQueryRet {
+                        entities,
+                        has_next_page,
+                        end_cursor,
+                    })
+                }.await;
+
+                __result
             }
 
             pub async fn list_by_id_include_deleted(
@@ -622,40 +626,44 @@ mod tests {
             where
                 OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let es_entity::PaginatedQueryArgs { first, after } = cursor;
-                let id = if let Some(after) = after {
-                    Some(after.id)
-                } else {
-                    None
-                };
-                let (entities, has_next_page) = match direction {
-                    es_entity::ListDirection::Ascending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT id FROM entities WHERE (COALESCE(id > $2, true)) ORDER BY id ASC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                    es_entity::ListDirection::Descending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT id FROM entities WHERE (COALESCE(id < $2, true)) ORDER BY id DESC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                };
-                let end_cursor = entities.last().map(cursor_mod::EntitiesByIdCursor::from);
-                Ok(es_entity::PaginatedQueryRet {
-                    entities,
-                    has_next_page,
-                    end_cursor,
-                })
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> = async {
+                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
+                    let id = if let Some(after) = after {
+                        Some(after.id)
+                    } else {
+                        None
+                    };
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT id FROM entities WHERE (COALESCE(id > $2, true)) ORDER BY id ASC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        es_entity::ListDirection::Descending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT id FROM entities WHERE (COALESCE(id < $2, true)) ORDER BY id DESC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                    };
+                    let end_cursor = entities.last().map(cursor_mod::EntitiesByIdCursor::from);
+                    Ok(es_entity::PaginatedQueryRet {
+                        entities,
+                        has_next_page,
+                        end_cursor,
+                    })
+                }.await;
+
+                __result
             }
         };
 
@@ -708,45 +716,49 @@ mod tests {
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let es_entity::PaginatedQueryArgs { first, after } = cursor;
-                let (id, name) = if let Some(after) = after {
-                    (Some(after.id), Some(after.name))
-                } else {
-                    (None, None)
-                };
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, es_entity::EsRepoError> = async {
+                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
+                    let (id, name) = if let Some(after) = after {
+                        (Some(after.id), Some(after.name))
+                    } else {
+                        (None, None)
+                    };
 
-                let (entities, has_next_page) = match direction {
-                    es_entity::ListDirection::Ascending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT name, id FROM entities WHERE (COALESCE((name, id) > ($3, $2), $2 IS NULL)) ORDER BY name ASC, id ASC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                            name as Option<String>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                    es_entity::ListDirection::Descending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT name, id FROM entities WHERE (COALESCE((name, id) < ($3, $2), $2 IS NULL)) ORDER BY name DESC, id DESC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                            name as Option<String>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                };
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT name, id FROM entities WHERE (COALESCE((name, id) > ($3, $2), $2 IS NULL)) ORDER BY name ASC, id ASC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                                name as Option<String>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        es_entity::ListDirection::Descending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT name, id FROM entities WHERE (COALESCE((name, id) < ($3, $2), $2 IS NULL)) ORDER BY name DESC, id DESC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                                name as Option<String>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                    };
 
-                let end_cursor = entities.last().map(cursor_mod::EntitiesByNameCursor::from);
+                    let end_cursor = entities.last().map(cursor_mod::EntitiesByNameCursor::from);
 
-                Ok(es_entity::PaginatedQueryRet {
-                    entities,
-                    has_next_page,
-                    end_cursor,
-                })
+                    Ok(es_entity::PaginatedQueryRet {
+                        entities,
+                        has_next_page,
+                        end_cursor,
+                    })
+                }.await;
+
+                __result
             }
         };
 
@@ -799,45 +811,49 @@ mod tests {
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let es_entity::PaginatedQueryArgs { first, after } = cursor;
-                let (id, value) = if let Some(after) = after {
-                    (Some(after.id), after.value)
-                } else {
-                    (None, None)
-                };
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, es_entity::EsRepoError> = async {
+                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
+                    let (id, value) = if let Some(after) = after {
+                        (Some(after.id), after.value)
+                    } else {
+                        (None, None)
+                    };
 
-                let (entities, has_next_page) = match direction {
-                    es_entity::ListDirection::Ascending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id > $2, true) OR COALESCE(value > $3, value IS NOT NULL)) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                            value as Option<rust_decimal::Decimal>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                    es_entity::ListDirection::Descending => {
-                        es_entity::es_query!(
-                            entity = Entity,
-                            "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id < $2, true) OR COALESCE(value < $3, value IS NOT NULL)) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
-                            (first + 1) as i64,
-                            id as Option<EntityId>,
-                            value as Option<rust_decimal::Decimal>,
-                        )
-                            .fetch_n(op, first)
-                            .await?
-                    },
-                };
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id > $2, true) OR COALESCE(value > $3, value IS NOT NULL)) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                                value as Option<rust_decimal::Decimal>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        es_entity::ListDirection::Descending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id < $2, true) OR COALESCE(value < $3, value IS NOT NULL)) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                                value as Option<rust_decimal::Decimal>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                    };
 
-                let end_cursor = entities.last().map(cursor_mod::EntitiesByValueCursor::from);
+                    let end_cursor = entities.last().map(cursor_mod::EntitiesByValueCursor::from);
 
-                Ok(es_entity::PaginatedQueryRet {
-                    entities,
-                    has_next_page,
-                    end_cursor,
-                })
+                    Ok(es_entity::PaginatedQueryRet {
+                        entities,
+                        has_next_page,
+                        end_cursor,
+                    })
+                }.await;
+
+                __result
             }
         };
 

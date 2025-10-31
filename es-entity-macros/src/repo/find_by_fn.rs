@@ -204,14 +204,18 @@ mod tests {
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let id = id.borrow();
-                es_entity::es_query!(
-                    entity = Entity,
-                    "SELECT id FROM entities WHERE id = $1",
-                    id as &EntityId,
-                )
-                .fetch_one(op)
-                .await
+                let __result: Result<Entity, es_entity::EsRepoError> = async {
+                    let id = id.borrow();
+                    es_entity::es_query!(
+                        entity = Entity,
+                        "SELECT id FROM entities WHERE id = $1",
+                        id as &EntityId,
+                    )
+                    .fetch_one(op)
+                    .await
+                }.await;
+
+                __result
             }
 
             pub async fn maybe_find_by_id(
@@ -229,14 +233,18 @@ mod tests {
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let id = id.borrow();
-                es_entity::es_query!(
-                    entity = Entity,
-                    "SELECT id FROM entities WHERE id = $1",
-                    id as &EntityId,
-                )
-                .fetch_optional(op)
-                .await
+                let __result: Result<Option<Entity>, es_entity::EsRepoError> = async {
+                    let id = id.borrow();
+                    es_entity::es_query!(
+                        entity = Entity,
+                        "SELECT id FROM entities WHERE id = $1",
+                        id as &EntityId,
+                    )
+                    .fetch_optional(op)
+                    .await
+                }.await;
+
+                __result
             }
         };
 
@@ -283,14 +291,18 @@ mod tests {
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let email = email.as_ref();
-                es_entity::es_query!(
-                    entity = Entity,
-                    "SELECT id FROM entities WHERE email = $1",
-                    email as &str,
-                )
-                .fetch_one(op)
-                .await
+                let __result: Result<Entity, es_entity::EsRepoError> = async {
+                    let email = email.as_ref();
+                    es_entity::es_query!(
+                        entity = Entity,
+                        "SELECT id FROM entities WHERE email = $1",
+                        email as &str,
+                    )
+                    .fetch_one(op)
+                    .await
+                }.await;
+
+                __result
             }
 
             pub async fn maybe_find_by_email(
@@ -308,14 +320,18 @@ mod tests {
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let email = email.as_ref();
-                es_entity::es_query!(
-                    entity = Entity,
-                    "SELECT id FROM entities WHERE email = $1",
-                    email as &str,
-                )
-                .fetch_optional(op)
-                .await
+                let __result: Result<Option<Entity>, es_entity::EsRepoError> = async {
+                    let email = email.as_ref();
+                    es_entity::es_query!(
+                        entity = Entity,
+                        "SELECT id FROM entities WHERE email = $1",
+                        email as &str,
+                    )
+                    .fetch_optional(op)
+                    .await
+                }.await;
+
+                __result
             }
         };
 
@@ -359,14 +375,18 @@ mod tests {
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let id = id.borrow();
-                es_entity::es_query!(
-                    entity = Entity,
-                    "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
-                    id as &EntityId,
-                )
-                .fetch_one(op)
-                .await
+                let __result: Result<Entity, es_entity::EsRepoError> = async {
+                    let id = id.borrow();
+                    es_entity::es_query!(
+                        entity = Entity,
+                        "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
+                        id as &EntityId,
+                    )
+                    .fetch_one(op)
+                    .await
+                }.await;
+
+                __result
             }
 
             pub async fn find_by_id_include_deleted(
@@ -384,14 +404,18 @@ mod tests {
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let id = id.borrow();
-                es_entity::es_query!(
-                    entity = Entity,
-                    "SELECT id FROM entities WHERE id = $1",
-                    id as &EntityId,
-                )
-                .fetch_one(op)
-                .await
+                let __result: Result<Entity, es_entity::EsRepoError> = async {
+                    let id = id.borrow();
+                    es_entity::es_query!(
+                        entity = Entity,
+                        "SELECT id FROM entities WHERE id = $1",
+                        id as &EntityId,
+                    )
+                    .fetch_one(op)
+                    .await
+                }.await;
+
+                __result
             }
 
             pub async fn maybe_find_by_id(
@@ -409,14 +433,18 @@ mod tests {
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let id = id.borrow();
-                es_entity::es_query!(
-                    entity = Entity,
-                    "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
-                    id as &EntityId,
-                )
-                .fetch_optional(op)
-                .await
+                let __result: Result<Option<Entity>, es_entity::EsRepoError> = async {
+                    let id = id.borrow();
+                    es_entity::es_query!(
+                        entity = Entity,
+                        "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
+                        id as &EntityId,
+                    )
+                    .fetch_optional(op)
+                    .await
+                }.await;
+
+                __result
             }
 
             pub async fn maybe_find_by_id_include_deleted(
@@ -434,14 +462,18 @@ mod tests {
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let id = id.borrow();
-                es_entity::es_query!(
-                    entity = Entity,
-                    "SELECT id FROM entities WHERE id = $1",
-                    id as &EntityId,
-                )
-                .fetch_optional(op)
-                .await
+                let __result: Result<Option<Entity>, es_entity::EsRepoError> = async {
+                    let id = id.borrow();
+                    es_entity::es_query!(
+                        entity = Entity,
+                        "SELECT id FROM entities WHERE id = $1",
+                        id as &EntityId,
+                    )
+                    .fetch_optional(op)
+                    .await
+                }.await;
+
+                __result
             }
         };
 
@@ -485,14 +517,18 @@ mod tests {
                 where
                     OP: es_entity::AtomicOperation
             {
-                let id = id.borrow();
-                es_entity::es_query!(
-                    entity = Entity,
-                    "SELECT id FROM entities WHERE id = $1",
-                    id as &EntityId,
-                )
-                .fetch_one(op)
-                .await
+                let __result: Result<Entity, es_entity::EsRepoError> = async {
+                    let id = id.borrow();
+                    es_entity::es_query!(
+                        entity = Entity,
+                        "SELECT id FROM entities WHERE id = $1",
+                        id as &EntityId,
+                    )
+                    .fetch_one(op)
+                    .await
+                }.await;
+
+                __result
             }
 
             pub async fn maybe_find_by_id(
@@ -510,14 +546,18 @@ mod tests {
                 where
                     OP: es_entity::AtomicOperation
             {
-                let id = id.borrow();
-                es_entity::es_query!(
-                    entity = Entity,
-                    "SELECT id FROM entities WHERE id = $1",
-                    id as &EntityId,
-                )
-                .fetch_optional(op)
-                .await
+                let __result: Result<Option<Entity>, es_entity::EsRepoError> = async {
+                    let id = id.borrow();
+                    es_entity::es_query!(
+                        entity = Entity,
+                        "SELECT id FROM entities WHERE id = $1",
+                        id as &EntityId,
+                    )
+                    .fetch_optional(op)
+                    .await
+                }.await;
+
+                __result
             }
         };
 

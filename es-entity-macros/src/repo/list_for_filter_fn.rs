@@ -409,89 +409,93 @@ mod tests {
             ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersCursor>, es_entity::EsRepoError>
                 where es_entity::EsRepoError: From<es_entity::CursorDestructureError>
             {
-                let es_entity::Sort { by, direction } = sort;
-                let es_entity::PaginatedQueryArgs { first, after } = cursor;
+                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersCursor>, es_entity::EsRepoError> = async {
+                    let es_entity::Sort { by, direction } = sort;
+                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
 
-                use cursor_mod::OrdersCursor;
-                let res = match (filter, by) {
-                    (OrdersFilter::WithCustomerId(filter_value), OrdersSortBy::Id) => {
-                        let after = after.map(cursor_mod::OrdersByIdCursor::try_from).transpose()?;
-                        let query = es_entity::PaginatedQueryArgs { first, after };
+                    use cursor_mod::OrdersCursor;
+                    let res = match (filter, by) {
+                        (OrdersFilter::WithCustomerId(filter_value), OrdersSortBy::Id) => {
+                            let after = after.map(cursor_mod::OrdersByIdCursor::try_from).transpose()?;
+                            let query = es_entity::PaginatedQueryArgs { first, after };
 
-                        let es_entity::PaginatedQueryRet {
-                            entities,
-                            has_next_page,
-                            end_cursor,
-                        } = self.list_for_customer_id_by_id(filter_value, query, direction).await?;
-                        es_entity::PaginatedQueryRet {
-                            entities,
-                            has_next_page,
-                            end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                            let es_entity::PaginatedQueryRet {
+                                entities,
+                                has_next_page,
+                                end_cursor,
+                            } = self.list_for_customer_id_by_id(filter_value, query, direction).await?;
+                            es_entity::PaginatedQueryRet {
+                                entities,
+                                has_next_page,
+                                end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                            }
                         }
-                    }
-                    (OrdersFilter::WithStatus(filter_value), OrdersSortBy::Id) => {
-                        let after = after.map(cursor_mod::OrdersByIdCursor::try_from).transpose()?;
-                        let query = es_entity::PaginatedQueryArgs { first, after };
+                        (OrdersFilter::WithStatus(filter_value), OrdersSortBy::Id) => {
+                            let after = after.map(cursor_mod::OrdersByIdCursor::try_from).transpose()?;
+                            let query = es_entity::PaginatedQueryArgs { first, after };
 
-                        let es_entity::PaginatedQueryRet {
-                            entities,
-                            has_next_page,
-                            end_cursor,
-                        } = self.list_for_status_by_id(filter_value, query, direction).await?;
-                        es_entity::PaginatedQueryRet {
-                            entities,
-                            has_next_page,
-                            end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                            let es_entity::PaginatedQueryRet {
+                                entities,
+                                has_next_page,
+                                end_cursor,
+                            } = self.list_for_status_by_id(filter_value, query, direction).await?;
+                            es_entity::PaginatedQueryRet {
+                                entities,
+                                has_next_page,
+                                end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                            }
                         }
-                    }
-                    (OrdersFilter::NoFilter, OrdersSortBy::Id) => {
-                        let after = after.map(cursor_mod::OrdersByIdCursor::try_from).transpose()?;
-                        let query = es_entity::PaginatedQueryArgs { first, after };
+                        (OrdersFilter::NoFilter, OrdersSortBy::Id) => {
+                            let after = after.map(cursor_mod::OrdersByIdCursor::try_from).transpose()?;
+                            let query = es_entity::PaginatedQueryArgs { first, after };
 
-                        let es_entity::PaginatedQueryRet {
-                            entities,
-                            has_next_page,
-                            end_cursor,
-                        } = self.list_by_id(query, direction).await?;
-                        es_entity::PaginatedQueryRet {
-                            entities,
-                            has_next_page,
-                            end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                            let es_entity::PaginatedQueryRet {
+                                entities,
+                                has_next_page,
+                                end_cursor,
+                            } = self.list_by_id(query, direction).await?;
+                            es_entity::PaginatedQueryRet {
+                                entities,
+                                has_next_page,
+                                end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                            }
                         }
-                    }
-                    (OrdersFilter::NoFilter, OrdersSortBy::CustomerId) => {
-                        let after = after.map(cursor_mod::OrdersByCustomerIdCursor::try_from).transpose()?;
-                        let query = es_entity::PaginatedQueryArgs { first, after };
+                        (OrdersFilter::NoFilter, OrdersSortBy::CustomerId) => {
+                            let after = after.map(cursor_mod::OrdersByCustomerIdCursor::try_from).transpose()?;
+                            let query = es_entity::PaginatedQueryArgs { first, after };
 
-                        let es_entity::PaginatedQueryRet {
-                            entities,
-                            has_next_page,
-                            end_cursor,
-                        } = self.list_by_customer_id(query, direction).await?;
-                        es_entity::PaginatedQueryRet {
-                            entities,
-                            has_next_page,
-                            end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                            let es_entity::PaginatedQueryRet {
+                                entities,
+                                has_next_page,
+                                end_cursor,
+                            } = self.list_by_customer_id(query, direction).await?;
+                            es_entity::PaginatedQueryRet {
+                                entities,
+                                has_next_page,
+                                end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                            }
                         }
-                    }
-                    (OrdersFilter::NoFilter, OrdersSortBy::Status) => {
-                        let after = after.map(cursor_mod::OrdersByStatusCursor::try_from).transpose()?;
-                        let query = es_entity::PaginatedQueryArgs { first, after };
+                        (OrdersFilter::NoFilter, OrdersSortBy::Status) => {
+                            let after = after.map(cursor_mod::OrdersByStatusCursor::try_from).transpose()?;
+                            let query = es_entity::PaginatedQueryArgs { first, after };
 
-                        let es_entity::PaginatedQueryRet {
-                            entities,
-                            has_next_page,
-                            end_cursor,
-                        } = self.list_by_status(query, direction).await?;
-                        es_entity::PaginatedQueryRet {
-                            entities,
-                            has_next_page,
-                            end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                            let es_entity::PaginatedQueryRet {
+                                entities,
+                                has_next_page,
+                                end_cursor,
+                            } = self.list_by_status(query, direction).await?;
+                            es_entity::PaginatedQueryRet {
+                                entities,
+                                has_next_page,
+                                end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                            }
                         }
-                    }
-                };
+                    };
 
-                Ok(res)
+                    Ok(res)
+                }.await;
+
+                __result
             }
         };
 

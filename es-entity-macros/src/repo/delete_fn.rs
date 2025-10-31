@@ -177,30 +177,34 @@ mod tests {
             where
                 OP: es_entity::AtomicOperation
             {
-                let id = &entity.id;
+                let __result: Result<(), es_entity::EsRepoError> = async {
+                    let id = &entity.id;
 
-                sqlx::query!(
-                    "UPDATE entities SET deleted = TRUE WHERE id = $1",
-                    id as &EntityId
-                )
-                    .execute(op.as_executor())
-                    .await?;
+                    sqlx::query!(
+                        "UPDATE entities SET deleted = TRUE WHERE id = $1",
+                        id as &EntityId
+                    )
+                        .execute(op.as_executor())
+                        .await?;
 
-                let new_events = {
-                    let events = Self::extract_events(&mut entity);
-                    events.any_new()
-                };
-
-                if new_events {
-                    let n_events = {
+                    let new_events = {
                         let events = Self::extract_events(&mut entity);
-                        self.persist_events(op, events).await?
+                        events.any_new()
                     };
 
-                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
-                }
+                    if new_events {
+                        let n_events = {
+                            let events = Self::extract_events(&mut entity);
+                            self.persist_events(op, events).await?
+                        };
 
-                Ok(())
+                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    }
+
+                    Ok(())
+                }.await;
+
+                __result
             }
         };
 
@@ -254,32 +258,36 @@ mod tests {
             where
                 OP: es_entity::AtomicOperation
             {
-                let id = &entity.id;
-                let name = &entity.name;
+                let __result: Result<(), es_entity::EsRepoError> = async {
+                    let id = &entity.id;
+                    let name = &entity.name;
 
-                sqlx::query!(
-                    "UPDATE entities SET name = $2, deleted = TRUE WHERE id = $1",
-                    id as &EntityId,
-                    name as &String
-                )
-                    .execute(op.as_executor())
-                    .await?;
+                    sqlx::query!(
+                        "UPDATE entities SET name = $2, deleted = TRUE WHERE id = $1",
+                        id as &EntityId,
+                        name as &String
+                    )
+                        .execute(op.as_executor())
+                        .await?;
 
-                let new_events = {
-                    let events = Self::extract_events(&mut entity);
-                    events.any_new()
-                };
-
-                if new_events {
-                    let n_events = {
+                    let new_events = {
                         let events = Self::extract_events(&mut entity);
-                        self.persist_events(op, events).await?
+                        events.any_new()
                     };
 
-                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
-                }
+                    if new_events {
+                        let n_events = {
+                            let events = Self::extract_events(&mut entity);
+                            self.persist_events(op, events).await?
+                        };
 
-                Ok(())
+                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    }
+
+                    Ok(())
+                }.await;
+
+                __result
             }
         };
 
