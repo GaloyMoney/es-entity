@@ -70,15 +70,20 @@ impl ToTokens for UpdateFn<'_> {
 
         #[cfg(feature = "instrument")]
         let (instrument_attr, record_id, error_recording) = {
+            use convert_case::{Case, Casing};
+
             let entity_name = entity.to_string();
             let repo_name = &self.repo_name_snake;
+
+            let id_ident = quote::format_ident!("{}_id", entity.to_string().to_case(Case::Snake));
+
             let span_name = format!("{}.update", repo_name);
             (
                 quote! {
-                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, id = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
+                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #id_ident = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
                 },
                 quote! {
-                    tracing::Span::current().record("id", tracing::field::debug(&entity.id));
+                    tracing::Span::current().record(stringify!(#id_ident), tracing::field::display(&entity.id));
                 },
                 quote! {
                     if let Err(ref e) = __result {
