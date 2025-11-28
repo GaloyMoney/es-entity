@@ -1,7 +1,6 @@
 [book]
 authors = ["ES Entity Contributors"]
 language = "en"
-multilingual = false
 src = "src"
 title = "ES Entity Framework"
 
