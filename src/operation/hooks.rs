@@ -151,8 +151,8 @@ where
     H: FnOnce(&mut HookOperation<'_>) -> Fut + Send + 'static,
     Fut: Future<Output = Result<(), sqlx::Error>> + Send + 'static,
 {
-    pub fn new(hook: H) -> Self {
-        Self { hook }
+    pub fn new(hook: H) -> Box<Self> {
+        Box::new(Self { hook })
     }
 }
 
@@ -169,15 +169,15 @@ where
     Fut: Future<Output = Result<(), sqlx::Error>> + Send + 'static,
     M: Fn(D, D) -> D + Send + 'static,
 {
-    pub fn new(hook: H, data: D, merge: M) -> Self {
-        Self { hook, data, merge }
+    pub fn new(hook: H, data: D, merge: M) -> Box<Self> {
+        Box::new(Self { hook, data, merge })
     }
 }
 
 // --- IntoPreCommitHook trait ---
 
 pub trait IntoPreCommitHook {
-    fn register(self, hook_name: &'static str, hooks: &mut PreCommitHooks);
+    fn register(self: Box<Self>, hook_name: &'static str, hooks: &mut PreCommitHooks);
 }
 
 impl<H, Fut> IntoPreCommitHook for PreCommitHook<H>
@@ -185,7 +185,7 @@ where
     H: FnOnce(&mut HookOperation<'_>) -> Fut + Send + 'static,
     Fut: Future<Output = Result<(), sqlx::Error>> + Send + 'static,
 {
-    fn register(self, hook_name: &'static str, hooks: &mut PreCommitHooks) {
+    fn register(self: Box<Self>, hook_name: &'static str, hooks: &mut PreCommitHooks) {
         let executor: ErasedExecutor = Box::new(move |op| Box::pin((self.hook)(op)));
         hooks.add_individual(hook_name, executor);
     }
@@ -198,17 +198,19 @@ where
     Fut: Future<Output = Result<(), sqlx::Error>> + Send + 'static,
     M: Fn(D, D) -> D + Send + 'static,
 {
-    fn register(self, hook_name: &'static str, hooks: &mut PreCommitHooks) {
+    fn register(self: Box<Self>, hook_name: &'static str, hooks: &mut PreCommitHooks) {
+        let PreCommitHookWithData { hook, data, merge } = *self;
+
         let executor: ErasedExecutorWithData = Box::new(move |op, boxed_data| {
             let data = *boxed_data.downcast::<D>().unwrap();
-            Box::pin((self.hook)(op, data))
+            Box::pin(hook(op, data))
         });
         let merger: ErasedMerger = Box::new(move |a, b| {
             let a = *a.downcast::<D>().unwrap();
             let b = *b.downcast::<D>().unwrap();
-            Box::new((self.merge)(a, b))
+            Box::new(merge(a, b))
         });
-        hooks.add_merged(hook_name, executor, Box::new(self.data), merger);
+        hooks.add_merged(hook_name, executor, Box::new(data), merger);
     }
 }
 
