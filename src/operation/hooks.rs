@@ -1,9 +1,4 @@
-use std::{
-    any::{Any, TypeId},
-    collections::HashMap,
-    future::Future,
-    pin::Pin,
-};
+use std::{any::Any, collections::HashMap, future::Future, pin::Pin};
 
 use super::AtomicOperation;
 
@@ -11,37 +6,41 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 // --- HookOperation ---
 
-pub struct HookOperation {
+pub struct HookOperation<'c> {
     now: Option<chrono::DateTime<chrono::Utc>>,
-    pub(super) tx: sqlx::PgTransaction<'static>,
+    inner: &'c mut sqlx::PgConnection,
 }
 
-impl HookOperation {
-    pub(super) fn new(
-        tx: sqlx::PgTransaction<'static>,
-        now: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Self {
-        Self { now, tx }
+impl<'c, T: AtomicOperation> From<&'c mut T> for HookOperation<'c> {
+    fn from(op: &'c mut T) -> Self {
+        Self {
+            now: op.now(),
+            inner: op.as_executor(),
+        }
     }
 }
 
-impl AtomicOperation for HookOperation {
+impl AtomicOperation for HookOperation<'_> {
     fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.now
     }
 
     fn as_executor(&mut self) -> &mut sqlx::PgConnection {
-        &mut *self.tx
+        self.inner
     }
 }
 
 // --- Type-erased storage ---
 
-type ErasedExecutor =
-    Box<dyn FnOnce(&mut HookOperation) -> BoxFuture<'_, Result<(), sqlx::Error>> + Send>;
+type ErasedExecutor = Box<
+    dyn for<'a> FnOnce(&mut HookOperation<'a>) -> BoxFuture<'a, Result<(), sqlx::Error>> + Send,
+>;
 
 type ErasedExecutorWithData = Box<
-    dyn FnOnce(&mut HookOperation, Box<dyn Any + Send>) -> BoxFuture<'_, Result<(), sqlx::Error>>
+    dyn for<'a> FnOnce(
+            &mut HookOperation<'a>,
+            Box<dyn Any + Send>,
+        ) -> BoxFuture<'a, Result<(), sqlx::Error>>
         + Send,
 >;
 
@@ -59,8 +58,8 @@ enum HookStorage {
 
 // --- PreCommitHooks ---
 
-pub(super) struct PreCommitHooks {
-    hooks: HashMap<TypeId, HookStorage>,
+pub struct PreCommitHooks {
+    hooks: HashMap<&'static str, HookStorage>,
 }
 
 impl PreCommitHooks {
@@ -70,13 +69,11 @@ impl PreCommitHooks {
         }
     }
 
-    fn add_individual<K: 'static>(&mut self, executor: ErasedExecutor) {
-        let type_id = TypeId::of::<K>();
-
-        match self.hooks.get_mut(&type_id) {
+    fn add_individual(&mut self, hook_name: &'static str, executor: ErasedExecutor) {
+        match self.hooks.get_mut(hook_name) {
             None => {
                 self.hooks
-                    .insert(type_id, HookStorage::Individual(vec![executor]));
+                    .insert(hook_name, HookStorage::Individual(vec![executor]));
             }
             Some(HookStorage::Individual(executors)) => {
                 executors.push(executor);
@@ -87,18 +84,17 @@ impl PreCommitHooks {
         }
     }
 
-    fn add_merged<K: 'static>(
+    fn add_merged(
         &mut self,
+        hook_name: &'static str,
         executor: ErasedExecutorWithData,
         data: Box<dyn Any + Send>,
         merger: ErasedMerger,
     ) {
-        let type_id = TypeId::of::<K>();
-
-        match self.hooks.get_mut(&type_id) {
+        match self.hooks.get_mut(&hook_name) {
             None => {
                 self.hooks.insert(
-                    type_id,
+                    hook_name,
                     HookStorage::Merged {
                         data,
                         executor,
@@ -120,16 +116,17 @@ impl PreCommitHooks {
         }
     }
 
-    pub async fn execute(mut self, mut op: &mut HookOperation) -> Result<(), sqlx::Error> {
+    pub async fn execute(mut self, conn: &mut impl AtomicOperation) -> Result<(), sqlx::Error> {
+        let mut hook_op = HookOperation::from(conn);
         for (_, storage) in self.hooks.drain() {
             match storage {
                 HookStorage::Individual(executors) => {
                     for executor in executors {
-                        executor(&mut op).await?;
+                        executor(&mut hook_op).await?;
                     }
                 }
                 HookStorage::Merged { data, executor, .. } => {
-                    executor(&mut op, data).await?;
+                    executor(&mut hook_op, data).await?;
                 }
             }
         }
@@ -151,7 +148,7 @@ pub struct PreCommitHook<H> {
 
 impl<H, Fut> PreCommitHook<H>
 where
-    H: FnOnce(&mut HookOperation) -> Fut + Send + 'static,
+    H: FnOnce(&mut HookOperation<'_>) -> Fut + Send + 'static,
     Fut: Future<Output = Result<(), sqlx::Error>> + Send + 'static,
 {
     pub fn new(hook: H) -> Self {
@@ -168,7 +165,7 @@ pub struct PreCommitHookWithData<H, D, M> {
 impl<H, D, M, Fut> PreCommitHookWithData<H, D, M>
 where
     D: Send + 'static,
-    H: FnOnce(&mut HookOperation, D) -> Fut + Send + 'static,
+    H: FnOnce(&mut HookOperation<'_>, D) -> Fut + Send + 'static,
     Fut: Future<Output = Result<(), sqlx::Error>> + Send + 'static,
     M: Fn(D, D) -> D + Send + 'static,
 {
@@ -180,28 +177,28 @@ where
 // --- IntoPreCommitHook trait ---
 
 pub trait IntoPreCommitHook {
-    fn register<K: 'static>(self, hooks: &mut PreCommitHooks);
+    fn register(self, hook_name: &'static str, hooks: &mut PreCommitHooks);
 }
 
 impl<H, Fut> IntoPreCommitHook for PreCommitHook<H>
 where
-    H: FnOnce(&mut HookOperation) -> Fut + Send + 'static,
+    H: FnOnce(&mut HookOperation<'_>) -> Fut + Send + 'static,
     Fut: Future<Output = Result<(), sqlx::Error>> + Send + 'static,
 {
-    fn register<K: 'static>(self, hooks: &mut PreCommitHooks) {
+    fn register(self, hook_name: &'static str, hooks: &mut PreCommitHooks) {
         let executor: ErasedExecutor = Box::new(move |op| Box::pin((self.hook)(op)));
-        hooks.add_individual::<K>(executor);
+        hooks.add_individual(hook_name, executor);
     }
 }
 
 impl<H, D, M, Fut> IntoPreCommitHook for PreCommitHookWithData<H, D, M>
 where
     D: Send + 'static,
-    H: FnOnce(&mut HookOperation, D) -> Fut + Send + 'static,
+    H: FnOnce(&mut HookOperation<'_>, D) -> Fut + Send + 'static,
     Fut: Future<Output = Result<(), sqlx::Error>> + Send + 'static,
     M: Fn(D, D) -> D + Send + 'static,
 {
-    fn register<K: 'static>(self, hooks: &mut PreCommitHooks) {
+    fn register(self, hook_name: &'static str, hooks: &mut PreCommitHooks) {
         let executor: ErasedExecutorWithData = Box::new(move |op, boxed_data| {
             let data = *boxed_data.downcast::<D>().unwrap();
             Box::pin((self.hook)(op, data))
@@ -211,7 +208,7 @@ where
             let b = *b.downcast::<D>().unwrap();
             Box::new((self.merge)(a, b))
         });
-        hooks.add_merged::<K>(executor, Box::new(self.data), merger);
+        hooks.add_merged(hook_name, executor, Box::new(self.data), merger);
     }
 }
 

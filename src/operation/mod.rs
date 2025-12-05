@@ -85,14 +85,10 @@ impl<'c> DbOp<'c> {
     }
 
     /// Commits the inner transaction.
-    pub async fn commit(mut self) -> Result<(), sqlx::Error>
-    where
-        'c: 'static,
-    {
+    pub async fn commit(mut self) -> Result<(), sqlx::Error> {
         let pre_commit_hooks = self.pre_commit_hooks.take().expect("no hooks");
-        let mut hook_op = hooks::HookOperation::new(self.tx, self.now);
-        pre_commit_hooks.execute(&mut hook_op).await?;
-        hook_op.tx.commit().await?;
+        pre_commit_hooks.execute(&mut self).await?;
+        self.tx.commit().await?;
         Ok(())
     }
 
@@ -111,8 +107,12 @@ impl<'o> AtomicOperation for DbOp<'o> {
         self.tx.as_executor()
     }
 
-    fn add_pre_commit_hook<K: 'static>(&mut self, hook: impl hooks::IntoPreCommitHook) -> bool {
-        hook.register::<K>(self.pre_commit_hooks.as_mut().expect("no hooks"));
+    fn add_pre_commit_hook(
+        &mut self,
+        hook_name: &'static str,
+        hook: impl hooks::IntoPreCommitHook,
+    ) -> bool {
+        hook.register(hook_name, self.pre_commit_hooks.as_mut().expect("no hooks"));
         true
     }
 }
@@ -154,10 +154,7 @@ impl<'c> DbOpWithTime<'c> {
     }
 
     /// Commits the inner transaction.
-    pub async fn commit(self) -> Result<(), sqlx::Error>
-    where
-        'c: 'static,
-    {
+    pub async fn commit(self) -> Result<(), sqlx::Error> {
         self.inner.commit().await
     }
 
@@ -176,8 +173,12 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
         self.inner.as_executor()
     }
 
-    fn add_pre_commit_hook<K: 'static>(&mut self, hook: impl hooks::IntoPreCommitHook) -> bool {
-        self.inner.add_pre_commit_hook::<K>(hook)
+    fn add_pre_commit_hook(
+        &mut self,
+        hook_name: &'static str,
+        hook: impl hooks::IntoPreCommitHook,
+    ) -> bool {
+        self.inner.add_pre_commit_hook(hook_name, hook)
     }
 }
 
@@ -218,7 +219,11 @@ pub trait AtomicOperation: Send {
     /// there is no variance in the return type - so its fine.
     fn as_executor(&mut self) -> &mut sqlx::PgConnection;
 
-    fn add_pre_commit_hook<K: 'static>(&mut self, _hook: impl hooks::IntoPreCommitHook) -> bool {
+    fn add_pre_commit_hook(
+        &mut self,
+        _hook_name: &'static str,
+        _hook: impl hooks::IntoPreCommitHook,
+    ) -> bool {
         false
     }
 }
