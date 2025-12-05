@@ -1,5 +1,7 @@
 //! Handle execution of database operations and transactions.
 
+mod hooks;
+
 use sqlx::{Acquire, PgPool, Postgres, Transaction};
 
 /// Default return type of the derived EsRepo::begin_op().
@@ -12,11 +14,16 @@ use sqlx::{Acquire, PgPool, Postgres, Transaction};
 pub struct DbOp<'c> {
     tx: Transaction<'c, Postgres>,
     now: Option<chrono::DateTime<chrono::Utc>>,
+    pre_commit_hooks: Option<hooks::PreCommitHooks>,
 }
 
 impl<'c> DbOp<'c> {
     fn new(tx: Transaction<'c, Postgres>, time: Option<chrono::DateTime<chrono::Utc>>) -> Self {
-        Self { tx, now: time }
+        Self {
+            tx,
+            now: time,
+            pre_commit_hooks: Some(hooks::PreCommitHooks::new()),
+        }
     }
 
     /// Initializes a transaction - defaults `now()` to `None` but will cache `sim_time::now()`
@@ -78,7 +85,9 @@ impl<'c> DbOp<'c> {
     }
 
     /// Commits the inner transaction.
-    pub async fn commit(self) -> Result<(), sqlx::Error> {
+    pub async fn commit(mut self) -> Result<(), sqlx::Error> {
+        let pre_commit_hooks = self.pre_commit_hooks.take().expect("no hooks");
+        pre_commit_hooks.execute(&mut self).await?;
         self.tx.commit().await?;
         Ok(())
     }
@@ -96,6 +105,26 @@ impl<'o> AtomicOperation for DbOp<'o> {
 
     fn as_executor(&mut self) -> &mut sqlx::PgConnection {
         self.tx.as_executor()
+    }
+
+    fn add_pre_commit_hook<K, H, D, Fut, M>(
+        &mut self,
+        hook: H,
+        data: impl Into<Option<D>>,
+        merge: impl Into<Option<M>>,
+    ) -> bool
+    where
+        K: 'static,
+        H: FnOnce(&mut hooks::HookOperation<'_>, D) -> Fut + Send + 'static,
+        D: Send + 'static,
+        Fut: Future<Output = Result<(), sqlx::Error>> + Send + 'static,
+        M: Fn(D, D) -> D + Send + 'static,
+    {
+        self.pre_commit_hooks
+            .as_mut()
+            .expect("no hooks")
+            .add::<K, H, D, Fut, M>(hook, data.into(), merge.into());
+        true
     }
 }
 
@@ -192,6 +221,22 @@ pub trait AtomicOperation: Send {
     /// Since this trait is generally applied to types that wrap a [`sqlx::Transaction`]
     /// there is no variance in the return type - so its fine.
     fn as_executor(&mut self) -> &mut sqlx::PgConnection;
+
+    fn add_pre_commit_hook<K, H, D, Fut, M>(
+        &mut self,
+        _hook: H,
+        _data: impl Into<Option<D>>,
+        _merge: impl Into<Option<M>>,
+    ) -> bool
+    where
+        K: 'static,
+        H: FnOnce(&mut hooks::HookOperation<'_>, D) -> Fut + Send + 'static,
+        D: Send + 'static,
+        Fut: Future<Output = Result<(), sqlx::Error>> + Send + 'static,
+        M: Fn(D, D) -> D + Send + 'static,
+    {
+        false
+    }
 }
 
 impl<'c> AtomicOperation for sqlx::Transaction<'c, Postgres> {
