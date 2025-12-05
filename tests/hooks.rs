@@ -14,14 +14,14 @@ async fn basic_hook_execution_with_db_op() -> anyhow::Result<()> {
     let executed = Arc::new(Mutex::new(false));
     let executed_clone = executed.clone();
 
-    let hook = PreCommitHook::new(move |_op| {
+    let hook = PreCommitHook::new(move |mut op| {
         let executed = executed_clone.clone();
         Box::pin(async move {
-            // sqlx::query!("SELECT NOW()")
-            //     .fetch_one(op.as_executor())
-            //     .await?;
+            sqlx::query!("SELECT NOW()")
+                .fetch_one(op.as_executor())
+                .await?;
             *executed.lock().unwrap() = true;
-            Ok(())
+            Ok(op)
         })
     });
 
@@ -48,11 +48,11 @@ async fn hook_with_data() -> anyhow::Result<()> {
     let result_clone = result.clone();
 
     let hook = PreCommitHookWithData::new(
-        move |_op, data: String| {
+        move |op, data: String| {
             let result = result_clone.clone();
             Box::pin(async move {
                 *result.lock().unwrap() = data;
-                Ok(())
+                Ok(op)
             })
         },
         "test_data".to_string(),

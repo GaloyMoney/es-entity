@@ -110,7 +110,7 @@ impl<'o> AtomicOperation for DbOp<'o> {
     fn add_pre_commit_hook(
         &mut self,
         hook_name: &'static str,
-        hook: Box<dyn hooks::IntoPreCommitHook>,
+        hook: impl hooks::IntoPreCommitHook,
     ) -> bool {
         hook.register(hook_name, self.pre_commit_hooks.as_mut().expect("no hooks"));
         true
@@ -176,7 +176,7 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
     fn add_pre_commit_hook(
         &mut self,
         hook_name: &'static str,
-        hook: Box<dyn hooks::IntoPreCommitHook>,
+        hook: impl hooks::IntoPreCommitHook,
     ) -> bool {
         self.inner.add_pre_commit_hook(hook_name, hook)
     }
@@ -222,7 +222,7 @@ pub trait AtomicOperation: Send {
     fn add_pre_commit_hook(
         &mut self,
         _hook_name: &'static str,
-        _hook: Box<dyn hooks::IntoPreCommitHook>,
+        _hook: impl hooks::IntoPreCommitHook,
     ) -> bool {
         false
     }

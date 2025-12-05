@@ -4,43 +4,42 @@ use super::AtomicOperation;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-// --- HookOperation ---
-
 pub struct HookOperation<'c> {
     now: Option<chrono::DateTime<chrono::Utc>>,
-    inner: &'c mut sqlx::PgConnection,
+    conn: &'c mut sqlx::PgConnection,
 }
 
-impl<'c, T: AtomicOperation> From<&'c mut T> for HookOperation<'c> {
-    fn from(op: &'c mut T) -> Self {
+impl<'c> HookOperation<'c> {
+    pub(super) fn new(op: &'c mut impl AtomicOperation) -> Self {
         Self {
             now: op.now(),
-            inner: op.as_executor(),
+            conn: op.as_executor(),
         }
     }
 }
 
-impl AtomicOperation for HookOperation<'_> {
+impl<'c> AtomicOperation for HookOperation<'c> {
     fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.now
     }
 
     fn as_executor(&mut self) -> &mut sqlx::PgConnection {
-        self.inner
+        self.conn
     }
 }
 
 // --- Type-erased storage ---
 
 type ErasedExecutor = Box<
-    dyn for<'a> FnOnce(&mut HookOperation<'a>) -> BoxFuture<'a, Result<(), sqlx::Error>> + Send,
+    dyn for<'c> FnOnce(HookOperation<'c>) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>>
+        + Send,
 >;
 
 type ErasedExecutorWithData = Box<
-    dyn for<'a> FnOnce(
-            &mut HookOperation<'a>,
+    dyn for<'c> FnOnce(
+            HookOperation<'c>,
             Box<dyn Any + Send>,
-        ) -> BoxFuture<'a, Result<(), sqlx::Error>>
+        ) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>>
         + Send,
 >;
 
@@ -116,17 +115,21 @@ impl PreCommitHooks {
         }
     }
 
-    pub async fn execute(mut self, conn: &mut impl AtomicOperation) -> Result<(), sqlx::Error> {
-        let mut hook_op = HookOperation::from(conn);
+    pub(super) async fn execute(
+        mut self,
+        op: &mut impl AtomicOperation,
+    ) -> Result<(), sqlx::Error> {
+        let mut op = HookOperation::new(op);
+
         for (_, storage) in self.hooks.drain() {
             match storage {
                 HookStorage::Individual(executors) => {
                     for executor in executors {
-                        executor(&mut hook_op).await?;
+                        op = executor(op).await?;
                     }
                 }
                 HookStorage::Merged { data, executor, .. } => {
-                    executor(&mut hook_op, data).await?;
+                    op = executor(op, data).await?;
                 }
             }
         }
@@ -140,19 +143,20 @@ impl Default for PreCommitHooks {
     }
 }
 
-// --- Hook types ---
+// --- Hook types (use BoxFuture directly, no generic Fut) ---
 
 pub struct PreCommitHook<H> {
     hook: H,
 }
 
-impl<H, Fut> PreCommitHook<H>
+impl<H> PreCommitHook<H>
 where
-    H: FnOnce(&mut HookOperation<'_>) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<(), sqlx::Error>> + Send + 'static,
+    H: for<'c> FnOnce(HookOperation<'c>) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>>
+        + Send
+        + 'static,
 {
-    pub fn new(hook: H) -> Box<Self> {
-        Box::new(Self { hook })
+    pub fn new(hook: H) -> Self {
+        Self { hook }
     }
 }
 
@@ -162,48 +166,56 @@ pub struct PreCommitHookWithData<H, D, M> {
     merge: M,
 }
 
-impl<H, D, M, Fut> PreCommitHookWithData<H, D, M>
+impl<H, D, M> PreCommitHookWithData<H, D, M>
 where
     D: Send + 'static,
-    H: FnOnce(&mut HookOperation<'_>, D) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<(), sqlx::Error>> + Send + 'static,
+    H: for<'c> FnOnce(
+            HookOperation<'c>,
+            D,
+        ) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>>
+        + Send
+        + 'static,
     M: Fn(D, D) -> D + Send + 'static,
 {
-    pub fn new(hook: H, data: D, merge: M) -> Box<Self> {
-        Box::new(Self { hook, data, merge })
+    pub fn new(hook: H, data: D, merge: M) -> Self {
+        Self { hook, data, merge }
     }
 }
 
 // --- IntoPreCommitHook trait ---
 
-pub trait IntoPreCommitHook {
-    fn register(self: Box<Self>, hook_name: &'static str, hooks: &mut PreCommitHooks);
+pub trait IntoPreCommitHook: Send {
+    fn register(self, hook_name: &'static str, hooks: &mut PreCommitHooks);
 }
 
-impl<H, Fut> IntoPreCommitHook for PreCommitHook<H>
+impl<H> IntoPreCommitHook for PreCommitHook<H>
 where
-    H: FnOnce(&mut HookOperation<'_>) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<(), sqlx::Error>> + Send + 'static,
+    H: for<'c> FnOnce(HookOperation<'c>) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>>
+        + Send
+        + 'static,
 {
-    fn register(self: Box<Self>, hook_name: &'static str, hooks: &mut PreCommitHooks) {
-        let executor: ErasedExecutor = Box::new(move |op| Box::pin((self.hook)(op)));
-        hooks.add_individual(hook_name, executor);
+    fn register(self, hook_name: &'static str, hooks: &mut PreCommitHooks) {
+        hooks.add_individual(hook_name, Box::new(self.hook));
     }
 }
 
-impl<H, D, M, Fut> IntoPreCommitHook for PreCommitHookWithData<H, D, M>
+impl<H, D, M> IntoPreCommitHook for PreCommitHookWithData<H, D, M>
 where
     D: Send + 'static,
-    H: FnOnce(&mut HookOperation<'_>, D) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<(), sqlx::Error>> + Send + 'static,
+    H: for<'c> FnOnce(
+            HookOperation<'c>,
+            D,
+        ) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>>
+        + Send
+        + 'static,
     M: Fn(D, D) -> D + Send + 'static,
 {
-    fn register(self: Box<Self>, hook_name: &'static str, hooks: &mut PreCommitHooks) {
-        let PreCommitHookWithData { hook, data, merge } = *self;
+    fn register(self, hook_name: &'static str, hooks: &mut PreCommitHooks) {
+        let PreCommitHookWithData { hook, data, merge } = self;
 
-        let executor: ErasedExecutorWithData = Box::new(move |op, boxed_data| {
+        let executor: ErasedExecutorWithData = Box::new(move |conn, boxed_data| {
             let data = *boxed_data.downcast::<D>().unwrap();
-            Box::pin(hook(op, data))
+            hook(conn, data)
         });
         let merger: ErasedMerger = Box::new(move |a, b| {
             let a = *a.downcast::<D>().unwrap();
