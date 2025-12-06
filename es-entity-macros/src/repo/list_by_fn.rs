@@ -355,7 +355,7 @@ impl ToTokens for ListByFn<'_> {
                 let span_name = format!("{}.list_by_{}", repo_name, column_name);
                 (
                     quote! {
-                        #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
+                        #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty, error = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
                     },
                     quote! {
                         let has_cursor = cursor.after.is_some();
@@ -372,6 +372,7 @@ impl ToTokens for ListByFn<'_> {
                     },
                     quote! {
                         if let Err(ref e) = __result {
+                            tracing::Span::current().record("error", true);
                             tracing::Span::current().record("exception.message", tracing::field::display(e));
                             tracing::Span::current().record("exception.type", std::any::type_name_of_val(e));
                         }

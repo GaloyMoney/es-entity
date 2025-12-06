@@ -108,13 +108,14 @@ impl ToTokens for FindByFn<'_> {
                     let field_ident = syn::Ident::new(&field_name, proc_macro2::Span::call_site());
                     (
                         quote! {
-                            #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #field_ident = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
+                            #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #field_ident = tracing::field::Empty, error = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
                         },
                         quote! {
                             tracing::Span::current().record(#field_name, tracing::field::debug(&#column_name));
                         },
                         quote! {
                             if let Err(ref e) = __result {
+                                tracing::Span::current().record("error", true);
                                 tracing::Span::current().record("exception.message", tracing::field::display(e));
                                 tracing::Span::current().record("exception.type", std::any::type_name_of_val(e));
                             }

@@ -77,10 +77,11 @@ impl ToTokens for CreateAllFn<'_> {
             let span_name = format!("{}.create_all", repo_name);
             (
                 quote! {
-                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, count = new_entities.len(), exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
+                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, count = new_entities.len(), error = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
                 },
                 quote! {
                     if let Err(ref e) = __result {
+                        tracing::Span::current().record("error", true);
                         tracing::Span::current().record("exception.message", tracing::field::display(e));
                         tracing::Span::current().record("exception.type", std::any::type_name_of_val(e));
                     }
