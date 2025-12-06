@@ -33,8 +33,6 @@ impl<'c> AtomicOperation for HookOperation<'c> {
     }
 }
 
-// --- Pre-commit result type ---
-
 pub struct PreCommitRet<'c, H> {
     op: HookOperation<'c>,
     hook: H,
@@ -45,8 +43,6 @@ impl<'c, H> PreCommitRet<'c, H> {
         Ok(Self { op, hook })
     }
 }
-
-// --- User-facing trait ---
 
 pub trait CommitHook: Send + 'static + Sized {
     /// Called before the transaction commits. Can perform database operations.
@@ -72,7 +68,7 @@ pub trait CommitHook: Send + 'static + Sized {
     }
 
     /// Execute the hook immediately.
-    /// Useful when `add_commit_hook` returns false (hooks not supported).
+    /// Useful when `add_commit_hook` returns Err (hooks not supported).
     fn force_execute_pre_commit(
         self,
         op: &mut impl AtomicOperation,
@@ -86,7 +82,6 @@ pub trait CommitHook: Send + 'static + Sized {
 }
 
 // --- Object-safe internal trait ---
-
 trait DynHook: Send {
     fn pre_commit_boxed<'c>(
         self: Box<Self>,
@@ -128,9 +123,7 @@ impl<H: CommitHook> DynHook for H {
     }
 }
 
-// --- Storage ---
-
-pub struct CommitHooks {
+pub(crate) struct CommitHooks {
     hooks: HashMap<TypeId, Vec<Box<dyn DynHook>>>,
 }
 
@@ -180,8 +173,6 @@ impl Default for CommitHooks {
         Self::new()
     }
 }
-
-// --- Post-commit execution ---
 
 pub struct PostCommitHooks {
     hooks: Vec<Box<dyn DynHook>>,
