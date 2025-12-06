@@ -33,20 +33,41 @@ impl<'c> AtomicOperation for HookOperation<'c> {
     }
 }
 
+// --- Pre-commit result type ---
+
+pub struct PreCommitRet<'c, H> {
+    pub(crate) op: HookOperation<'c>,
+    pub(crate) hook: H,
+}
+
+impl<'c, H> PreCommitRet<'c, H> {
+    pub fn ok(hook: H, op: HookOperation<'c>) -> Result<Self, sqlx::Error> {
+        Ok(Self { op, hook })
+    }
+}
+
 // --- User-facing trait ---
 
-pub trait PreCommitHook: Send + 'static + Sized {
-    fn execute(
+pub trait CommitHook: Send + 'static + Sized {
+    /// Called before the transaction commits. Can perform database operations.
+    /// Returns Self so it can be used in post_commit.
+    fn pre_commit(
         self,
         op: HookOperation<'_>,
-    ) -> impl Future<Output = Result<HookOperation<'_>, sqlx::Error>> + Send;
+    ) -> impl Future<Output = Result<PreCommitRet<'_, Self>, sqlx::Error>> + Send {
+        async { PreCommitRet::ok(self, op) }
+    }
+
+    /// Called after the transaction has successfully committed.
+    /// Cannot fail, not async.
+    fn post_commit(self) {
+        // Default: do nothing
+    }
 
     /// Try to merge `other` into `self`.
     /// Returns true if merged (other will be dropped).
     /// Returns false if not merged (both will execute separately).
-    /// Default returns false.
-    fn merge(&mut self, other: &mut Self) -> bool {
-        let _ = other;
+    fn merge(&mut self, _other: &mut Self) -> bool {
         false
     }
 }
@@ -54,22 +75,31 @@ pub trait PreCommitHook: Send + 'static + Sized {
 // --- Object-safe internal trait ---
 
 trait DynHook: Send {
-    fn execute_boxed<'c>(
+    fn pre_commit_boxed<'c>(
         self: Box<Self>,
         op: HookOperation<'c>,
-    ) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>>;
+    ) -> BoxFuture<'c, Result<(HookOperation<'c>, Box<dyn DynHook>), sqlx::Error>>;
+
+    fn post_commit_boxed(self: Box<Self>);
 
     fn try_merge(&mut self, other: &mut dyn DynHook) -> bool;
 
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
-impl<H: PreCommitHook> DynHook for H {
-    fn execute_boxed<'c>(
+impl<H: CommitHook> DynHook for H {
+    fn pre_commit_boxed<'c>(
         self: Box<Self>,
         op: HookOperation<'c>,
-    ) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>> {
-        Box::pin((*self).execute(op))
+    ) -> BoxFuture<'c, Result<(HookOperation<'c>, Box<dyn DynHook>), sqlx::Error>> {
+        Box::pin(async move {
+            let ret = (*self).pre_commit(op).await?;
+            Ok((ret.op, Box::new(ret.hook) as Box<dyn DynHook>))
+        })
+    }
+
+    fn post_commit_boxed(self: Box<Self>) {
+        (*self).post_commit()
     }
 
     fn try_merge(&mut self, other: &mut dyn DynHook) -> bool {
@@ -87,51 +117,67 @@ impl<H: PreCommitHook> DynHook for H {
 
 // --- Storage ---
 
-pub struct PreCommitHooks {
+pub struct CommitHooks {
     hooks: HashMap<TypeId, Vec<Box<dyn DynHook>>>,
 }
 
-impl PreCommitHooks {
+impl CommitHooks {
     pub fn new() -> Self {
         Self {
             hooks: HashMap::new(),
         }
     }
 
-    pub(super) fn add<H: PreCommitHook>(&mut self, hook: H) {
+    pub(super) fn add<H: CommitHook>(&mut self, hook: H) {
         let type_id = TypeId::of::<H>();
         let hooks_vec = self.hooks.entry(type_id).or_default();
 
         let mut new_hook: Box<dyn DynHook> = Box::new(hook);
 
-        // Try to merge with the last existing hook of this type
         if let Some(last) = hooks_vec.last_mut() {
             if last.try_merge(new_hook.as_mut()) {
-                return; // Merged successfully, new_hook is dropped
+                return;
             }
         }
 
-        // Not merged (or no existing hooks), add as separate entry
         hooks_vec.push(new_hook);
     }
 
-    pub(super) async fn execute(
+    pub(super) async fn execute_pre(
         mut self,
         op: &mut impl AtomicOperation,
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<PostCommitHooks, sqlx::Error> {
         let mut op = HookOperation::new(op);
+        let mut post_hooks = Vec::new();
 
         for (_, hooks_vec) in self.hooks.drain() {
             for hook in hooks_vec {
-                op = hook.execute_boxed(op).await?;
+                let (new_op, hook) = hook.pre_commit_boxed(op).await?;
+                op = new_op;
+                post_hooks.push(hook);
             }
         }
-        Ok(())
+
+        Ok(PostCommitHooks { hooks: post_hooks })
     }
 }
 
-impl Default for PreCommitHooks {
+impl Default for CommitHooks {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// --- Post-commit execution ---
+
+pub struct PostCommitHooks {
+    hooks: Vec<Box<dyn DynHook>>,
+}
+
+impl PostCommitHooks {
+    pub(super) fn execute(self) {
+        for hook in self.hooks {
+            hook.post_commit_boxed();
+        }
     }
 }

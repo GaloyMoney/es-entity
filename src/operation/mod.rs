@@ -14,7 +14,7 @@ use sqlx::{Acquire, PgPool, Postgres, Transaction};
 pub struct DbOp<'c> {
     tx: Transaction<'c, Postgres>,
     now: Option<chrono::DateTime<chrono::Utc>>,
-    pre_commit_hooks: Option<hooks::PreCommitHooks>,
+    commit_hooks: Option<hooks::CommitHooks>,
 }
 
 impl<'c> DbOp<'c> {
@@ -22,7 +22,7 @@ impl<'c> DbOp<'c> {
         Self {
             tx,
             now: time,
-            pre_commit_hooks: Some(hooks::PreCommitHooks::new()),
+            commit_hooks: Some(hooks::CommitHooks::new()),
         }
     }
 
@@ -86,9 +86,10 @@ impl<'c> DbOp<'c> {
 
     /// Commits the inner transaction.
     pub async fn commit(mut self) -> Result<(), sqlx::Error> {
-        let pre_commit_hooks = self.pre_commit_hooks.take().expect("no hooks");
-        pre_commit_hooks.execute(&mut self).await?;
+        let commit_hooks = self.commit_hooks.take().expect("no hooks");
+        let post_hooks = commit_hooks.execute_pre(&mut self).await?;
         self.tx.commit().await?;
+        post_hooks.execute();
         Ok(())
     }
 
@@ -107,8 +108,8 @@ impl<'o> AtomicOperation for DbOp<'o> {
         self.tx.as_executor()
     }
 
-    fn add_pre_commit_hook<H: hooks::PreCommitHook>(&mut self, hook: H) -> bool {
-        self.pre_commit_hooks.as_mut().expect("no hooks").add(hook);
+    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> bool {
+        self.commit_hooks.as_mut().expect("no hooks").add(hook);
         true
     }
 }
@@ -169,8 +170,8 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
         self.inner.as_executor()
     }
 
-    fn add_pre_commit_hook<H: hooks::PreCommitHook>(&mut self, hook: H) -> bool {
-        self.inner.add_pre_commit_hook(hook)
+    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> bool {
+        self.inner.add_commit_hook(hook)
     }
 }
 
@@ -211,9 +212,9 @@ pub trait AtomicOperation: Send {
     /// there is no variance in the return type - so its fine.
     fn as_executor(&mut self) -> &mut sqlx::PgConnection;
 
-    /// Registers a pre-commit hook.
+    /// Registers a commit hook that will run pre_commit before and post_commit after the transaction commits.
     /// Returns true if the hook was registered, false if hooks are not supported.
-    fn add_pre_commit_hook<H: hooks::PreCommitHook>(&mut self, _hook: H) -> bool {
+    fn add_commit_hook<H: hooks::CommitHook>(&mut self, _hook: H) -> bool {
         false
     }
 }
