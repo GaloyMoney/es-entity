@@ -15,7 +15,7 @@ pub struct HookOperation<'c> {
 }
 
 impl<'c> HookOperation<'c> {
-    pub(super) fn new(op: &'c mut impl AtomicOperation) -> Self {
+    fn new(op: &'c mut impl AtomicOperation) -> Self {
         Self {
             now: op.now(),
             conn: op.as_executor(),
@@ -36,8 +36,8 @@ impl<'c> AtomicOperation for HookOperation<'c> {
 // --- Pre-commit result type ---
 
 pub struct PreCommitRet<'c, H> {
-    pub(crate) op: HookOperation<'c>,
-    pub(crate) hook: H,
+    op: HookOperation<'c>,
+    hook: H,
 }
 
 impl<'c, H> PreCommitRet<'c, H> {
@@ -69,6 +69,19 @@ pub trait CommitHook: Send + 'static + Sized {
     /// Returns false if not merged (both will execute separately).
     fn merge(&mut self, _other: &mut Self) -> bool {
         false
+    }
+
+    /// Execute the hook immediately.
+    /// Useful when `add_commit_hook` returns false (hooks not supported).
+    fn force_execute_pre_commit(
+        self,
+        op: &mut impl AtomicOperation,
+    ) -> impl Future<Output = Result<(), sqlx::Error>> + Send {
+        async {
+            let hook_op = HookOperation::new(op);
+            self.pre_commit(hook_op).await?;
+            Ok(())
+        }
     }
 }
 

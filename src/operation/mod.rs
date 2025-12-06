@@ -108,9 +108,9 @@ impl<'o> AtomicOperation for DbOp<'o> {
         self.tx.as_executor()
     }
 
-    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> bool {
+    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
         self.commit_hooks.as_mut().expect("no hooks").add(hook);
-        true
+        Ok(())
     }
 }
 
@@ -170,7 +170,7 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
         self.inner.as_executor()
     }
 
-    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> bool {
+    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
         self.inner.add_commit_hook(hook)
     }
 }
@@ -214,8 +214,8 @@ pub trait AtomicOperation: Send {
 
     /// Registers a commit hook that will run pre_commit before and post_commit after the transaction commits.
     /// Returns true if the hook was registered, false if hooks are not supported.
-    fn add_commit_hook<H: hooks::CommitHook>(&mut self, _hook: H) -> bool {
-        false
+    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
+        Err(hook)
     }
 }
 

@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 // --- Pre-commit only hook ---
 
+#[derive(Debug)]
 struct PreCommitTracker(Arc<Mutex<bool>>);
 
 impl CommitHook for PreCommitTracker {
@@ -25,6 +26,7 @@ impl CommitHook for PreCommitTracker {
 
 // --- Post-commit only hook ---
 
+#[derive(Debug)]
 struct PostCommitTracker(Arc<Mutex<bool>>);
 
 impl CommitHook for PostCommitTracker {
@@ -35,6 +37,7 @@ impl CommitHook for PostCommitTracker {
 
 // --- Both pre and post commit ---
 
+#[derive(Debug)]
 struct FullCommitHook {
     data: String,
     pre_result: Arc<Mutex<String>>,
@@ -57,6 +60,7 @@ impl CommitHook for FullCommitHook {
 
 // --- Mergeable hook ---
 
+#[derive(Debug)]
 struct MergeableEvents {
     events: Vec<String>,
     pre_result: Arc<Mutex<Vec<String>>>,
@@ -84,6 +88,7 @@ impl CommitHook for MergeableEvents {
 
 // --- Non-mergeable hook ---
 
+#[derive(Debug)]
 struct NonMergeableHook {
     pre_count: Arc<Mutex<i32>>,
     post_count: Arc<Mutex<i32>>,
@@ -111,7 +116,8 @@ async fn pre_commit_hook_executes_before_commit() -> anyhow::Result<()> {
     let mut op = DbOp::init(&pool).await?;
 
     let executed = Arc::new(Mutex::new(false));
-    op.add_commit_hook(PreCommitTracker(executed.clone()));
+    op.add_commit_hook(PreCommitTracker(executed.clone()))
+        .unwrap();
 
     assert!(!*executed.lock().unwrap());
     op.commit().await?;
@@ -126,7 +132,8 @@ async fn post_commit_hook_executes_after_commit() -> anyhow::Result<()> {
     let mut op = DbOp::init(&pool).await?;
 
     let executed = Arc::new(Mutex::new(false));
-    op.add_commit_hook(PostCommitTracker(executed.clone()));
+    op.add_commit_hook(PostCommitTracker(executed.clone()))
+        .unwrap();
 
     assert!(!*executed.lock().unwrap());
     op.commit().await?;
@@ -147,7 +154,8 @@ async fn both_pre_and_post_commit_execute() -> anyhow::Result<()> {
         data: "test".to_string(),
         pre_result: pre_result.clone(),
         post_result: post_result.clone(),
-    });
+    })
+    .unwrap();
 
     op.commit().await?;
 
@@ -169,12 +177,14 @@ async fn hooks_merge_when_returning_true() -> anyhow::Result<()> {
         events: vec!["e1".into()],
         pre_result: pre_result.clone(),
         post_result: post_result.clone(),
-    });
+    })
+    .unwrap();
     op.add_commit_hook(MergeableEvents {
         events: vec!["e2".into(), "e3".into()],
         pre_result: pre_result.clone(),
         post_result: post_result.clone(),
-    });
+    })
+    .unwrap();
 
     op.commit().await?;
 
@@ -195,15 +205,18 @@ async fn hooks_execute_separately_when_not_merged() -> anyhow::Result<()> {
     op.add_commit_hook(NonMergeableHook {
         pre_count: pre_count.clone(),
         post_count: post_count.clone(),
-    });
+    })
+    .unwrap();
     op.add_commit_hook(NonMergeableHook {
         pre_count: pre_count.clone(),
         post_count: post_count.clone(),
-    });
+    })
+    .unwrap();
     op.add_commit_hook(NonMergeableHook {
         pre_count: pre_count.clone(),
         post_count: post_count.clone(),
-    });
+    })
+    .unwrap();
 
     op.commit().await?;
 
@@ -221,6 +234,7 @@ async fn hook_can_access_cached_time() -> anyhow::Result<()> {
 
     let captured_time = op.now();
 
+    #[derive(Debug)]
     struct TimeCapture(Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>);
 
     impl CommitHook for TimeCapture {
@@ -234,7 +248,7 @@ async fn hook_can_access_cached_time() -> anyhow::Result<()> {
     }
 
     let result = Arc::new(Mutex::new(None));
-    op.add_commit_hook(TimeCapture(result.clone()));
+    op.add_commit_hook(TimeCapture(result.clone())).unwrap();
 
     op.commit().await?;
 
