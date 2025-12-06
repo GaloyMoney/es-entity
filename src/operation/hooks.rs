@@ -1,4 +1,9 @@
-use std::{any::Any, collections::HashMap, future::Future, pin::Pin};
+use std::{
+    any::{Any, TypeId},
+    collections::HashMap,
+    future::Future,
+    pin::Pin,
+};
 
 use super::AtomicOperation;
 
@@ -28,37 +33,62 @@ impl<'c> AtomicOperation for HookOperation<'c> {
     }
 }
 
-// --- Type-erased storage ---
+// --- User-facing trait ---
 
-type ErasedExecutor = Box<
-    dyn for<'c> FnOnce(HookOperation<'c>) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>>
-        + Send,
->;
+pub trait PreCommitHook: Send + 'static + Sized {
+    fn execute(
+        self,
+        op: HookOperation<'_>,
+    ) -> impl Future<Output = Result<HookOperation<'_>, sqlx::Error>> + Send;
 
-type ErasedExecutorWithData = Box<
-    dyn for<'c> FnOnce(
-            HookOperation<'c>,
-            Box<dyn Any + Send>,
-        ) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>>
-        + Send,
->;
-
-type ErasedMerger =
-    Box<dyn Fn(Box<dyn Any + Send>, Box<dyn Any + Send>) -> Box<dyn Any + Send> + Send>;
-
-enum HookStorage {
-    Individual(Vec<ErasedExecutor>),
-    Merged {
-        data: Box<dyn Any + Send>,
-        executor: ErasedExecutorWithData,
-        merger: ErasedMerger,
-    },
+    /// Try to merge `other` into `self`.
+    /// Returns true if merged (other will be dropped).
+    /// Returns false if not merged (both will execute separately).
+    /// Default returns false.
+    fn merge(&mut self, other: &mut Self) -> bool {
+        let _ = other;
+        false
+    }
 }
 
-// --- PreCommitHooks ---
+// --- Object-safe internal trait ---
+
+trait DynHook: Send {
+    fn execute_boxed<'c>(
+        self: Box<Self>,
+        op: HookOperation<'c>,
+    ) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>>;
+
+    fn try_merge(&mut self, other: &mut dyn DynHook) -> bool;
+
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
+
+impl<H: PreCommitHook> DynHook for H {
+    fn execute_boxed<'c>(
+        self: Box<Self>,
+        op: HookOperation<'c>,
+    ) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>> {
+        Box::pin((*self).execute(op))
+    }
+
+    fn try_merge(&mut self, other: &mut dyn DynHook) -> bool {
+        let other_h = other
+            .as_any_mut()
+            .downcast_mut::<H>()
+            .expect("hook type mismatch");
+        self.merge(other_h)
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+// --- Storage ---
 
 pub struct PreCommitHooks {
-    hooks: HashMap<&'static str, HookStorage>,
+    hooks: HashMap<TypeId, Vec<Box<dyn DynHook>>>,
 }
 
 impl PreCommitHooks {
@@ -68,51 +98,21 @@ impl PreCommitHooks {
         }
     }
 
-    fn add_individual(&mut self, hook_name: &'static str, executor: ErasedExecutor) {
-        match self.hooks.get_mut(hook_name) {
-            None => {
-                self.hooks
-                    .insert(hook_name, HookStorage::Individual(vec![executor]));
-            }
-            Some(HookStorage::Individual(executors)) => {
-                executors.push(executor);
-            }
-            Some(HookStorage::Merged { .. }) => {
-                panic!("hook key mismatch: expected individual hook, found merged");
-            }
-        }
-    }
+    pub(super) fn add<H: PreCommitHook>(&mut self, hook: H) {
+        let type_id = TypeId::of::<H>();
+        let hooks_vec = self.hooks.entry(type_id).or_default();
 
-    fn add_merged(
-        &mut self,
-        hook_name: &'static str,
-        executor: ErasedExecutorWithData,
-        data: Box<dyn Any + Send>,
-        merger: ErasedMerger,
-    ) {
-        match self.hooks.get_mut(&hook_name) {
-            None => {
-                self.hooks.insert(
-                    hook_name,
-                    HookStorage::Merged {
-                        data,
-                        executor,
-                        merger,
-                    },
-                );
-            }
-            Some(HookStorage::Merged {
-                data: existing,
-                merger,
-                ..
-            }) => {
-                let old = std::mem::replace(existing, Box::new(()));
-                *existing = merger(old, data);
-            }
-            Some(HookStorage::Individual(_)) => {
-                panic!("hook key mismatch: expected merged hook, found individual");
+        let mut new_hook: Box<dyn DynHook> = Box::new(hook);
+
+        // Try to merge with the last existing hook of this type
+        if let Some(last) = hooks_vec.last_mut() {
+            if last.try_merge(new_hook.as_mut()) {
+                return; // Merged successfully, new_hook is dropped
             }
         }
+
+        // Not merged (or no existing hooks), add as separate entry
+        hooks_vec.push(new_hook);
     }
 
     pub(super) async fn execute(
@@ -121,16 +121,9 @@ impl PreCommitHooks {
     ) -> Result<(), sqlx::Error> {
         let mut op = HookOperation::new(op);
 
-        for (_, storage) in self.hooks.drain() {
-            match storage {
-                HookStorage::Individual(executors) => {
-                    for executor in executors {
-                        op = executor(op).await?;
-                    }
-                }
-                HookStorage::Merged { data, executor, .. } => {
-                    op = executor(op, data).await?;
-                }
+        for (_, hooks_vec) in self.hooks.drain() {
+            for hook in hooks_vec {
+                op = hook.execute_boxed(op).await?;
             }
         }
         Ok(())
@@ -140,99 +133,5 @@ impl PreCommitHooks {
 impl Default for PreCommitHooks {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// --- Hook types (use BoxFuture directly, no generic Fut) ---
-
-pub struct PreCommitHook<H> {
-    hook: H,
-}
-
-impl<H> PreCommitHook<H>
-where
-    H: for<'c> FnOnce(HookOperation<'c>) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>>
-        + Send
-        + 'static,
-{
-    pub fn new(hook: H) -> Self {
-        Self { hook }
-    }
-}
-
-pub struct PreCommitHookWithData<H, D, M> {
-    hook: H,
-    data: D,
-    merge: M,
-}
-
-impl<H, D, M> PreCommitHookWithData<H, D, M>
-where
-    D: Send + 'static,
-    H: for<'c> FnOnce(
-            HookOperation<'c>,
-            D,
-        ) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>>
-        + Send
-        + 'static,
-    M: Fn(D, D) -> D + Send + 'static,
-{
-    pub fn new(hook: H, data: D, merge: M) -> Self {
-        Self { hook, data, merge }
-    }
-}
-
-// --- IntoPreCommitHook trait ---
-
-pub trait IntoPreCommitHook: Send {
-    fn register(self, hook_name: &'static str, hooks: &mut PreCommitHooks);
-}
-
-impl<H> IntoPreCommitHook for PreCommitHook<H>
-where
-    H: for<'c> FnOnce(HookOperation<'c>) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>>
-        + Send
-        + 'static,
-{
-    fn register(self, hook_name: &'static str, hooks: &mut PreCommitHooks) {
-        hooks.add_individual(hook_name, Box::new(self.hook));
-    }
-}
-
-impl<H, D, M> IntoPreCommitHook for PreCommitHookWithData<H, D, M>
-where
-    D: Send + 'static,
-    H: for<'c> FnOnce(
-            HookOperation<'c>,
-            D,
-        ) -> BoxFuture<'c, Result<HookOperation<'c>, sqlx::Error>>
-        + Send
-        + 'static,
-    M: Fn(D, D) -> D + Send + 'static,
-{
-    fn register(self, hook_name: &'static str, hooks: &mut PreCommitHooks) {
-        let PreCommitHookWithData { hook, data, merge } = self;
-
-        let executor: ErasedExecutorWithData = Box::new(move |conn, boxed_data| {
-            let data = *boxed_data.downcast::<D>().unwrap();
-            hook(conn, data)
-        });
-        let merger: ErasedMerger = Box::new(move |a, b| {
-            let a = *a.downcast::<D>().unwrap();
-            let b = *b.downcast::<D>().unwrap();
-            Box::new(merge(a, b))
-        });
-        hooks.add_merged(hook_name, executor, Box::new(data), merger);
-    }
-}
-
-pub mod merge {
-    pub fn extend<T>(mut a: Vec<T>, b: Vec<T>) -> Vec<T> {
-        a.extend(b);
-        a
-    }
-
-    pub fn replace<T>(_: T, b: T) -> T {
-        b
     }
 }

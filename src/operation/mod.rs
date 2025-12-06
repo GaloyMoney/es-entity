@@ -107,12 +107,8 @@ impl<'o> AtomicOperation for DbOp<'o> {
         self.tx.as_executor()
     }
 
-    fn add_pre_commit_hook(
-        &mut self,
-        hook_name: &'static str,
-        hook: impl hooks::IntoPreCommitHook,
-    ) -> bool {
-        hook.register(hook_name, self.pre_commit_hooks.as_mut().expect("no hooks"));
+    fn add_pre_commit_hook<H: hooks::PreCommitHook>(&mut self, hook: H) -> bool {
+        self.pre_commit_hooks.as_mut().expect("no hooks").add(hook);
         true
     }
 }
@@ -173,12 +169,8 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
         self.inner.as_executor()
     }
 
-    fn add_pre_commit_hook(
-        &mut self,
-        hook_name: &'static str,
-        hook: impl hooks::IntoPreCommitHook,
-    ) -> bool {
-        self.inner.add_pre_commit_hook(hook_name, hook)
+    fn add_pre_commit_hook<H: hooks::PreCommitHook>(&mut self, hook: H) -> bool {
+        self.inner.add_pre_commit_hook(hook)
     }
 }
 
@@ -219,11 +211,9 @@ pub trait AtomicOperation: Send {
     /// there is no variance in the return type - so its fine.
     fn as_executor(&mut self) -> &mut sqlx::PgConnection;
 
-    fn add_pre_commit_hook(
-        &mut self,
-        _hook_name: &'static str,
-        _hook: impl hooks::IntoPreCommitHook,
-    ) -> bool {
+    /// Registers a pre-commit hook.
+    /// Returns true if the hook was registered, false if hooks are not supported.
+    fn add_pre_commit_hook<H: hooks::PreCommitHook>(&mut self, _hook: H) -> bool {
         false
     }
 }
