@@ -213,7 +213,7 @@ pub trait AtomicOperation: Send {
     fn as_executor(&mut self) -> &mut sqlx::PgConnection;
 
     /// Registers a commit hook that will run pre_commit before and post_commit after the transaction commits.
-    /// Returns true if the hook was registered, false if hooks are not supported.
+    /// Returns Ok(()) if the hook was registered, Err(hook) if hooks are not supported.
     fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
         Err(hook)
     }

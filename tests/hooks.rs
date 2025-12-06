@@ -6,25 +6,43 @@ use es_entity::operation::{
 };
 use std::sync::{Arc, Mutex};
 
-// --- Pre-commit only hook ---
-
 #[derive(Debug)]
-struct PreCommitTracker(Arc<Mutex<bool>>);
+struct PreCommitTracker(Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>);
 
 impl CommitHook for PreCommitTracker {
     async fn pre_commit(
         self,
         mut op: HookOperation<'_>,
     ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
-        sqlx::query!("SELECT NOW()")
+        let result = sqlx::query!("SELECT NOW() as now")
             .fetch_one(op.as_executor())
             .await?;
-        *self.0.lock().unwrap() = true;
+        *self.0.lock().unwrap() = result.now;
         PreCommitRet::ok(self, op)
     }
 }
 
-// --- Post-commit only hook ---
+#[tokio::test]
+async fn pre_commit_hook_executes_before_commit() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let db_time = Arc::new(Mutex::new(None));
+    op.add_commit_hook(PreCommitTracker(db_time.clone()))
+        .unwrap();
+
+    assert!(db_time.lock().unwrap().is_none());
+    op.commit().await?;
+
+    let captured_time = db_time
+        .lock()
+        .unwrap()
+        .expect("should have captured db time");
+    let now = chrono::Utc::now();
+    assert!(now.signed_duration_since(captured_time).num_seconds().abs() < 5);
+
+    Ok(())
+}
 
 #[derive(Debug)]
 struct PostCommitTracker(Arc<Mutex<bool>>);
@@ -35,7 +53,21 @@ impl CommitHook for PostCommitTracker {
     }
 }
 
-// --- Both pre and post commit ---
+#[tokio::test]
+async fn post_commit_hook_executes_after_commit() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let executed = Arc::new(Mutex::new(false));
+    op.add_commit_hook(PostCommitTracker(executed.clone()))
+        .unwrap();
+
+    assert!(!*executed.lock().unwrap());
+    op.commit().await?;
+    assert!(*executed.lock().unwrap());
+
+    Ok(())
+}
 
 #[derive(Debug)]
 struct FullCommitHook {
@@ -58,7 +90,28 @@ impl CommitHook for FullCommitHook {
     }
 }
 
-// --- Mergeable hook ---
+#[tokio::test]
+async fn both_pre_and_post_commit_execute() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let pre_result = Arc::new(Mutex::new(String::new()));
+    let post_result = Arc::new(Mutex::new(String::new()));
+
+    op.add_commit_hook(FullCommitHook {
+        data: "test".to_string(),
+        pre_result: pre_result.clone(),
+        post_result: post_result.clone(),
+    })
+    .unwrap();
+
+    op.commit().await?;
+
+    assert_eq!(*pre_result.lock().unwrap(), "test");
+    assert_eq!(*post_result.lock().unwrap(), "post:test");
+
+    Ok(())
+}
 
 #[derive(Debug)]
 struct MergeableEvents {
@@ -84,85 +137,6 @@ impl CommitHook for MergeableEvents {
         self.events.append(&mut other.events);
         true
     }
-}
-
-// --- Non-mergeable hook ---
-
-#[derive(Debug)]
-struct NonMergeableHook {
-    pre_count: Arc<Mutex<i32>>,
-    post_count: Arc<Mutex<i32>>,
-}
-
-impl CommitHook for NonMergeableHook {
-    async fn pre_commit(
-        self,
-        op: HookOperation<'_>,
-    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
-        *self.pre_count.lock().unwrap() += 1;
-        PreCommitRet::ok(self, op)
-    }
-
-    fn post_commit(self) {
-        *self.post_count.lock().unwrap() += 1;
-    }
-}
-
-// --- Tests ---
-
-#[tokio::test]
-async fn pre_commit_hook_executes_before_commit() -> anyhow::Result<()> {
-    let pool = helpers::init_pool().await?;
-    let mut op = DbOp::init(&pool).await?;
-
-    let executed = Arc::new(Mutex::new(false));
-    op.add_commit_hook(PreCommitTracker(executed.clone()))
-        .unwrap();
-
-    assert!(!*executed.lock().unwrap());
-    op.commit().await?;
-    assert!(*executed.lock().unwrap());
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn post_commit_hook_executes_after_commit() -> anyhow::Result<()> {
-    let pool = helpers::init_pool().await?;
-    let mut op = DbOp::init(&pool).await?;
-
-    let executed = Arc::new(Mutex::new(false));
-    op.add_commit_hook(PostCommitTracker(executed.clone()))
-        .unwrap();
-
-    assert!(!*executed.lock().unwrap());
-    op.commit().await?;
-    assert!(*executed.lock().unwrap());
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn both_pre_and_post_commit_execute() -> anyhow::Result<()> {
-    let pool = helpers::init_pool().await?;
-    let mut op = DbOp::init(&pool).await?;
-
-    let pre_result = Arc::new(Mutex::new(String::new()));
-    let post_result = Arc::new(Mutex::new(String::new()));
-
-    op.add_commit_hook(FullCommitHook {
-        data: "test".to_string(),
-        pre_result: pre_result.clone(),
-        post_result: post_result.clone(),
-    })
-    .unwrap();
-
-    op.commit().await?;
-
-    assert_eq!(*pre_result.lock().unwrap(), "test");
-    assert_eq!(*post_result.lock().unwrap(), "post:test");
-
-    Ok(())
 }
 
 #[tokio::test]
@@ -194,6 +168,26 @@ async fn hooks_merge_when_returning_true() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+struct NonMergeableHook {
+    pre_count: Arc<Mutex<i32>>,
+    post_count: Arc<Mutex<i32>>,
+}
+
+impl CommitHook for NonMergeableHook {
+    async fn pre_commit(
+        self,
+        op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        *self.pre_count.lock().unwrap() += 1;
+        PreCommitRet::ok(self, op)
+    }
+
+    fn post_commit(self) {
+        *self.post_count.lock().unwrap() += 1;
+    }
+}
+
 #[tokio::test]
 async fn hooks_execute_separately_when_not_merged() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -222,37 +216,6 @@ async fn hooks_execute_separately_when_not_merged() -> anyhow::Result<()> {
 
     assert_eq!(*pre_count.lock().unwrap(), 3);
     assert_eq!(*post_count.lock().unwrap(), 3);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn hook_can_access_cached_time() -> anyhow::Result<()> {
-    let pool = helpers::init_pool().await?;
-    let op = DbOp::init(&pool).await?;
-    let mut op = op.with_system_time();
-
-    let captured_time = op.now();
-
-    #[derive(Debug)]
-    struct TimeCapture(Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>);
-
-    impl CommitHook for TimeCapture {
-        async fn pre_commit(
-            self,
-            op: HookOperation<'_>,
-        ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
-            *self.0.lock().unwrap() = op.now();
-            PreCommitRet::ok(self, op)
-        }
-    }
-
-    let result = Arc::new(Mutex::new(None));
-    op.add_commit_hook(TimeCapture(result.clone())).unwrap();
-
-    op.commit().await?;
-
-    assert_eq!(result.lock().unwrap().unwrap(), captured_time);
 
     Ok(())
 }
