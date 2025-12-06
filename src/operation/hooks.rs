@@ -72,11 +72,10 @@ pub trait CommitHook: Send + 'static + Sized {
     fn force_execute_pre_commit(
         self,
         op: &mut impl AtomicOperation,
-    ) -> impl Future<Output = Result<(), sqlx::Error>> + Send {
+    ) -> impl Future<Output = Result<Self, sqlx::Error>> + Send {
         async {
             let hook_op = HookOperation::new(op);
-            self.pre_commit(hook_op).await?;
-            Ok(())
+            Ok(self.pre_commit(hook_op).await?.hook)
         }
     }
 }
