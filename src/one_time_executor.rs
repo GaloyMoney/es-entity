@@ -113,6 +113,20 @@ pub trait IntoOneTimeExecutorAt<'c> {
         Self: 'c;
 }
 
+impl<'c, E> IntoOneTimeExecutorAt<'c> for OneTimeExecutor<'c, E>
+where
+    E: sqlx::PgExecutor<'c> + 'c,
+{
+    type Executor = E;
+
+    fn into_executor(self) -> OneTimeExecutor<'c, Self::Executor>
+    where
+        Self: 'c,
+    {
+        self
+    }
+}
+
 impl<'c> IntoOneTimeExecutorAt<'c> for &sqlx::PgPool {
     type Executor = &'c sqlx::PgPool;
 
