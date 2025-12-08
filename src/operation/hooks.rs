@@ -9,41 +9,6 @@ use super::AtomicOperation;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-pub struct HookOperation<'c> {
-    now: Option<chrono::DateTime<chrono::Utc>>,
-    conn: &'c mut sqlx::PgConnection,
-}
-
-impl<'c> HookOperation<'c> {
-    fn new(op: &'c mut impl AtomicOperation) -> Self {
-        Self {
-            now: op.now(),
-            conn: op.as_executor(),
-        }
-    }
-}
-
-impl<'c> AtomicOperation for HookOperation<'c> {
-    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.now
-    }
-
-    fn as_executor(&mut self) -> &mut sqlx::PgConnection {
-        self.conn
-    }
-}
-
-pub struct PreCommitRet<'c, H> {
-    op: HookOperation<'c>,
-    hook: H,
-}
-
-impl<'c, H> PreCommitRet<'c, H> {
-    pub fn ok(hook: H, op: HookOperation<'c>) -> Result<Self, sqlx::Error> {
-        Ok(Self { op, hook })
-    }
-}
-
 pub trait CommitHook: Send + 'static + Sized {
     /// Called before the transaction commits. Can perform database operations.
     /// Returns Self so it can be used in post_commit.
@@ -77,6 +42,41 @@ pub trait CommitHook: Send + 'static + Sized {
             let hook_op = HookOperation::new(op);
             Ok(self.pre_commit(hook_op).await?.hook)
         }
+    }
+}
+
+pub struct HookOperation<'c> {
+    now: Option<chrono::DateTime<chrono::Utc>>,
+    conn: &'c mut sqlx::PgConnection,
+}
+
+impl<'c> HookOperation<'c> {
+    fn new(op: &'c mut impl AtomicOperation) -> Self {
+        Self {
+            now: op.now(),
+            conn: op.as_executor(),
+        }
+    }
+}
+
+impl<'c> AtomicOperation for HookOperation<'c> {
+    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.now
+    }
+
+    fn as_executor(&mut self) -> &mut sqlx::PgConnection {
+        self.conn
+    }
+}
+
+pub struct PreCommitRet<'c, H> {
+    op: HookOperation<'c>,
+    hook: H,
+}
+
+impl<'c, H> PreCommitRet<'c, H> {
+    pub fn ok(hook: H, op: HookOperation<'c>) -> Result<Self, sqlx::Error> {
+        Ok(Self { op, hook })
     }
 }
 
