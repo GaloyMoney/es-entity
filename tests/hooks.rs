@@ -7,9 +7,13 @@ use es_entity::operation::{
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]
-struct PreCommitTracker(Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>);
+struct FullCommitHook {
+    data: String,
+    pre_result: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
+    post_result: Arc<Mutex<String>>,
+}
 
-impl CommitHook for PreCommitTracker {
+impl CommitHook for FullCommitHook {
     async fn pre_commit(
         self,
         mut op: HookOperation<'_>,
@@ -17,71 +21,7 @@ impl CommitHook for PreCommitTracker {
         let result = sqlx::query!("SELECT NOW() as now")
             .fetch_one(op.as_executor())
             .await?;
-        *self.0.lock().unwrap() = result.now;
-        PreCommitRet::ok(self, op)
-    }
-}
-
-#[tokio::test]
-async fn pre_commit_hook_executes_before_commit() -> anyhow::Result<()> {
-    let pool = helpers::init_pool().await?;
-    let mut op = DbOp::init(&pool).await?;
-
-    let db_time = Arc::new(Mutex::new(None));
-    op.add_commit_hook(PreCommitTracker(db_time.clone()))
-        .unwrap();
-
-    assert!(db_time.lock().unwrap().is_none());
-    op.commit().await?;
-
-    let captured_time = db_time
-        .lock()
-        .unwrap()
-        .expect("should have captured db time");
-    let now = chrono::Utc::now();
-    assert!(now.signed_duration_since(captured_time).num_seconds().abs() < 5);
-
-    Ok(())
-}
-
-#[derive(Debug)]
-struct PostCommitTracker(Arc<Mutex<bool>>);
-
-impl CommitHook for PostCommitTracker {
-    fn post_commit(self) {
-        *self.0.lock().unwrap() = true;
-    }
-}
-
-#[tokio::test]
-async fn post_commit_hook_executes_after_commit() -> anyhow::Result<()> {
-    let pool = helpers::init_pool().await?;
-    let mut op = DbOp::init(&pool).await?;
-
-    let executed = Arc::new(Mutex::new(false));
-    op.add_commit_hook(PostCommitTracker(executed.clone()))
-        .unwrap();
-
-    assert!(!*executed.lock().unwrap());
-    op.commit().await?;
-    assert!(*executed.lock().unwrap());
-
-    Ok(())
-}
-
-#[derive(Debug)]
-struct FullCommitHook {
-    data: String,
-    pre_result: Arc<Mutex<String>>,
-    post_result: Arc<Mutex<String>>,
-}
-
-impl CommitHook for FullCommitHook {
-    async fn pre_commit(
-        self,
-        op: HookOperation<'_>,
-    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
-        *self.pre_result.lock().unwrap() = self.data.clone();
+        *self.pre_result.lock().unwrap() = result.now;
         PreCommitRet::ok(self, op)
     }
 
@@ -95,7 +35,7 @@ async fn both_pre_and_post_commit_execute() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let mut op = DbOp::init(&pool).await?;
 
-    let pre_result = Arc::new(Mutex::new(String::new()));
+    let pre_result = Arc::new(Mutex::new(None));
     let post_result = Arc::new(Mutex::new(String::new()));
 
     op.add_commit_hook(FullCommitHook {
@@ -105,9 +45,15 @@ async fn both_pre_and_post_commit_execute() -> anyhow::Result<()> {
     })
     .unwrap();
 
+    assert!(pre_result.lock().unwrap().is_none());
     op.commit().await?;
 
-    assert_eq!(*pre_result.lock().unwrap(), "test");
+    let captured_time = pre_result
+        .lock()
+        .unwrap()
+        .expect("should have captured db time");
+    let now = chrono::Utc::now();
+    assert!(now.signed_duration_since(captured_time).num_seconds().abs() < 5);
     assert_eq!(*post_result.lock().unwrap(), "post:test");
 
     Ok(())
