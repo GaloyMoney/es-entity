@@ -82,6 +82,7 @@ impl<'c, H> PreCommitRet<'c, H> {
 
 // --- Object-safe internal trait ---
 trait DynHook: Send {
+    #[allow(clippy::type_complexity)]
     fn pre_commit_boxed<'c>(
         self: Box<Self>,
         op: HookOperation<'c>,
@@ -139,10 +140,10 @@ impl CommitHooks {
 
         let mut new_hook: Box<dyn DynHook> = Box::new(hook);
 
-        if let Some(last) = hooks_vec.last_mut() {
-            if last.try_merge(new_hook.as_mut()) {
-                return;
-            }
+        if let Some(last) = hooks_vec.last_mut()
+            && last.try_merge(new_hook.as_mut())
+        {
+            return;
         }
 
         hooks_vec.push(new_hook);
