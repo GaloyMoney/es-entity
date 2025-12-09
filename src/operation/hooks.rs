@@ -101,7 +101,7 @@ impl<H: CommitHook> DynHook for H {
         op: HookOperation<'c>,
     ) -> BoxFuture<'c, Result<(HookOperation<'c>, Box<dyn DynHook>), sqlx::Error>> {
         Box::pin(async move {
-            let ret = (*self).pre_commit(op).await?;
+            let ret = self.pre_commit(op).await?;
             Ok((ret.op, Box::new(ret.hook) as Box<dyn DynHook>))
         })
     }
