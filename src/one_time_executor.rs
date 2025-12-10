@@ -42,7 +42,7 @@ where
         }
     }
 
-    pub fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    pub fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.now
     }
 

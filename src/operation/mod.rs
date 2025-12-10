@@ -1,8 +1,11 @@
 //! Handle execution of database operations and transactions.
 
 pub mod hooks;
+mod with_time;
 
 use sqlx::{Acquire, PgPool, Postgres, Transaction};
+
+pub use with_time::*;
 
 /// Default return type of the derived EsRepo::begin_op().
 ///
@@ -75,7 +78,7 @@ impl<'c> DbOp<'c> {
     }
 
     /// Returns the optionally cached [`chrono::DateTime`]
-    pub fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    pub fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.now
     }
 
@@ -101,7 +104,7 @@ impl<'c> DbOp<'c> {
 
 impl<'o> AtomicOperation for DbOp<'o> {
     fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.now()
+        self.maybe_now()
     }
 
     fn as_executor(&mut self) -> &mut sqlx::PgConnection {
@@ -172,6 +175,12 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
 
     fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
         self.inner.add_commit_hook(hook)
+    }
+}
+
+impl<'o> AtomicOperationWithTime for DbOpWithTime<'o> {
+    fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        self.now
     }
 }
 
