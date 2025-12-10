@@ -119,7 +119,7 @@ impl ToTokens for CreateAllFn<'_> {
 
                     #arg_collection
 
-                    let now = op.now();
+                    let now = op.maybe_now();
                     sqlx::query(#query)
                        .bind(now)
                        #(#bindings)*
@@ -218,7 +218,7 @@ mod tests {
                         name_collection.push(name);
                     }
 
-                    let now = op.now();
+                    let now = op.maybe_now();
                     sqlx::query(
                         "INSERT INTO entities (created_at, id, name) SELECT COALESCE($1, NOW()), unnested.id, unnested.name FROM UNNEST($2, $3) AS unnested(id, name)")
                         .bind(now)

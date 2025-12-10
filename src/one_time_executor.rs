@@ -42,7 +42,7 @@ where
         }
     }
 
-    pub fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    pub fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.now
     }
 
@@ -148,7 +148,7 @@ where
     where
         Self: 'c,
     {
-        let now = self.now();
+        let now = self.maybe_now();
         OneTimeExecutor::new(self.as_executor(), now)
     }
 }
