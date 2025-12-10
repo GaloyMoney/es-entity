@@ -85,7 +85,7 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                 let mut all_types = Vec::new();
                 let mut all_ids: Vec<&#id_type> = Vec::new();
                 let mut all_sequences = Vec::new();
-                let now = op.now();
+                let now = op.maybe_now();
 
                 let mut n_events_map = std::collections::HashMap::new();
                 for events in all_events.iter_mut() {
@@ -168,7 +168,7 @@ mod tests {
                 let mut all_types = Vec::new();
                 let mut all_ids: Vec<&EntityId> = Vec::new();
                 let mut all_sequences = Vec::new();
-                let now = op.now();
+                let now = op.maybe_now();
 
                 let mut n_events_map = std::collections::HashMap::new();
                 for events in all_events.iter_mut() {
@@ -254,7 +254,7 @@ mod tests {
                 let mut all_types = Vec::new();
                 let mut all_ids: Vec<&EntityId> = Vec::new();
                 let mut all_sequences = Vec::new();
-                let now = op.now();
+                let now = op.maybe_now();
 
                 let mut n_events_map = std::collections::HashMap::new();
                 for events in all_events.iter_mut() {

@@ -80,7 +80,7 @@ impl ToTokens for PersistEventsFn<'_> {
                 let serialized_events = events.serialize_new_events();
                 #ctx_var
                 let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
-                let now = op.now();
+                let now = op.maybe_now();
 
                 let rows = Self::extract_concurrent_modification(
                     sqlx::query!(
@@ -146,7 +146,7 @@ mod tests {
                 let serialized_events = events.serialize_new_events();
                 let contexts = events.serialize_new_event_contexts();
                 let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
-                let now = op.now();
+                let now = op.maybe_now();
 
                 let rows = Self::extract_concurrent_modification(
                     sqlx::query!(
@@ -208,7 +208,7 @@ mod tests {
                 let offset = events.len_persisted();
                 let serialized_events = events.serialize_new_events();
                 let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
-                let now = op.now();
+                let now = op.maybe_now();
 
                 let rows = Self::extract_concurrent_modification(
                     sqlx::query!(

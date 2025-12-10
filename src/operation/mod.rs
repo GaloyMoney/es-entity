@@ -100,7 +100,7 @@ impl<'c> DbOp<'c> {
 }
 
 impl<'o> AtomicOperation for DbOp<'o> {
-    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.now()
     }
 
@@ -162,7 +162,7 @@ impl<'c> DbOpWithTime<'c> {
 }
 
 impl<'o> AtomicOperation for DbOpWithTime<'o> {
-    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         Some(self.now())
     }
 
@@ -190,7 +190,7 @@ impl<'c> From<DbOpWithTime<'c>> for Transaction<'c, Postgres> {
 /// See [`DbOp`] or [`DbOpWithTime`].
 pub trait AtomicOperation: Send {
     /// Function for querying when the operation is taking place - if it is cached.
-    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         None
     }
 

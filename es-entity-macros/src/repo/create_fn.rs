@@ -137,7 +137,7 @@ impl ToTokens for CreateFn<'_> {
                      sqlx::query!(
                          #query,
                          #(#args)*
-                         op.now()
+                         op.maybe_now()
                     )
                     .execute(op.as_executor())
                     .await?;
@@ -230,7 +230,7 @@ mod tests {
 
                     sqlx::query!("INSERT INTO entities (id, created_at) VALUES ($1, COALESCE($2, NOW()))",
                         id as &EntityId,
-                        op.now()
+                        op.maybe_now()
                     )
                     .execute(op.as_executor())
                     .await?;
@@ -321,7 +321,7 @@ mod tests {
                     sqlx::query!("INSERT INTO entities (id, name, created_at) VALUES ($1, $2, COALESCE($3, NOW()))",
                         id as &EntityId,
                         name as &String,
-                        op.now()
+                        op.maybe_now()
                     )
                     .execute(op.as_executor())
                     .await?;

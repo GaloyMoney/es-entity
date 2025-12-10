@@ -148,7 +148,7 @@ where
     where
         Self: 'c,
     {
-        let now = self.now();
+        let now = self.maybe_now();
         OneTimeExecutor::new(self.as_executor(), now)
     }
 }

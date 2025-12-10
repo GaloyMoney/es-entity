@@ -53,14 +53,14 @@ pub struct HookOperation<'c> {
 impl<'c> HookOperation<'c> {
     fn new(op: &'c mut impl AtomicOperation) -> Self {
         Self {
-            now: op.now(),
+            now: op.maybe_now(),
             conn: op.as_executor(),
         }
     }
 }
 
 impl<'c> AtomicOperation for HookOperation<'c> {
-    fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.now
     }
 
