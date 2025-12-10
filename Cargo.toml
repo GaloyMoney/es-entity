@@ -80,7 +80,7 @@ sqlx = { version = "0.8", default-features = false, features = ["macros", "runti
 tokio = { version = "1.48", features = ["rt-multi-thread", "macros"] }
 thiserror = "2.0"
 uuid = { version = "1.18", features = ["serde", "v7"] }
-im = { version = "15.1.0", features = ["serde"] }
+im = { version = "15.1", features = ["serde"] }
 pin-project = "1.1.10"
 tracing = { version = "0.1.41", default-features = false }
 tracing-opentelemetry = { version = "0.32.0", default-features = false }

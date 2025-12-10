@@ -25,6 +25,7 @@ pub struct OneTimeExecutor<'c, E>
 where
     E: sqlx::PgExecutor<'c>,
 {
+    now: Option<chrono::DateTime<chrono::Utc>>,
     executor: E,
     _phantom: std::marker::PhantomData<&'c ()>,
 }
@@ -33,11 +34,29 @@ impl<'c, E> OneTimeExecutor<'c, E>
 where
     E: sqlx::PgExecutor<'c>,
 {
-    pub fn new(executor: E) -> Self {
+    fn new(executor: E, now: Option<chrono::DateTime<chrono::Utc>>) -> Self {
         OneTimeExecutor {
             executor,
+            now,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    pub fn now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.now
+    }
+
+    /// Proxy call to `query.fetch_one` but guarantees the inner executor will only be used once.
+    pub async fn fetch_one<'q, F, O, A>(
+        self,
+        query: sqlx::query::Map<'q, sqlx::Postgres, F, A>,
+    ) -> Result<O, sqlx::Error>
+    where
+        F: FnMut(sqlx::postgres::PgRow) -> Result<O, sqlx::Error> + Send,
+        O: Send + Unpin,
+        A: 'q + Send + sqlx::IntoArguments<'q, sqlx::Postgres>,
+    {
+        query.fetch_one(self.executor).await
     }
 
     /// Proxy call to `query.fetch_all` but guarantees the inner executor will only be used once.
@@ -94,6 +113,20 @@ pub trait IntoOneTimeExecutorAt<'c> {
         Self: 'c;
 }
 
+impl<'c, E> IntoOneTimeExecutorAt<'c> for OneTimeExecutor<'c, E>
+where
+    E: sqlx::PgExecutor<'c> + 'c,
+{
+    type Executor = E;
+
+    fn into_executor(self) -> OneTimeExecutor<'c, Self::Executor>
+    where
+        Self: 'c,
+    {
+        self
+    }
+}
+
 impl<'c> IntoOneTimeExecutorAt<'c> for &sqlx::PgPool {
     type Executor = &'c sqlx::PgPool;
 
@@ -101,7 +134,7 @@ impl<'c> IntoOneTimeExecutorAt<'c> for &sqlx::PgPool {
     where
         Self: 'c,
     {
-        OneTimeExecutor::new(self)
+        OneTimeExecutor::new(self, None)
     }
 }
 
@@ -115,6 +148,7 @@ where
     where
         Self: 'c,
     {
-        OneTimeExecutor::new(self.as_executor())
+        let now = self.now();
+        OneTimeExecutor::new(self.as_executor(), now)
     }
 }

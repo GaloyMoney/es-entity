@@ -1,5 +1,7 @@
 //! Handle execution of database operations and transactions.
 
+pub mod hooks;
+
 use sqlx::{Acquire, PgPool, Postgres, Transaction};
 
 /// Default return type of the derived EsRepo::begin_op().
@@ -12,11 +14,16 @@ use sqlx::{Acquire, PgPool, Postgres, Transaction};
 pub struct DbOp<'c> {
     tx: Transaction<'c, Postgres>,
     now: Option<chrono::DateTime<chrono::Utc>>,
+    commit_hooks: Option<hooks::CommitHooks>,
 }
 
 impl<'c> DbOp<'c> {
     fn new(tx: Transaction<'c, Postgres>, time: Option<chrono::DateTime<chrono::Utc>>) -> Self {
-        Self { tx, now: time }
+        Self {
+            tx,
+            now: time,
+            commit_hooks: Some(hooks::CommitHooks::new()),
+        }
     }
 
     /// Initializes a transaction - defaults `now()` to `None` but will cache `sim_time::now()`
@@ -34,7 +41,7 @@ impl<'c> DbOp<'c> {
 
     /// Transitions to a [`DbOpWithTime`] with the given time cached.
     pub fn with_time(self, time: chrono::DateTime<chrono::Utc>) -> DbOpWithTime<'c> {
-        DbOpWithTime::new(self.tx, time)
+        DbOpWithTime::new(self, time)
     }
 
     /// Transitions to a [`DbOpWithTime`] using [`chrono::Utc::now()`] to populate
@@ -46,7 +53,7 @@ impl<'c> DbOp<'c> {
             chrono::Utc::now()
         };
 
-        DbOpWithTime::new(self.tx, time)
+        DbOpWithTime::new(self, time)
     }
 
     /// Transitions to a [`DbOpWithTime`] using
@@ -64,7 +71,7 @@ impl<'c> DbOp<'c> {
             res.now.expect("could not fetch now")
         };
 
-        Ok(DbOpWithTime::new(self.tx, time))
+        Ok(DbOpWithTime::new(self, time))
     }
 
     /// Returns the optionally cached [`chrono::DateTime`]
@@ -78,8 +85,11 @@ impl<'c> DbOp<'c> {
     }
 
     /// Commits the inner transaction.
-    pub async fn commit(self) -> Result<(), sqlx::Error> {
+    pub async fn commit(mut self) -> Result<(), sqlx::Error> {
+        let commit_hooks = self.commit_hooks.take().expect("no hooks");
+        let post_hooks = commit_hooks.execute_pre(&mut self).await?;
         self.tx.commit().await?;
+        post_hooks.execute();
         Ok(())
     }
 
@@ -96,6 +106,11 @@ impl<'o> AtomicOperation for DbOp<'o> {
 
     fn as_executor(&mut self) -> &mut sqlx::PgConnection {
         self.tx.as_executor()
+    }
+
+    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
+        self.commit_hooks.as_mut().expect("no hooks").add(hook);
+        Ok(())
     }
 }
 
@@ -115,13 +130,14 @@ impl<'c> From<DbOp<'c>> for Transaction<'c, Postgres> {
 ///
 /// Used as a wrapper of a [`sqlx::Transaction`] with cached time of the transaction.
 pub struct DbOpWithTime<'c> {
-    tx: Transaction<'c, Postgres>,
+    inner: DbOp<'c>,
     now: chrono::DateTime<chrono::Utc>,
 }
 
 impl<'c> DbOpWithTime<'c> {
-    fn new(tx: Transaction<'c, Postgres>, time: chrono::DateTime<chrono::Utc>) -> Self {
-        Self { tx, now: time }
+    fn new(mut inner: DbOp<'c>, time: chrono::DateTime<chrono::Utc>) -> Self {
+        inner.now = Some(time);
+        Self { inner, now: time }
     }
 
     /// The cached [`chrono::DateTime`]
@@ -131,18 +147,17 @@ impl<'c> DbOpWithTime<'c> {
 
     /// Begins a nested transaction.
     pub async fn begin(&mut self) -> Result<DbOpWithTime<'_>, sqlx::Error> {
-        Ok(DbOpWithTime::new(self.tx.begin().await?, self.now))
+        Ok(DbOpWithTime::new(self.inner.begin().await?, self.now))
     }
 
     /// Commits the inner transaction.
     pub async fn commit(self) -> Result<(), sqlx::Error> {
-        self.tx.commit().await?;
-        Ok(())
+        self.inner.commit().await
     }
 
     /// Gets a mutable handle to the inner transaction
     pub fn tx_mut(&mut self) -> &mut Transaction<'c, Postgres> {
-        &mut self.tx
+        self.inner.tx_mut()
     }
 }
 
@@ -152,13 +167,17 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
     }
 
     fn as_executor(&mut self) -> &mut sqlx::PgConnection {
-        self.tx.as_executor()
+        self.inner.as_executor()
+    }
+
+    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
+        self.inner.add_commit_hook(hook)
     }
 }
 
 impl<'c> From<DbOpWithTime<'c>> for Transaction<'c, Postgres> {
     fn from(op: DbOpWithTime<'c>) -> Self {
-        op.tx
+        op.inner.into()
     }
 }
 
@@ -192,6 +211,12 @@ pub trait AtomicOperation: Send {
     /// Since this trait is generally applied to types that wrap a [`sqlx::Transaction`]
     /// there is no variance in the return type - so its fine.
     fn as_executor(&mut self) -> &mut sqlx::PgConnection;
+
+    /// Registers a commit hook that will run pre_commit before and post_commit after the transaction commits.
+    /// Returns Ok(()) if the hook was registered, Err(hook) if hooks are not supported.
+    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
+        Err(hook)
+    }
 }
 
 impl<'c> AtomicOperation for sqlx::Transaction<'c, Postgres> {
