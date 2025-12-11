@@ -204,7 +204,7 @@ impl ToTokens for ListForFn<'_> {
                     syn::Ident::new(&filter_field_name, proc_macro2::Span::call_site());
                 (
                     quote! {
-                        #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #filter_field_ident = tracing::field::Empty, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
+                        #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #filter_field_ident = tracing::field::Empty, first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty, error = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
                     },
                     quote! {
                         let has_cursor = cursor.after.is_some();
@@ -222,6 +222,7 @@ impl ToTokens for ListForFn<'_> {
                     },
                     quote! {
                         if let Err(ref e) = __result {
+                            tracing::Span::current().record("error", true);
                             tracing::Span::current().record("exception.message", tracing::field::display(e));
                             tracing::Span::current().record("exception.type", std::any::type_name_of_val(e));
                         }
