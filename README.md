@@ -61,7 +61,7 @@ impl User {
         // Check whether the event was already recorded
         idempotency_guard!(
             self.events.iter().rev(),
-            // Return Idempotent::Ignored if this pattern hits
+            // Return Idempotent::AlreadyApplied if this pattern hits
             UserEvent::NameUpdated { name: existing_name } if existing_name == &name,
             // Stop searching here
             => UserEvent::NameUpdated { .. }
@@ -262,7 +262,7 @@ mod tests {
     fn test_user_update() {
         let mut user = test_user(UserId::new());
         assert_eq!(user.update_name("Bob"), Idempotent::Executed(()));
-        assert_eq!(user.update_name("Bob"), Idempotent::Ignored(()));
+        assert_eq!(user.update_name("Bob"), Idempotent::AlreadyApplied(()));
     }
 }
 ```

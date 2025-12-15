@@ -366,7 +366,7 @@ impl Subscription {
             }
         }
 
-        Idempotent::Ignored
+        Idempotent::AlreadyApplied
     }
 }
 
@@ -812,7 +812,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #                 return current_period.add_line_item(amount, description);
 #             }
 #         }
-#         Idempotent::Ignored
+#         Idempotent::AlreadyApplied
 #     }
 #     pub fn current_billing_period(&self) -> Option<&BillingPeriod> {
 #         self.current_period_id

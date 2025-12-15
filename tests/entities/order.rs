@@ -154,7 +154,7 @@ impl Order {
         {
             item.update_quantity(quantity)
         } else {
-            Idempotent::Ignored
+            Idempotent::AlreadyApplied
         }
     }
 }

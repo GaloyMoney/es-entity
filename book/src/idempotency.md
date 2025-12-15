@@ -110,7 +110,7 @@ use es_entity::Idempotent;
 // #[must_use]
 // pub enum Idempotent<T> {
 //     Executed(T),
-//     Ignored,
+//     AlreadyApplied,
 // }
 
 impl User {
@@ -119,7 +119,7 @@ impl User {
         for event in self.events.iter().rev() {
             match event {
                 UserEvent::NameUpdated { name: existing_name } if existing_name == &name => {
-                    return Idempotent::Ignored;
+                    return Idempotent::AlreadyApplied;
                 }
                 _ => ()
             }
@@ -132,7 +132,7 @@ impl User {
 fn main() {
     let mut user = User { events: vec![] };
     assert!(user.update_name("Harrison").did_execute());
-    assert!(user.update_name("Harrison").was_ignored());
+    assert!(user.update_name("Harrison").was_already_applied());
 }
 ```
 
@@ -166,7 +166,7 @@ impl User {
 fn main() {
     let mut user = User { events: vec![] };
     assert!(user.update_name("Harrison").did_execute());
-    assert!(user.update_name("Harrison").was_ignored());
+    assert!(user.update_name("Harrison").was_already_applied());
 }
 ```
 

@@ -59,7 +59,7 @@ impl User {
         // systems to protect against replays.
         idempotency_guard!(
             self.events.iter_all().rev(),
-            // If this pattern matches return Idempotent::Ignored
+            // If this pattern matches return Idempotent::AlreadyApplied
             UserEvent::NameUpdated { name } if name == &new_name,
             // Stop searching here
             => UserEvent::NameUpdated { .. }
