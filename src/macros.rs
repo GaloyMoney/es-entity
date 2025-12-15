@@ -1,7 +1,7 @@
 /// Prevent duplicate event processing by checking for idempotent operations.
 ///
 /// Guards against replaying the same mutation in event-sourced systems.
-/// Returns [`Ignored`][crate::Idempotent::Ignored] early if matching events are found, allowing the caller
+/// Returns [`AlreadyApplied`][crate::Idempotent::AlreadyApplied] early if matching events are found, allowing the caller
 /// to skip redundant operations. Use break pattern to allow re-applying past operations.
 ///
 /// # Parameters
@@ -52,7 +52,7 @@
 /// let mut user2 = User{ events: vec![] };
 /// assert!(user1.update_name("Alice").did_execute());
 /// // updating "ALice" again ignored because same event with same name exists
-/// assert!(user1.update_name("Alice").was_ignored());
+/// assert!(user1.update_name("Alice").was_already_applied());
 ///     
 /// assert!(user2.update_name_with_break("Alice").did_execute());
 /// assert!(user2.update_name_with_break("Bob").did_execute());
@@ -65,7 +65,7 @@ macro_rules! idempotency_guard {
         for event in $events {
             match event {
                 $(
-                    $pattern $(if $guard)? => return $crate::FromIdempotentIgnored::from_ignored(),
+                    $pattern $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
                 )+
                 _ => {}
             }
@@ -75,7 +75,7 @@ macro_rules! idempotency_guard {
      => $break_pattern:pat $(if $break_guard:expr)?) => {
         for event in $events {
             match event {
-                $($pattern $(if $guard)? => return $crate::FromIdempotentIgnored::from_ignored(),)+
+                $($pattern $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),)+
                 $break_pattern $(if $break_guard)? => break,
                 _ => {}
             }
