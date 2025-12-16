@@ -27,6 +27,10 @@
     - [delete](./repo-delete.md)
 
 - [Transactions](./transactions.md)
+  - [Connection Traits](./connection-traits.md)
+  - [DbOp](./db-op.md)
+  - [Commit Hooks](./commit-hooks.md)
+
 - [Aggregates](./aggregates.md)
   - [Nesting](./nesting.md)
 

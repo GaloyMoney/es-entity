@@ -129,3 +129,9 @@ CREATE TABLE billing_period_events (
   recorded_at TIMESTAMPTZ NOT NULL,
   UNIQUE(id, sequence)
 );
+
+CREATE TABLE hook_events (
+  entity_id UUID NOT NULL,
+  event_type VARCHAR NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
+);
