@@ -18,95 +18,124 @@
 //!
 //! # Examples
 //!
-//! ## Basic Hook
+//! ## Hook with Database Operations and Channel-Based Publishing
+//!
+//! This example shows a complete event publishing hook that:
+//! - Stores events in the database during pre-commit (within the transaction)
+//! - Sends events to a channel during post-commit for async processing
+//! - Merges multiple hook instances to batch operations
+//!
+//! Note: `post_commit()` is synchronous and cannot fail, so it's best used for
+//! fire-and-forget operations like sending to channels. A background task can then
+//! handle the async work of publishing to external systems.
 //!
 //! ```
-//! use es_entity::operation::hooks::{CommitHook, HookOperation, PreCommitRet};
+//! use es_entity::{AtomicOperation, operation::hooks::{CommitHook, HookOperation, PreCommitRet}};
+//!
+//! #[derive(Debug, Clone)]
+//! struct Event {
+//!     entity_id: uuid::Uuid,
+//!     event_type: String,
+//! }
 //!
 //! #[derive(Debug)]
 //! struct EventPublisher {
-//!     events: Vec<String>,
+//!     events: Vec<Event>,
+//!     // Channel sender for publishing events to a background processor
+//!     // In production, this might be tokio::sync::mpsc::Sender or similar
+//!     tx: std::sync::mpsc::Sender<Event>,
 //! }
 //!
 //! impl CommitHook for EventPublisher {
-//!     async fn pre_commit(self, op: HookOperation<'_>)
+//!     async fn pre_commit(self, mut op: HookOperation<'_>)
 //!         -> Result<PreCommitRet<'_, Self>, sqlx::Error>
 //!     {
+//!         // Store events in the database within the transaction
+//!         // If the transaction fails, these inserts will be rolled back
+//!         for event in &self.events {
+//!             sqlx::query!(
+//!                 "INSERT INTO hook_events (entity_id, event_type, created_at) VALUES ($1, $2, NOW())",
+//!                 event.entity_id,
+//!                 event.event_type
+//!             )
+//!             .execute(op.as_executor())
+//!             .await?;
+//!         }
+//!
 //!         PreCommitRet::ok(self, op)
 //!     }
 //!
 //!     fn post_commit(self) {
+//!         // Send events to a channel for async processing
+//!         // This only runs if the transaction succeeded
+//!         // Channel sends are fast and don't block; a background task handles publishing
 //!         for event in self.events {
-//!             println!("Publishing: {}", event);
+//!             // In production, handle send failures appropriately (logging, metrics, etc.)
+//!             // The channel might be bounded to apply backpressure
+//!             let _ = self.tx.send(event);
 //!         }
 //!     }
 //!
 //!     fn merge(&mut self, other: &mut Self) -> bool {
+//!         // Merge multiple EventPublisher hooks into one to batch operations
 //!         self.events.append(&mut other.events);
 //!         true
 //!     }
 //! }
-//! ```
 //!
-//! ## Hook with Database Operations
-//!
-//! ```
-//! use es_entity::operation::hooks::{CommitHook, HookOperation, PreCommitRet};
-//!
-//! #[derive(Debug)]
-//! struct AuditLogger {
-//!     user_id: uuid::Uuid,
-//!     action: String,
-//! }
-//!
-//! impl CommitHook for AuditLogger {
-//!     async fn pre_commit(self, mut op: HookOperation<'_>)
-//!         -> Result<PreCommitRet<'_, Self>, sqlx::Error>
-//!     {
-//!         // Insert audit log within the transaction
-//!         sqlx::query!(
-//!             "INSERT INTO audit_log (user_id, action, created_at) VALUES ($1, $2, NOW())",
-//!             self.user_id,
-//!             self.action
-//!         )
-//!         .execute(op.as_executor())
-//!         .await?;
-//!
-//!         PreCommitRet::ok(self, op)
-//!     }
-//!
-//!     fn post_commit(self) {
-//!         println!("Audit log committed for user: {}", self.user_id);
-//!     }
-//! }
+//! // Separate background task for async event publishing
+//! // async fn event_publisher_task(mut rx: tokio::sync::mpsc::Receiver<Event>) {
+//! //     while let Some(event) = rx.recv().await {
+//! //         // Publish to Kafka, RabbitMQ, webhooks, etc.
+//! //         // Handle failures with retries, dead-letter queues, etc.
+//! //         match publish_to_external_system(&event).await {
+//! //             Ok(_) => log::info!("Published event: {:?}", event),
+//! //             Err(e) => log::error!("Failed to publish event: {:?}", e),
+//! //         }
+//! //     }
+//! // }
 //! ```
 //!
 //! ## Usage
 //!
 //! ```no_run
-//! # use es_entity::operation::{DbOp, hooks::{CommitHook, HookOperation, PreCommitRet}};
+//! # use es_entity::{AtomicOperation, DbOp, operation::hooks::{CommitHook, HookOperation, PreCommitRet}};
 //! # use sqlx::PgPool;
+//! # #[derive(Debug, Clone)]
+//! # struct Event { entity_id: uuid::Uuid, event_type: String }
 //! # #[derive(Debug)]
-//! # struct EventPublisher { events: Vec<String> }
+//! # struct EventPublisher { events: Vec<Event>, tx: std::sync::mpsc::Sender<Event> }
 //! # impl CommitHook for EventPublisher {
-//! #     async fn pre_commit(self, op: HookOperation<'_>) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+//! #     async fn pre_commit(self, mut op: HookOperation<'_>) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+//! #         for event in &self.events {
+//! #             sqlx::query!(
+//! #                 "INSERT INTO hook_events (entity_id, event_type, created_at) VALUES ($1, $2, NOW())",
+//! #                 event.entity_id, event.event_type
+//! #             ).execute(op.as_executor()).await?;
+//! #         }
 //! #         PreCommitRet::ok(self, op)
 //! #     }
-//! #     fn post_commit(self) {}
+//! #     fn post_commit(self) { for event in self.events { let _ = self.tx.send(event); } }
 //! #     fn merge(&mut self, other: &mut Self) -> bool { self.events.append(&mut other.events); true }
 //! # }
 //! # async fn example(pool: PgPool) -> Result<(), sqlx::Error> {
+//! let user_id = uuid::Uuid::nil();
+//! let (tx, _rx) = std::sync::mpsc::channel();
 //! let mut op = DbOp::init(&pool).await?;
 //!
+//! // Add first hook
 //! op.add_commit_hook(EventPublisher {
-//!     events: vec!["user.created".to_string()]
-//! })?;
+//!     events: vec![Event { entity_id: user_id, event_type: "user.created".to_string() }],
+//!     tx: tx.clone(),
+//! }).expect("could not add hook");
 //!
+//! // Add second hook - will merge with the first
 //! op.add_commit_hook(EventPublisher {
-//!     events: vec!["email.sent".to_string()]
-//! })?;
+//!     events: vec![Event { entity_id: user_id, event_type: "email.sent".to_string() }],
+//!     tx: tx.clone(),
+//! }).expect("could not add hook");
 //!
-//! // Hooks merge and execute when commit is called
+//! // Both hooks merge into one, events are stored in DB, then sent to channel
 //! op.commit().await?;
 //! # Ok(())
 //! # }
