@@ -1,3 +1,25 @@
+# [cala release v0.10.6](https://github.com/GaloyMoney/cala/releases/tag/0.10.6)
+
+
+### Documentation
+
+- More extensive docs on hooks (#74)
+
+### Miscellaneous Tasks
+
+- Add error field in traces for better navigation (#70)
+- Add pre / post commit hooks to DbOp (#71)
+- Update convert_case requirement from 0.9 to 0.10 (#65)
+- Update darling requirement from 0.21 to 0.23 (#69)
+- Remove unused file (#66)
+- Remove multilingual field (#67)
+- Update convert_case requirement from 0.8 to 0.9 (#63)
+
+### Refactor
+
+- [**breaking**] Rename Ignored -> AlreadyApplied (#73)
+- [**breaking**] Update handling of time in AtomicOperation trait (#72)
+
 # [cala release v0.10.5](https://github.com/GaloyMoney/cala/releases/tag/0.10.5)
 
 
