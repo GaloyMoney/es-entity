@@ -1,3 +1,117 @@
+//! Commit hooks for executing custom logic before and after transaction commits.
+//!
+//! This module provides the [`CommitHook`] trait and supporting types that allow you to
+//! register hooks that execute during the commit lifecycle of a transaction. This is useful for:
+//!
+//! - Publishing events to message queues after successful commits
+//! - Updating caches
+//! - Triggering side effects that should only occur if the transaction succeeds
+//! - Accumulating operations across multiple entity updates in a transaction
+//!
+//! # Hook Lifecycle
+//!
+//! 1. **Registration**: Hooks are registered using [`AtomicOperation::add_commit_hook()`]
+//! 2. **Merging**: Multiple hooks of the same type may be merged via [`CommitHook::merge()`]
+//! 3. **Pre-commit**: [`CommitHook::pre_commit()`] executes before the transaction commits
+//! 4. **Commit**: The underlying database transaction is committed
+//! 5. **Post-commit**: [`CommitHook::post_commit()`] executes after successful commit
+//!
+//! # Examples
+//!
+//! ## Basic Hook
+//!
+//! ```
+//! use es_entity::operation::hooks::{CommitHook, HookOperation, PreCommitRet};
+//!
+//! #[derive(Debug)]
+//! struct EventPublisher {
+//!     events: Vec<String>,
+//! }
+//!
+//! impl CommitHook for EventPublisher {
+//!     async fn pre_commit(self, op: HookOperation<'_>)
+//!         -> Result<PreCommitRet<'_, Self>, sqlx::Error>
+//!     {
+//!         PreCommitRet::ok(self, op)
+//!     }
+//!
+//!     fn post_commit(self) {
+//!         for event in self.events {
+//!             println!("Publishing: {}", event);
+//!         }
+//!     }
+//!
+//!     fn merge(&mut self, other: &mut Self) -> bool {
+//!         self.events.append(&mut other.events);
+//!         true
+//!     }
+//! }
+//! ```
+//!
+//! ## Hook with Database Operations
+//!
+//! ```
+//! use es_entity::operation::hooks::{CommitHook, HookOperation, PreCommitRet};
+//!
+//! #[derive(Debug)]
+//! struct AuditLogger {
+//!     user_id: uuid::Uuid,
+//!     action: String,
+//! }
+//!
+//! impl CommitHook for AuditLogger {
+//!     async fn pre_commit(self, mut op: HookOperation<'_>)
+//!         -> Result<PreCommitRet<'_, Self>, sqlx::Error>
+//!     {
+//!         // Insert audit log within the transaction
+//!         sqlx::query!(
+//!             "INSERT INTO audit_log (user_id, action, created_at) VALUES ($1, $2, NOW())",
+//!             self.user_id,
+//!             self.action
+//!         )
+//!         .execute(op.as_executor())
+//!         .await?;
+//!
+//!         PreCommitRet::ok(self, op)
+//!     }
+//!
+//!     fn post_commit(self) {
+//!         println!("Audit log committed for user: {}", self.user_id);
+//!     }
+//! }
+//! ```
+//!
+//! ## Usage
+//!
+//! ```no_run
+//! # use es_entity::operation::{DbOp, hooks::{CommitHook, HookOperation, PreCommitRet}};
+//! # use sqlx::PgPool;
+//! # #[derive(Debug)]
+//! # struct EventPublisher { events: Vec<String> }
+//! # impl CommitHook for EventPublisher {
+//! #     async fn pre_commit(self, op: HookOperation<'_>) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+//! #         PreCommitRet::ok(self, op)
+//! #     }
+//! #     fn post_commit(self) {}
+//! #     fn merge(&mut self, other: &mut Self) -> bool { self.events.append(&mut other.events); true }
+//! # }
+//! # async fn example(pool: PgPool) -> Result<(), sqlx::Error> {
+//! let mut op = DbOp::init(&pool).await?;
+//!
+//! op.add_commit_hook(EventPublisher {
+//!     events: vec!["user.created".to_string()]
+//! })?;
+//!
+//! op.add_commit_hook(EventPublisher {
+//!     events: vec!["email.sent".to_string()]
+//! })?;
+//!
+//! // Hooks merge and execute when commit is called
+//! op.commit().await?;
+//! # Ok(())
+//! # }
+//! ```
+
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
@@ -7,11 +121,19 @@ use std::{
 
 use super::AtomicOperation;
 
+/// Type alias for boxed async futures.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// Trait for implementing custom commit hooks that execute before and after transaction commits.
+///
+/// Hooks execute in order: [`pre_commit()`](Self::pre_commit) → database commit → [`post_commit()`](Self::post_commit).
+/// Multiple hooks of the same type can be merged via [`merge()`](Self::merge).
+///
+/// See module-level documentation for a complete example.
 pub trait CommitHook: Send + 'static + Sized {
     /// Called before the transaction commits. Can perform database operations.
-    /// Returns Self so it can be used in post_commit.
+    ///
+    /// Errors returned here will roll back the transaction.
     fn pre_commit(
         self,
         op: HookOperation<'_>,
@@ -19,21 +141,21 @@ pub trait CommitHook: Send + 'static + Sized {
         async { PreCommitRet::ok(self, op) }
     }
 
-    /// Called after the transaction has successfully committed.
-    /// Cannot fail, not async.
+    /// Called after successful commit. Cannot fail, not async.
     fn post_commit(self) {
         // Default: do nothing
     }
 
-    /// Try to merge `other` into `self`.
-    /// Returns true if merged (other will be dropped).
-    /// Returns false if not merged (both will execute separately).
+    /// Try to merge another hook of the same type into this one.
+    ///
+    /// Returns `true` if merged (other will be dropped), `false` if not (both execute separately).
     fn merge(&mut self, _other: &mut Self) -> bool {
         false
     }
 
-    /// Execute the hook immediately.
-    /// Useful when `add_commit_hook` returns Err (hooks not supported).
+    /// Execute the hook immediately, bypassing the hook system.
+    ///
+    /// Useful when [`AtomicOperation::add_commit_hook()`] returns `Err(hook)`.
     fn force_execute_pre_commit(
         self,
         op: &mut impl AtomicOperation,
@@ -45,6 +167,9 @@ pub trait CommitHook: Send + 'static + Sized {
     }
 }
 
+/// Wrapper around a database connection passed to [`CommitHook::pre_commit()`].
+///
+/// Implements [`AtomicOperation`] to allow executing database queries within the transaction.
 pub struct HookOperation<'c> {
     now: Option<chrono::DateTime<chrono::Utc>>,
     conn: &'c mut sqlx::PgConnection,
@@ -69,12 +194,16 @@ impl<'c> AtomicOperation for HookOperation<'c> {
     }
 }
 
+/// Return type for [`CommitHook::pre_commit()`].
+///
+/// Use [`PreCommitRet::ok()`] to construct: `PreCommitRet::ok(self, op)`.
 pub struct PreCommitRet<'c, H> {
     op: HookOperation<'c>,
     hook: H,
 }
 
 impl<'c, H> PreCommitRet<'c, H> {
+    /// Creates a successful pre-commit result.
     pub fn ok(hook: H, op: HookOperation<'c>) -> Result<Self, sqlx::Error> {
         Ok(Self { op, hook })
     }

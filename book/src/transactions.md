@@ -6,45 +6,25 @@ That is you can execute multiple writes atomically or multiple successive querie
 
 The `sqlx` struct that manages this is the [`Transaction`](https://docs.rs/sqlx/latest/sqlx/struct.Transaction.html) that is typically acquired from a pool.
 
-## Method Variants
+Es-entity supports custom types that can wrap a connection while augmenting it with additional custom functionality.
 
-All CRUD `fn`s that`es-entity` generates come in 2 variants:
-```rust,ignore
-async fn create(new_entity: NewEntity)
-async fn create_in_op(<connection>, new_entity: NewEntity)
+By default the generated `async fn begin_op() -> Result<Op, sqlx::Error>` on `EsRepo` structs returns an `es_entity::DbOp` transaction wrapper that has support for [commit hooks](./commit-hooks.md) and caching of transaction time.
 
-async fn update(entity: &mut Entity)
-async fn update_in_op(<connection>, entity: &mut Entity)
+In order to be interoperable with bare `sqlx::Transaction`s as well as custom transaction wrappers all generated functions accept one of 2 traits:
+- `AtomicOperation` - representing a transactional operation that needs to be committed.
+- `IntoOneTimeExecutor<'_>` - representing a connection that can do 1 DB round trip and has no additional consistency guaranteed.
 
-async fn find_by_id(id: EntityId)
-async fn find_by_id_in_op(<connection>, id: EntityId)
+See [Connection Types and Traits](./connection-traits.md) for details on these traits and their implementations.
 
-etc
-```
+## Key Concepts
 
-In all cases the `_in_op` variant accepts a first argument that represents the connection to the database.
-The non-`_in_op` variant simply wraps the `_in_op` call by passing an appropriate connection argument internally.
+- **[Connection Traits](./connection-traits.md)**: Learn about `AtomicOperation` and `IntoOneTimeExecutor` traits, method variants (`_in_op` functions), and operation requirements.
 
-## Connection Types and Traits
+- **[DbOp](./db-op.md)**: The default transaction wrapper with support for time caching, nested transactions, and `DbOpWithTime` for guaranteed timestamps.
 
-The type of the `<connection>` argument is generic requiring either the `AtomicOperation` or `IntoOneTimeExecutor` trait to be implemented on the type.
-There is a blanket implementation that makes every `AtomicOperation` implement `IntoOneTimeExecutor` - but the reverse is _not_ the case.
+- **[Commit Hooks](./commit-hooks.md)**: Execute custom logic before and after transaction commits, with support for hook merging and database operations during pre-commit.
 
-```rust,ignore
-async fn find_by_id_in_op<'a, OP>(op: OP, id: EntityId)
-where
-    OP: IntoOneTimeExecutor<'a>;
-
-async fn create_in_op<OP>(op: &mut OP, new_entity: NewEntity)
-where
-    OP: AtomicOperation;
-```
-
-Both traits wrap access to an `sqlx::Executor` implementation that ultimately executes the query.
-
-The difference is that the `IntoOneTimeExecutor` trait ensures in a typesafe way that only 1 database operation can occur by consuming the inner reference.
-
-## Example Usage
+## Basic Example
 
 ```rust
 # extern crate anyhow;
@@ -103,12 +83,3 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
-
-## Operation Requirements
-
-In `es-entity` mutating `fn`s generally require 2 roundtrips to update the `index` table and append to the `events` table.
-Hence `create_in_op`, `update_in_op` and `delete_in_op` all require `&mut impl AtomicOperation` first arguments.
-
-Most queries on the other hand are executed with 1 round trip (to fetch the events) and thus accept `impl IntoOneTimeExecutor<'_>` first arguments.
-
-Exceptions to this are for `nested` entities which have will be explained in a later section.
