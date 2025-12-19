@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TracingContext {
@@ -11,8 +10,10 @@ pub struct TracingContext {
 }
 
 impl TracingContext {
+    #[cfg(feature = "tracing-context")]
     pub fn current() -> Option<Self> {
         use opentelemetry::trace::TraceContextExt;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
 
         let current = tracing::Span::current();
         let context = current.context();
@@ -37,6 +38,7 @@ impl TracingContext {
         })
     }
 
+    #[cfg(feature = "tracing-context")]
     pub fn inject_as_parent(&self) {
         use opentelemetry::propagation::TextMapPropagator;
         use opentelemetry_sdk::propagation::TraceContextPropagator;

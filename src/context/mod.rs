@@ -69,7 +69,6 @@
 //! alongside the event data, enabling comprehensive audit trails and debugging.
 
 mod sqlx;
-#[cfg(feature = "tracing-context")]
 mod tracing;
 mod with_event_context;
 
@@ -77,7 +76,6 @@ use serde::{Deserialize, Serialize};
 
 use std::{borrow::Cow, cell::RefCell, rc::Rc};
 
-#[cfg(feature = "tracing-context")]
 pub use tracing::*;
 pub use with_event_context::*;
 
