@@ -1,3 +1,14 @@
+# [cala release v0.10.7](https://github.com/GaloyMoney/cala/releases/tag/0.10.7)
+
+
+### Bug Fixes
+
+- Add use stmt
+
+### Miscellaneous Tasks
+
+- Always expose TracingContext struct
+
 # [cala release v0.10.6](https://github.com/GaloyMoney/cala/releases/tag/0.10.6)
 
 
