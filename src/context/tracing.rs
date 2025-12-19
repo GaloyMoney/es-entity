@@ -42,6 +42,7 @@ impl TracingContext {
     pub fn inject_as_parent(&self) {
         use opentelemetry::propagation::TextMapPropagator;
         use opentelemetry_sdk::propagation::TraceContextPropagator;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
 
         let mut carrier = std::collections::HashMap::new();
 
