@@ -123,12 +123,6 @@ impl<'c> From<Transaction<'c, Postgres>> for DbOp<'c> {
     }
 }
 
-impl<'c> From<DbOp<'c>> for Transaction<'c, Postgres> {
-    fn from(op: DbOp<'c>) -> Self {
-        op.tx
-    }
-}
-
 /// Equivileant of [`DbOp`] just that the time is guaranteed to be cached.
 ///
 /// Used as a wrapper of a [`sqlx::Transaction`] with cached time of the transaction.
@@ -181,12 +175,6 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
 impl<'o> AtomicOperationWithTime for DbOpWithTime<'o> {
     fn now(&self) -> chrono::DateTime<chrono::Utc> {
         self.now
-    }
-}
-
-impl<'c> From<DbOpWithTime<'c>> for Transaction<'c, Postgres> {
-    fn from(op: DbOpWithTime<'c>) -> Self {
-        op.inner.into()
     }
 }
 
