@@ -1,3 +1,10 @@
+# [cala release v0.10.8](https://github.com/GaloyMoney/cala/releases/tag/0.10.8)
+
+
+### Bug Fixes
+
+- Remove unsupported Into for operations
+
 # [cala release v0.10.7](https://github.com/GaloyMoney/cala/releases/tag/0.10.7)
 
 
