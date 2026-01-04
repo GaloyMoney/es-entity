@@ -104,7 +104,7 @@ impl SimulatedClock {
     }
 
     /// Convert simulated duration to real duration (for auto-advance mode).
-    pub fn real_duration(&self, duration: Duration) -> Duration {
+    pub(crate) fn real_duration(&self, duration: Duration) -> Duration {
         match self.config.mode {
             SimulationMode::Manual => {
                 // In manual mode, we don't use real sleeps - just register for wake
@@ -165,14 +165,9 @@ impl SimulatedClock {
     }
 
     /// Set the current time directly.
-    pub fn set_time(&self, time: DateTime<Utc>) {
+    pub(crate) fn set_time(&self, time: DateTime<Utc>) {
         self.current_ms
             .store(time.timestamp_millis(), Ordering::SeqCst);
-    }
-
-    /// Set the current time to a specific millisecond value.
-    pub fn set_time_ms(&self, ms: i64) {
-        self.current_ms.store(ms, Ordering::SeqCst);
     }
 
     /// Advance time by the given duration, processing wake events in order.
@@ -242,7 +237,7 @@ mod tests {
     #[test]
     fn test_manual_now() {
         let clock = SimulatedClock::new(SimulationConfig::manual());
-        
+
         // Get the start time from the clock (already truncated to ms)
         let start = clock.now();
 

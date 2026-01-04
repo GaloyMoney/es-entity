@@ -10,6 +10,8 @@
 //! - `sleep(duration)` - Sleep for a duration
 //! - `timeout(duration, future)` - Timeout a future
 //!
+//! For simulated clocks, a [`ClockController`] is also provided for controlling time.
+//!
 //! # Clock Types
 //!
 //! - **Realtime**: Uses system clock and tokio timers
@@ -19,17 +21,14 @@
 //! # Example
 //!
 //! ```rust
-//! use es_entity_time::{ClockHandle, SimulationConfig, SimulationMode};
+//! use es_entity_time::{ClockHandle, SimulationConfig};
 //! use std::time::Duration;
 //!
 //! // Production: use real time
 //! let clock = ClockHandle::realtime();
 //!
 //! // Testing: use manual simulation
-//! let clock = ClockHandle::simulated(SimulationConfig {
-//!     start_at: chrono::Utc::now(),
-//!     mode: SimulationMode::Manual,
-//! });
+//! let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
 //!
 //! // Same interface regardless of clock type
 //! let now = clock.now();
@@ -42,11 +41,11 @@
 //! the correct time when they wake:
 //!
 //! ```rust,no_run
-//! use es_entity_time::{ClockHandle, SimulationConfig, SimulationMode};
+//! use es_entity_time::{ClockHandle, SimulationConfig};
 //! use std::time::Duration;
 //!
 //! # async fn example() {
-//! let clock = ClockHandle::simulated(SimulationConfig::manual());
+//! let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
 //!
 //! let clock2 = clock.clone();
 //! tokio::spawn(async move {
@@ -56,7 +55,7 @@
 //! });
 //!
 //! // Advance 1 day - but the task wakes at exactly +1 hour
-//! clock.advance(Duration::from_secs(86400)).await;
+//! ctrl.advance(Duration::from_secs(86400)).await;
 //! # }
 //! ```
 
@@ -65,6 +64,7 @@
 #![forbid(unsafe_code)]
 
 mod config;
+mod controller;
 mod handle;
 mod inner;
 mod realtime;
@@ -74,6 +74,7 @@ mod sleep;
 mod transaction;
 
 pub use config::*;
+pub use controller::*;
 pub use handle::*;
 #[cfg(feature = "sqlx")]
 pub use transaction::*;

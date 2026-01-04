@@ -89,3 +89,5 @@ tracing = { version = "0.1.41", default-features = false }
 tracing-opentelemetry = { version = "0.32.0", default-features = false }
 opentelemetry = { version = "0.31.0", default-features = false }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
+futures = "0.3"
+parking_lot = "0.12"

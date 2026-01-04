@@ -12,8 +12,7 @@ pub struct SimulationConfig {
 /// Truncate a DateTime to millisecond precision.
 /// This ensures consistency since we store time as epoch milliseconds.
 fn truncate_to_millis(time: DateTime<Utc>) -> DateTime<Utc> {
-    DateTime::from_timestamp_millis(time.timestamp_millis())
-        .expect("valid timestamp")
+    DateTime::from_timestamp_millis(time.timestamp_millis()).expect("valid timestamp")
 }
 
 impl SimulationConfig {

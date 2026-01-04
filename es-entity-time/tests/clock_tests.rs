@@ -1,6 +1,6 @@
-use es_entity_time::{ClockHandle, SimulationConfig, SimulationMode};
-use std::sync::Arc;
+use es_entity_time::{ClockHandle, SimulationConfig};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::test]
@@ -27,7 +27,7 @@ async fn test_realtime_sleep() {
 
 #[tokio::test]
 async fn test_simulated_manual_time_stands_still() {
-    let clock = ClockHandle::simulated(SimulationConfig::manual());
+    let (clock, _ctrl) = ClockHandle::simulated(SimulationConfig::manual());
     let t0 = clock.now();
 
     // Time doesn't advance on its own
@@ -37,10 +37,10 @@ async fn test_simulated_manual_time_stands_still() {
 
 #[tokio::test]
 async fn test_simulated_manual_advance() {
-    let clock = ClockHandle::simulated(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
     let t0 = clock.now();
 
-    clock.advance(Duration::from_secs(3600)).await;
+    ctrl.advance(Duration::from_secs(3600)).await;
 
     assert_eq!(clock.now(), t0 + chrono::Duration::hours(1));
 }
@@ -48,7 +48,7 @@ async fn test_simulated_manual_advance() {
 #[tokio::test]
 async fn test_simulated_auto_advance() {
     // 10000x speed: 1ms real = 10 seconds simulated
-    let clock = ClockHandle::simulated(SimulationConfig::auto(10000.0));
+    let (clock, _ctrl) = ClockHandle::simulated(SimulationConfig::auto(10000.0));
 
     let start = clock.now();
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -62,7 +62,7 @@ async fn test_simulated_auto_advance() {
 
 #[tokio::test]
 async fn test_manual_sleep_wakes_on_advance() {
-    let clock = ClockHandle::simulated(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
     let t0 = clock.now();
 
     let woke = Arc::new(AtomicUsize::new(0));
@@ -77,11 +77,11 @@ async fn test_manual_sleep_wakes_on_advance() {
 
     // Let task register its sleep
     tokio::task::yield_now().await;
-    assert_eq!(clock.pending_wake_count(), 1);
+    assert_eq!(ctrl.pending_wake_count(), 1);
     assert_eq!(woke.load(Ordering::SeqCst), 0);
 
     // Advance past sleep time
-    clock.advance(Duration::from_secs(120)).await;
+    ctrl.advance(Duration::from_secs(120)).await;
 
     let wake_time = handle.await.unwrap();
     assert_eq!(woke.load(Ordering::SeqCst), 1);
@@ -91,7 +91,7 @@ async fn test_manual_sleep_wakes_on_advance() {
 
 #[tokio::test]
 async fn test_multiple_sleeps_wake_in_order() {
-    let clock = ClockHandle::simulated(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
     let t0 = clock.now();
 
     let wake_order = Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -122,10 +122,10 @@ async fn test_multiple_sleeps_wake_in_order() {
 
     // Let tasks register
     tokio::task::yield_now().await;
-    assert_eq!(clock.pending_wake_count(), 3);
+    assert_eq!(ctrl.pending_wake_count(), 3);
 
     // Advance 1 minute - all should wake in order
-    clock.advance(Duration::from_secs(60)).await;
+    ctrl.advance(Duration::from_secs(60)).await;
 
     let _ = tokio::join!(handle_a, handle_b, handle_c);
 
@@ -145,7 +145,7 @@ async fn test_multiple_sleeps_wake_in_order() {
 
 #[tokio::test]
 async fn test_advance_to_next_wake() {
-    let clock = ClockHandle::simulated(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
     let t0 = clock.now();
 
     let c = clock.clone();
@@ -156,12 +156,12 @@ async fn test_advance_to_next_wake() {
     tokio::task::yield_now().await;
 
     // Advance to next wake
-    let wake_time = clock.advance_to_next_wake().await;
+    let wake_time = ctrl.advance_to_next_wake().await;
     assert_eq!(wake_time, Some(t0 + chrono::Duration::seconds(100)));
     assert_eq!(clock.now(), t0 + chrono::Duration::seconds(100));
 
     // No more pending wakes
-    let next = clock.advance_to_next_wake().await;
+    let next = ctrl.advance_to_next_wake().await;
     assert_eq!(next, None);
 
     let _ = handle.await;
@@ -169,14 +169,14 @@ async fn test_advance_to_next_wake() {
 
 #[tokio::test]
 async fn test_timeout_success() {
-    let clock = ClockHandle::simulated(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
 
     let c = clock.clone();
     let result =
         tokio::spawn(async move { c.timeout(Duration::from_secs(10), async { 42 }).await });
 
     tokio::task::yield_now().await;
-    clock.advance(Duration::from_secs(1)).await;
+    ctrl.advance(Duration::from_secs(1)).await;
 
     let value = result.await.unwrap();
     assert_eq!(value, Ok(42));
@@ -184,7 +184,7 @@ async fn test_timeout_success() {
 
 #[tokio::test]
 async fn test_timeout_elapsed() {
-    let clock = ClockHandle::simulated(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
 
     let c = clock.clone();
     let result_handle = tokio::spawn(async move {
@@ -198,7 +198,7 @@ async fn test_timeout_elapsed() {
     tokio::task::yield_now().await;
 
     // Advance past timeout
-    clock.advance(Duration::from_secs(10)).await;
+    ctrl.advance(Duration::from_secs(10)).await;
 
     let result = result_handle.await.unwrap();
     assert!(result.is_err());
@@ -206,14 +206,14 @@ async fn test_timeout_elapsed() {
 
 #[tokio::test]
 async fn test_cloned_handles_share_time() {
-    let clock1 = ClockHandle::simulated(SimulationConfig::manual());
+    let (clock1, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
     let clock2 = clock1.clone();
     let clock3 = clock1.clone();
 
     let t0 = clock1.now();
 
-    // Advance via one handle
-    clock2.advance(Duration::from_secs(100)).await;
+    // Advance via controller
+    ctrl.advance(Duration::from_secs(100)).await;
 
     // All see the same time
     assert_eq!(clock1.now(), t0 + chrono::Duration::seconds(100));
@@ -223,18 +223,18 @@ async fn test_cloned_handles_share_time() {
 
 #[tokio::test]
 async fn test_set_time_jumps_directly() {
-    let clock = ClockHandle::simulated(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
     let t0 = clock.now();
 
     let target = t0 + chrono::Duration::days(30);
-    clock.set_time(target);
+    ctrl.set_time(target);
 
     assert_eq!(clock.now(), target);
 }
 
 #[tokio::test]
 async fn test_cancelled_sleep_cleanup() {
-    let clock = ClockHandle::simulated(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
 
     // Start a sleep
     let c = clock.clone();
@@ -243,7 +243,7 @@ async fn test_cancelled_sleep_cleanup() {
     });
 
     tokio::task::yield_now().await;
-    assert_eq!(clock.pending_wake_count(), 1);
+    assert_eq!(ctrl.pending_wake_count(), 1);
 
     // Cancel the task
     handle.abort();
@@ -252,13 +252,13 @@ async fn test_cancelled_sleep_cleanup() {
     // Wake should be cleaned up
     // Note: might need a yield for cleanup to propagate
     tokio::task::yield_now().await;
-    assert_eq!(clock.pending_wake_count(), 0);
+    assert_eq!(ctrl.pending_wake_count(), 0);
 }
 
 #[tokio::test]
 async fn test_concurrent_system_coordination() {
     // Simulate multiple systems that need coordinated time
-    let clock = ClockHandle::simulated(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
     let t0 = clock.now();
 
     // System A: Job scheduler - runs job every hour
@@ -286,7 +286,7 @@ async fn test_concurrent_system_coordination() {
     tokio::task::yield_now().await;
 
     // Advance 2 hours
-    clock.advance(Duration::from_secs(7200)).await;
+    ctrl.advance(Duration::from_secs(7200)).await;
 
     // Job should have run 2 times (at 1h and 2h)
     assert_eq!(job_runs.load(Ordering::SeqCst), 2);
@@ -300,7 +300,7 @@ async fn test_concurrent_system_coordination() {
 
 #[tokio::test]
 async fn test_same_time_wakes() {
-    let clock = ClockHandle::simulated(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
     let t0 = clock.now();
 
     let wake_count = Arc::new(AtomicUsize::new(0));
@@ -316,10 +316,10 @@ async fn test_same_time_wakes() {
     }
 
     tokio::task::yield_now().await;
-    assert_eq!(clock.pending_wake_count(), 5);
+    assert_eq!(ctrl.pending_wake_count(), 5);
 
     // Advance to wake time
-    clock.advance(Duration::from_secs(60)).await;
+    ctrl.advance(Duration::from_secs(60)).await;
 
     // All should have woken
     assert_eq!(wake_count.load(Ordering::SeqCst), 5);
@@ -332,7 +332,39 @@ async fn test_debug_output() {
     let debug = format!("{:?}", clock);
     assert!(debug.contains("Realtime"));
 
-    let clock = ClockHandle::simulated(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
     let debug = format!("{:?}", clock);
     assert!(debug.contains("Simulated"));
+
+    let debug = format!("{:?}", ctrl);
+    assert!(debug.contains("ClockController"));
+}
+
+#[tokio::test]
+async fn test_controller_now() {
+    let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
+
+    // Both should return the same time
+    assert_eq!(clock.now(), ctrl.now());
+
+    ctrl.advance(Duration::from_secs(100)).await;
+
+    // Still in sync
+    assert_eq!(clock.now(), ctrl.now());
+}
+
+#[tokio::test]
+async fn test_controller_clone() {
+    let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
+    let ctrl2 = ctrl.clone();
+
+    let t0 = clock.now();
+
+    // Advance via one controller
+    ctrl.advance(Duration::from_secs(50)).await;
+
+    // Both controllers see same state
+    assert_eq!(ctrl.now(), t0 + chrono::Duration::seconds(50));
+    assert_eq!(ctrl2.now(), t0 + chrono::Duration::seconds(50));
+    assert_eq!(ctrl.pending_wake_count(), ctrl2.pending_wake_count());
 }

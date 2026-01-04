@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::SimulationConfig;
+use crate::controller::ClockController;
 use crate::inner::ClockInner;
 use crate::realtime::RealtimeClock;
 use crate::simulated::SimulatedClock;
@@ -18,16 +19,13 @@ use crate::sleep::{ClockSleep, ClockTimeout};
 /// # Creating a Clock
 ///
 /// ```rust
-/// use es_entity_time::{ClockHandle, SimulationConfig, SimulationMode};
+/// use es_entity_time::{ClockHandle, SimulationConfig};
 ///
 /// // Real-time clock for production
 /// let clock = ClockHandle::realtime();
 ///
-/// // Simulated clock for testing (manual mode)
-/// let clock = ClockHandle::simulated(SimulationConfig::manual());
-///
-/// // Simulated clock with auto-advance (1000x faster)
-/// let clock = ClockHandle::simulated(SimulationConfig::auto(1000.0));
+/// // Simulated clock for testing - returns (handle, controller)
+/// let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
 /// ```
 ///
 /// # Basic Operations
@@ -68,28 +66,35 @@ impl ClockHandle {
 
     /// Create a simulated clock with the given configuration.
     ///
+    /// Returns a tuple of `(ClockHandle, ClockController)`. The handle provides
+    /// the common time interface, while the controller provides simulation-specific
+    /// operations like advancing time.
+    ///
     /// # Example
     ///
     /// ```rust
     /// use es_entity_time::{ClockHandle, SimulationConfig, SimulationMode};
     /// use chrono::Utc;
     ///
-    /// // Manual mode - time only advances via advance()
-    /// let clock = ClockHandle::simulated(SimulationConfig::manual());
+    /// // Manual mode - time only advances via controller.advance()
+    /// let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
     ///
     /// // Auto mode - time advances 1000x faster than real time
-    /// let clock = ClockHandle::simulated(SimulationConfig::auto(1000.0));
+    /// let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::auto(1000.0));
     ///
     /// // Start at a specific time
-    /// let clock = ClockHandle::simulated(SimulationConfig {
+    /// let (clock, ctrl) = ClockHandle::simulated(SimulationConfig {
     ///     start_at: Utc::now() - chrono::Duration::days(30),
     ///     mode: SimulationMode::Manual,
     /// });
     /// ```
-    pub fn simulated(config: SimulationConfig) -> Self {
-        Self {
-            inner: Arc::new(ClockInner::Simulated(Arc::new(SimulatedClock::new(config)))),
-        }
+    pub fn simulated(config: SimulationConfig) -> (Self, ClockController) {
+        let sim = Arc::new(SimulatedClock::new(config));
+        let handle = Self {
+            inner: Arc::new(ClockInner::Simulated(Arc::clone(&sim))),
+        };
+        let controller = ClockController { sim };
+        (handle, controller)
     }
 
     /// Get the current time.
@@ -125,133 +130,6 @@ impl ClockHandle {
     {
         ClockTimeout::new(&self.inner, duration, future)
     }
-
-    /// Advance simulated time by the given duration.
-    ///
-    /// This only works for simulated clocks in manual mode. For other clock
-    /// types, this is a no-op that returns 0.
-    ///
-    /// Wake events are processed in chronological order. If you advance by
-    /// 1 day and there are sleeps scheduled at 1 hour and 2 hours, they will
-    /// wake at their scheduled times (seeing the correct `now()` value),
-    /// not at +1 day.
-    ///
-    /// Returns the number of wake events that were processed.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use es_entity_time::{ClockHandle, SimulationConfig};
-    /// use std::time::Duration;
-    ///
-    /// # async fn example() {
-    /// let clock = ClockHandle::simulated(SimulationConfig::manual());
-    /// let t0 = clock.now();
-    ///
-    /// let clock2 = clock.clone();
-    /// let handle = tokio::spawn(async move {
-    ///     clock2.sleep(Duration::from_secs(3600)).await;
-    ///     clock2.now() // Will be t0 + 1 hour
-    /// });
-    ///
-    /// tokio::task::yield_now().await; // Let task register its sleep
-    ///
-    /// // Advance 1 day - task wakes at exactly +1 hour
-    /// clock.advance(Duration::from_secs(86400)).await;
-    ///
-    /// let wake_time = handle.await.unwrap();
-    /// assert_eq!(wake_time, t0 + chrono::Duration::hours(1));
-    /// # }
-    /// ```
-    pub async fn advance(&self, duration: Duration) -> usize {
-        match &*self.inner {
-            ClockInner::Realtime(_) => 0,
-            ClockInner::Simulated(sim) => sim.advance(duration).await,
-        }
-    }
-
-    /// Advance to the next pending wake event.
-    ///
-    /// This only works for simulated clocks in manual mode.
-    /// Returns the time that was advanced to, or `None` if there are no
-    /// pending wake events.
-    ///
-    /// This is useful for step-by-step testing where you want to process
-    /// events one at a time.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use es_entity_time::{ClockHandle, SimulationConfig};
-    /// use std::time::Duration;
-    ///
-    /// # async fn example() {
-    /// let clock = ClockHandle::simulated(SimulationConfig::manual());
-    /// let t0 = clock.now();
-    ///
-    /// // Spawn tasks with different sleep durations
-    /// let c = clock.clone();
-    /// tokio::spawn(async move { c.sleep(Duration::from_secs(60)).await; });
-    /// let c = clock.clone();
-    /// tokio::spawn(async move { c.sleep(Duration::from_secs(120)).await; });
-    ///
-    /// tokio::task::yield_now().await;
-    ///
-    /// // Step through one wake at a time
-    /// let t1 = clock.advance_to_next_wake().await;
-    /// assert_eq!(t1, Some(t0 + chrono::Duration::seconds(60)));
-    ///
-    /// let t2 = clock.advance_to_next_wake().await;
-    /// assert_eq!(t2, Some(t0 + chrono::Duration::seconds(120)));
-    ///
-    /// let t3 = clock.advance_to_next_wake().await;
-    /// assert_eq!(t3, None); // No more pending wakes
-    /// # }
-    /// ```
-    pub async fn advance_to_next_wake(&self) -> Option<DateTime<Utc>> {
-        match &*self.inner {
-            ClockInner::Realtime(_) => None,
-            ClockInner::Simulated(sim) => sim.advance_to_next_wake().await,
-        }
-    }
-
-    /// Set the simulated time to a specific value.
-    ///
-    /// This only works for simulated clocks. For real-time clocks, this is a no-op.
-    ///
-    /// **Warning**: Unlike `advance()`, this does NOT process wake events in order.
-    /// All tasks whose wake time has passed will see the new time when they wake.
-    /// Use this for "jump ahead, don't care about intermediate events" scenarios.
-    ///
-    /// For deterministic testing, prefer `advance()` or `advance_to_next_wake()`.
-    pub fn set_time(&self, time: DateTime<Utc>) {
-        if let ClockInner::Simulated(sim) = &*self.inner {
-            sim.set_time(time);
-            // Wake all tasks that are now past their wake time
-            sim.wake_tasks_at(time.timestamp_millis());
-        }
-    }
-
-    /// Get the number of pending wake events.
-    ///
-    /// This is mainly useful for testing to verify that tasks have registered
-    /// their sleeps before advancing time.
-    pub fn pending_wake_count(&self) -> usize {
-        match &*self.inner {
-            ClockInner::Realtime(_) => 0,
-            ClockInner::Simulated(sim) => sim.pending_wake_count(),
-        }
-    }
-
-    /// Check if this is a simulated clock.
-    pub fn is_simulated(&self) -> bool {
-        matches!(&*self.inner, ClockInner::Simulated(_))
-    }
-
-    /// Check if this is a real-time clock.
-    pub fn is_realtime(&self) -> bool {
-        matches!(&*self.inner, ClockInner::Realtime(_))
-    }
 }
 
 impl std::fmt::Debug for ClockHandle {
@@ -261,7 +139,6 @@ impl std::fmt::Debug for ClockHandle {
             ClockInner::Simulated(sim) => f
                 .debug_struct("ClockHandle::Simulated")
                 .field("now", &sim.now())
-                .field("pending_wakes", &sim.pending_wake_count())
                 .finish(),
         }
     }

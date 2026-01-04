@@ -61,9 +61,7 @@ impl TransactionTime {
 
         // For real clocks, sync with database
         let local_at = clock.now();
-        let db_time: DateTime<Utc> = sqlx::query_scalar("SELECT NOW()")
-            .fetch_one(conn)
-            .await?;
+        let db_time: DateTime<Utc> = sqlx::query_scalar("SELECT NOW()").fetch_one(conn).await?;
 
         Ok(Self {
             db_time,
