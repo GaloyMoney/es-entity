@@ -1,10 +1,13 @@
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
-use std::cmp::Ordering as CmpOrdering;
-use std::collections::BinaryHeap;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::task::Waker;
-use std::time::{Duration, Instant};
+
+use std::{
+    cmp::Ordering as CmpOrdering,
+    collections::BinaryHeap,
+    sync::atomic::{AtomicI64, AtomicU64, Ordering},
+    task::Waker,
+    time::{Duration, Instant},
+};
 
 use crate::config::{SimulationConfig, SimulationMode};
 

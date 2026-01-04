@@ -1,12 +1,17 @@
 use pin_project::{pin_project, pinned_drop};
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::time::Duration;
 
-use crate::inner::ClockInner;
-use crate::artificial::{next_sleep_id, ArtificialClock};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
+
+use crate::{
+    artificial::{next_sleep_id, ArtificialClock},
+    inner::ClockInner,
+};
 
 /// A future that completes after a duration has elapsed on the clock.
 ///

@@ -63,12 +63,12 @@
 #![cfg_attr(feature = "fail-on-warnings", deny(clippy::all))]
 #![forbid(unsafe_code)]
 
+mod artificial;
 mod config;
 mod controller;
 mod handle;
 mod inner;
 mod realtime;
-mod artificial;
 mod sleep;
 
 // Re-export public API

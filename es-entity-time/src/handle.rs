@@ -1,13 +1,15 @@
 use chrono::{DateTime, Utc};
-use std::sync::Arc;
-use std::time::Duration;
 
-use crate::config::SimulationConfig;
-use crate::controller::ClockController;
-use crate::inner::ClockInner;
-use crate::realtime::RealtimeClock;
-use crate::artificial::ArtificialClock;
-use crate::sleep::{ClockSleep, ClockTimeout};
+use std::{sync::Arc, time::Duration};
+
+use crate::{
+    artificial::ArtificialClock,
+    config::SimulationConfig,
+    controller::ClockController,
+    inner::ClockInner,
+    realtime::RealtimeClock,
+    sleep::{ClockSleep, ClockTimeout},
+};
 
 pub use crate::sleep::Elapsed;
 
