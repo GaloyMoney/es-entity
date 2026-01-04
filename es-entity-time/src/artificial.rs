@@ -31,11 +31,11 @@ pub(crate) struct ArtificialClock {
 /// A pending wake event in the priority queue.
 pub(crate) struct PendingWake {
     /// When to wake (artificial epoch ms).
-    pub wake_at_ms: i64,
+    wake_at_ms: i64,
     /// Unique ID for this sleep (for cancellation).
-    pub sleep_id: u64,
+    sleep_id: u64,
     /// Waker to call when time arrives.
-    pub waker: Waker,
+    waker: Waker,
 }
 
 // BinaryHeap is a max-heap, so we reverse the ordering to get a min-heap.

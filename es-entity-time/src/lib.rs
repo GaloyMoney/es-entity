@@ -71,6 +71,8 @@ mod realtime;
 mod artificial;
 mod sleep;
 
-pub use config::*;
-pub use controller::*;
-pub use handle::*;
+// Re-export public API
+pub use config::{SimulationConfig, SimulationMode};
+pub use controller::ClockController;
+pub use handle::{ClockHandle, Elapsed};
+pub use sleep::{ClockSleep, ClockTimeout};

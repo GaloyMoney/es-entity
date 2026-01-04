@@ -7,8 +7,9 @@ use crate::controller::ClockController;
 use crate::inner::ClockInner;
 use crate::realtime::RealtimeClock;
 use crate::artificial::ArtificialClock;
-pub use crate::sleep::Elapsed;
 use crate::sleep::{ClockSleep, ClockTimeout};
+
+pub use crate::sleep::Elapsed;
 
 /// A handle to a clock for getting time and performing time-based operations.
 ///
