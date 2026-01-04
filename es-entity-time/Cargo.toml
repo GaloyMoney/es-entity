@@ -1,0 +1,25 @@
+[package]
+name = "es-entity-time"
+version = "0.10.9-dev"
+edition = "2021"
+description = "Time abstraction for es-entity with support for simulated time"
+license = "Apache-2.0"
+
+[features]
+
+fail-on-warnings = []
+sqlx = ["dep:sqlx"]
+
+[dependencies]
+chrono = { workspace = true }
+tokio = { workspace = true }
+parking_lot = "0.12"
+pin-project = "1"
+
+# Optional for DB time sync
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+futures = "0.3"
+parking_lot = "0.12"

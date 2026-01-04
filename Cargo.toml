@@ -13,7 +13,7 @@ inherits = "dev"
 
 [features]
 
-fail-on-warnings = []
+fail-on-warnings = ["es-entity-macros/fail-on-warnings", "es-entity-time/fail-on-warnings"]
 tracing-context = ["dep:tracing", "dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk"]
 graphql = ["es-entity-macros/graphql", "dep:async-graphql", "dep:base64"]
 event-context = ["es-entity-macros/event-context", "event-context-enabled"]
@@ -25,6 +25,7 @@ instrument = ["es-entity-macros/instrument", "dep:tracing"]
 
 [dependencies]
 es-entity-macros = { workspace = true }
+es-entity-time = { workspace = true }
 sim-time = { workspace = true, optional = true }
 
 base64 = { workspace = true, optional = true }
@@ -58,12 +59,14 @@ async-trait = { workspace = true }
 resolver = "2"
 members = [
   "es-entity-macros",
+  "es-entity-time",
   "sim-time",
 ]
 
 [workspace.dependencies]
 
 es-entity-macros = { path = "es-entity-macros", version = "0.10.9-dev" }
+es-entity-time = { path = "es-entity-time", version = "0.10.9-dev" }
 sim-time = { path = "sim-time", version = "0.10.9-dev" }
 
 anyhow = "1.0.100"
