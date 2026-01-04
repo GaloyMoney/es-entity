@@ -16,9 +16,9 @@ pub(crate) fn next_sleep_id() -> u64 {
     NEXT_SLEEP_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Simulated clock with support for auto-advance and manual modes.
-pub(crate) struct SimulatedClock {
-    /// Current simulated time as epoch milliseconds.
+/// Artificial clock with support for auto-advance and manual modes.
+pub(crate) struct ArtificialClock {
+    /// Current artificial time as epoch milliseconds.
     current_ms: AtomicI64,
     /// Configuration including mode.
     config: SimulationConfig,
@@ -30,7 +30,7 @@ pub(crate) struct SimulatedClock {
 
 /// A pending wake event in the priority queue.
 pub(crate) struct PendingWake {
-    /// When to wake (simulated epoch ms).
+    /// When to wake (artificial epoch ms).
     pub wake_at_ms: i64,
     /// Unique ID for this sleep (for cancellation).
     pub sleep_id: u64,
@@ -63,8 +63,8 @@ impl Ord for PendingWake {
     }
 }
 
-impl SimulatedClock {
-    /// Create a new simulated clock with the given configuration.
+impl ArtificialClock {
+    /// Create a new artificial clock with the given configuration.
     pub fn new(config: SimulationConfig) -> Self {
         // Truncate to millisecond precision since we store as epoch millis
         let start_ms = config.start_at.timestamp_millis();
@@ -76,7 +76,7 @@ impl SimulatedClock {
         }
     }
 
-    /// Get the current simulated time.
+    /// Get the current artificial time.
     pub fn now(&self) -> DateTime<Utc> {
         let ms = match self.config.mode {
             SimulationMode::Manual => self.current_ms.load(Ordering::SeqCst),
@@ -103,7 +103,7 @@ impl SimulatedClock {
         }
     }
 
-    /// Convert simulated duration to real duration (for auto-advance mode).
+    /// Convert artificial duration to real duration (for auto-advance mode).
     pub(crate) fn real_duration(&self, duration: Duration) -> Duration {
         match self.config.mode {
             SimulationMode::Manual => {
@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_manual_now() {
-        let clock = SimulatedClock::new(SimulationConfig::manual());
+        let clock = ArtificialClock::new(SimulationConfig::manual());
 
         // Get the start time from the clock (already truncated to ms)
         let start = clock.now();
@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn test_auto_advance_now() {
         let start = Utc::now();
-        let clock = SimulatedClock::new(SimulationConfig::auto_at(start, 1000.0));
+        let clock = ArtificialClock::new(SimulationConfig::auto_at(start, 1000.0));
 
         let t1 = clock.now();
         std::thread::sleep(Duration::from_millis(10));
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_pending_wake_ordering() {
-        let clock = SimulatedClock::new(SimulationConfig::manual());
+        let clock = ArtificialClock::new(SimulationConfig::manual());
 
         let waker = futures::task::noop_waker();
 

@@ -2,22 +2,22 @@ use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::simulated::SimulatedClock;
+use crate::artificial::ArtificialClock;
 
-/// Controller for simulated time operations.
+/// Controller for artificial time operations.
 ///
-/// This is only available for simulated clocks and provides methods to
+/// This is only available for artificial clocks and provides methods to
 /// advance time, set time, and inspect pending wake events.
 ///
 /// Created alongside a [`ClockHandle`](crate::ClockHandle) via
-/// [`ClockHandle::simulated()`](crate::ClockHandle::simulated).
+/// [`ClockHandle::artificial()`](crate::ClockHandle::artificial).
 #[derive(Clone)]
 pub struct ClockController {
-    pub(crate) sim: Arc<SimulatedClock>,
+    pub(crate) sim: Arc<ArtificialClock>,
 }
 
 impl ClockController {
-    /// Advance simulated time by the given duration.
+    /// Advance artificial time by the given duration.
     ///
     /// Wake events are processed in chronological order. If you advance by
     /// 1 day and there are sleeps scheduled at 1 hour and 2 hours, they will
@@ -33,7 +33,7 @@ impl ClockController {
     /// use std::time::Duration;
     ///
     /// # async fn example() {
-    /// let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
+    /// let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
     /// let t0 = clock.now();
     ///
     /// let clock2 = clock.clone();
@@ -70,7 +70,7 @@ impl ClockController {
     /// use std::time::Duration;
     ///
     /// # async fn example() {
-    /// let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
+    /// let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
     /// let t0 = clock.now();
     ///
     /// // Spawn tasks with different sleep durations
@@ -96,7 +96,7 @@ impl ClockController {
         self.sim.advance_to_next_wake().await
     }
 
-    /// Set the simulated time to a specific value.
+    /// Set the artificial time to a specific value.
     ///
     /// **Warning**: Unlike `advance()`, this does NOT process wake events in order.
     /// All tasks whose wake time has passed will see the new time when they wake.
@@ -117,7 +117,7 @@ impl ClockController {
         self.sim.pending_wake_count()
     }
 
-    /// Get the current simulated time.
+    /// Get the current artificial time.
     ///
     /// This is equivalent to calling `now()` on the associated `ClockHandle`.
     pub fn now(&self) -> DateTime<Utc> {

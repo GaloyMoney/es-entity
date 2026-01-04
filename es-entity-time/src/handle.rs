@@ -6,7 +6,7 @@ use crate::config::SimulationConfig;
 use crate::controller::ClockController;
 use crate::inner::ClockInner;
 use crate::realtime::RealtimeClock;
-use crate::simulated::SimulatedClock;
+use crate::artificial::ArtificialClock;
 pub use crate::sleep::Elapsed;
 use crate::sleep::{ClockSleep, ClockTimeout};
 
@@ -24,8 +24,8 @@ use crate::sleep::{ClockSleep, ClockTimeout};
 /// // Real-time clock for production
 /// let clock = ClockHandle::realtime();
 ///
-/// // Simulated clock for testing - returns (handle, controller)
-/// let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
+/// // Artificial clock for testing - returns (handle, controller)
+/// let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
 /// ```
 ///
 /// # Basic Operations
@@ -64,7 +64,7 @@ impl ClockHandle {
         }
     }
 
-    /// Create a simulated clock with the given configuration.
+    /// Create an artificial clock with the given configuration.
     ///
     /// Returns a tuple of `(ClockHandle, ClockController)`. The handle provides
     /// the common time interface, while the controller provides simulation-specific
@@ -77,21 +77,21 @@ impl ClockHandle {
     /// use chrono::Utc;
     ///
     /// // Manual mode - time only advances via controller.advance()
-    /// let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
+    /// let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
     ///
     /// // Auto mode - time advances 1000x faster than real time
-    /// let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::auto(1000.0));
+    /// let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::auto(1000.0));
     ///
     /// // Start at a specific time
-    /// let (clock, ctrl) = ClockHandle::simulated(SimulationConfig {
+    /// let (clock, ctrl) = ClockHandle::artificial(SimulationConfig {
     ///     start_at: Utc::now() - chrono::Duration::days(30),
     ///     mode: SimulationMode::Manual,
     /// });
     /// ```
-    pub fn simulated(config: SimulationConfig) -> (Self, ClockController) {
-        let sim = Arc::new(SimulatedClock::new(config));
+    pub fn artificial(config: SimulationConfig) -> (Self, ClockController) {
+        let sim = Arc::new(ArtificialClock::new(config));
         let handle = Self {
-            inner: Arc::new(ClockInner::Simulated(Arc::clone(&sim))),
+            inner: Arc::new(ClockInner::Artificial(Arc::clone(&sim))),
         };
         let controller = ClockController { sim };
         (handle, controller)
@@ -102,20 +102,20 @@ impl ClockHandle {
     /// This is a fast, synchronous operation regardless of clock type.
     ///
     /// For real-time clocks, this returns `Utc::now()`.
-    /// For simulated clocks, this returns the current simulated time.
+    /// For artificial clocks, this returns the current artificial time.
     #[inline]
     pub fn now(&self) -> DateTime<Utc> {
         match &*self.inner {
             ClockInner::Realtime(rt) => rt.now(),
-            ClockInner::Simulated(sim) => sim.now(),
+            ClockInner::Artificial(sim) => sim.now(),
         }
     }
 
     /// Sleep for the given duration.
     ///
     /// For real-time clocks, this delegates to `tokio::time::sleep`.
-    /// For simulated clocks in manual mode, this waits until time is advanced.
-    /// For simulated clocks in auto mode, this sleeps for a scaled real duration.
+    /// For artificial clocks in manual mode, this waits until time is advanced.
+    /// For artificial clocks in auto mode, this sleeps for a scaled real duration.
     pub fn sleep(&self, duration: Duration) -> ClockSleep {
         ClockSleep::new(&self.inner, duration)
     }
@@ -130,14 +130,20 @@ impl ClockHandle {
     {
         ClockTimeout::new(&self.inner, duration, future)
     }
+
+    /// Get a reference to the inner clock implementation.
+    #[cfg(feature = "sqlx")]
+    pub(crate) fn inner(&self) -> &ClockInner {
+        &self.inner
+    }
 }
 
 impl std::fmt::Debug for ClockHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &*self.inner {
             ClockInner::Realtime(_) => f.debug_struct("ClockHandle::Realtime").finish(),
-            ClockInner::Simulated(sim) => f
-                .debug_struct("ClockHandle::Simulated")
+            ClockInner::Artificial(sim) => f
+                .debug_struct("ClockHandle::Artificial")
                 .field("now", &sim.now())
                 .finish(),
         }

@@ -1,7 +1,7 @@
-//! Time abstraction for es-entity with support for real and simulated time.
+//! Time abstraction for es-entity with support for real and artificial time.
 //!
 //! This crate provides a unified interface for time operations that works
-//! identically whether using real time or simulated time for testing.
+//! identically whether using real time or artificial time for testing.
 //!
 //! # Overview
 //!
@@ -10,13 +10,13 @@
 //! - `sleep(duration)` - Sleep for a duration
 //! - `timeout(duration, future)` - Timeout a future
 //!
-//! For simulated clocks, a [`ClockController`] is also provided for controlling time.
+//! For artificial clocks, a [`ClockController`] is also provided for controlling time.
 //!
 //! # Clock Types
 //!
 //! - **Realtime**: Uses system clock and tokio timers
-//! - **Simulated (Auto)**: Time advances automatically at a configurable scale
-//! - **Simulated (Manual)**: Time only advances via explicit `advance()` calls
+//! - **Artificial (Auto)**: Time advances automatically at a configurable scale
+//! - **Artificial (Manual)**: Time only advances via explicit `advance()` calls
 //!
 //! # Example
 //!
@@ -28,7 +28,7 @@
 //! let clock = ClockHandle::realtime();
 //!
 //! // Testing: use manual simulation
-//! let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
+//! let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
 //!
 //! // Same interface regardless of clock type
 //! let now = clock.now();
@@ -45,7 +45,7 @@
 //! use std::time::Duration;
 //!
 //! # async fn example() {
-//! let (clock, ctrl) = ClockHandle::simulated(SimulationConfig::manual());
+//! let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
 //!
 //! let clock2 = clock.clone();
 //! tokio::spawn(async move {
@@ -68,7 +68,7 @@ mod controller;
 mod handle;
 mod inner;
 mod realtime;
-mod simulated;
+mod artificial;
 mod sleep;
 #[cfg(feature = "sqlx")]
 mod transaction;

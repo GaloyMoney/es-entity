@@ -2,7 +2,7 @@
 name = "es-entity-time"
 version = "0.10.9-dev"
 edition = "2021"
-description = "Time abstraction for es-entity with support for simulated time"
+description = "Time abstraction for es-entity with support for artificial time"
 license = "Apache-2.0"
 
 [features]
@@ -12,12 +12,12 @@ sqlx = ["dep:sqlx"]
 
 [dependencies]
 chrono = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 parking_lot = { workspace = true }
 pin-project = { workspace = true }
 
 sqlx = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 futures = { workspace = true }

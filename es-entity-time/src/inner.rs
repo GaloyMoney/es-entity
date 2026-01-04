@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use crate::realtime::RealtimeClock;
-use crate::simulated::SimulatedClock;
+use crate::artificial::ArtificialClock;
 
 /// Internal clock implementation.
 pub(crate) enum ClockInner {
     Realtime(RealtimeClock),
-    Simulated(Arc<SimulatedClock>),
+    Artificial(Arc<ArtificialClock>),
 }

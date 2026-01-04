@@ -10,7 +10,7 @@ use crate::sleep::ClockSleep;
 /// This provides an authoritative timestamp from the database for use
 /// throughout a transaction, ensuring all operations see consistent time.
 ///
-/// For simulated clocks, the database query is skipped and simulated time is used.
+/// For artificial clocks, the database query is skipped and artificial time is used.
 ///
 /// # Example
 ///
@@ -44,13 +44,13 @@ pub struct TransactionTime {
 impl TransactionTime {
     /// Create a new transaction time synchronized with the database.
     ///
-    /// For simulated clocks, this skips the database query and uses simulated time.
+    /// For artificial clocks, this skips the database query and uses artificial time.
     pub async fn new(
         clock: &ClockHandle,
         conn: &mut sqlx::PgConnection,
     ) -> Result<Self, sqlx::Error> {
-        // For simulated clocks, skip the DB query
-        if let ClockInner::Simulated(sim) = clock.inner() {
+        // For artificial clocks, skip the DB query
+        if let ClockInner::Artificial(sim) = clock.inner() {
             let sim_time = sim.now();
             return Ok(Self {
                 db_time: sim_time,
@@ -155,7 +155,7 @@ impl ClockHandle {
     /// [`TransactionTime`] that should be used for all operations within
     /// the transaction.
     ///
-    /// For simulated clocks, the database query is skipped.
+    /// For artificial clocks, the database query is skipped.
     ///
     /// # Example
     ///

@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use crate::inner::ClockInner;
-use crate::simulated::{next_sleep_id, SimulatedClock};
+use crate::artificial::{next_sleep_id, ArtificialClock};
 
 /// A future that completes after a duration has elapsed on the clock.
 ///
@@ -23,16 +23,16 @@ enum ClockSleepInner {
         #[pin]
         sleep: tokio::time::Sleep,
     },
-    SimulatedAuto {
+    ArtificialAuto {
         #[pin]
         sleep: tokio::time::Sleep,
         wake_at_ms: i64,
-        clock: Arc<SimulatedClock>,
+        clock: Arc<ArtificialClock>,
     },
-    SimulatedManual {
+    ArtificialManual {
         wake_at_ms: i64,
         sleep_id: u64,
-        clock: Arc<SimulatedClock>,
+        clock: Arc<ArtificialClock>,
         registered: bool,
     },
 }
@@ -43,11 +43,11 @@ impl ClockSleep {
             ClockInner::Realtime(rt) => ClockSleepInner::Realtime {
                 sleep: rt.sleep(duration),
             },
-            ClockInner::Simulated(sim) => {
+            ClockInner::Artificial(sim) => {
                 let wake_at_ms = sim.now_ms() + duration.as_millis() as i64;
 
                 if sim.is_manual() {
-                    ClockSleepInner::SimulatedManual {
+                    ClockSleepInner::ArtificialManual {
                         wake_at_ms,
                         sleep_id: next_sleep_id(),
                         clock: Arc::clone(sim),
@@ -56,7 +56,7 @@ impl ClockSleep {
                 } else {
                     // Auto-advance mode uses real tokio sleep with scaled duration
                     let real_duration = sim.real_duration(duration);
-                    ClockSleepInner::SimulatedAuto {
+                    ClockSleepInner::ArtificialAuto {
                         sleep: tokio::time::sleep(real_duration),
                         wake_at_ms,
                         clock: Arc::clone(sim),
@@ -78,12 +78,12 @@ impl Future for ClockSleep {
         match this.inner.project() {
             ClockSleepInnerProj::Realtime { sleep } => sleep.poll(cx),
 
-            ClockSleepInnerProj::SimulatedAuto {
+            ClockSleepInnerProj::ArtificialAuto {
                 sleep,
                 wake_at_ms,
                 clock,
             } => {
-                // Check if simulated time has reached wake time
+                // Check if artificial time has reached wake time
                 if clock.now_ms() >= *wake_at_ms {
                     return Poll::Ready(());
                 }
@@ -91,7 +91,7 @@ impl Future for ClockSleep {
                 sleep.poll(cx)
             }
 
-            ClockSleepInnerProj::SimulatedManual {
+            ClockSleepInnerProj::ArtificialManual {
                 wake_at_ms,
                 sleep_id,
                 clock,
@@ -118,7 +118,7 @@ impl Future for ClockSleep {
 impl PinnedDrop for ClockSleep {
     fn drop(self: Pin<&mut Self>) {
         // Clean up pending wake registration if cancelled
-        if let ClockSleepInner::SimulatedManual {
+        if let ClockSleepInner::ArtificialManual {
             sleep_id,
             clock,
             registered: true,
