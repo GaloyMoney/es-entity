@@ -8,15 +8,12 @@ license = "Apache-2.0"
 [features]
 
 fail-on-warnings = []
-sqlx = ["dep:sqlx"]
 
 [dependencies]
 chrono = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 parking_lot = { workspace = true }
 pin-project = { workspace = true }
-
-sqlx = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["time"] }

@@ -130,12 +130,6 @@ impl ClockHandle {
     {
         ClockTimeout::new(&self.inner, duration, future)
     }
-
-    /// Get a reference to the inner clock implementation.
-    #[cfg(feature = "sqlx")]
-    pub(crate) fn inner(&self) -> &ClockInner {
-        &self.inner
-    }
 }
 
 impl std::fmt::Debug for ClockHandle {

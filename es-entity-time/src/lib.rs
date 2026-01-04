@@ -70,11 +70,7 @@ mod inner;
 mod realtime;
 mod artificial;
 mod sleep;
-#[cfg(feature = "sqlx")]
-mod transaction;
 
 pub use config::*;
 pub use controller::*;
 pub use handle::*;
-#[cfg(feature = "sqlx")]
-pub use transaction::*;
