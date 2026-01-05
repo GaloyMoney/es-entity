@@ -231,6 +231,10 @@ impl ArtificialClock {
     pub fn pending_wake_count(&self) -> usize {
         self.pending_wakes.lock().len()
     }
+
+    pub(crate) fn clear_pending_wakes(&self) {
+        self.pending_wakes.lock().clear();
+    }
 }
 
 #[cfg(test)]

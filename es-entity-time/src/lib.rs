@@ -66,6 +66,7 @@
 mod artificial;
 mod config;
 mod controller;
+mod global;
 mod handle;
 mod inner;
 mod realtime;
@@ -74,5 +75,6 @@ mod sleep;
 // Re-export public API
 pub use config::{SimulationConfig, SimulationMode};
 pub use controller::ClockController;
+pub use global::Clock;
 pub use handle::{ClockHandle, Elapsed};
 pub use sleep::{ClockSleep, ClockTimeout};

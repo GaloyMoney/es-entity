@@ -123,6 +123,19 @@ impl ClockController {
     pub fn now(&self) -> DateTime<Utc> {
         self.sim.now()
     }
+
+    /// Clear all pending wake events.
+    pub fn clear_pending_wakes(&self) {
+        self.sim.clear_pending_wakes();
+    }
+
+    /// Reset clock to a specific time and clear all pending wakes.
+    ///
+    /// Useful for test isolation between test cases.
+    pub fn reset_to(&self, time: DateTime<Utc>) {
+        self.sim.set_time(time);
+        self.sim.clear_pending_wakes();
+    }
 }
 
 impl std::fmt::Debug for ClockController {
