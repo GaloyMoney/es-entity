@@ -1,4 +1,4 @@
-use es_entity_time::{ClockHandle, SimulationConfig};
+use es_entity::clock::{ClockHandle, SimulationConfig};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;

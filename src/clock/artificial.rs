@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::config::{SimulationConfig, SimulationMode};
+use super::config::{SimulationConfig, SimulationMode};
 
 /// Counter for unique sleep IDs.
 static NEXT_SLEEP_ID: AtomicU64 = AtomicU64::new(0);

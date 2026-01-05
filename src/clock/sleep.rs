@@ -1,4 +1,5 @@
 use pin_project::{pin_project, pinned_drop};
+use tokio::time::Sleep;
 
 use std::{
     future::Future,
@@ -8,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{
+use super::{
     artificial::{next_sleep_id, ArtificialClock},
     inner::ClockInner,
 };
@@ -26,11 +27,11 @@ pub struct ClockSleep {
 enum ClockSleepInner {
     Realtime {
         #[pin]
-        sleep: tokio::time::Sleep,
+        sleep: Sleep,
     },
     ArtificialAuto {
         #[pin]
-        sleep: tokio::time::Sleep,
+        sleep: Sleep,
         wake_at_ms: i64,
         clock: Arc<ArtificialClock>,
     },

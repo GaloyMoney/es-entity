@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use tokio::time::Sleep;
 
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ impl RealtimeClock {
     }
 
     #[inline]
-    pub fn sleep(&self, duration: Duration) -> tokio::time::Sleep {
+    pub fn sleep(&self, duration: Duration) -> Sleep {
         tokio::time::sleep(duration)
     }
 }

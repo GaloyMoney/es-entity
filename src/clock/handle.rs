@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 
 use std::{sync::Arc, time::Duration};
 
-use crate::{
+use super::{
     artificial::ArtificialClock,
     config::SimulationConfig,
     controller::ClockController,
@@ -11,7 +11,7 @@ use crate::{
     sleep::{ClockSleep, ClockTimeout},
 };
 
-pub use crate::sleep::Elapsed;
+pub use super::sleep::Elapsed;
 
 /// A handle to a clock for getting time and performing time-based operations.
 ///
@@ -22,7 +22,7 @@ pub use crate::sleep::Elapsed;
 /// # Creating a Clock
 ///
 /// ```rust
-/// use es_entity_time::{ClockHandle, SimulationConfig};
+/// use es_entity::clock::{ClockHandle, SimulationConfig};
 ///
 /// // Real-time clock for production
 /// let clock = ClockHandle::realtime();
@@ -34,7 +34,7 @@ pub use crate::sleep::Elapsed;
 /// # Basic Operations
 ///
 /// ```rust
-/// use es_entity_time::ClockHandle;
+/// use es_entity::clock::ClockHandle;
 /// use std::time::Duration;
 ///
 /// # async fn example() {
@@ -76,7 +76,7 @@ impl ClockHandle {
     /// # Example
     ///
     /// ```rust
-    /// use es_entity_time::{ClockHandle, SimulationConfig, SimulationMode};
+    /// use es_entity::clock::{ClockHandle, SimulationConfig, SimulationMode};
     /// use chrono::Utc;
     ///
     /// // Manual mode - time only advances via controller.advance()

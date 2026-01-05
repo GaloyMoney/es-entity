@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 
 use std::{sync::Arc, time::Duration};
 
-use crate::artificial::ArtificialClock;
+use super::artificial::ArtificialClock;
 
 /// Controller for artificial time operations.
 ///
@@ -29,7 +29,7 @@ impl ClockController {
     /// # Example
     ///
     /// ```rust
-    /// use es_entity_time::{ClockHandle, SimulationConfig};
+    /// use es_entity::clock::{ClockHandle, SimulationConfig};
     /// use std::time::Duration;
     ///
     /// # async fn example() {
@@ -66,7 +66,7 @@ impl ClockController {
     /// # Example
     ///
     /// ```rust
-    /// use es_entity_time::{ClockHandle, SimulationConfig};
+    /// use es_entity::clock::{ClockHandle, SimulationConfig};
     /// use std::time::Duration;
     ///
     /// # async fn example() {

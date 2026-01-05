@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{artificial::ArtificialClock, realtime::RealtimeClock};
+use super::{artificial::ArtificialClock, realtime::RealtimeClock};
 
 /// Internal clock implementation.
 pub(crate) enum ClockInner {
