@@ -10,7 +10,7 @@ use std::{
 };
 
 use super::{
-    artificial::{next_sleep_id, ArtificialClock},
+    artificial::{ArtificialClock, next_sleep_id},
     inner::ClockInner,
 };
 

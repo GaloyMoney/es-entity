@@ -1,7 +1,7 @@
 use es_entity::clock::{Clock, ClockHandle, SimulationConfig};
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 #[tokio::test]
@@ -388,4 +388,3 @@ async fn test_global_clock_api() {
     // Verify time advanced
     assert_eq!(Clock::now(), t0 + chrono::Duration::seconds(100));
 }
-
