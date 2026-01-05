@@ -3,7 +3,7 @@
 `DbOp` is the default transaction wrapper returned by the generated `begin_op()` method on `EsRepo` structs. It wraps a `sqlx::Transaction` while providing:
 - Support for commit hooks
 - Caching of transaction time
-- Integration with the `sim-time` feature for deterministic testing
+- Integration with the [clock module](./clock.md) for deterministic testing
 
 ## Creating DbOp Instances
 
@@ -23,8 +23,10 @@ let mut op = MyEntityRepo::begin_op(&pool).await?;
 
 `DbOp` supports caching the transaction timestamp, which is useful for:
 - Ensuring consistent timestamps across multiple operations in a transaction
-- Deterministic testing with the `sim-time` feature
+- Deterministic testing with artificial time (see [clock module](./clock.md))
 - Avoiding multiple `NOW()` database queries
+
+When a global artificial clock is installed via `Clock::install_artificial()`, `DbOp::init()` automatically caches the artificial time.
 
 ```rust,ignore
 // Get cached time if available
@@ -33,10 +35,11 @@ let maybe_time: Option<DateTime<Utc>> = op.maybe_now();
 // Transition to DbOpWithTime with specific time
 let op_with_time = op.with_time(my_timestamp);
 
-// Transition to DbOpWithTime with system time
+// Transition to DbOpWithTime using Clock::now() (artificial or system time)
 let op_with_time = op.with_system_time();
 
-// Transition to DbOpWithTime with database time (executes SELECT NOW())
+// Transition to DbOpWithTime with database time
+// Uses artificial time if installed, otherwise executes SELECT NOW()
 let op_with_time = op.with_db_time().await?;
 ```
 
