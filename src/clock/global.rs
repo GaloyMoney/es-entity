@@ -79,8 +79,11 @@ impl Clock {
         }
     }
 
-    /// Get the controller if an artificial clock is installed.
-    pub fn controller() -> Option<&'static ClockController> {
-        GLOBAL.get().and_then(|s| s.controller.as_ref())
+    /// Check if an artificial clock is installed.
+    pub fn is_artificial() -> bool {
+        GLOBAL
+            .get()
+            .map(|s| s.controller.is_some())
+            .unwrap_or(false)
     }
 }

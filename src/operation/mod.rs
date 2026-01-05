@@ -38,7 +38,7 @@ impl<'c> DbOp<'c> {
         let tx = pool.begin().await?;
 
         // If a global artificial clock is set, cache its time
-        let time = crate::clock::Clock::controller().map(|_| crate::clock::Clock::now());
+        let time = crate::clock::Clock::is_artificial().then(crate::clock::Clock::now);
 
         Ok(DbOp::new(tx, time))
     }
@@ -66,7 +66,7 @@ impl<'c> DbOp<'c> {
     pub async fn with_db_time(mut self) -> Result<DbOpWithTime<'c>, sqlx::Error> {
         let time = if let Some(time) = self.now {
             time
-        } else if crate::clock::Clock::controller().is_some() {
+        } else if crate::clock::Clock::is_artificial() {
             crate::clock::Clock::now()
         } else {
             let res = sqlx::query!("SELECT NOW()")

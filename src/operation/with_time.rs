@@ -21,12 +21,12 @@ impl<'a, Op: AtomicOperation + ?Sized> OpWithTime<'a, Op> {
     ///
     /// Priority order:
     /// 1. Cached time from operation
-    /// 2. Global clock time (artificial or realtime)
+    /// 2. Artificial clock time if installed
     /// 3. Database time via `SELECT NOW()`
     pub async fn cached_or_db_time(op: &'a mut Op) -> Result<Self, sqlx::Error> {
         let now = if let Some(time) = op.maybe_now() {
             time
-        } else if crate::clock::Clock::controller().is_some() {
+        } else if crate::clock::Clock::is_artificial() {
             crate::clock::Clock::now()
         } else {
             let res = sqlx::query!("SELECT NOW()")

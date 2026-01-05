@@ -371,22 +371,20 @@ async fn test_controller_clone() {
 }
 #[tokio::test]
 async fn test_global_clock_api() {
-    
     // Install artificial clock
     let ctrl = Clock::install_artificial(SimulationConfig::manual());
     let t0 = Clock::now();
-    
+
+    // Verify it's artificial
+    assert!(Clock::is_artificial());
+
     // Verify handle access
     let handle = Clock::handle();
     assert_eq!(handle.now(), t0);
-    
-    // Verify controller access
-    let retrieved_ctrl = Clock::controller().expect("controller should exist");
-    assert_eq!(retrieved_ctrl.now(), t0);
-    
-    // Advance time
+
+    // Advance time using the returned controller
     ctrl.advance(std::time::Duration::from_secs(100)).await;
-    
+
     // Verify time advanced
     assert_eq!(Clock::now(), t0 + chrono::Duration::seconds(100));
 }
