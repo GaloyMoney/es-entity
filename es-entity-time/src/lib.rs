@@ -40,7 +40,7 @@
 //! Wake events are processed in chronological order, so tasks always see
 //! the correct time when they wake:
 //!
-//! ```rust,no_run
+//! ```rust
 //! use es_entity_time::{ClockHandle, SimulationConfig};
 //! use std::time::Duration;
 //!

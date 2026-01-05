@@ -124,6 +124,23 @@ impl ClockController {
         self.sim.now()
     }
 
+    /// Transition to realtime mode.
+    ///
+    /// After this call:
+    /// - `now()` returns `Utc::now()`
+    /// - `sleep()` uses real tokio timers
+    /// - `advance()` becomes a no-op
+    ///
+    /// Pending sleeps are woken immediately and will re-register using real timers.
+    pub fn transition_to_realtime(&self) {
+        self.sim.transition_to_realtime();
+    }
+
+    /// Check if clock has transitioned to realtime.
+    pub fn is_realtime(&self) -> bool {
+        self.sim.is_realtime()
+    }
+
     /// Clear all pending wake events.
     pub fn clear_pending_wakes(&self) {
         self.sim.clear_pending_wakes();

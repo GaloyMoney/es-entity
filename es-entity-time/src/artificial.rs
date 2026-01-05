@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 use std::{
     cmp::Ordering as CmpOrdering,
     collections::BinaryHeap,
-    sync::atomic::{AtomicI64, AtomicU64, Ordering},
+    sync::atomic::{AtomicI64, AtomicU8, AtomicU64, Ordering},
     task::Waker,
     time::{Duration, Instant},
 };
@@ -19,12 +19,19 @@ pub(crate) fn next_sleep_id() -> u64 {
     NEXT_SLEEP_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Artificial clock with support for auto-advance and manual modes.
+// Mode constants for atomic storage
+const MODE_MANUAL: u8 = 0;
+const MODE_AUTO: u8 = 1;
+const MODE_REALTIME: u8 = 2;
+
+/// Artificial clock with support for auto-advance, manual, and realtime modes.
 pub(crate) struct ArtificialClock {
-    /// Current artificial time as epoch milliseconds.
+    /// Current mode (manual, auto, or realtime).
+    mode: AtomicU8,
+    /// Time scale for auto-advance mode.
+    time_scale: f64,
+    /// Current artificial time as epoch milliseconds (used in manual/auto modes).
     current_ms: AtomicI64,
-    /// Configuration including mode.
-    config: SimulationConfig,
     /// For auto-advance mode: when simulation started in real time.
     real_start: Instant,
     /// Priority queue of pending wake events (earliest first).
@@ -69,60 +76,76 @@ impl Ord for PendingWake {
 impl ArtificialClock {
     /// Create a new artificial clock with the given configuration.
     pub fn new(config: SimulationConfig) -> Self {
-        // Truncate to millisecond precision since we store as epoch millis
-        let start_ms = config.start_at.timestamp_millis();
+        let (mode, time_scale) = match config.mode {
+            SimulationMode::Manual => (MODE_MANUAL, 0.0),
+            SimulationMode::AutoAdvance { time_scale } => (MODE_AUTO, time_scale),
+        };
+
         Self {
-            current_ms: AtomicI64::new(start_ms),
+            mode: AtomicU8::new(mode),
+            time_scale,
+            current_ms: AtomicI64::new(config.start_at.timestamp_millis()),
             real_start: Instant::now(),
-            config,
             pending_wakes: Mutex::new(BinaryHeap::new()),
         }
     }
 
     /// Get the current artificial time.
     pub fn now(&self) -> DateTime<Utc> {
-        let ms = match self.config.mode {
-            SimulationMode::Manual => self.current_ms.load(Ordering::SeqCst),
-            SimulationMode::AutoAdvance { time_scale } => {
-                let base_ms = self.current_ms.load(Ordering::SeqCst);
-                let real_elapsed = self.real_start.elapsed();
-                let sim_elapsed_ms = (real_elapsed.as_millis() as f64 * time_scale) as i64;
-                base_ms + sim_elapsed_ms
-            }
-        };
-        DateTime::from_timestamp_millis(ms).expect("valid timestamp")
+        DateTime::from_timestamp_millis(self.now_ms()).expect("valid timestamp")
     }
 
     /// Get the current time as epoch milliseconds.
     pub fn now_ms(&self) -> i64 {
-        match self.config.mode {
-            SimulationMode::Manual => self.current_ms.load(Ordering::SeqCst),
-            SimulationMode::AutoAdvance { time_scale } => {
+        match self.mode.load(Ordering::Acquire) {
+            MODE_REALTIME => Utc::now().timestamp_millis(),
+            MODE_MANUAL => self.current_ms.load(Ordering::SeqCst),
+            MODE_AUTO => {
                 let base_ms = self.current_ms.load(Ordering::SeqCst);
                 let real_elapsed = self.real_start.elapsed();
-                let sim_elapsed_ms = (real_elapsed.as_millis() as f64 * time_scale) as i64;
-                base_ms + sim_elapsed_ms
+                base_ms + (real_elapsed.as_millis() as f64 * self.time_scale) as i64
             }
+            _ => unreachable!(),
         }
     }
 
-    /// Convert artificial duration to real duration (for auto-advance mode).
+    /// Convert artificial duration to real duration.
     pub(crate) fn real_duration(&self, duration: Duration) -> Duration {
-        match self.config.mode {
-            SimulationMode::Manual => {
-                // In manual mode, we don't use real sleeps - just register for wake
-                Duration::from_millis(0)
-            }
-            SimulationMode::AutoAdvance { time_scale } => {
-                let real_ms = (duration.as_millis() as f64 / time_scale).ceil() as u64;
+        match self.mode.load(Ordering::Acquire) {
+            MODE_REALTIME => duration,
+            MODE_MANUAL => Duration::ZERO,
+            MODE_AUTO => {
+                let real_ms = (duration.as_millis() as f64 / self.time_scale).ceil() as u64;
                 Duration::from_millis(real_ms.max(1))
             }
+            _ => unreachable!(),
         }
     }
 
     /// Check if this is manual mode.
     pub fn is_manual(&self) -> bool {
-        matches!(self.config.mode, SimulationMode::Manual)
+        self.mode.load(Ordering::Acquire) == MODE_MANUAL
+    }
+
+    /// Check if this has transitioned to realtime.
+    pub fn is_realtime(&self) -> bool {
+        self.mode.load(Ordering::Acquire) == MODE_REALTIME
+    }
+
+    /// Transition to realtime mode.
+    ///
+    /// After this call, `now()` returns `Utc::now()` and sleeps use real tokio timers.
+    pub fn transition_to_realtime(&self) {
+        self.mode.store(MODE_REALTIME, Ordering::Release);
+        self.wake_all_pending();
+    }
+
+    /// Wake all pending tasks.
+    fn wake_all_pending(&self) {
+        let mut pending = self.pending_wakes.lock();
+        for wake in pending.drain() {
+            wake.waker.wake();
+        }
     }
 
     /// Register a pending wake event.
@@ -141,6 +164,11 @@ impl ArtificialClock {
         // Rebuild heap without the cancelled entry
         let entries: Vec<_> = pending.drain().filter(|w| w.sleep_id != sleep_id).collect();
         pending.extend(entries);
+    }
+
+    /// Clear all pending wake events.
+    pub fn clear_pending_wakes(&self) {
+        self.pending_wakes.lock().clear();
     }
 
     /// Peek at the next wake time, if any.
@@ -168,7 +196,7 @@ impl ArtificialClock {
     }
 
     /// Set the current time directly.
-    pub(crate) fn set_time(&self, time: DateTime<Utc>) {
+    pub fn set_time(&self, time: DateTime<Utc>) {
         self.current_ms
             .store(time.timestamp_millis(), Ordering::SeqCst);
     }
@@ -177,7 +205,7 @@ impl ArtificialClock {
     /// Returns the number of wake events processed.
     pub async fn advance(&self, duration: Duration) -> usize {
         if !self.is_manual() {
-            // Auto-advance mode doesn't support explicit advance
+            // Auto-advance and realtime modes don't support explicit advance
             return 0;
         }
 
@@ -231,10 +259,6 @@ impl ArtificialClock {
     pub fn pending_wake_count(&self) -> usize {
         self.pending_wakes.lock().len()
     }
-
-    pub(crate) fn clear_pending_wakes(&self) {
-        self.pending_wakes.lock().clear();
-    }
 }
 
 #[cfg(test)]
@@ -245,7 +269,6 @@ mod tests {
     fn test_manual_now() {
         let clock = ArtificialClock::new(SimulationConfig::manual());
 
-        // Get the start time from the clock (already truncated to ms)
         let start = clock.now();
 
         // Time doesn't advance on its own
@@ -268,6 +291,25 @@ mod tests {
     }
 
     #[test]
+    fn test_transition_to_realtime() {
+        let clock = ArtificialClock::new(SimulationConfig::manual());
+
+        assert!(clock.is_manual());
+        assert!(!clock.is_realtime());
+
+        clock.transition_to_realtime();
+
+        assert!(!clock.is_manual());
+        assert!(clock.is_realtime());
+
+        // now() should return approximately Utc::now()
+        let clock_now = clock.now();
+        let utc_now = Utc::now();
+        let diff = (clock_now - utc_now).num_milliseconds().abs();
+        assert!(diff < 100); // Within 100ms
+    }
+
+    #[test]
     fn test_pending_wake_ordering() {
         let clock = ArtificialClock::new(SimulationConfig::manual());
 
@@ -286,5 +328,20 @@ mod tests {
         clock.wake_tasks_at(2000);
 
         assert_eq!(clock.next_wake_time(), Some(3000));
+    }
+
+    #[test]
+    fn test_clear_pending_wakes() {
+        let clock = ArtificialClock::new(SimulationConfig::manual());
+        let waker = futures::task::noop_waker();
+
+        clock.register_wake(1000, 1, waker.clone());
+        clock.register_wake(2000, 2, waker);
+
+        assert_eq!(clock.pending_wake_count(), 2);
+
+        clock.clear_pending_wakes();
+
+        assert_eq!(clock.pending_wake_count(), 0);
     }
 }
