@@ -12,8 +12,9 @@ pub use with_time::*;
 /// Used as a wrapper of a [`sqlx::Transaction`] but can also cache the time at which the
 /// transaction is taking place.
 ///
-/// When `--feature sim-time` is active it will hold a time that will substitute `NOW()` in all
-/// write operations.
+/// When a global artificial clock is set via [`crate::clock::Clock::install_artificial`],
+/// the transaction will automatically cache that clock's time, enabling deterministic
+/// testing. This cached time will be used in all time-dependent operations.
 pub struct DbOp<'c> {
     tx: Transaction<'c, Postgres>,
     now: Option<chrono::DateTime<chrono::Utc>>,
@@ -29,15 +30,15 @@ impl<'c> DbOp<'c> {
         }
     }
 
-    /// Initializes a transaction - defaults `now()` to `None` but will cache `sim_time::now()`
-    /// when `--feature sim-time` is active.
+    /// Initializes a transaction - defaults `now()` to `None` unless a global artificial clock is set.
+    ///
+    /// If a global artificial clock is configured via [`crate::clock::Clock::install_artificial`],
+    /// the current time from that clock will be cached in the transaction.
     pub async fn init(pool: &PgPool) -> Result<DbOp<'static>, sqlx::Error> {
         let tx = pool.begin().await?;
 
-        #[cfg(feature = "sim-time")]
-        let time = Some(crate::prelude::sim_time::now());
-        #[cfg(not(feature = "sim-time"))]
-        let time = None;
+        // If a global artificial clock is set, cache its time
+        let time = crate::clock::Clock::controller().map(|_| crate::clock::Clock::now());
 
         Ok(DbOp::new(tx, time))
     }
@@ -47,26 +48,26 @@ impl<'c> DbOp<'c> {
         DbOpWithTime::new(self, time)
     }
 
-    /// Transitions to a [`DbOpWithTime`] using [`chrono::Utc::now()`] to populate
-    /// (unless a time was already cached from sim-time).
+    /// Transitions to a [`DbOpWithTime`] using the global clock.
+    ///
+    /// Uses cached time if present, otherwise uses [`crate::clock::Clock::now()`]
+    /// which returns the artificial clock time if set, or system time otherwise.
     pub fn with_system_time(self) -> DbOpWithTime<'c> {
-        let time = if let Some(time) = self.now {
-            time
-        } else {
-            chrono::Utc::now()
-        };
-
+        let time = self.now.unwrap_or_else(crate::clock::Clock::now);
         DbOpWithTime::new(self, time)
     }
 
-    /// Transitions to a [`DbOpWithTime`] using
-    /// ```sql
-    /// SELECT NOW()
-    /// ```
-    /// from the database (unless a time was already cached from sim-time).
+    /// Transitions to a [`DbOpWithTime`] using the database time.
+    ///
+    /// Priority order:
+    /// 1. Cached time if present
+    /// 2. Artificial clock time if installed
+    /// 3. Database time via `SELECT NOW()`
     pub async fn with_db_time(mut self) -> Result<DbOpWithTime<'c>, sqlx::Error> {
         let time = if let Some(time) = self.now {
             time
+        } else if crate::clock::Clock::controller().is_some() {
+            crate::clock::Clock::now()
         } else {
             let res = sqlx::query!("SELECT NOW()")
                 .fetch_one(&mut *self.tx)

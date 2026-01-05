@@ -18,21 +18,21 @@ impl<'a, Op: AtomicOperation + ?Sized> AtomicOperationWithTime for OpWithTime<'a
 
 impl<'a, Op: AtomicOperation + ?Sized> OpWithTime<'a, Op> {
     /// Wraps an operation, using existing time if present, otherwise fetching from DB.
+    ///
+    /// Priority order:
+    /// 1. Cached time from operation
+    /// 2. Global clock time (artificial or realtime)
+    /// 3. Database time via `SELECT NOW()`
     pub async fn cached_or_db_time(op: &'a mut Op) -> Result<Self, sqlx::Error> {
         let now = if let Some(time) = op.maybe_now() {
             time
+        } else if crate::clock::Clock::controller().is_some() {
+            crate::clock::Clock::now()
         } else {
-            #[cfg(feature = "sim-time")]
-            {
-                crate::prelude::sim_time::now()
-            }
-            #[cfg(not(feature = "sim-time"))]
-            {
-                let res = sqlx::query!("SELECT NOW()")
-                    .fetch_one(op.as_executor())
-                    .await?;
-                res.now.expect("could not fetch now")
-            }
+            let res = sqlx::query!("SELECT NOW()")
+                .fetch_one(op.as_executor())
+                .await?;
+            res.now.expect("could not fetch now")
         };
         Ok(Self { inner: op, now })
     }
@@ -44,17 +44,11 @@ impl<'a, Op: AtomicOperation + ?Sized> OpWithTime<'a, Op> {
     }
 
     /// Wraps using system time (uses existing if present).
+    ///
+    /// Uses cached time if present, otherwise [`crate::clock::Clock::now()`]
+    /// which returns the artificial clock time if set, or system time otherwise.
     pub fn cached_or_system_time(op: &'a mut Op) -> Self {
-        let now = op.maybe_now().unwrap_or_else(|| {
-            #[cfg(feature = "sim-time")]
-            {
-                crate::prelude::sim_time::now()
-            }
-            #[cfg(not(feature = "sim-time"))]
-            {
-                chrono::Utc::now()
-            }
-        });
+        let now = op.maybe_now().unwrap_or_else(crate::clock::Clock::now);
         Self { inner: op, now }
     }
 

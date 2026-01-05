@@ -1,4 +1,5 @@
-use es_entity::clock::{ClockHandle, SimulationConfig};
+use es_entity::clock::{Clock, ClockHandle, SimulationConfig};
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -368,3 +369,25 @@ async fn test_controller_clone() {
     assert_eq!(ctrl2.now(), t0 + chrono::Duration::seconds(50));
     assert_eq!(ctrl.pending_wake_count(), ctrl2.pending_wake_count());
 }
+#[tokio::test]
+async fn test_global_clock_api() {
+    
+    // Install artificial clock
+    let ctrl = Clock::install_artificial(SimulationConfig::manual());
+    let t0 = Clock::now();
+    
+    // Verify handle access
+    let handle = Clock::handle();
+    assert_eq!(handle.now(), t0);
+    
+    // Verify controller access
+    let retrieved_ctrl = Clock::controller().expect("controller should exist");
+    assert_eq!(retrieved_ctrl.now(), t0);
+    
+    // Advance time
+    ctrl.advance(std::time::Duration::from_secs(100)).await;
+    
+    // Verify time advanced
+    assert_eq!(Clock::now(), t0 + chrono::Duration::seconds(100));
+}
+
