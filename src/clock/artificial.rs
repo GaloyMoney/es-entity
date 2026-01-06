@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::config::{SimulationConfig, SimulationMode};
+use super::config::{ArtificialClockConfig, ArtificialMode};
 
 /// Counter for unique sleep IDs.
 static NEXT_SLEEP_ID: AtomicU64 = AtomicU64::new(0);
@@ -75,10 +75,10 @@ impl Ord for PendingWake {
 
 impl ArtificialClock {
     /// Create a new artificial clock with the given configuration.
-    pub fn new(config: SimulationConfig) -> Self {
+    pub fn new(config: ArtificialClockConfig) -> Self {
         let (mode, time_scale) = match config.mode {
-            SimulationMode::Manual => (MODE_MANUAL, 0.0),
-            SimulationMode::AutoAdvance { time_scale } => (MODE_AUTO, time_scale),
+            ArtificialMode::Manual => (MODE_MANUAL, 0.0),
+            ArtificialMode::AutoAdvance { time_scale } => (MODE_AUTO, time_scale),
         };
 
         Self {
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn test_manual_now() {
-        let clock = ArtificialClock::new(SimulationConfig::manual());
+        let clock = ArtificialClock::new(ArtificialClockConfig::manual());
 
         let start = clock.now();
 
@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn test_auto_advance_now() {
         let start = Utc::now();
-        let clock = ArtificialClock::new(SimulationConfig::auto_at(start, 1000.0));
+        let clock = ArtificialClock::new(ArtificialClockConfig::auto_at(start, 1000.0));
 
         let t1 = clock.now();
         std::thread::sleep(Duration::from_millis(10));
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn test_transition_to_realtime() {
-        let clock = ArtificialClock::new(SimulationConfig::manual());
+        let clock = ArtificialClock::new(ArtificialClockConfig::manual());
 
         assert!(clock.is_manual());
         assert!(!clock.is_realtime());
@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn test_pending_wake_ordering() {
-        let clock = ArtificialClock::new(SimulationConfig::manual());
+        let clock = ArtificialClock::new(ArtificialClockConfig::manual());
 
         let waker = futures::task::noop_waker();
 
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn test_clear_pending_wakes() {
-        let clock = ArtificialClock::new(SimulationConfig::manual());
+        let clock = ArtificialClock::new(ArtificialClockConfig::manual());
         let waker = futures::task::noop_waker();
 
         clock.register_wake(1000, 1, waker.clone());

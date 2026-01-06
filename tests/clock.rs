@@ -1,4 +1,4 @@
-use es_entity::clock::{Clock, ClockHandle, SimulationConfig};
+use es_entity::clock::{ArtificialClockConfig, Clock, ClockHandle};
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -28,7 +28,7 @@ async fn test_realtime_sleep() {
 
 #[tokio::test]
 async fn test_artificial_manual_time_stands_still() {
-    let (clock, _ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    let (clock, _ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     let t0 = clock.now();
 
     // Time doesn't advance on its own
@@ -38,7 +38,7 @@ async fn test_artificial_manual_time_stands_still() {
 
 #[tokio::test]
 async fn test_artificial_manual_advance() {
-    let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     let t0 = clock.now();
 
     ctrl.advance(Duration::from_secs(3600)).await;
@@ -49,7 +49,7 @@ async fn test_artificial_manual_advance() {
 #[tokio::test]
 async fn test_artificial_auto_advance() {
     // 10000x speed: 1ms real = 10 seconds artificial
-    let (clock, _ctrl) = ClockHandle::artificial(SimulationConfig::auto(10000.0));
+    let (clock, _ctrl) = ClockHandle::artificial(ArtificialClockConfig::auto(10000.0));
 
     let start = clock.now();
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -63,7 +63,7 @@ async fn test_artificial_auto_advance() {
 
 #[tokio::test]
 async fn test_manual_sleep_wakes_on_advance() {
-    let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     let t0 = clock.now();
 
     let woke = Arc::new(AtomicUsize::new(0));
@@ -92,7 +92,7 @@ async fn test_manual_sleep_wakes_on_advance() {
 
 #[tokio::test]
 async fn test_multiple_sleeps_wake_in_order() {
-    let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     let t0 = clock.now();
 
     let wake_order = Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -146,7 +146,7 @@ async fn test_multiple_sleeps_wake_in_order() {
 
 #[tokio::test]
 async fn test_advance_to_next_wake() {
-    let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     let t0 = clock.now();
 
     let c = clock.clone();
@@ -170,7 +170,7 @@ async fn test_advance_to_next_wake() {
 
 #[tokio::test]
 async fn test_timeout_success() {
-    let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
 
     let c = clock.clone();
     let result =
@@ -185,7 +185,7 @@ async fn test_timeout_success() {
 
 #[tokio::test]
 async fn test_timeout_elapsed() {
-    let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
 
     let c = clock.clone();
     let result_handle = tokio::spawn(async move {
@@ -207,7 +207,7 @@ async fn test_timeout_elapsed() {
 
 #[tokio::test]
 async fn test_cloned_handles_share_time() {
-    let (clock1, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    let (clock1, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     let clock2 = clock1.clone();
     let clock3 = clock1.clone();
 
@@ -224,7 +224,7 @@ async fn test_cloned_handles_share_time() {
 
 #[tokio::test]
 async fn test_set_time_jumps_directly() {
-    let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     let t0 = clock.now();
 
     let target = t0 + chrono::Duration::days(30);
@@ -235,7 +235,7 @@ async fn test_set_time_jumps_directly() {
 
 #[tokio::test]
 async fn test_cancelled_sleep_cleanup() {
-    let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
 
     // Start a sleep
     let c = clock.clone();
@@ -259,7 +259,7 @@ async fn test_cancelled_sleep_cleanup() {
 #[tokio::test]
 async fn test_concurrent_system_coordination() {
     // Simulate multiple systems that need coordinated time
-    let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     let t0 = clock.now();
 
     // System A: Job scheduler - runs job every hour
@@ -301,7 +301,7 @@ async fn test_concurrent_system_coordination() {
 
 #[tokio::test]
 async fn test_same_time_wakes() {
-    let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     let t0 = clock.now();
 
     let wake_count = Arc::new(AtomicUsize::new(0));
@@ -333,7 +333,7 @@ async fn test_debug_output() {
     let debug = format!("{:?}", clock);
     assert!(debug.contains("Realtime"));
 
-    let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     let debug = format!("{:?}", clock);
     assert!(debug.contains("Artificial"));
 
@@ -343,7 +343,7 @@ async fn test_debug_output() {
 
 #[tokio::test]
 async fn test_controller_now() {
-    let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
 
     // Both should return the same time
     assert_eq!(clock.now(), ctrl.now());
@@ -356,7 +356,7 @@ async fn test_controller_now() {
 
 #[tokio::test]
 async fn test_controller_clone() {
-    let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     let ctrl2 = ctrl.clone();
 
     let t0 = clock.now();
@@ -372,7 +372,7 @@ async fn test_controller_clone() {
 #[tokio::test]
 async fn test_global_clock_api() {
     // Install artificial clock
-    let ctrl = Clock::install_artificial(SimulationConfig::manual());
+    let ctrl = Clock::install_artificial(ArtificialClockConfig::manual());
     let t0 = Clock::now();
 
     // Verify it's artificial

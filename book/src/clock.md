@@ -9,7 +9,7 @@ The clock module provides:
 - **`ClockHandle`** - A cheap-to-clone handle for time operations
 - **`Clock`** - Global clock access (like `Utc::now()` but testable)
 - **`ClockController`** - Control artificial time advancement
-- **`SimulationConfig`** - Configure artificial clock behavior
+- **`ArtificialClockConfig`** - Configure artificial clock behavior
 
 ## Clock Types
 
@@ -29,10 +29,10 @@ let now = clock.now(); // Returns Utc::now()
 Time only advances when explicitly controlled. Perfect for deterministic testing.
 
 ```rust,ignore
-use es_entity::clock::{ClockHandle, SimulationConfig};
+use es_entity::clock::{ClockHandle, ArtificialClockConfig};
 
 // Create artificial clock with manual advancement
-let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
 
 let t0 = clock.now();
 
@@ -50,10 +50,10 @@ assert_eq!(clock.now(), t0 + chrono::Duration::hours(1));
 The `Clock` struct provides static methods for global clock access, similar to `Utc::now()`:
 
 ```rust,ignore
-use es_entity::clock::{Clock, SimulationConfig};
+use es_entity::clock::{Clock, ArtificialClockConfig};
 
 // For testing: install artificial clock (returns controller)
-let ctrl = Clock::install_artificial(SimulationConfig::manual());
+let ctrl = Clock::install_artificial(ArtificialClockConfig::manual());
 
 // Get current time (works with both artificial and real time)
 let now = Clock::now();
@@ -72,24 +72,24 @@ Clock::timeout(Duration::from_secs(5), some_future).await;
 
 If you call `Clock::now()` without installing an artificial clock, it lazily initializes to realtime mode. This means production code can use `Clock::now()` without any setup.
 
-## SimulationConfig
+## ArtificialClockConfig
 
 Configure how the artificial clock behaves:
 
 ```rust,ignore
-use es_entity::clock::{SimulationConfig, SimulationMode};
+use es_entity::clock::{ArtificialClockConfig, ArtificialMode};
 use chrono::Utc;
 
 // Manual mode - time only advances via controller.advance()
-let config = SimulationConfig::manual();
+let config = ArtificialClockConfig::manual();
 
 // Auto mode - time advances automatically at 1000x speed
-let config = SimulationConfig::auto(1000.0);
+let config = ArtificialClockConfig::auto(1000.0);
 
 // Start at a specific time
-let config = SimulationConfig {
+let config = ArtificialClockConfig {
     start_at: Utc::now() - chrono::Duration::days(30),
-    mode: SimulationMode::Manual,
+    mode: ArtificialMode::Manual,
 };
 ```
 
@@ -122,10 +122,10 @@ ctrl.transition_to_realtime();
 When a global artificial clock is installed, database operations automatically use it:
 
 ```rust,ignore
-use es_entity::clock::{Clock, SimulationConfig};
+use es_entity::clock::{Clock, ArtificialClockConfig};
 
 // Install artificial clock for testing
-let ctrl = Clock::install_artificial(SimulationConfig::manual());
+let ctrl = Clock::install_artificial(ArtificialClockConfig::manual());
 
 // DbOp::init() now caches the artificial time
 let op = DbOp::init(&pool).await?;
@@ -142,16 +142,16 @@ This ensures all operations within a transaction use consistent, controlled time
 ## Example: Testing Time-Dependent Logic
 
 ```rust,ignore
-use es_entity::clock::{Clock, SimulationConfig};
+use es_entity::clock::{Clock, ArtificialClockConfig};
 use std::time::Duration;
 
 #[tokio::test]
 async fn test_subscription_expiry() {
     // Install artificial clock starting 30 days ago
     let start = Utc::now() - chrono::Duration::days(30);
-    let ctrl = Clock::install_artificial(SimulationConfig {
+    let ctrl = Clock::install_artificial(ArtificialClockConfig {
         start_at: start,
-        mode: SimulationMode::Manual,
+        mode: ArtificialMode::Manual,
     });
 
     // Create subscription that expires in 7 days

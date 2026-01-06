@@ -115,7 +115,7 @@ use std::{
 // Internal modules
 use crate::{
     artificial::ArtificialClock,
-    config::SimulationConfig,
+    config::ArtificialClockConfig,
     inner::ClockInner,
 };
 

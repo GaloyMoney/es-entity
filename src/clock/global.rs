@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use super::{ClockController, ClockHandle, ClockSleep, ClockTimeout, SimulationConfig};
+use super::{ArtificialClockConfig, ClockController, ClockHandle, ClockSleep, ClockTimeout};
 
 struct GlobalState {
     handle: ClockHandle,
@@ -50,7 +50,7 @@ impl Clock {
     /// - If already realtime: panics
     ///
     /// Must be called before any `Clock::now()` calls if you want artificial time.
-    pub fn install_artificial(config: SimulationConfig) -> ClockController {
+    pub fn install_artificial(config: ArtificialClockConfig) -> ClockController {
         // Check if already initialized
         if let Some(state) = GLOBAL.get() {
             return state

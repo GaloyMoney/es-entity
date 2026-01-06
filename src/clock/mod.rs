@@ -21,14 +21,14 @@
 //! # Example
 //!
 //! ```rust
-//! use es_entity::clock::{ClockHandle, SimulationConfig};
+//! use es_entity::clock::{ClockHandle, ArtificialClockConfig};
 //! use std::time::Duration;
 //!
 //! // Production: use real time
 //! let clock = ClockHandle::realtime();
 //!
 //! // Testing: use manual simulation
-//! let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+//! let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
 //!
 //! // Same interface regardless of clock type
 //! let now = clock.now();
@@ -41,11 +41,11 @@
 //! the correct time when they wake:
 //!
 //! ```rust
-//! use es_entity::clock::{ClockHandle, SimulationConfig};
+//! use es_entity::clock::{ClockHandle, ArtificialClockConfig};
 //! use std::time::Duration;
 //!
 //! # async fn example() {
-//! let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+//! let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
 //!
 //! let clock2 = clock.clone();
 //! tokio::spawn(async move {
@@ -73,7 +73,7 @@ mod realtime;
 mod sleep;
 
 // Re-export public API
-pub use config::{SimulationConfig, SimulationMode};
+pub use config::{ArtificialClockConfig, ArtificialMode};
 pub use controller::ClockController;
 pub use global::Clock;
 pub use handle::{ClockHandle, Elapsed};

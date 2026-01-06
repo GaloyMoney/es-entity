@@ -4,7 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use super::{
     artificial::ArtificialClock,
-    config::SimulationConfig,
+    config::ArtificialClockConfig,
     controller::ClockController,
     inner::ClockInner,
     realtime::RealtimeClock,
@@ -22,13 +22,13 @@ pub use super::sleep::Elapsed;
 /// # Creating a Clock
 ///
 /// ```rust
-/// use es_entity::clock::{ClockHandle, SimulationConfig};
+/// use es_entity::clock::{ClockHandle, ArtificialClockConfig};
 ///
 /// // Real-time clock for production
 /// let clock = ClockHandle::realtime();
 ///
 /// // Artificial clock for testing - returns (handle, controller)
-/// let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+/// let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
 /// ```
 ///
 /// # Basic Operations
@@ -70,28 +70,28 @@ impl ClockHandle {
     /// Create an artificial clock with the given configuration.
     ///
     /// Returns a tuple of `(ClockHandle, ClockController)`. The handle provides
-    /// the common time interface, while the controller provides simulation-specific
-    /// operations like advancing time.
+    /// the common time interface, while the controller provides operations
+    /// for advancing time.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use es_entity::clock::{ClockHandle, SimulationConfig, SimulationMode};
+    /// use es_entity::clock::{ClockHandle, ArtificialClockConfig, ArtificialMode};
     /// use chrono::Utc;
     ///
     /// // Manual mode - time only advances via controller.advance()
-    /// let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    /// let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     ///
     /// // Auto mode - time advances 1000x faster than real time
-    /// let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::auto(1000.0));
+    /// let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::auto(1000.0));
     ///
     /// // Start at a specific time
-    /// let (clock, ctrl) = ClockHandle::artificial(SimulationConfig {
+    /// let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig {
     ///     start_at: Utc::now() - chrono::Duration::days(30),
-    ///     mode: SimulationMode::Manual,
+    ///     mode: ArtificialMode::Manual,
     /// });
     /// ```
-    pub fn artificial(config: SimulationConfig) -> (Self, ClockController) {
+    pub fn artificial(config: ArtificialClockConfig) -> (Self, ClockController) {
         let sim = Arc::new(ArtificialClock::new(config));
         let handle = Self {
             inner: Arc::new(ClockInner::Artificial(Arc::clone(&sim))),

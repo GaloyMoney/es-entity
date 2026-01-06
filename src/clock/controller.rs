@@ -29,11 +29,11 @@ impl ClockController {
     /// # Example
     ///
     /// ```rust
-    /// use es_entity::clock::{ClockHandle, SimulationConfig};
+    /// use es_entity::clock::{ClockHandle, ArtificialClockConfig};
     /// use std::time::Duration;
     ///
     /// # async fn example() {
-    /// let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    /// let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     /// let t0 = clock.now();
     ///
     /// let clock2 = clock.clone();
@@ -66,11 +66,11 @@ impl ClockController {
     /// # Example
     ///
     /// ```rust
-    /// use es_entity::clock::{ClockHandle, SimulationConfig};
+    /// use es_entity::clock::{ClockHandle, ArtificialClockConfig};
     /// use std::time::Duration;
     ///
     /// # async fn example() {
-    /// let (clock, ctrl) = ClockHandle::artificial(SimulationConfig::manual());
+    /// let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     /// let t0 = clock.now();
     ///
     /// // Spawn tasks with different sleep durations
