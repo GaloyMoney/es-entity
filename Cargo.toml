@@ -19,13 +19,11 @@ graphql = ["es-entity-macros/graphql", "dep:async-graphql", "dep:base64"]
 event-context = ["es-entity-macros/event-context", "event-context-enabled"]
 event-context-enabled = ["es-entity-macros/event-context-enabled"]
 json-schema = ["dep:schemars"]
-sim-time = [ "dep:sim-time" ]
 mdbook-test = ["dep:anyhow"]
 instrument = ["es-entity-macros/instrument", "dep:tracing"]
 
 [dependencies]
 es-entity-macros = { workspace = true }
-sim-time = { workspace = true, optional = true }
 
 base64 = { workspace = true, optional = true }
 sqlx = { workspace = true }
@@ -60,13 +58,11 @@ futures = { workspace = true }
 resolver = "2"
 members = [
   "es-entity-macros",
-  "sim-time",
 ]
 
 [workspace.dependencies]
 
 es-entity-macros = { path = "es-entity-macros", version = "0.10.9-dev" }
-sim-time = { path = "sim-time", version = "0.10.9-dev" }
 
 anyhow = "1.0.100"
 async-graphql = { version = "7.0.17", default-features = false }

@@ -23,7 +23,6 @@ for file in $(find . -name Cargo.toml); do
   sed -i'' "s/^version.*/version = \"${VERSION}\"/" ${file}
 done
 
-sed -i'' "s/sim-time\", version = .*/sim-time\", version = \"${VERSION}\" }/" ./Cargo.toml
 sed -i'' "s/es-entity-macros\", version = .*/es-entity-macros\", version = \"${VERSION}\" }/" ./Cargo.toml
 cargo update --workspace
 
