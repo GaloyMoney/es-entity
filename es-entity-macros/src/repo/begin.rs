@@ -47,13 +47,13 @@ impl ToTokens for Begin<'_> {
             tokens.append_all(quote! {
                 #[inline(always)]
                 pub async fn begin_op(&self) -> Result<#op, sqlx::Error> {
-                    self.begin_op_with_clock(es_entity::clock::Clock::handle().clone()).await
+                    self.begin_op_with_clock(es_entity::clock::Clock::handle()).await
                 }
 
                 #[inline(always)]
                 pub async fn begin_op_with_clock(
                     &self,
-                    clock: es_entity::clock::ClockHandle,
+                    clock: &es_entity::clock::ClockHandle,
                 ) -> Result<#op, sqlx::Error> {
                     es_entity::DbOp::init_with_clock(self.pool(), clock).await
                 }

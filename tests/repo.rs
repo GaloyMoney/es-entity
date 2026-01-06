@@ -152,7 +152,7 @@ async fn create_with_artificial_clock() -> anyhow::Result<()> {
     let (clock, _ctrl) = ClockHandle::artificial(config);
 
     // Begin operation with the artificial clock
-    let mut op = users.begin_op_with_clock(clock.clone()).await?;
+    let mut op = users.begin_op_with_clock(&clock).await?;
 
     let new_user = NewUser::builder()
         .id(UserId::new())

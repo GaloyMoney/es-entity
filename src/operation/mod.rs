@@ -42,7 +42,7 @@ impl<'c> DbOp<'c> {
     ///
     /// Delegates to [`init_with_clock`](Self::init_with_clock) using the global clock handle.
     pub async fn init(pool: &PgPool) -> Result<DbOp<'static>, sqlx::Error> {
-        Self::init_with_clock(pool, crate::clock::Clock::handle().clone()).await
+        Self::init_with_clock(pool, crate::clock::Clock::handle()).await
     }
 
     /// Initializes a transaction with the specified clock.
@@ -50,14 +50,14 @@ impl<'c> DbOp<'c> {
     /// If the clock is artificial, its current time will be cached in the transaction.
     pub async fn init_with_clock(
         pool: &PgPool,
-        clock: ClockHandle,
+        clock: &ClockHandle,
     ) -> Result<DbOp<'static>, sqlx::Error> {
         let tx = pool.begin().await?;
 
         // If an artificial clock is provided, cache its time
         let time = clock.is_artificial().then(|| clock.now());
 
-        Ok(DbOp::new(tx, clock, time))
+        Ok(DbOp::new(tx, clock.clone(), time))
     }
 
     /// Transitions to a [`DbOpWithTime`] with the given time cached.
