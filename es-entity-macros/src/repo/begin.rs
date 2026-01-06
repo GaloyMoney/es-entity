@@ -22,10 +22,10 @@ impl<'a> From<&'a RepositoryOptions> for Begin<'a> {
 
 /// Check if a type is DbOp (either `DbOp<...>` or `es_entity::DbOp<...>`)
 fn is_db_op_type(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            return segment.ident == "DbOp";
-        }
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+    {
+        return segment.ident == "DbOp";
     }
     false
 }
