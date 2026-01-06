@@ -133,6 +133,11 @@ impl ClockHandle {
     {
         ClockTimeout::new(&self.inner, duration, future)
     }
+
+    /// Check if this clock is artificial (as opposed to realtime).
+    pub fn is_artificial(&self) -> bool {
+        matches!(&*self.inner, ClockInner::Artificial(_))
+    }
 }
 
 impl std::fmt::Debug for ClockHandle {
