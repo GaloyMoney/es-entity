@@ -2,7 +2,7 @@ mod entities;
 mod helpers;
 
 use entities::user::*;
-use es_entity::*;
+use es_entity::{clock::*, *};
 use sqlx::PgPool;
 
 #[derive(EsRepo, Debug)]
@@ -131,6 +131,48 @@ async fn list_for_filter() -> anyhow::Result<()> {
     for user in &filtered_result.entities {
         assert_eq!(user.name, "Alice",);
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_with_artificial_clock() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool);
+
+    // Create an artificial clock at a specific time (truncated to millis for DB compatibility)
+    let fixed_time = {
+        let t = chrono::Utc::now() - chrono::Duration::days(30);
+        chrono::DateTime::from_timestamp_millis(t.timestamp_millis()).unwrap()
+    };
+    let config = ArtificialClockConfig {
+        start_at: fixed_time,
+        mode: ArtificialMode::Manual,
+    };
+    let (clock, _ctrl) = ClockHandle::artificial(config);
+
+    // Begin operation with the artificial clock
+    let mut op = users.begin_op_with_clock(clock.clone()).await?;
+
+    let new_user = NewUser::builder()
+        .id(UserId::new())
+        .name("TimeTest")
+        .build()
+        .unwrap();
+
+    let user = users.create_in_op(&mut op, new_user).await?;
+    let user_id = user.id;
+    op.commit().await?;
+
+    // Load the user back and check the recorded_at timestamp
+    let loaded_user = users.find_by_id(user_id).await?;
+    let recorded_at = loaded_user
+        .events()
+        .entity_first_persisted_at()
+        .expect("should have recorded_at");
+
+    // The recorded_at should match the artificial clock's time
+    assert_eq!(recorded_at, fixed_time);
 
     Ok(())
 }
