@@ -130,14 +130,44 @@ let ctrl = Clock::install_artificial(ArtificialClockConfig::manual());
 // DbOp::init() now caches the artificial time
 let op = DbOp::init(&pool).await?;
 
-// with_system_time() uses Clock::now()
-let op_with_time = op.with_system_time();
+// with_clock_time() uses the operation's clock
+let op_with_time = op.with_clock_time();
 
 // with_db_time() uses artificial time instead of SELECT NOW()
 let op_with_time = op.with_db_time().await?;
 ```
 
 This ensures all operations within a transaction use consistent, controlled time.
+
+### Explicit Clock Injection
+
+For more control, you can inject a specific clock into database operations without modifying global state. This is useful when you want isolated clocks per test or need different clocks for different operations:
+
+```rust,ignore
+use es_entity::clock::{ClockHandle, ArtificialClockConfig};
+
+// Create an artificial clock (not installed globally)
+let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+
+// Pass the clock explicitly to DbOp
+let op = DbOp::init_with_clock(&pool, &clock).await?;
+
+// The operation uses this clock for time operations
+let op_with_time = op.with_clock_time();
+```
+
+Repositories generated with `#[derive(EsRepo)]` also support this pattern:
+
+```rust,ignore
+// Using the repo's begin_op_with_clock method
+let mut op = users.begin_op_with_clock(&clock).await?;
+
+// Create entity - recorded_at will use the artificial clock's time
+let user = users.create_in_op(&mut op, new_user).await?;
+op.commit().await?;
+```
+
+This approach avoids global state and allows each test to have its own independent clock, preventing test interference.
 
 ## Example: Testing Time-Dependent Logic
 
