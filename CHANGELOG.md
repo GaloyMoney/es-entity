@@ -1,3 +1,18 @@
+# [cala release v0.10.9](https://github.com/GaloyMoney/cala/releases/tag/0.10.9)
+
+
+### Bug Fixes
+
+- Spelling
+
+### Features
+
+- More advanced clock implementation (#76)
+
+### Miscellaneous Tasks
+
+- Bump flake (#75)
+
 # [cala release v0.10.8](https://github.com/GaloyMoney/cala/releases/tag/0.10.8)
 
 
