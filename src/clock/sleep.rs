@@ -49,23 +49,23 @@ impl ClockSleep {
             ClockInner::Realtime(rt) => ClockSleepInner::Realtime {
                 sleep: rt.sleep(duration),
             },
-            ClockInner::Artificial(sim) => {
-                let wake_at_ms = sim.now_ms() + duration.as_millis() as i64;
+            ClockInner::Artificial(artificial) => {
+                let wake_at_ms = artificial.now_ms() + duration.as_millis() as i64;
 
-                if sim.is_manual() {
+                if artificial.is_manual() {
                     ClockSleepInner::ArtificialManual {
                         wake_at_ms,
                         sleep_id: next_sleep_id(),
-                        clock: Arc::clone(sim),
+                        clock: Arc::clone(artificial),
                         registered: false,
                     }
                 } else {
                     // Auto-advance mode uses real tokio sleep with scaled duration
-                    let real_duration = sim.real_duration(duration);
+                    let real_duration = artificial.real_duration(duration);
                     ClockSleepInner::ArtificialAuto {
                         sleep: tokio::time::sleep(real_duration),
                         wake_at_ms,
-                        clock: Arc::clone(sim),
+                        clock: Arc::clone(artificial),
                     }
                 }
             }

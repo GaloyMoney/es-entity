@@ -13,7 +13,7 @@ use super::artificial::ArtificialClock;
 /// [`ClockHandle::artificial()`](crate::ClockHandle::artificial).
 #[derive(Clone)]
 pub struct ClockController {
-    pub(crate) sim: Arc<ArtificialClock>,
+    pub(crate) clock: Arc<ArtificialClock>,
 }
 
 impl ClockController {
@@ -52,7 +52,7 @@ impl ClockController {
     /// # }
     /// ```
     pub async fn advance(&self, duration: Duration) -> usize {
-        self.sim.advance(duration).await
+        self.clock.advance(duration).await
     }
 
     /// Advance to the next pending wake event.
@@ -93,7 +93,7 @@ impl ClockController {
     /// # }
     /// ```
     pub async fn advance_to_next_wake(&self) -> Option<DateTime<Utc>> {
-        self.sim.advance_to_next_wake().await
+        self.clock.advance_to_next_wake().await
     }
 
     /// Set the artificial time to a specific value.
@@ -104,9 +104,9 @@ impl ClockController {
     ///
     /// For deterministic testing, prefer `advance()` or `advance_to_next_wake()`.
     pub fn set_time(&self, time: DateTime<Utc>) {
-        self.sim.set_time(time);
+        self.clock.set_time(time);
         // Wake all tasks that are now past their wake time
-        self.sim.wake_tasks_at(time.timestamp_millis());
+        self.clock.wake_tasks_at(time.timestamp_millis());
     }
 
     /// Get the number of pending wake events.
@@ -114,14 +114,14 @@ impl ClockController {
     /// This is useful for testing to verify that tasks have registered
     /// their sleeps before advancing time.
     pub fn pending_wake_count(&self) -> usize {
-        self.sim.pending_wake_count()
+        self.clock.pending_wake_count()
     }
 
     /// Get the current artificial time.
     ///
     /// This is equivalent to calling `now()` on the associated `ClockHandle`.
     pub fn now(&self) -> DateTime<Utc> {
-        self.sim.now()
+        self.clock.now()
     }
 
     /// Transition to realtime mode.
@@ -133,33 +133,33 @@ impl ClockController {
     ///
     /// Pending sleeps are woken immediately and will re-register using real timers.
     pub fn transition_to_realtime(&self) {
-        self.sim.transition_to_realtime();
+        self.clock.transition_to_realtime();
     }
 
     /// Check if clock has transitioned to realtime.
     pub fn is_realtime(&self) -> bool {
-        self.sim.is_realtime()
+        self.clock.is_realtime()
     }
 
     /// Clear all pending wake events.
     pub fn clear_pending_wakes(&self) {
-        self.sim.clear_pending_wakes();
+        self.clock.clear_pending_wakes();
     }
 
     /// Reset clock to a specific time and clear all pending wakes.
     ///
     /// Useful for test isolation between test cases.
     pub fn reset_to(&self, time: DateTime<Utc>) {
-        self.sim.set_time(time);
-        self.sim.clear_pending_wakes();
+        self.clock.set_time(time);
+        self.clock.clear_pending_wakes();
     }
 }
 
 impl std::fmt::Debug for ClockController {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClockController")
-            .field("now", &self.sim.now())
-            .field("pending_wakes", &self.sim.pending_wake_count())
+            .field("now", &self.clock.now())
+            .field("pending_wakes", &self.clock.pending_wake_count())
             .finish()
     }
 }

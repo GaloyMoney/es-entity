@@ -27,7 +27,7 @@
 //! // Production: use real time
 //! let clock = ClockHandle::realtime();
 //!
-//! // Testing: use manual simulation
+//! // Testing: use artificial clock with manual advancement
 //! let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
 //!
 //! // Same interface regardless of clock type
@@ -36,7 +36,7 @@
 //!
 //! # Deterministic Testing
 //!
-//! In manual simulation mode, time only advances when you call `advance()`.
+//! In manual mode, time only advances when you call `advance()`.
 //! Wake events are processed in chronological order, so tasks always see
 //! the correct time when they wake:
 //!

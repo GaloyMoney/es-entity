@@ -32,7 +32,7 @@ pub(crate) struct ArtificialClock {
     time_scale: f64,
     /// Current artificial time as epoch milliseconds (used in manual/auto modes).
     current_ms: AtomicI64,
-    /// For auto-advance mode: when simulation started in real time.
+    /// For auto-advance mode: when the clock was created in real time.
     real_start: Instant,
     /// Priority queue of pending wake events (earliest first).
     pending_wakes: Mutex<BinaryHeap<PendingWake>>,

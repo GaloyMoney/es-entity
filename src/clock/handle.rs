@@ -92,11 +92,11 @@ impl ClockHandle {
     /// });
     /// ```
     pub fn artificial(config: ArtificialClockConfig) -> (Self, ClockController) {
-        let sim = Arc::new(ArtificialClock::new(config));
+        let clock = Arc::new(ArtificialClock::new(config));
         let handle = Self {
-            inner: Arc::new(ClockInner::Artificial(Arc::clone(&sim))),
+            inner: Arc::new(ClockInner::Artificial(Arc::clone(&clock))),
         };
-        let controller = ClockController { sim };
+        let controller = ClockController { clock };
         (handle, controller)
     }
 
@@ -110,7 +110,7 @@ impl ClockHandle {
     pub fn now(&self) -> DateTime<Utc> {
         match &*self.inner {
             ClockInner::Realtime(rt) => rt.now(),
-            ClockInner::Artificial(sim) => sim.now(),
+            ClockInner::Artificial(clock) => clock.now(),
         }
     }
 
@@ -144,9 +144,9 @@ impl std::fmt::Debug for ClockHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &*self.inner {
             ClockInner::Realtime(_) => f.debug_struct("ClockHandle::Realtime").finish(),
-            ClockInner::Artificial(sim) => f
+            ClockInner::Artificial(clock) => f
                 .debug_struct("ClockHandle::Artificial")
-                .field("now", &sim.now())
+                .field("now", &clock.now())
                 .finish(),
         }
     }
