@@ -142,9 +142,14 @@ impl ArtificialClock {
 
     /// Wake all pending tasks.
     fn wake_all_pending(&self) {
-        let mut pending = self.pending_wakes.lock();
-        for wake in pending.drain() {
-            wake.waker.wake();
+        // Collect wakers while holding the lock, then wake after releasing.
+        // This avoids potential deadlock if a woken task tries to re-acquire the lock.
+        let wakers: Vec<Waker> = {
+            let mut pending = self.pending_wakes.lock();
+            pending.drain().map(|w| w.waker).collect()
+        };
+        for waker in wakers {
+            waker.wake();
         }
     }
 
@@ -180,16 +185,26 @@ impl ArtificialClock {
     /// Wake all tasks scheduled at or before the given time.
     /// Returns the number of tasks woken.
     pub fn wake_tasks_at(&self, up_to_ms: i64) -> usize {
-        let mut pending = self.pending_wakes.lock();
-        let mut count = 0;
+        // Collect wakers while holding the lock, then wake after releasing.
+        // This avoids potential deadlock if a woken task tries to re-acquire the lock.
+        let wakers: Vec<Waker> = {
+            let mut pending = self.pending_wakes.lock();
+            let mut wakers = Vec::new();
 
-        while let Some(wake) = pending.peek() {
-            if wake.wake_at_ms > up_to_ms {
-                break;
+            while let Some(wake) = pending.peek() {
+                if wake.wake_at_ms > up_to_ms {
+                    break;
+                }
+                let wake = pending.pop().unwrap();
+                wakers.push(wake.waker);
             }
-            let wake = pending.pop().unwrap();
-            wake.waker.wake();
-            count += 1;
+
+            wakers
+        };
+
+        let count = wakers.len();
+        for waker in wakers {
+            waker.wake();
         }
 
         count
