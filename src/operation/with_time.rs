@@ -1,3 +1,5 @@
+use crate::clock::ClockHandle;
+
 use super::{AtomicOperation, hooks};
 
 pub trait AtomicOperationWithTime: AtomicOperation {
@@ -18,21 +20,21 @@ impl<'a, Op: AtomicOperation + ?Sized> AtomicOperationWithTime for OpWithTime<'a
 
 impl<'a, Op: AtomicOperation + ?Sized> OpWithTime<'a, Op> {
     /// Wraps an operation, using existing time if present, otherwise fetching from DB.
+    ///
+    /// Priority order:
+    /// 1. Cached time from operation
+    /// 2. Artificial clock time if the operation's clock is artificial
+    /// 3. Database time via `SELECT NOW()`
     pub async fn cached_or_db_time(op: &'a mut Op) -> Result<Self, sqlx::Error> {
         let now = if let Some(time) = op.maybe_now() {
             time
+        } else if op.clock().is_artificial() {
+            op.clock().now()
         } else {
-            #[cfg(feature = "sim-time")]
-            {
-                crate::prelude::sim_time::now()
-            }
-            #[cfg(not(feature = "sim-time"))]
-            {
-                let res = sqlx::query!("SELECT NOW()")
-                    .fetch_one(op.as_executor())
-                    .await?;
-                res.now.expect("could not fetch now")
-            }
+            let res = sqlx::query!("SELECT NOW()")
+                .fetch_one(op.as_executor())
+                .await?;
+            res.now.expect("could not fetch now")
         };
         Ok(Self { inner: op, now })
     }
@@ -44,17 +46,10 @@ impl<'a, Op: AtomicOperation + ?Sized> OpWithTime<'a, Op> {
     }
 
     /// Wraps using system time (uses existing if present).
-    pub fn cached_or_system_time(op: &'a mut Op) -> Self {
-        let now = op.maybe_now().unwrap_or_else(|| {
-            #[cfg(feature = "sim-time")]
-            {
-                crate::prelude::sim_time::now()
-            }
-            #[cfg(not(feature = "sim-time"))]
-            {
-                chrono::Utc::now()
-            }
-        });
+    ///
+    /// Uses cached time if present, otherwise uses the operation's clock.
+    pub fn cached_or_clock_time(op: &'a mut Op) -> Self {
+        let now = op.maybe_now().unwrap_or_else(|| op.clock().now());
         Self { inner: op, now }
     }
 
@@ -66,6 +61,10 @@ impl<'a, Op: AtomicOperation + ?Sized> OpWithTime<'a, Op> {
 impl<'a, Op: AtomicOperation + ?Sized> AtomicOperation for OpWithTime<'a, Op> {
     fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         Some(self.now)
+    }
+
+    fn clock(&self) -> &ClockHandle {
+        self.inner.clock()
     }
 
     fn as_executor(&mut self) -> &mut sqlx::PgConnection {

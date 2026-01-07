@@ -23,6 +23,7 @@
 #![cfg_attr(feature = "fail-on-warnings", deny(clippy::all))]
 #![forbid(unsafe_code)]
 
+pub mod clock;
 pub mod context;
 pub mod error;
 pub mod events;
@@ -46,9 +47,6 @@ pub mod prelude {
 
     #[cfg(feature = "json-schema")]
     pub use schemars;
-
-    #[cfg(feature = "sim-time")]
-    pub use sim_time;
 }
 
 #[doc(inline)]

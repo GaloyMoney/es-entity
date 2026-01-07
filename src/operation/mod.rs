@@ -5,6 +5,8 @@ mod with_time;
 
 use sqlx::{Acquire, PgPool, Postgres, Transaction};
 
+use crate::clock::ClockHandle;
+
 pub use with_time::*;
 
 /// Default return type of the derived EsRepo::begin_op().
@@ -12,34 +14,50 @@ pub use with_time::*;
 /// Used as a wrapper of a [`sqlx::Transaction`] but can also cache the time at which the
 /// transaction is taking place.
 ///
-/// When `--feature sim-time` is active it will hold a time that will substitute `NOW()` in all
-/// write operations.
+/// When an artificial clock is provided, the transaction will automatically cache that
+/// clock's time, enabling deterministic testing. This cached time will be used in all
+/// time-dependent operations.
 pub struct DbOp<'c> {
     tx: Transaction<'c, Postgres>,
+    clock: ClockHandle,
     now: Option<chrono::DateTime<chrono::Utc>>,
     commit_hooks: Option<hooks::CommitHooks>,
 }
 
 impl<'c> DbOp<'c> {
-    fn new(tx: Transaction<'c, Postgres>, time: Option<chrono::DateTime<chrono::Utc>>) -> Self {
+    fn new(
+        tx: Transaction<'c, Postgres>,
+        clock: ClockHandle,
+        time: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Self {
         Self {
             tx,
+            clock,
             now: time,
             commit_hooks: Some(hooks::CommitHooks::new()),
         }
     }
 
-    /// Initializes a transaction - defaults `now()` to `None` but will cache `sim_time::now()`
-    /// when `--feature sim-time` is active.
+    /// Initializes a transaction using the global clock.
+    ///
+    /// Delegates to [`init_with_clock`](Self::init_with_clock) using the global clock handle.
     pub async fn init(pool: &PgPool) -> Result<DbOp<'static>, sqlx::Error> {
+        Self::init_with_clock(pool, crate::clock::Clock::handle()).await
+    }
+
+    /// Initializes a transaction with the specified clock.
+    ///
+    /// If the clock is artificial, its current time will be cached in the transaction.
+    pub async fn init_with_clock(
+        pool: &PgPool,
+        clock: &ClockHandle,
+    ) -> Result<DbOp<'static>, sqlx::Error> {
         let tx = pool.begin().await?;
 
-        #[cfg(feature = "sim-time")]
-        let time = Some(crate::prelude::sim_time::now());
-        #[cfg(not(feature = "sim-time"))]
-        let time = None;
+        // If an artificial clock is provided, cache its time
+        let time = clock.is_artificial().then(|| clock.now());
 
-        Ok(DbOp::new(tx, time))
+        Ok(DbOp::new(tx, clock.clone(), time))
     }
 
     /// Transitions to a [`DbOpWithTime`] with the given time cached.
@@ -47,26 +65,25 @@ impl<'c> DbOp<'c> {
         DbOpWithTime::new(self, time)
     }
 
-    /// Transitions to a [`DbOpWithTime`] using [`chrono::Utc::now()`] to populate
-    /// (unless a time was already cached from sim-time).
-    pub fn with_system_time(self) -> DbOpWithTime<'c> {
-        let time = if let Some(time) = self.now {
-            time
-        } else {
-            chrono::Utc::now()
-        };
-
+    /// Transitions to a [`DbOpWithTime`] using the clock.
+    ///
+    /// Uses cached time if present, otherwise uses the clock's current time.
+    pub fn with_clock_time(self) -> DbOpWithTime<'c> {
+        let time = self.now.unwrap_or_else(|| self.clock.now());
         DbOpWithTime::new(self, time)
     }
 
-    /// Transitions to a [`DbOpWithTime`] using
-    /// ```sql
-    /// SELECT NOW()
-    /// ```
-    /// from the database (unless a time was already cached from sim-time).
+    /// Transitions to a [`DbOpWithTime`] using the database time.
+    ///
+    /// Priority order:
+    /// 1. Cached time if present
+    /// 2. Artificial clock time if the clock is artificial
+    /// 3. Database time via `SELECT NOW()`
     pub async fn with_db_time(mut self) -> Result<DbOpWithTime<'c>, sqlx::Error> {
         let time = if let Some(time) = self.now {
             time
+        } else if self.clock.is_artificial() {
+            self.clock.now()
         } else {
             let res = sqlx::query!("SELECT NOW()")
                 .fetch_one(&mut *self.tx)
@@ -84,7 +101,11 @@ impl<'c> DbOp<'c> {
 
     /// Begins a nested transaction.
     pub async fn begin(&mut self) -> Result<DbOp<'_>, sqlx::Error> {
-        Ok(DbOp::new(self.tx.begin().await?, self.now))
+        Ok(DbOp::new(
+            self.tx.begin().await?,
+            self.clock.clone(),
+            self.now,
+        ))
     }
 
     /// Commits the inner transaction.
@@ -107,6 +128,10 @@ impl<'o> AtomicOperation for DbOp<'o> {
         self.maybe_now()
     }
 
+    fn clock(&self) -> &ClockHandle {
+        &self.clock
+    }
+
     fn as_executor(&mut self) -> &mut sqlx::PgConnection {
         self.tx.as_executor()
     }
@@ -114,12 +139,6 @@ impl<'o> AtomicOperation for DbOp<'o> {
     fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
         self.commit_hooks.as_mut().expect("no hooks").add(hook);
         Ok(())
-    }
-}
-
-impl<'c> From<Transaction<'c, Postgres>> for DbOp<'c> {
-    fn from(tx: Transaction<'c, Postgres>) -> Self {
-        Self::new(tx, None)
     }
 }
 
@@ -163,6 +182,10 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
         Some(self.now())
     }
 
+    fn clock(&self) -> &ClockHandle {
+        self.inner.clock()
+    }
+
     fn as_executor(&mut self) -> &mut sqlx::PgConnection {
         self.inner.as_executor()
     }
@@ -189,6 +212,13 @@ pub trait AtomicOperation: Send {
     /// Function for querying when the operation is taking place - if it is cached.
     fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         None
+    }
+
+    /// Returns the clock handle for time operations.
+    ///
+    /// Default implementation returns the global clock handle.
+    fn clock(&self) -> &ClockHandle {
+        crate::clock::Clock::handle()
     }
 
     /// Returns the [`sqlx::Executor`] implementation.

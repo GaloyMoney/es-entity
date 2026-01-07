@@ -34,5 +34,4 @@
 - [Aggregates](./aggregates.md)
   - [Nesting](./nesting.md)
 
-- [Features](./features.md)
-  - [sim-time](./sim-time.md)
+- [Clock](./clock.md)

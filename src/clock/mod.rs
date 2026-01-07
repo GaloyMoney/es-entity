@@ -1,0 +1,80 @@
+//! Time abstraction for es-entity with support for real and artificial time.
+//!
+//! This crate provides a unified interface for time operations that works
+//! identically whether using real time or artificial time for testing.
+//!
+//! # Overview
+//!
+//! The main type is [`ClockHandle`], a cheap-to-clone handle that provides:
+//! - `now()` - Get current time (synchronous, fast)
+//! - `sleep(duration)` - Sleep for a duration
+//! - `timeout(duration, future)` - Timeout a future
+//!
+//! For artificial clocks, a [`ClockController`] is also provided for controlling time.
+//!
+//! # Clock Types
+//!
+//! - **Realtime**: Uses system clock and tokio timers
+//! - **Artificial (Auto)**: Time advances automatically at a configurable scale
+//! - **Artificial (Manual)**: Time only advances via explicit `advance()` calls
+//!
+//! # Example
+//!
+//! ```rust
+//! use es_entity::clock::{ClockHandle, ArtificialClockConfig};
+//! use std::time::Duration;
+//!
+//! // Production: use real time
+//! let clock = ClockHandle::realtime();
+//!
+//! // Testing: use artificial clock with manual advancement
+//! let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+//!
+//! // Same interface regardless of clock type
+//! let now = clock.now();
+//! ```
+//!
+//! # Deterministic Testing
+//!
+//! In manual mode, time only advances when you call `advance()`.
+//! Wake events are processed in chronological order, so tasks always see
+//! the correct time when they wake:
+//!
+//! ```rust
+//! use es_entity::clock::{ClockHandle, ArtificialClockConfig};
+//! use std::time::Duration;
+//!
+//! # async fn example() {
+//! let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+//!
+//! let clock2 = clock.clone();
+//! tokio::spawn(async move {
+//!     clock2.sleep(Duration::from_secs(3600)).await; // 1 hour
+//!     // When this wakes, clock2.now() == start + 1 hour
+//!     // (even if advance() jumped further)
+//! });
+//!
+//! // Advance 1 day - but the task wakes at exactly +1 hour
+//! ctrl.advance(Duration::from_secs(86400)).await;
+//! # }
+//! ```
+
+#![cfg_attr(feature = "fail-on-warnings", deny(warnings))]
+#![cfg_attr(feature = "fail-on-warnings", deny(clippy::all))]
+#![forbid(unsafe_code)]
+
+mod artificial;
+mod config;
+mod controller;
+mod global;
+mod handle;
+mod inner;
+mod realtime;
+mod sleep;
+
+// Re-export public API
+pub use config::{ArtificialClockConfig, ArtificialMode};
+pub use controller::ClockController;
+pub use global::Clock;
+pub use handle::{ClockHandle, Elapsed};
+pub use sleep::{ClockSleep, ClockTimeout};

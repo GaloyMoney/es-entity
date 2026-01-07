@@ -13,19 +13,17 @@ inherits = "dev"
 
 [features]
 
-fail-on-warnings = []
+fail-on-warnings = ["es-entity-macros/fail-on-warnings"]
 tracing-context = ["dep:tracing", "dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk"]
 graphql = ["es-entity-macros/graphql", "dep:async-graphql", "dep:base64"]
 event-context = ["es-entity-macros/event-context", "event-context-enabled"]
 event-context-enabled = ["es-entity-macros/event-context-enabled"]
 json-schema = ["dep:schemars"]
-sim-time = [ "dep:sim-time" ]
-mdbook-test = ["dep:tokio", "dep:anyhow"]
+mdbook-test = ["dep:anyhow"]
 instrument = ["es-entity-macros/instrument", "dep:tracing"]
 
 [dependencies]
 es-entity-macros = { workspace = true }
-sim-time = { workspace = true, optional = true }
 
 base64 = { workspace = true, optional = true }
 sqlx = { workspace = true }
@@ -37,6 +35,8 @@ derive_builder = { workspace = true }
 uuid = { workspace = true }
 im = { workspace = true }
 pin-project = { workspace = true }
+parking_lot = { workspace = true }
+tokio = { workspace = true }
 async-graphql = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 
@@ -46,25 +46,23 @@ opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
 
 # For book tests
-tokio = { workspace = true, optional = true }
 anyhow = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+futures = { workspace = true }
 
 [workspace]
 resolver = "2"
 members = [
   "es-entity-macros",
-  "sim-time",
 ]
 
 [workspace.dependencies]
 
 es-entity-macros = { path = "es-entity-macros", version = "0.10.9-dev" }
-sim-time = { path = "sim-time", version = "0.10.9-dev" }
 
 anyhow = "1.0.100"
 async-graphql = { version = "7.0.17", default-features = false }
@@ -77,7 +75,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 serde_with = "3.15.1"
 sqlx = { version = "0.8", default-features = false, features = ["macros", "runtime-tokio-rustls", "postgres", "uuid", "chrono", "json" ] }
-tokio = { version = "1.48", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.48", features = ["rt-multi-thread", "macros", "time"] }
 thiserror = "2.0"
 uuid = { version = "1.18", features = ["serde", "v7"] }
 im = { version = "15.1", features = ["serde"] }
@@ -86,3 +84,5 @@ tracing = { version = "0.1.41", default-features = false }
 tracing-opentelemetry = { version = "0.32.0", default-features = false }
 opentelemetry = { version = "0.31.0", default-features = false }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
+futures = "0.3"
+parking_lot = "0.12"

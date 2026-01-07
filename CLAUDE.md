@@ -69,3 +69,64 @@ This is an Event Sourcing Entity Framework for Rust that provides:
 
 - `SQLX_OFFLINE=true` - Use offline mode for SQLx (required for CI)
 - `DATABASE_URL` - PostgreSQL connection string
+
+## Code Style Guide
+
+### Import Organization
+
+All Rust files must follow this import structure:
+
+#### 1. One Line Per Crate
+- Combine all imports from the same crate into a single line using braces
+- ✅ Good: `use std::{sync::Arc, time::Duration};`
+- ❌ Bad: `use std::sync::Arc;` followed by `use std::time::Duration;`
+
+#### 2. Exception for Public Re-exports
+- When a module has both private imports and public re-exports from the same crate, keep them separate
+- ✅ Good:
+  ```rust
+  use std::time::Duration;
+
+  pub use std::sync::Arc;
+  ```
+
+#### 3. Grouping Order
+Organize imports into three groups, separated by blank lines, in this order:
+
+1. **External dependencies** (from Cargo.toml)
+2. **Standard library** (std/core/alloc)
+3. **Internal crate modules** (crate::)
+
+#### 4. Example
+
+```rust
+// External dependencies
+use chrono::{DateTime, Utc};
+use parking_lot::Mutex;
+
+// Standard library
+use std::{
+    cmp::Ordering,
+    collections::BinaryHeap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+// Internal modules
+use crate::{
+    artificial::ArtificialClock,
+    config::ArtificialClockConfig,
+    inner::ClockInner,
+};
+
+// Public re-exports (if any)
+pub use crate::sleep::Elapsed;
+```
+
+#### 5. Sorting Within Groups
+- Sort alphabetically within each group
+- For multi-item imports, sort the items alphabetically within the braces
+
+#### 6. Public Re-exports
+- Place public re-exports after all private imports
+- Separate with a blank line if mixing with private imports
