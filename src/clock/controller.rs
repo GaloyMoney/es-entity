@@ -131,7 +131,8 @@ impl ClockController {
     /// - `sleep()` uses real tokio timers
     /// - `advance()` becomes a no-op
     ///
-    /// Pending sleeps are woken immediately and will re-register using real timers.
+    /// Pending sleeps are woken immediately and will re-register using real timers
+    /// for their remaining duration (based on the original wake time).
     pub fn transition_to_realtime(&self) {
         self.clock.transition_to_realtime();
     }

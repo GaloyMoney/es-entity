@@ -40,6 +40,9 @@ enum ClockSleepInner {
         sleep_id: u64,
         clock: Arc<ArtificialClock>,
         registered: bool,
+        /// Fallback timer used when clock transitions to realtime mode.
+        #[pin]
+        realtime_fallback: Option<Sleep>,
     },
 }
 
@@ -58,6 +61,7 @@ impl ClockSleep {
                         sleep_id: next_sleep_id(),
                         clock: Arc::clone(artificial),
                         registered: false,
+                        realtime_fallback: None,
                     }
                 } else {
                     // Auto-advance mode uses real tokio sleep with scaled duration
@@ -102,10 +106,27 @@ impl Future for ClockSleep {
                 sleep_id,
                 clock,
                 registered,
+                mut realtime_fallback,
             } => {
                 // Check if we've reached wake time
                 if clock.now_ms() >= *wake_at_ms {
                     return Poll::Ready(());
+                }
+
+                // If clock has transitioned to realtime, use a real timer for remaining time
+                if clock.is_realtime() {
+                    // Create fallback timer if not already created
+                    if realtime_fallback.is_none() {
+                        let remaining_ms = (*wake_at_ms - clock.now_ms()).max(0) as u64;
+                        realtime_fallback.set(Some(tokio::time::sleep(Duration::from_millis(
+                            remaining_ms,
+                        ))));
+                    }
+
+                    // Poll the fallback timer
+                    if let Some(sleep) = realtime_fallback.as_pin_mut() {
+                        return sleep.poll(cx);
+                    }
                 }
 
                 // Register for wake notification if not already done

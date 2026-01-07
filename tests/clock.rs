@@ -388,3 +388,48 @@ async fn test_global_clock_api() {
     // Verify time advanced
     assert_eq!(Clock::now(), t0 + chrono::Duration::seconds(100));
 }
+
+#[tokio::test]
+async fn test_transition_to_realtime_wakes_pending_sleeps() {
+    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+
+    let completed = Arc::new(AtomicUsize::new(0));
+    let completed_clone = completed.clone();
+    let clock_clone = clock.clone();
+
+    // Sleep for 100ms in artificial time
+    let handle = tokio::spawn(async move {
+        clock_clone.sleep(Duration::from_millis(100)).await;
+        completed_clone.fetch_add(1, Ordering::SeqCst);
+    });
+
+    // Let task register its sleep
+    tokio::task::yield_now().await;
+    assert_eq!(ctrl.pending_wake_count(), 1);
+    assert_eq!(completed.load(Ordering::SeqCst), 0);
+
+    // Advance to 50ms - halfway, sleep should not complete yet
+    ctrl.advance(Duration::from_millis(50)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(completed.load(Ordering::SeqCst), 0);
+
+    // Transition to realtime - pending sleeps should be woken and re-register with real timers
+    ctrl.transition_to_realtime();
+
+    // After transition, the sleep should complete using a real timer for the remaining duration.
+    // Since artificial clock started at Utc::now() and we only advanced 50ms artificially,
+    // the remaining time is approximately 50-100ms (depending on how much real time passed).
+    // Wait up to 200ms to give plenty of margin for the real timer to complete.
+    let result = tokio::time::timeout(Duration::from_millis(200), handle).await;
+
+    // Task should complete (not timeout)
+    assert!(
+        result.is_ok(),
+        "Sleep should complete using real timer after transition_to_realtime"
+    );
+    assert_eq!(
+        completed.load(Ordering::SeqCst),
+        1,
+        "Sleep should complete after transition_to_realtime"
+    );
+}
