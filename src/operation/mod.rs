@@ -54,8 +54,9 @@ impl<'c> DbOp<'c> {
     ) -> Result<DbOp<'static>, sqlx::Error> {
         let tx = pool.begin().await?;
 
-        // If an artificial clock is provided, cache its time
-        let time = clock.is_artificial().then(|| clock.now());
+        // If an artificial clock is provided (and hasn't transitioned to realtime),
+        // cache its time for consistent timestamps within the transaction.
+        let time = clock.artificial_now();
 
         Ok(DbOp::new(tx, clock.clone(), time))
     }
@@ -77,13 +78,13 @@ impl<'c> DbOp<'c> {
     ///
     /// Priority order:
     /// 1. Cached time if present
-    /// 2. Artificial clock time if the clock is artificial
+    /// 2. Artificial clock time if the clock is artificial (and hasn't transitioned)
     /// 3. Database time via `SELECT NOW()`
     pub async fn with_db_time(mut self) -> Result<DbOpWithTime<'c>, sqlx::Error> {
         let time = if let Some(time) = self.now {
             time
-        } else if self.clock.is_artificial() {
-            self.clock.now()
+        } else if let Some(artificial_time) = self.clock.artificial_now() {
+            artificial_time
         } else {
             let res = sqlx::query!("SELECT NOW()")
                 .fetch_one(&mut *self.tx)

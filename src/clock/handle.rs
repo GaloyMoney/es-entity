@@ -138,6 +138,29 @@ impl ClockHandle {
     pub fn is_artificial(&self) -> bool {
         matches!(&*self.inner, ClockInner::Artificial(_))
     }
+
+    /// Get the current artificial time, if this is an artificial clock that
+    /// hasn't transitioned to realtime.
+    ///
+    /// Returns:
+    /// - `None` for realtime clocks
+    /// - `None` for artificial clocks that have transitioned to realtime
+    /// - `Some(time)` for artificial clocks (manual or auto) that are still artificial
+    ///
+    /// This is useful for code that needs to cache time when running under
+    /// artificial clocks but use fresh time for realtime clocks.
+    pub fn artificial_now(&self) -> Option<DateTime<Utc>> {
+        match &*self.inner {
+            ClockInner::Realtime(_) => None,
+            ClockInner::Artificial(clock) => {
+                if clock.is_realtime() {
+                    None
+                } else {
+                    Some(clock.now())
+                }
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for ClockHandle {

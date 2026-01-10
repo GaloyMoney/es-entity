@@ -86,4 +86,16 @@ impl Clock {
             .map(|s| s.controller.is_some())
             .unwrap_or(false)
     }
+
+    /// Get the current artificial time, if an artificial clock is installed
+    /// and hasn't transitioned to realtime.
+    ///
+    /// Returns:
+    /// - `None` if no clock is initialized (doesn't initialize one)
+    /// - `None` for realtime clocks
+    /// - `None` for artificial clocks that have transitioned to realtime
+    /// - `Some(time)` for artificial clocks that are still artificial
+    pub fn artificial_now() -> Option<DateTime<Utc>> {
+        GLOBAL.get().and_then(|s| s.handle.artificial_now())
+    }
 }
