@@ -23,13 +23,13 @@ impl<'a, Op: AtomicOperation + ?Sized> OpWithTime<'a, Op> {
     ///
     /// Priority order:
     /// 1. Cached time from operation
-    /// 2. Artificial clock time if the operation's clock is artificial
+    /// 2. Artificial clock time if the operation's clock is artificial (and hasn't transitioned)
     /// 3. Database time via `SELECT NOW()`
     pub async fn cached_or_db_time(op: &'a mut Op) -> Result<Self, sqlx::Error> {
         let now = if let Some(time) = op.maybe_now() {
             time
-        } else if op.clock().is_artificial() {
-            op.clock().now()
+        } else if let Some(artificial_time) = op.clock().artificial_now() {
+            artificial_time
         } else {
             let res = sqlx::query!("SELECT NOW()")
                 .fetch_one(op.as_executor())
