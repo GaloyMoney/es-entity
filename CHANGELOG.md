@@ -1,3 +1,10 @@
+# [cala release v0.10.10](https://github.com/GaloyMoney/cala/releases/tag/0.10.10)
+
+
+### Miscellaneous Tasks
+
+- Use artificial_now to reduce logic (#77)
+
 # [cala release v0.10.9](https://github.com/GaloyMoney/cala/releases/tag/0.10.9)
 
 
