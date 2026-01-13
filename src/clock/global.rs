@@ -23,6 +23,13 @@ impl Clock {
         Self::handle().now()
     }
 
+    /// Get the current date (without time component).
+    ///
+    /// Lazily initializes to realtime if not already set.
+    pub fn today() -> chrono::NaiveDate {
+        Self::handle().today()
+    }
+
     /// Sleep using the global clock.
     pub fn sleep(duration: Duration) -> ClockSleep {
         Self::handle().sleep(duration)

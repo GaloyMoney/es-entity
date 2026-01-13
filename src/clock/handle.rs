@@ -139,6 +139,14 @@ impl ClockHandle {
         matches!(&*self.inner, ClockInner::Artificial(_))
     }
 
+    /// Get the current date (without time component).
+    ///
+    /// This is equivalent to `clock.now().date_naive()`.
+    #[inline]
+    pub fn today(&self) -> chrono::NaiveDate {
+        self.now().date_naive()
+    }
+
     /// Get the current artificial time, if this is an artificial clock that
     /// hasn't transitioned to realtime.
     ///
