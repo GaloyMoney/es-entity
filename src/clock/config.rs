@@ -1,7 +1,9 @@
+use serde::{Deserialize, Serialize};
+
 use chrono::{DateTime, Utc};
 
 /// Configuration for artificial time.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtificialClockConfig {
     /// What time should the clock start at (truncated to millisecond precision).
     pub start_at: DateTime<Utc>,
@@ -56,7 +58,8 @@ impl Default for ArtificialClockConfig {
 }
 
 /// How artificial time advances.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ArtificialMode {
     /// Time advances automatically at the given scale.
     /// A time_scale of 1000.0 means 1 real second = 1000 artificial seconds.
