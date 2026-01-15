@@ -1,3 +1,11 @@
+# [cala release v0.10.11](https://github.com/GaloyMoney/cala/releases/tag/0.10.11)
+
+
+### Miscellaneous Tasks
+
+- Serde support for artificial clock config (#78)
+- Add today fn
+
 # [cala release v0.10.10](https://github.com/GaloyMoney/cala/releases/tag/0.10.10)
 
 
