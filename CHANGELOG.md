@@ -1,3 +1,10 @@
+# [cala release v0.10.12](https://github.com/GaloyMoney/cala/releases/tag/0.10.12)
+
+
+### Miscellaneous Tasks
+
+- Bump deps (#79)
+
 # [cala release v0.10.11](https://github.com/GaloyMoney/cala/releases/tag/0.10.11)
 
 
