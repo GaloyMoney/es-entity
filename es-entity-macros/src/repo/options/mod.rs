@@ -8,6 +8,17 @@ use quote::quote;
 pub use columns::*;
 pub use delete::*;
 
+/// Information about the clock field in a repository
+#[derive(Debug, Clone)]
+pub enum ClockFieldInfo<'a> {
+    /// No clock field present
+    None,
+    /// Clock field is `Option<ClockHandle>` - use if Some, fallback to global
+    Optional(&'a syn::Ident),
+    /// Clock field is `ClockHandle` - always use it
+    Required(&'a syn::Ident),
+}
+
 #[derive(FromField)]
 #[darling(attributes(es_repo))]
 pub struct RepoField {
@@ -15,6 +26,8 @@ pub struct RepoField {
     pub ty: syn::Type,
     #[darling(default)]
     pub pool: bool,
+    #[darling(default)]
+    pub clock: bool,
     #[darling(default)]
     pub nested: bool,
 }
@@ -26,6 +39,20 @@ impl RepoField {
 
     fn is_pool_field(&self) -> bool {
         self.pool || self.ident.as_ref().is_some_and(|i| i == "pool")
+    }
+
+    fn is_clock_field(&self) -> bool {
+        self.clock || self.ident.as_ref().is_some_and(|i| i == "clock")
+    }
+
+    /// Check if the field type is `Option<...>`
+    fn is_option_type(&self) -> bool {
+        if let syn::Type::Path(type_path) = &self.ty
+            && let Some(segment) = type_path.path.segments.last()
+        {
+            return segment.ident == "Option";
+        }
+        false
     }
 
     pub fn create_nested_fn_name(&self) -> syn::Ident {
@@ -190,6 +217,25 @@ impl RepositoryOptions {
             _ => None,
         };
         field.expect("Repo must have a field named 'pool' or marked with #[es_repo(pool)]")
+    }
+
+    pub fn clock_field(&self) -> ClockFieldInfo<'_> {
+        match &self.data {
+            darling::ast::Data::Struct(fields) => {
+                for field in fields.iter() {
+                    if field.is_clock_field() {
+                        let ident = field.ident.as_ref().unwrap();
+                        return if field.is_option_type() {
+                            ClockFieldInfo::Optional(ident)
+                        } else {
+                            ClockFieldInfo::Required(ident)
+                        };
+                    }
+                }
+                ClockFieldInfo::None
+            }
+            _ => ClockFieldInfo::None,
+        }
     }
 
     pub fn any_nested(&self) -> bool {

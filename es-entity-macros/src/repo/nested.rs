@@ -85,6 +85,7 @@ mod tests {
             ty: parse_quote! { UserRepo },
             nested: true,
             pool: false,
+            clock: false,
         };
         let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
