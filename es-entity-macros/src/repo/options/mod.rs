@@ -60,8 +60,6 @@ pub struct RepositoryOptions {
     #[darling(default)]
     pub post_persist_hook: Option<syn::Ident>,
     #[darling(default)]
-    pub begin: Option<syn::Ident>,
-    #[darling(default)]
     pub delete: DeleteOption,
 
     data: darling::ast::Data<(), RepoField>,
@@ -80,10 +78,6 @@ pub struct RepositoryOptions {
     table_name: Option<String>,
     #[darling(default, rename = "events_tbl")]
     events_table_name: Option<String>,
-    #[darling(default, rename = "op")]
-    op_ty: Option<syn::Type>,
-    #[darling(default, rename = "additional_op_traits")]
-    additional_op_traits: Option<String>,
 
     #[darling(default)]
     persist_event_context: Option<bool>,
@@ -113,10 +107,6 @@ impl RepositoryOptions {
         } else {
             String::new()
         };
-        if self.op_ty.is_none() {
-            self.op_ty =
-                Some(syn::parse_str("es_entity::DbOp<'static>").expect("Failed to parse op type"));
-        }
         if self.table_name.is_none() {
             self.table_name = Some(format!(
                 "{prefix}{}",
@@ -164,23 +154,6 @@ impl RepositoryOptions {
         #[cfg(not(feature = "event-context-enabled"))]
         {
             self.persist_event_context.unwrap_or(false)
-        }
-    }
-
-    pub fn op(&self) -> &syn::Type {
-        self.op_ty.as_ref().expect("Op type is not set")
-    }
-
-    pub fn additional_op_constraint(&self) -> proc_macro2::TokenStream {
-        if let Some(additional_traits) = &self.additional_op_traits {
-            let additional_traits_tokens: proc_macro2::TokenStream = additional_traits
-                .parse()
-                .expect("Failed to parse additional_op_traits");
-            quote! {
-                , OP: #additional_traits_tokens
-            }
-        } else {
-            quote! {}
         }
     }
 

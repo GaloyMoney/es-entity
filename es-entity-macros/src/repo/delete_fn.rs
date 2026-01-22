@@ -10,7 +10,6 @@ pub struct DeleteFn<'a> {
     table_name: &'a str,
     columns: &'a Columns,
     delete_option: &'a DeleteOption,
-    additional_op_constraint: proc_macro2::TokenStream,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -23,7 +22,6 @@ impl<'a> DeleteFn<'a> {
             columns: &opts.columns,
             table_name: opts.table_name(),
             delete_option: &opts.delete,
-            additional_op_constraint: opts.additional_op_constraint(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -38,7 +36,6 @@ impl ToTokens for DeleteFn<'_> {
 
         let entity = self.entity;
         let error = self.error;
-        let additional_op_constraint = &self.additional_op_constraint;
 
         let assignments = self
             .columns
@@ -94,7 +91,6 @@ impl ToTokens for DeleteFn<'_> {
             ) -> Result<(), #error>
             where
                 OP: es_entity::AtomicOperation
-                #additional_op_constraint
             {
                 let __result: Result<(), #error> = async {
                     #assignments
@@ -151,7 +147,6 @@ mod tests {
             table_name: "entities",
             columns: &columns,
             delete_option: &DeleteOption::Soft,
-            additional_op_constraint: quote! {},
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -232,7 +227,6 @@ mod tests {
             table_name: "entities",
             columns: &columns,
             delete_option: &DeleteOption::Soft,
-            additional_op_constraint: quote! {},
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
