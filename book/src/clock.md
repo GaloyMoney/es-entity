@@ -169,6 +169,80 @@ op.commit().await?;
 
 This approach avoids global state and allows each test to have its own independent clock, preventing test interference.
 
+### Clock Field in Repository
+
+For an even cleaner API, you can add a `clock` field to your repository struct. The macro supports two patterns:
+
+#### Optional Clock Field
+
+Use `Option<ClockHandle>` when you want the same repo type to work both with and without a custom clock:
+
+```rust,ignore
+use es_entity::{clock::ClockHandle, EsRepo};
+use sqlx::PgPool;
+
+#[derive(EsRepo)]
+#[es_repo(entity = "User")]
+pub struct Users {
+    pool: PgPool,
+    clock: Option<ClockHandle>,  // Optional: use if Some, fallback to global
+}
+
+impl Users {
+    // Production: no clock, uses global
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool, clock: None }
+    }
+
+    // Testing: with artificial clock
+    pub fn with_clock(pool: PgPool, clock: ClockHandle) -> Self {
+        Self { pool, clock: Some(clock) }
+    }
+}
+```
+
+Usage:
+
+```rust,ignore
+// Production code - uses global clock
+let users = Users::new(pool);
+let user = users.create(new_user).await?;
+
+// Test code - uses artificial clock
+let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+let users = Users::with_clock(pool, clock);
+let user = users.create(new_user).await?;  // Uses artificial clock!
+```
+
+#### Required Clock Field
+
+Use `ClockHandle` (non-optional) when you always want to inject a clock:
+
+```rust,ignore
+#[derive(EsRepo)]
+#[es_repo(entity = "User")]
+pub struct Users {
+    pool: PgPool,
+    clock: ClockHandle,  // Required: always use this clock
+}
+
+impl Users {
+    pub fn new(pool: PgPool, clock: ClockHandle) -> Self {
+        Self { pool, clock }
+    }
+}
+```
+
+This is useful when you want to enforce clock injection at construction time, making the dependency explicit.
+
+#### Field Detection
+
+The macro detects a field named `clock` (or marked with `#[es_repo(clock)]`) and generates the appropriate `begin_op()` implementation:
+
+- `Option<ClockHandle>`: Uses the clock if `Some`, falls back to global clock if `None`
+- `ClockHandle`: Always uses the injected clock
+- No clock field: Always uses the global clock
+
 ## Example: Testing Time-Dependent Logic
 
 ```rust,ignore
