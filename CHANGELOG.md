@@ -1,3 +1,10 @@
+# [cala release v0.10.13](https://github.com/GaloyMoney/cala/releases/tag/0.10.13)
+
+
+### Miscellaneous Tasks
+
+- Clock for non op fns (#80)
+
 # [cala release v0.10.12](https://github.com/GaloyMoney/cala/releases/tag/0.10.12)
 
 
