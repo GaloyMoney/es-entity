@@ -122,8 +122,8 @@ impl<'a> ComboCursor<'a> {
         #[cfg(feature = "graphql")]
         let sort_by_enum = quote! {
             mod #mod_name {
-                use es_entity::graphql::async_graphql;
-                #[derive(async_graphql::Enum, Default, Debug, Clone, Copy, PartialEq, Eq)]
+                #[derive(es_entity::graphql::async_graphql::Enum, Default, Debug, Clone, Copy, PartialEq, Eq)]
+                #[graphql(crate = "es_entity::graphql::async_graphql")]
                 pub enum #name {
                     #(#variants),*
                 }
