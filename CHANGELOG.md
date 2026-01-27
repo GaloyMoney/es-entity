@@ -1,3 +1,15 @@
+# [cala release v0.10.14](https://github.com/GaloyMoney/cala/releases/tag/0.10.14)
+
+
+
+### Bug Fixes
+
+- Use crate attribute for graphql feature
+
+### Miscellaneous Tasks
+
+- Bump async-graphql
+
 # [cala release v0.10.13](https://github.com/GaloyMoney/cala/releases/tag/0.10.13)
 
 
