@@ -18,8 +18,9 @@ tracing-context = ["dep:tracing", "dep:tracing-opentelemetry", "dep:opentelemetr
 graphql = ["es-entity-macros/graphql", "dep:async-graphql", "dep:base64"]
 event-context = ["es-entity-macros/event-context", "event-context-enabled"]
 event-context-enabled = ["es-entity-macros/event-context-enabled"]
+idempotency-key = ["es-entity-macros/idempotency-key", "event-context-enabled"]
 json-schema = ["dep:schemars"]
-mdbook-test = ["dep:anyhow"]
+mdbook-test = ["dep:anyhow", "idempotency-key"]
 instrument = ["es-entity-macros/instrument", "dep:tracing"]
 
 [dependencies]

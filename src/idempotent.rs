@@ -6,43 +6,7 @@
 /// ignored due to idempotency checks.
 /// The [`idempotency_guard`][crate::idempotency_guard] macro provides an easy way to do such checks.
 ///
-/// # Examples
-///
-/// ```rust
-/// use es_entity::{idempotency_guard, Idempotent};
-/// pub enum UserEvent{
-///     Initialized {id: u64, name: String},
-///     NameUpdated {name: String}
-/// }
-///
-/// pub struct User{
-///     events: Vec<UserEvent>
-/// }
-///
-/// impl User{
-///     // This returns `Idempotent<T>` where T is the return value we get after the event is processed
-///     pub fn update_name(&mut self, new_name: impl Into<String>) -> Idempotent<()>{
-///         let name = new_name.into();
-///         idempotency_guard!(
-///             self.events.iter().rev(),
-///             UserEvent::NameUpdated { name: existing_name } if existing_name == &name
-///         );
-///         self.events.push(UserEvent::NameUpdated{name});
-///         Idempotent::Executed(())
-///     }
-/// }
-///   
-/// fn example(){
-///     let mut user = User{ events: vec![] };
-///     assert!(user.update_name("Alice").did_execute());
-///     // updating "Alice" executes as no such event has been processed before.
-///     // Signalled by returning `Idempotent::Executed(T)`, validated with `did_execute` helper method
-///
-///     assert!(user.update_name("Alice").was_already_applied());
-///     // updating "Alice" again ignored because same event has been processed before.
-///     // Signalled by returning `Idempotent::AlreadyApplied` early, validated with `was_already_applied` helper method
-/// }
-/// ```
+/// See the [`idempotency_guard`][crate::idempotency_guard] macro for usage examples.
 #[must_use]
 pub enum Idempotent<T> {
     // Signals if executed and returns T

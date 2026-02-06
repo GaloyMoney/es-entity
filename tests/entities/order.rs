@@ -40,8 +40,8 @@ pub struct OrderItem {
 impl OrderItem {
     pub fn update_quantity(&mut self, quantity: i32) -> Idempotent<()> {
         idempotency_guard!(
-            self.events.iter_all().rev(),
-            OrderItemEvent::QuantityUpdated { quantity: q } if q == &quantity,
+            self.events.iter_persisted().rev(),
+            OrderItemEvent::QuantityUpdated { quantity: q } if *q == quantity,
             => OrderItemEvent::QuantityUpdated { .. }
         );
 

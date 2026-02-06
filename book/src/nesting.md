@@ -99,9 +99,9 @@ pub struct LineItem {
 impl BillingPeriod {
     pub fn add_line_item(&mut self, amount: f64, description: String) -> Idempotent<usize> {
         idempotency_guard!(
-            self.events.iter_all().rev(),
+            self.events.iter_persisted().rev(),
             BillingPeriodEvent::LineItemAdded { amount: a, description: d, .. }
-                if a == &amount && d == &description
+                if *a == amount && d == &description
         );
 
         self.line_items.push(LineItem {
@@ -119,7 +119,7 @@ impl BillingPeriod {
 
     pub fn close(&mut self) -> Idempotent<()> {
         idempotency_guard!(
-            self.events.iter_all().rev(),
+            self.events.iter_persisted().rev(),
             BillingPeriodEvent::Closed
         );
 
@@ -232,9 +232,9 @@ Now let's implement the `Subscription` entity that will contain the nested `Bill
 # impl BillingPeriod {
 #     pub fn add_line_item(&mut self, amount: f64, description: String) -> Idempotent<usize> {
 #         idempotency_guard!(
-#             self.events.iter_all().rev(),
+#             self.events.iter_persisted().rev(),
 #             BillingPeriodEvent::LineItemAdded { amount: a, description: d, .. }
-#                 if a == &amount && d == &description
+#                 if *a == amount && d == &description
 #         );
 #
 #         self.line_items.push(LineItem {
@@ -252,7 +252,7 @@ Now let's implement the `Subscription` entity that will contain the nested `Bill
 #
 #     pub fn close(&mut self) -> Idempotent<()> {
 #         idempotency_guard!(
-#             self.events.iter_all().rev(),
+#             self.events.iter_persisted().rev(),
 #             BillingPeriodEvent::Closed
 #         );
 #
@@ -483,9 +483,9 @@ This leverages the rust module system to enforce that the children cannot be acc
 # impl BillingPeriod {
 #     pub fn add_line_item(&mut self, amount: f64, description: String) -> Idempotent<usize> {
 #         idempotency_guard!(
-#             self.events.iter_all().rev(),
+#             self.events.iter_persisted().rev(),
 #             BillingPeriodEvent::LineItemAdded { amount: a, description: d, .. }
-#                 if a == &amount && d == &description
+#                 if *a == amount && d == &description
 #         );
 #
 #         self.line_items.push(LineItem {
@@ -503,7 +503,7 @@ This leverages the rust module system to enforce that the children cannot be acc
 #
 #     pub fn close(&mut self) -> Idempotent<()> {
 #         idempotency_guard!(
-#             self.events.iter_all().rev(),
+#             self.events.iter_persisted().rev(),
 #             BillingPeriodEvent::Closed
 #         );
 #
@@ -704,9 +704,9 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #             unreachable!()
 #         }
 #         idempotency_guard!(
-#             self.events.iter_all().rev(),
+#             self.events.iter_persisted().rev(),
 #             BillingPeriodEvent::LineItemAdded { amount: a, description: d, .. }
-#                 if a == &amount && d == &description
+#                 if *a == amount && d == &description
 #         );
 #         self.line_items.push(LineItem {
 #             amount,
@@ -720,7 +720,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     }
 #     pub fn close(&mut self) -> Idempotent<()> {
 #         idempotency_guard!(
-#             self.events.iter_all().rev(),
+#             self.events.iter_persisted().rev(),
 #             BillingPeriodEvent::Closed
 #         );
 #         self.is_current = false;
