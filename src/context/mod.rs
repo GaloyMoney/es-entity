@@ -79,6 +79,10 @@ use std::{borrow::Cow, cell::RefCell, rc::Rc};
 pub use tracing::*;
 pub use with_event_context::*;
 
+/// The key used to store the idempotency key in event context.
+#[cfg(feature = "idempotency-key")]
+pub const IDEMPOTENCY_KEY: &str = "idempotency_key";
+
 /// Immutable context data that can be safely shared across thread boundaries.
 ///
 /// This struct holds key-value pairs of context information that gets attached
@@ -119,6 +123,12 @@ impl ContextData {
             return Ok(None);
         };
         serde_json::from_value(val.clone()).map(Some)
+    }
+
+    /// Returns the idempotency key if present in the context data.
+    #[cfg(feature = "idempotency-key")]
+    pub fn idempotency_key(&self) -> Option<&str> {
+        self.0.get(IDEMPOTENCY_KEY).and_then(|v| v.as_str())
     }
 }
 
@@ -365,6 +375,31 @@ impl EventContext {
         }
         data
     }
+
+    /// Sets the idempotency key in the current context.
+    ///
+    /// The idempotency key is used by the `idempotency_guard!` macro to detect
+    /// duplicate operations by matching against event contexts in the event history.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use es_entity::context::EventContext;
+    ///
+    /// let mut ctx = EventContext::current();
+    /// ctx.set_idempotency_key("request-12345");
+    /// ```
+    #[cfg(feature = "idempotency-key")]
+    pub fn set_idempotency_key(&mut self, key: impl Into<String>) {
+        self.insert(IDEMPOTENCY_KEY, &key.into())
+            .expect("Failed to serialize idempotency key");
+    }
+
+    /// Returns the idempotency key from the current context, if set.
+    #[cfg(feature = "idempotency-key")]
+    pub fn idempotency_key(&self) -> Option<String> {
+        self.data().idempotency_key().map(|s| s.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -559,5 +594,53 @@ mod tests {
         );
 
         assert_eq!(current_json(), serde_json::json!({ "parent": "context" }));
+    }
+
+    #[cfg(feature = "idempotency-key")]
+    #[test]
+    fn set_and_get_idempotency_key() {
+        let mut ctx = EventContext::current();
+        assert!(ctx.idempotency_key().is_none());
+
+        ctx.set_idempotency_key("test-key-123");
+        assert_eq!(ctx.idempotency_key(), Some("test-key-123".to_string()));
+
+        // Verify it's in the context data
+        let data = ctx.data();
+        assert_eq!(data.idempotency_key(), Some("test-key-123"));
+    }
+
+    #[cfg(feature = "idempotency-key")]
+    #[test]
+    fn idempotency_key_in_forked_context() {
+        let mut parent = EventContext::current();
+        parent.set_idempotency_key("parent-key");
+
+        {
+            let mut child = EventContext::fork();
+            // Child inherits parent's idempotency key
+            assert_eq!(child.idempotency_key(), Some("parent-key".to_string()));
+
+            // Child can override the key
+            child.set_idempotency_key("child-key");
+            assert_eq!(child.idempotency_key(), Some("child-key".to_string()));
+        }
+
+        // Parent's key is unchanged
+        assert_eq!(parent.idempotency_key(), Some("parent-key".to_string()));
+    }
+
+    #[cfg(feature = "idempotency-key")]
+    #[test]
+    fn context_data_idempotency_key() {
+        let mut ctx = EventContext::current();
+        ctx.set_idempotency_key("data-key");
+
+        let data = ctx.data();
+        assert_eq!(data.idempotency_key(), Some("data-key"));
+
+        // Verify we can look it up via the constant
+        let key: Option<String> = data.lookup(IDEMPOTENCY_KEY).unwrap();
+        assert_eq!(key, Some("data-key".to_string()));
     }
 }

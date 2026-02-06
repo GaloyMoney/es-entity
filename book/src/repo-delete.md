@@ -69,7 +69,7 @@ pub struct User {
 impl User {
     fn delete(&mut self) -> Idempotent<()> {
         idempotency_guard!(
-            self.events.iter_all(),
+            self.events.iter_persisted(),
             UserEvent::Deleted
         );
         self.events.push(UserEvent::Deleted);

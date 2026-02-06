@@ -28,7 +28,7 @@ impl User {
     pub fn update_name(&mut self, new_name: impl Into<String>) -> Idempotent<()> {
         let new_name = new_name.into();
         idempotency_guard!(
-            self.events.iter_all().rev(),
+            self.events.iter_persisted().rev(),
             UserEvent::NameUpdated { name } if name == &new_name,
             => UserEvent::NameUpdated { .. }
         );

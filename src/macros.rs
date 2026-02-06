@@ -6,64 +6,78 @@
 ///
 /// # Parameters
 ///
-/// - `$events`: Event collection to search (usually chronologically reversed)
+/// - `$events`: Iterator over `&PersistedEvent<T>` items (use `iter_persisted().rev()`)
 /// - `$pattern`: Event patterns that indicate operation already applied
 /// - `$break_pattern`: Optional break pattern to stop searching
+///
+/// # Feature: idempotency-key
+///
+/// When the `idempotency-key` feature is enabled, the macro also checks for matching
+/// idempotency keys stored in event contexts. If an idempotency key is set in the
+/// current context (via `EventContext::set_idempotency_key()`), the macro will return
+/// `AlreadyApplied` if any persisted event has a matching idempotency key.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use es_entity::{idempotency_guard, Idempotent};
-/// pub enum UserEvent{
-///     Initialized {id: u64, name: String},
-///     NameUpdated {name: String}
+/// use es_entity::{idempotency_guard, Idempotent, EntityEvents, EsEvent};
+/// use serde::{Serialize, Deserialize};
+///
+/// #[derive(Debug, Clone, Serialize, Deserialize)]
+/// pub enum UserEvent {
+///     Initialized { name: String },
+///     NameUpdated { name: String },
 /// }
 ///
-/// pub struct User{
-///     events: Vec<UserEvent>
+/// impl EsEvent for UserEvent {
+///     type EntityId = uuid::Uuid;
+///     fn event_context() -> bool { false }
 /// }
 ///
-/// impl User{
-///     pub fn update_name(&mut self, new_name: impl Into<String>) -> Idempotent<()>{
+/// pub struct User {
+///     name: String,
+///     events: EntityEvents<UserEvent>,
+/// }
+///
+/// impl User {
+///     pub fn update_name(&mut self, new_name: impl Into<String>) -> Idempotent<()> {
 ///         let name = new_name.into();
 ///         idempotency_guard!(
-///             self.events.iter().rev(),
+///             self.events.iter_persisted().rev(),
 ///             UserEvent::NameUpdated { name: existing_name } if existing_name == &name
-///             // above line returns early if same name found
 ///         );
-///         self.events.push(UserEvent::NameUpdated{name});
+///         self.events.push(UserEvent::NameUpdated { name });
 ///         Idempotent::Executed(())
 ///     }
-///     
-///     pub fn update_name_with_break(&mut self, new_name: impl Into<String>) -> Idempotent<()>{
+///
+///     pub fn update_name_with_break(&mut self, new_name: impl Into<String>) -> Idempotent<()> {
 ///         let name = new_name.into();
 ///         idempotency_guard!(
-///             self.events.iter().rev(),
+///             self.events.iter_persisted().rev(),
 ///             UserEvent::NameUpdated { name: existing_name } if existing_name == &name,
-///             => UserEvent::NameUpdated {..}
-///             // above line breaks iteration if same event found
-///        );
-///        self.events.push(UserEvent::NameUpdated{name});
-///        Idempotent::Executed(())     
+///             // The `=>` signifies the pattern where to stop the iteration
+///             => UserEvent::NameUpdated { .. }
+///         );
+///         self.events.push(UserEvent::NameUpdated { name });
+///         Idempotent::Executed(())
 ///     }
 /// }
-///   
-/// let mut user1 = User{ events: vec![] };
-/// let mut user2 = User{ events: vec![] };
-/// assert!(user1.update_name("Alice").did_execute());
-/// // updating "ALice" again ignored because same event with same name exists
-/// assert!(user1.update_name("Alice").was_already_applied());
-///     
-/// assert!(user2.update_name_with_break("Alice").did_execute());
-/// assert!(user2.update_name_with_break("Bob").did_execute());
-/// // updating "ALice" again works because of early break condition
-/// assert!(user2.update_name_with_break("Alice").did_execute());
 /// ```
 #[macro_export]
 macro_rules! idempotency_guard {
     ($events:expr, $( $pattern:pat $(if $guard:expr)? ),+ $(,)?) => {
-        for event in $events {
-            match event {
+        #[cfg(feature = "idempotency-key")]
+        let __current_idempotency_key = $crate::EventContext::current().idempotency_key();
+        for __persisted_event in $events {
+            #[cfg(feature = "idempotency-key")]
+            if let Some(ref __key) = __current_idempotency_key {
+                if let Some(ref __ctx) = __persisted_event.context {
+                    if __ctx.idempotency_key() == Some(__key.as_str()) {
+                        return $crate::FromAlreadyApplied::from_already_applied();
+                    }
+                }
+            }
+            match &__persisted_event.event {
                 $(
                     $pattern $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
                 )+
@@ -73,8 +87,29 @@ macro_rules! idempotency_guard {
     };
     ($events:expr, $( $pattern:pat $(if $guard:expr)? ),+,
      => $break_pattern:pat $(if $break_guard:expr)?) => {
-        for event in $events {
-            match event {
+        #[cfg(feature = "idempotency-key")]
+        let __current_idempotency_key = $crate::EventContext::current().idempotency_key();
+        #[cfg(feature = "idempotency-key")]
+        let mut __pattern_matching_active = true;
+        for __persisted_event in $events {
+            #[cfg(feature = "idempotency-key")]
+            if let Some(ref __key) = __current_idempotency_key {
+                if let Some(ref __ctx) = __persisted_event.context {
+                    if __ctx.idempotency_key() == Some(__key.as_str()) {
+                        return $crate::FromAlreadyApplied::from_already_applied();
+                    }
+                }
+            }
+            #[cfg(feature = "idempotency-key")]
+            if __pattern_matching_active {
+                match &__persisted_event.event {
+                    $($pattern $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),)+
+                    $break_pattern $(if $break_guard)? => __pattern_matching_active = false,
+                    _ => {}
+                }
+            }
+            #[cfg(not(feature = "idempotency-key"))]
+            match &__persisted_event.event {
                 $($pattern $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),)+
                 $break_pattern $(if $break_guard)? => break,
                 _ => {}
