@@ -1,7 +1,7 @@
 # fn list_for_filters
 
-The `list_for_filters` function provides multi-column filtering using a struct-based API where each filter field is optional.
-Unlike `list_for_filter` which filters by **one column at a time** via an enum, `list_for_filters` can filter by **N columns simultaneously**, making it ideal for UI table filtering use cases.
+The `list_for_filters` function provides a unified interface for querying entities with optional filtering and flexible sorting.
+It uses a struct-based API where each filter field is optional, allowing filtering by **N columns simultaneously** — making it ideal for UI table filtering use cases.
 
 The function accepts:
 
@@ -62,22 +62,15 @@ When a parameter is `NULL` (i.e., `None`), the `COALESCE` evaluates to `true`, e
 
 ### A Dispatch Function
 
-The `list_for_filters` function matches on the sort column and delegates to the appropriate per-sort function, handling cursor conversion automatically.
+The `list_for_filters` function matches on the sort column and intelligently delegates to the most efficient underlying function:
 
-## Comparison with list_for_filter
-
-| Feature | `list_for_filter` | `list_for_filters` |
-|---------|-------------------|---------------------|
-| Filter type | Enum (one variant at a time) | Struct (all fields optional) |
-| Multi-column filtering | No | Yes |
-| No-filter case | `Filter::NoFilter` variant | `Filters::default()` |
-| Use case | Single column filter + sort | UI table filtering with N columns |
-
-Both APIs coexist and are fully backward compatible.
+- **No filters set** (`Filters::default()`): proxies to `list_by_{sort}` (simple query, full index usage)
+- **Exactly one filter set**: proxies to `list_for_{col}_by_{sort}` (single-column WHERE, full index usage)
+- **Two or more filters set**: uses the per-sort COALESCE-based SQL (multi-column nullable WHERE)
 
 ## Important Notes
 
-**Cursor and Sort Alignment**: The cursor type in `PaginatedQueryArgs` must match the sort field specified in the `Sort` parameter, same as with `list_for_filter`.
+**Cursor and Sort Alignment**: The cursor type in `PaginatedQueryArgs` must match the sort field specified in the `Sort` parameter.
 
 **Column Options**: Filter fields are generated for columns with the `list_for` option. Sort options are generated for columns with `list_by` (ID and created_at are included by default).
 
@@ -97,15 +90,26 @@ Both APIs coexist and are fully backward compatible.
 # #[es_event(id = "UserId")]
 # pub enum UserEvent {
 #     Initialized { id: UserId, name: String },
+#     NameUpdated { name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
 #     fn into_events(self) -> EntityEvents<UserEvent> {
-#         unimplemented!()
+#         EntityEvents::init(
+#             self.id,
+#             [UserEvent::Initialized { id: self.id, name: self.name }],
+#         )
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
 #     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
-#         unimplemented!()
+#         let mut name = String::new();
+#         for event in events.iter_all() {
+#             match event {
+#                 UserEvent::Initialized { name: n, .. } => { name = n.clone(); }
+#                 UserEvent::NameUpdated { name: n } => { name = n.clone(); }
+#             }
+#         }
+#         Ok(User { id: events.id().clone(), name, events })
 #     }
 # }
 # pub struct NewUser { id: UserId, name: String }

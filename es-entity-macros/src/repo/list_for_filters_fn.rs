@@ -123,6 +123,92 @@ impl<'a> ListForFiltersFn<'a> {
         }
     }
 
+    fn generate_proxy_body(&self, by_col: &Column, delete: DeleteOption) -> TokenStream {
+        let by_col_name = by_col.name();
+        let delete_postfix = delete.include_deletion_fn_postfix();
+
+        let list_by_fn = syn::Ident::new(
+            &format!("list_by_{}{}", by_col_name, delete_postfix),
+            Span::call_site(),
+        );
+
+        if self.for_columns.is_empty() {
+            return quote! { self.#list_by_fn(query, direction).await? };
+        }
+
+        let all_none_checks: Vec<_> = self
+            .for_columns
+            .iter()
+            .map(|c| {
+                let name = c.name();
+                quote! { filters.#name.is_none() }
+            })
+            .collect();
+
+        let single_filter_branches: TokenStream = self
+            .for_columns
+            .iter()
+            .enumerate()
+            .map(|(i, for_col)| {
+                let others_none: Vec<_> = self
+                    .for_columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .map(|(_, c)| {
+                        let name = c.name();
+                        quote! { filters.#name.is_none() }
+                    })
+                    .collect();
+
+                let for_col_name = for_col.name();
+                let fn_name = syn::Ident::new(
+                    &format!(
+                        "list_for_{}_by_{}{}",
+                        for_col_name, by_col_name, delete_postfix
+                    ),
+                    Span::call_site(),
+                );
+
+                if others_none.is_empty() {
+                    quote! {
+                        else {
+                            self.#fn_name(filters.#for_col_name.unwrap(), query, direction).await?
+                        }
+                    }
+                } else {
+                    quote! {
+                        else if #(#others_none)&&* {
+                            self.#fn_name(filters.#for_col_name.unwrap(), query, direction).await?
+                        }
+                    }
+                }
+            })
+            .collect();
+
+        let multi_filter_fallback = if self.for_columns.len() >= 2 {
+            let list_for_filters_fn = syn::Ident::new(
+                &format!("list_for_filters_by_{}{}", by_col_name, delete_postfix),
+                Span::call_site(),
+            );
+            quote! {
+                else {
+                    self.#list_for_filters_fn(filters, query, direction).await?
+                }
+            }
+        } else {
+            quote! {}
+        };
+
+        quote! {
+            if #(#all_none_checks)&&* {
+                self.#list_by_fn(query, direction).await?
+            }
+            #single_filter_branches
+            #multi_filter_fallback
+        }
+    }
+
     fn generate_by_fn(&self, by_column: &'a Column, delete: DeleteOption) -> TokenStream {
         let entity = self.entity;
         let error = self.error;
@@ -395,14 +481,6 @@ impl ToTokens for ListForFiltersFn<'_> {
                         &format!("{}", by_col.name()).to_case(Case::UpperCamel),
                         Span::call_site(),
                     );
-                    let by_fn_name = syn::Ident::new(
-                        &format!(
-                            "list_for_filters_by_{}{}",
-                            by_col.name(),
-                            delete.include_deletion_fn_postfix()
-                        ),
-                        Span::call_site(),
-                    );
                     let inner_cursor_ident = {
                         let entity_name =
                             pluralizer::pluralize(&format!("{}", self.entity), 2, false);
@@ -412,6 +490,7 @@ impl ToTokens for ListForFiltersFn<'_> {
                             Span::call_site(),
                         )
                     };
+                    let proxy_body = self.generate_proxy_body(by_col, delete);
                     quote! {
                         #sort_by_name::#by_variant => {
                             let after = after.map(#cursor_mod::#inner_cursor_ident::try_from).transpose()?;
@@ -421,7 +500,7 @@ impl ToTokens for ListForFiltersFn<'_> {
                                 entities,
                                 has_next_page,
                                 end_cursor,
-                            } = self.#by_fn_name(filters, query, direction).await?;
+                            } = #proxy_body;
                             es_entity::PaginatedQueryRet {
                                 entities,
                                 has_next_page,
@@ -695,7 +774,15 @@ mod tests {
                                 entities,
                                 has_next_page,
                                 end_cursor,
-                            } = self.list_for_filters_by_id(filters, query, direction).await?;
+                            } = if filters.customer_id.is_none() && filters.status.is_none() {
+                                self.list_by_id(query, direction).await?
+                            } else if filters.status.is_none() {
+                                self.list_for_customer_id_by_id(filters.customer_id.unwrap(), query, direction).await?
+                            } else if filters.customer_id.is_none() {
+                                self.list_for_status_by_id(filters.status.unwrap(), query, direction).await?
+                            } else {
+                                self.list_for_filters_by_id(filters, query, direction).await?
+                            };
                             es_entity::PaginatedQueryRet {
                                 entities,
                                 has_next_page,
