@@ -7,6 +7,7 @@ mod find_all_fn;
 mod find_by_fn;
 mod list_by_fn;
 mod list_for_filter_fn;
+mod list_for_filters_fn;
 mod list_for_fn;
 mod nested;
 mod options;
@@ -128,6 +129,13 @@ impl ToTokens for EsRepo<'_> {
             &combo_cursor,
         );
         let list_for_filter_filter = &list_for_filter.filter;
+        let list_for_filters = list_for_filters_fn::ListForFiltersFn::new(
+            self.opts,
+            self.opts.columns.all_list_for().collect(),
+            self.opts.columns.all_list_by().collect(),
+            &combo_cursor,
+        );
+        let list_for_filters_struct = &list_for_filters.filters_struct;
         #[cfg(feature = "graphql")]
         let gql_combo_cursor = combo_cursor.gql_cursor();
         #[cfg(not(feature = "graphql"))]
@@ -194,6 +202,7 @@ impl ToTokens for EsRepo<'_> {
             }
 
             #list_for_filter_filter
+            #list_for_filters_struct
             #sort_by
 
              impl #impl_generics #repo #ty_generics #where_clause {
@@ -213,6 +222,7 @@ impl ToTokens for EsRepo<'_> {
                 #(#find_by_fns)*
                 #find_all_fn
                 #list_for_filter
+                #list_for_filters
                 #(#list_by_fns)*
                 #(#list_for_fns)*
                 #(#nested)*

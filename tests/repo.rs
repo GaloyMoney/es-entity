@@ -191,6 +191,102 @@ async fn list_for_filter() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn list_for_filters() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+
+    let users = Users::new(pool);
+
+    // Test with default filters (no filter) - should return all entities
+    let PaginatedQueryRet {
+        entities,
+        has_next_page: _,
+        end_cursor: _,
+    } = users
+        .list_for_filters(
+            UsersFilters::default(),
+            Sort {
+                by: UsersSortBy::Id,
+                direction: ListDirection::Ascending,
+            },
+            PaginatedQueryArgs {
+                first: 10,
+                after: None,
+            },
+        )
+        .await?;
+
+    assert!(!entities.is_empty());
+
+    // Create a user with a unique name for testing the filter
+    let unique_name = format!("FiltersTest_{}", UserId::new());
+    let new_user = NewUser::builder()
+        .id(UserId::new())
+        .name(&unique_name)
+        .build()
+        .unwrap();
+
+    users.create(new_user).await?;
+
+    // Test with specific name filter
+    let filtered_result = users
+        .list_for_filters(
+            UsersFilters {
+                name: Some(unique_name.clone()),
+            },
+            Sort {
+                by: UsersSortBy::Id,
+                direction: ListDirection::Ascending,
+            },
+            PaginatedQueryArgs {
+                first: 10,
+                after: None,
+            },
+        )
+        .await?;
+
+    assert_eq!(filtered_result.entities.len(), 1);
+    assert_eq!(filtered_result.entities[0].name, unique_name);
+
+    // Test pagination with filters
+    let paginated_result = users
+        .list_for_filters(
+            UsersFilters::default(),
+            Sort {
+                by: UsersSortBy::Id,
+                direction: ListDirection::Ascending,
+            },
+            PaginatedQueryArgs {
+                first: 1,
+                after: None,
+            },
+        )
+        .await?;
+
+    assert_eq!(paginated_result.entities.len(), 1);
+    assert!(paginated_result.has_next_page);
+
+    // Use cursor for next page
+    let next_page = users
+        .list_for_filters(
+            UsersFilters::default(),
+            Sort {
+                by: UsersSortBy::Id,
+                direction: ListDirection::Ascending,
+            },
+            PaginatedQueryArgs {
+                first: 1,
+                after: paginated_result.end_cursor,
+            },
+        )
+        .await?;
+
+    assert_eq!(next_page.entities.len(), 1);
+    assert_ne!(paginated_result.entities[0].id, next_page.entities[0].id);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_with_artificial_clock() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let users = Users::new(pool);
