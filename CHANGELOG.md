@@ -1,3 +1,15 @@
+# [cala release v0.10.15](https://github.com/GaloyMoney/cala/releases/tag/0.10.15)
+
+
+
+### Features
+
+- Multi filter (#83)
+
+### Miscellaneous Tasks
+
+- Update convert_case requirement from 0.10 to 0.11 (#81)
+
 # [cala release v0.10.14](https://github.com/GaloyMoney/cala/releases/tag/0.10.14)
 
 
