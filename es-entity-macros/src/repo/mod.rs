@@ -6,7 +6,7 @@ mod delete_fn;
 mod find_all_fn;
 mod find_by_fn;
 mod list_by_fn;
-mod list_for_filter_fn;
+mod list_for_filters_fn;
 mod list_for_fn;
 mod nested;
 mod options;
@@ -120,14 +120,13 @@ impl ToTokens for EsRepo<'_> {
             self.list_by_fns.iter().map(|l| l.cursor()).collect(),
         );
         let sort_by = combo_cursor.sort_by();
-        let list_for_filter = list_for_filter_fn::ListForFilterFn::new(
+        let list_for_filters = list_for_filters_fn::ListForFiltersFn::new(
             self.opts,
-            &self.list_for_fns,
             self.opts.columns.all_list_for().collect(),
             self.opts.columns.all_list_by().collect(),
             &combo_cursor,
         );
-        let list_for_filter_filter = &list_for_filter.filter;
+        let list_for_filters_struct = &list_for_filters.filters_struct;
         #[cfg(feature = "graphql")]
         let gql_combo_cursor = combo_cursor.gql_cursor();
         #[cfg(not(feature = "graphql"))]
@@ -193,7 +192,7 @@ impl ToTokens for EsRepo<'_> {
                 pub(super) type Repo__DbEvent = es_entity::GenericEvent<#id>;
             }
 
-            #list_for_filter_filter
+            #list_for_filters_struct
             #sort_by
 
              impl #impl_generics #repo #ty_generics #where_clause {
@@ -212,7 +211,7 @@ impl ToTokens for EsRepo<'_> {
                 #delete_fn
                 #(#find_by_fns)*
                 #find_all_fn
-                #list_for_filter
+                #list_for_filters
                 #(#list_by_fns)*
                 #(#list_for_fns)*
                 #(#nested)*
