@@ -1,3 +1,12 @@
+# [cala release v0.10.17](https://github.com/GaloyMoney/cala/releases/tag/0.10.17)
+
+
+
+### Bug Fixes
+
+- Retry database connection in setup-db
+- Handle custom accessors correctly in batch operations
+
 # [cala release v0.10.16](https://github.com/GaloyMoney/cala/releases/tag/0.10.16)
 
 
