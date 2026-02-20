@@ -456,20 +456,14 @@ impl Column {
     fn variable_assignment_for_create_all(&self, ident: &syn::Ident) -> proc_macro2::TokenStream {
         let name = &self.name;
         let accessor = self.opts.create_accessor(name);
-        let needs_ref = self
-            .opts
-            .create_opts
-            .as_ref()
-            .map(|o| o.accessor.is_none())
-            .unwrap_or(true);
         let ty = &self.opts.ty;
-        if needs_ref {
+        if self.opts.create_accessor_returns_owned() {
             quote! {
-                let #name: &#ty = &#ident.#accessor;
+                let #name: #ty = #ident.#accessor;
             }
         } else {
             quote! {
-                let #name: #ty = #ident.#accessor;
+                let #name: &#ty = &#ident.#accessor;
             }
         }
     }
@@ -485,19 +479,13 @@ impl Column {
     fn variable_assignment_for_update_all(&self, ident: &syn::Ident) -> proc_macro2::TokenStream {
         let name = &self.name;
         let accessor = self.opts.update_accessor(name);
-        let needs_ref = self
-            .opts
-            .update_opts
-            .as_ref()
-            .map(|o| o.accessor.is_none())
-            .unwrap_or(true);
-        if needs_ref {
+        if self.opts.update_accessor_returns_owned() {
             quote! {
-                let #name = &#ident.#accessor;
+                let #name = #ident.#accessor;
             }
         } else {
             quote! {
-                let #name = #ident.#accessor;
+                let #name = &#ident.#accessor;
             }
         }
     }
@@ -582,6 +570,20 @@ impl ColumnOpts {
                 #name
             }
         }
+    }
+
+    fn create_accessor_returns_owned(&self) -> bool {
+        self.create_opts
+            .as_ref()
+            .and_then(|o| o.accessor.as_ref())
+            .is_some_and(|expr| matches!(expr, syn::Expr::Call(_) | syn::Expr::MethodCall(_)))
+    }
+
+    fn update_accessor_returns_owned(&self) -> bool {
+        self.update_opts
+            .as_ref()
+            .and_then(|o| o.accessor.as_ref())
+            .is_some_and(|expr| matches!(expr, syn::Expr::Call(_) | syn::Expr::MethodCall(_)))
     }
 
     fn parent_accessor(&self, name: &syn::Ident) -> proc_macro2::TokenStream {
