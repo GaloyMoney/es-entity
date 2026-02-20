@@ -73,7 +73,7 @@ impl ToTokens for PersistEventsBatchFn<'_> {
             async fn persist_events_batch<OP>(
                 &self,
                 op: &mut OP,
-                all_events: &mut [es_entity::EntityEvents<#event_type>]
+                all_events: &mut [&mut es_entity::EntityEvents<#event_type>]
             ) -> Result<std::collections::HashMap<#id_type, usize>, #error>
             where
                 OP: es_entity::AtomicOperation
@@ -156,7 +156,7 @@ mod tests {
             async fn persist_events_batch<OP>(
                 &self,
                 op: &mut OP,
-                all_events: &mut [es_entity::EntityEvents<EntityEvent>]
+                all_events: &mut [&mut es_entity::EntityEvents<EntityEvent>]
             ) -> Result<std::collections::HashMap<EntityId, usize>, es_entity::EsRepoError>
             where
                 OP: es_entity::AtomicOperation
@@ -243,7 +243,7 @@ mod tests {
             async fn persist_events_batch<OP>(
                 &self,
                 op: &mut OP,
-                all_events: &mut [es_entity::EntityEvents<EntityEvent>]
+                all_events: &mut [&mut es_entity::EntityEvents<EntityEvent>]
             ) -> Result<std::collections::HashMap<EntityId, usize>, es_entity::EsRepoError>
             where
                 OP: es_entity::AtomicOperation
