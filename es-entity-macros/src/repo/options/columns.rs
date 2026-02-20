@@ -198,6 +198,73 @@ impl Columns {
             })
             .collect()
     }
+
+    pub fn update_all_arg_parts(
+        &self,
+        ident: syn::Ident,
+    ) -> (
+        proc_macro2::TokenStream,
+        proc_macro2::TokenStream,
+        Vec<proc_macro2::TokenStream>,
+    ) {
+        let assignments = self.variable_assignments_for_update(ident);
+        let (vecs, pushes, bindings) = self
+            .all
+            .iter()
+            .filter(|c| c.opts.persist_on_update() || c.opts.is_id)
+            .map(|column| {
+                let vec_ident = syn::Ident::new(
+                    &format!("{}_collection", column.name),
+                    proc_macro2::Span::call_site(),
+                );
+                let ident = &column.name;
+                (
+                    quote! {
+                        let mut #vec_ident = Vec::new();
+                    },
+                    quote! {
+                        #vec_ident.push(#ident);
+                    },
+                    quote! {
+                        .bind(#vec_ident)
+                    },
+                )
+            })
+            .fold(
+                (Vec::new(), Vec::new(), Vec::new()),
+                |(mut v1, mut v2, mut v3): (Vec<_>, Vec<_>, Vec<_>), (a, b, c)| {
+                    v1.push(a);
+                    v2.push(b);
+                    v3.push(c);
+                    (v1, v2, v3)
+                },
+            );
+        (
+            quote! { #(#vecs)* },
+            quote! {
+                #assignments
+                #(#pushes)*
+            },
+            bindings,
+        )
+    }
+
+    pub fn sql_bulk_update_set(&self) -> String {
+        self.all
+            .iter()
+            .filter(|c| c.opts.persist_on_update() && !c.opts.is_id)
+            .map(|column| format!("{name} = unnested.{name}", name = column.name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    pub fn update_all_column_names(&self) -> Vec<String> {
+        self.all
+            .iter()
+            .filter(|c| c.opts.persist_on_update() || c.opts.is_id)
+            .map(|c| c.name.to_string())
+            .collect()
+    }
 }
 
 impl FromMeta for Columns {

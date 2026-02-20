@@ -386,3 +386,48 @@ async fn create_with_required_clock_field() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn update_all() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool);
+
+    let new_users = vec![
+        NewUser::builder()
+            .id(UserId::new())
+            .name("Alice")
+            .build()
+            .unwrap(),
+        NewUser::builder()
+            .id(UserId::new())
+            .name("Bob")
+            .build()
+            .unwrap(),
+        NewUser::builder()
+            .id(UserId::new())
+            .name("Charlie")
+            .build()
+            .unwrap(),
+    ];
+
+    let mut created = users.create_all(new_users).await?;
+    assert_eq!(created.len(), 3);
+
+    let _ = created[0].update_name("Alice_updated");
+    let _ = created[1].update_name("Bob_updated");
+    // Leave created[2] unchanged to test skipping
+
+    let n_events = users.update_all(&mut created).await?;
+    assert_eq!(n_events, 2);
+
+    let loaded_alice = users.find_by_id(created[0].id).await?;
+    assert_eq!(loaded_alice.name, "Alice_updated");
+
+    let loaded_bob = users.find_by_id(created[1].id).await?;
+    assert_eq!(loaded_bob.name, "Bob_updated");
+
+    let loaded_charlie = users.find_by_id(created[2].id).await?;
+    assert_eq!(loaded_charlie.name, "Charlie");
+
+    Ok(())
+}
