@@ -70,13 +70,14 @@ impl ToTokens for PersistEventsBatchFn<'_> {
         };
 
         tokens.append_all(quote! {
-            async fn persist_events_batch<OP>(
+            async fn persist_events_batch<OP, B>(
                 &self,
                 op: &mut OP,
-                all_events: &mut [es_entity::EntityEvents<#event_type>]
+                all_events: &mut [B]
             ) -> Result<std::collections::HashMap<#id_type, usize>, #error>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation,
+                B: std::borrow::BorrowMut<es_entity::EntityEvents<#event_type>>
             {
                 use es_entity::prelude::sqlx::Row;
 
@@ -88,7 +89,8 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                 let now = op.maybe_now();
 
                 let mut n_events_map = std::collections::HashMap::new();
-                for events in all_events.iter_mut() {
+                for item in all_events.iter() {
+                    let events: &es_entity::EntityEvents<#event_type> = item.borrow();
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
                     let serialized = events.serialize_new_events();
@@ -122,7 +124,8 @@ impl ToTokens for PersistEventsBatchFn<'_> {
 
                 let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
 
-                for events in all_events.iter_mut() {
+                for item in all_events.iter_mut() {
+                    let events: &mut es_entity::EntityEvents<#event_type> = item.borrow_mut();
                     events.mark_new_events_persisted_at(recorded_at);
                 }
 
@@ -153,13 +156,14 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            async fn persist_events_batch<OP>(
+            async fn persist_events_batch<OP, B>(
                 &self,
                 op: &mut OP,
-                all_events: &mut [es_entity::EntityEvents<EntityEvent>]
+                all_events: &mut [B]
             ) -> Result<std::collections::HashMap<EntityId, usize>, es_entity::EsRepoError>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation,
+                B: std::borrow::BorrowMut<es_entity::EntityEvents<EntityEvent>>
             {
                 use es_entity::prelude::sqlx::Row;
 
@@ -171,7 +175,8 @@ mod tests {
                 let now = op.maybe_now();
 
                 let mut n_events_map = std::collections::HashMap::new();
-                for events in all_events.iter_mut() {
+                for item in all_events.iter() {
+                    let events: &es_entity::EntityEvents<EntityEvent> = item.borrow();
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
                     let serialized = events.serialize_new_events();
@@ -212,7 +217,8 @@ mod tests {
 
                 let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
 
-                for events in all_events.iter_mut() {
+                for item in all_events.iter_mut() {
+                    let events: &mut es_entity::EntityEvents<EntityEvent> = item.borrow_mut();
                     events.mark_new_events_persisted_at(recorded_at);
                 }
 
@@ -240,13 +246,14 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            async fn persist_events_batch<OP>(
+            async fn persist_events_batch<OP, B>(
                 &self,
                 op: &mut OP,
-                all_events: &mut [es_entity::EntityEvents<EntityEvent>]
+                all_events: &mut [B]
             ) -> Result<std::collections::HashMap<EntityId, usize>, es_entity::EsRepoError>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation,
+                B: std::borrow::BorrowMut<es_entity::EntityEvents<EntityEvent>>
             {
                 use es_entity::prelude::sqlx::Row;
 
@@ -257,7 +264,8 @@ mod tests {
                 let now = op.maybe_now();
 
                 let mut n_events_map = std::collections::HashMap::new();
-                for events in all_events.iter_mut() {
+                for item in all_events.iter() {
+                    let events: &es_entity::EntityEvents<EntityEvent> = item.borrow();
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
                     let serialized = events.serialize_new_events();
@@ -289,7 +297,8 @@ mod tests {
 
                 let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
 
-                for events in all_events.iter_mut() {
+                for item in all_events.iter_mut() {
+                    let events: &mut es_entity::EntityEvents<EntityEvent> = item.borrow_mut();
                     events.mark_new_events_persisted_at(recorded_at);
                 }
 
