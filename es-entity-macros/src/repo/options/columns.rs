@@ -207,7 +207,18 @@ impl Columns {
         proc_macro2::TokenStream,
         Vec<proc_macro2::TokenStream>,
     ) {
-        let assignments = self.variable_assignments_for_update(ident);
+        let assignments = {
+            let assignments = self.all.iter().filter_map(|c| {
+                if c.opts.persist_on_update() || c.opts.is_id {
+                    Some(c.variable_assignment_for_update_all(&ident))
+                } else {
+                    None
+                }
+            });
+            quote! {
+                #(#assignments)*
+            }
+        };
         let (vecs, pushes, bindings) = self
             .all
             .iter()
@@ -468,6 +479,26 @@ impl Column {
         let accessor = self.opts.update_accessor(name);
         quote! {
             let #name = &#ident.#accessor;
+        }
+    }
+
+    fn variable_assignment_for_update_all(&self, ident: &syn::Ident) -> proc_macro2::TokenStream {
+        let name = &self.name;
+        let accessor = self.opts.update_accessor(name);
+        let needs_ref = self
+            .opts
+            .update_opts
+            .as_ref()
+            .map(|o| o.accessor.is_none())
+            .unwrap_or(true);
+        if needs_ref {
+            quote! {
+                let #name = &#ident.#accessor;
+            }
+        } else {
+            quote! {
+                let #name = #ident.#accessor;
+            }
         }
     }
 }
