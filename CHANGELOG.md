@@ -1,3 +1,11 @@
+# [cala release v0.10.16](https://github.com/GaloyMoney/cala/releases/tag/0.10.16)
+
+
+
+### Features
+
+- Update_all (#84)
+
 # [cala release v0.10.15](https://github.com/GaloyMoney/cala/releases/tag/0.10.15)
 
 
