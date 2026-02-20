@@ -125,8 +125,7 @@ impl ToTokens for CreateAllFn<'_> {
 
 
                     let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event>> = new_entities.into_iter().map(Self::convert_new).collect();
-                    let mut all_event_refs: Vec<&mut es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event>> = all_events.iter_mut().collect();
-                    let mut n_persisted = self.persist_events_batch(op, &mut all_event_refs).await?;
+                    let mut n_persisted = self.persist_events_batch(op, &mut all_events).await?;
 
                     for events in all_events.into_iter() {
                         let n_events = n_persisted.remove(events.id()).expect("n_events exists");
@@ -226,8 +225,7 @@ mod tests {
 
 
                     let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event>> = new_entities.into_iter().map(Self::convert_new).collect();
-                    let mut all_event_refs: Vec<&mut es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event>> = all_events.iter_mut().collect();
-                    let mut n_persisted = self.persist_events_batch(op, &mut all_event_refs).await?;
+                    let mut n_persisted = self.persist_events_batch(op, &mut all_events).await?;
 
                     for events in all_events.into_iter() {
                         let n_events = n_persisted.remove(events.id()).expect("n_events exists");
