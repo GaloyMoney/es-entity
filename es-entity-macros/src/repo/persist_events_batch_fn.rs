@@ -89,8 +89,8 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                 let now = op.maybe_now();
 
                 let mut n_events_map = std::collections::HashMap::new();
-                for item in all_events.iter_mut() {
-                    let events: &mut es_entity::EntityEvents<#event_type> = item.borrow_mut();
+                for item in all_events.iter() {
+                    let events: &es_entity::EntityEvents<#event_type> = item.borrow();
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
                     let serialized = events.serialize_new_events();
@@ -175,8 +175,8 @@ mod tests {
                 let now = op.maybe_now();
 
                 let mut n_events_map = std::collections::HashMap::new();
-                for item in all_events.iter_mut() {
-                    let events: &mut es_entity::EntityEvents<EntityEvent> = item.borrow_mut();
+                for item in all_events.iter() {
+                    let events: &es_entity::EntityEvents<EntityEvent> = item.borrow();
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
                     let serialized = events.serialize_new_events();
@@ -264,8 +264,8 @@ mod tests {
                 let now = op.maybe_now();
 
                 let mut n_events_map = std::collections::HashMap::new();
-                for item in all_events.iter_mut() {
-                    let events: &mut es_entity::EntityEvents<EntityEvent> = item.borrow_mut();
+                for item in all_events.iter() {
+                    let events: &es_entity::EntityEvents<EntityEvent> = item.borrow();
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
                     let serialized = events.serialize_new_events();
