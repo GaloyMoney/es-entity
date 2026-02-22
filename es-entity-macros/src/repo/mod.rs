@@ -62,15 +62,18 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             .all_list_by()
             .map(|c| list_by_fn::ListByFn::new(c, opts))
             .collect();
-        let list_for_fns = opts
-            .columns
-            .all_list_for()
-            .flat_map(|list_for_column| {
-                opts.columns
-                    .all_list_by()
-                    .map(|b| list_for_fn::ListForFn::new(list_for_column, b, opts))
-            })
-            .collect();
+        let list_for_fns = if opts.generate_list_for_by() {
+            opts.columns
+                .all_list_for()
+                .flat_map(|list_for_column| {
+                    opts.columns
+                        .all_list_by()
+                        .map(|b| list_for_fn::ListForFn::new(list_for_column, b, opts))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let populate_nested = opts
             .columns
             .parent()

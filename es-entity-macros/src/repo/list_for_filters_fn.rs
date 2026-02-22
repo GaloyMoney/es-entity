@@ -94,6 +94,7 @@ pub struct ListForFiltersFn<'a> {
     ignore_prefix: Option<&'a syn::LitStr>,
     id: &'a syn::Ident,
     any_nested: bool,
+    generate_list_for_by: bool,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -118,6 +119,7 @@ impl<'a> ListForFiltersFn<'a> {
             ignore_prefix: opts.table_prefix(),
             id: opts.id(),
             any_nested: opts.any_nested(),
+            generate_list_for_by: opts.generate_list_for_by(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -144,6 +146,22 @@ impl<'a> ListForFiltersFn<'a> {
                 quote! { filters.#name.is_none() }
             })
             .collect();
+
+        // When list_for_by = false, skip individual list_for_X_by_Y dispatch
+        // and always route through the unified list_for_filters_by_Y method.
+        if !self.generate_list_for_by {
+            let list_for_filters_fn = syn::Ident::new(
+                &format!("list_for_filters_by_{}{}", by_col_name, delete_postfix),
+                Span::call_site(),
+            );
+            return quote! {
+                if #(#all_none_checks)&&* {
+                    self.#list_by_fn(query, direction).await?
+                } else {
+                    self.#list_for_filters_fn(filters, query, direction).await?
+                }
+            };
+        }
 
         let single_filter_branches: TokenStream = self
             .for_columns
@@ -676,6 +694,7 @@ mod tests {
             ignore_prefix: None,
             id: &id,
             any_nested: false,
+            generate_list_for_by: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -799,5 +818,68 @@ mod tests {
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn list_for_filters_skip_list_for_by() {
+        let entity = Ident::new("Order", Span::call_site());
+        let error: syn::Type = syn::parse_str("es_entity::EsRepoError").unwrap();
+        let id = syn::Ident::new("OrderId", proc_macro2::Span::call_site());
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        let id_column = Column::for_id(syn::parse_str("OrderId").unwrap());
+        let customer_id_column = Column::new(
+            syn::Ident::new("customer_id", proc_macro2::Span::call_site()),
+            syn::parse_str("CustomerId").unwrap(),
+        );
+        let status_column = Column::new(
+            syn::Ident::new("status", proc_macro2::Span::call_site()),
+            syn::parse_str("OrderStatus").unwrap(),
+        );
+
+        let for_columns = vec![&customer_id_column, &status_column];
+        let by_columns = vec![&id_column];
+
+        let id_cursor = CursorStruct {
+            column: &id_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
+
+        let list_for_filters_fn = ListForFiltersFn {
+            filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
+            entity: &entity,
+            error: &error,
+            for_columns,
+            by_columns,
+            cursor: &combo_cursor,
+            delete: DeleteOption::No,
+            cursor_mod: cursor_mod.clone(),
+            table_name: "orders",
+            ignore_prefix: None,
+            id: &id,
+            any_nested: false,
+            generate_list_for_by: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        list_for_filters_fn.to_tokens(&mut tokens);
+
+        // When list_for_by = false, the dispatch should route through
+        // list_for_filters_by_id instead of individual list_for_X_by_id methods
+        let token_str = tokens.to_string();
+
+        // Should NOT contain individual list_for_X_by_Y dispatches
+        assert!(!token_str.contains("list_for_customer_id_by_id"));
+        assert!(!token_str.contains("list_for_status_by_id"));
+
+        // Should contain the unified filter dispatch
+        assert!(token_str.contains("list_for_filters_by_id"));
+        assert!(token_str.contains("list_by_id"));
     }
 }

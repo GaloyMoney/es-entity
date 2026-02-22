@@ -108,6 +108,16 @@ pub struct RepositoryOptions {
 
     #[darling(default)]
     persist_event_context: Option<bool>,
+
+    /// When set to `false`, skips generating the cartesian product of
+    /// `list_for_X_by_Y` methods. The `list_for_filters` dispatch will
+    /// route all filtered queries through the unified `list_for_filters_by_Y`
+    /// method instead. This reduces the number of compile-time-checked SQL
+    /// queries, which can significantly speed up compilation.
+    ///
+    /// Default: `true` (generate all combinations for backward compatibility).
+    #[darling(default)]
+    list_for_by: Option<bool>,
 }
 
 impl RepositoryOptions {
@@ -304,5 +314,9 @@ impl RepositoryOptions {
 
     pub fn err(&self) -> &syn::Type {
         self.err_ty.as_ref().expect("Error identifier is not set")
+    }
+
+    pub fn generate_list_for_by(&self) -> bool {
+        self.list_for_by.unwrap_or(true)
     }
 }
