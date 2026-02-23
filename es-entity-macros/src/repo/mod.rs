@@ -78,9 +78,9 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
                     by_columns
                         .iter()
                         .filter_map(|by_name| {
-                            opts.columns.find_list_by(by_name).map(|by_col| {
-                                list_for_fn::ListForFn::new(for_col, by_col, opts)
-                            })
+                            opts.columns
+                                .find_list_by(by_name)
+                                .map(|by_col| list_for_fn::ListForFn::new(for_col, by_col, opts))
                         })
                         .collect::<Vec<_>>()
                 }

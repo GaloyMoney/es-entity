@@ -37,7 +37,9 @@ impl Columns {
     }
 
     pub fn find_list_by(&self, name: &syn::Ident) -> Option<&Column> {
-        self.all.iter().find(|c| c.name() == name && c.opts.list_by())
+        self.all
+            .iter()
+            .find(|c| c.name() == name && c.opts.list_by())
     }
 
     pub fn parent(&self) -> Option<&Column> {
@@ -663,16 +665,13 @@ impl FromMeta for ListForOpts {
                     if list.path.is_ident("by") =>
                 {
                     let inner: syn::punctuated::Punctuated<syn::Ident, syn::Token![,]> =
-                        list.parse_args_with(
-                            syn::punctuated::Punctuated::parse_terminated,
-                        )?;
+                        list.parse_args_with(syn::punctuated::Punctuated::parse_terminated)?;
                     by_columns.extend(inner);
                 }
                 _ => {
                     return Err(
-                        darling::Error::custom("Expected `by(col1, col2, ...)`")
-                            .with_span(item),
-                    )
+                        darling::Error::custom("Expected `by(col1, col2, ...)`").with_span(item)
+                    );
                 }
             }
         }
@@ -784,8 +783,7 @@ mod tests {
 
     #[test]
     fn list_for_with_by_columns() {
-        let input: syn::Meta =
-            parse_quote!(thing(ty = "String", list_for(by(created_at))));
+        let input: syn::Meta = parse_quote!(thing(ty = "String", list_for(by(created_at))));
         let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
         assert!(values.list_for());
         assert_eq!(values.list_for_by_columns().len(), 1);
@@ -794,8 +792,7 @@ mod tests {
 
     #[test]
     fn list_for_with_multiple_by_columns() {
-        let input: syn::Meta =
-            parse_quote!(thing(ty = "String", list_for(by(created_at, id))));
+        let input: syn::Meta = parse_quote!(thing(ty = "String", list_for(by(created_at, id))));
         let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
         assert!(values.list_for());
         assert_eq!(values.list_for_by_columns().len(), 2);
