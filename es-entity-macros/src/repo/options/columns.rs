@@ -36,6 +36,10 @@ impl Columns {
         self.all.iter().filter(|c| c.opts.list_for())
     }
 
+    pub fn find_list_by(&self, name: &syn::Ident) -> Option<&Column> {
+        self.all.iter().find(|c| c.name() == name && c.opts.list_by())
+    }
+
     pub fn parent(&self) -> Option<&Column> {
         self.all.iter().find(|c| c.opts.parent_opts.is_some())
     }
@@ -338,6 +342,17 @@ impl Column {
         }
     }
 
+    #[cfg(test)]
+    pub fn new_list_for(name: syn::Ident, ty: syn::Type, by_columns: Vec<syn::Ident>) -> Self {
+        Column {
+            name,
+            opts: ColumnOpts {
+                list_for_opts: Some(ListForOpts { by_columns }),
+                ..ColumnOpts::new(ty)
+            },
+        }
+    }
+
     pub fn for_id(ty: syn::Type) -> Self {
         Column {
             name: syn::Ident::new("id", proc_macro2::Span::call_site()),
@@ -346,7 +361,7 @@ impl Column {
                 is_id: true,
                 list_by: Some(true),
                 find_by: Some(true),
-                list_for: Some(false),
+                list_for_opts: None,
                 parent_opts: None,
                 create_opts: Some(CreateOpts {
                     persist: Some(true),
@@ -370,7 +385,7 @@ impl Column {
                 is_id: false,
                 list_by: Some(true),
                 find_by: Some(false),
-                list_for: Some(false),
+                list_for_opts: None,
                 parent_opts: None,
                 create_opts: Some(CreateOpts {
                     persist: Some(false),
@@ -386,6 +401,10 @@ impl Column {
                 }),
             },
         }
+    }
+
+    pub fn list_for_by_columns(&self) -> &[syn::Ident] {
+        self.opts.list_for_by_columns()
     }
 
     pub fn is_id(&self) -> bool {
@@ -500,8 +519,8 @@ struct ColumnOpts {
     find_by: Option<bool>,
     #[darling(default)]
     list_by: Option<bool>,
-    #[darling(default)]
-    list_for: Option<bool>,
+    #[darling(default, rename = "list_for")]
+    list_for_opts: Option<ListForOpts>,
     #[darling(default, rename = "parent")]
     parent_opts: Option<ParentOpts>,
     #[darling(default, rename = "create")]
@@ -517,7 +536,7 @@ impl ColumnOpts {
             is_id: false,
             find_by: None,
             list_by: None,
-            list_for: None,
+            list_for_opts: None,
             parent_opts: None,
             create_opts: None,
             update_opts: None,
@@ -533,7 +552,14 @@ impl ColumnOpts {
     }
 
     fn list_for(&self) -> bool {
-        self.list_for.unwrap_or(false)
+        self.list_for_opts.is_some()
+    }
+
+    fn list_for_by_columns(&self) -> &[syn::Ident] {
+        self.list_for_opts
+            .as_ref()
+            .map(|o| o.by_columns.as_slice())
+            .unwrap_or(&[])
     }
 
     fn persist_on_create(&self) -> bool {
@@ -607,6 +633,41 @@ struct CreateOpts {
 struct UpdateOpts {
     persist: Option<bool>,
     accessor: Option<syn::Expr>,
+}
+
+#[derive(PartialEq, Debug, Default)]
+struct ListForOpts {
+    by_columns: Vec<syn::Ident>,
+}
+
+impl FromMeta for ListForOpts {
+    fn from_word() -> darling::Result<Self> {
+        Ok(ListForOpts::default())
+    }
+
+    fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
+        let mut by_columns = Vec::new();
+        for item in items {
+            match item {
+                darling::ast::NestedMeta::Meta(syn::Meta::List(list))
+                    if list.path.is_ident("by") =>
+                {
+                    let inner: syn::punctuated::Punctuated<syn::Ident, syn::Token![,]> =
+                        list.parse_args_with(
+                            syn::punctuated::Punctuated::parse_terminated,
+                        )?;
+                    by_columns.extend(inner);
+                }
+                _ => {
+                    return Err(
+                        darling::Error::custom("Expected `by(col1, col2, ...)`")
+                            .with_span(item),
+                    )
+                }
+            }
+        }
+        Ok(ListForOpts { by_columns })
+    }
 }
 
 #[derive(PartialEq, Debug, Default)]
@@ -701,5 +762,34 @@ mod tests {
             values.parent_accessor(&parse_quote!(thing)).to_string(),
             quote!(parent_id()).to_string()
         );
+    }
+
+    #[test]
+    fn list_for_bare_word() {
+        let input: syn::Meta = parse_quote!(thing(ty = "String", list_for));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert!(values.list_for());
+        assert!(values.list_for_by_columns().is_empty());
+    }
+
+    #[test]
+    fn list_for_with_by_columns() {
+        let input: syn::Meta =
+            parse_quote!(thing(ty = "String", list_for(by(created_at))));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert!(values.list_for());
+        assert_eq!(values.list_for_by_columns().len(), 1);
+        assert_eq!(values.list_for_by_columns()[0].to_string(), "created_at");
+    }
+
+    #[test]
+    fn list_for_with_multiple_by_columns() {
+        let input: syn::Meta =
+            parse_quote!(thing(ty = "String", list_for(by(created_at, id))));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert!(values.list_for());
+        assert_eq!(values.list_for_by_columns().len(), 2);
+        assert_eq!(values.list_for_by_columns()[0].to_string(), "created_at");
+        assert_eq!(values.list_for_by_columns()[1].to_string(), "id");
     }
 }
