@@ -645,6 +645,16 @@ impl FromMeta for ListForOpts {
         Ok(ListForOpts::default())
     }
 
+    fn from_bool(value: bool) -> darling::Result<Self> {
+        if value {
+            Ok(ListForOpts::default())
+        } else {
+            Err(darling::Error::custom(
+                "list_for = false is not supported; remove list_for entirely to disable",
+            ))
+        }
+    }
+
     fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
         let mut by_columns = Vec::new();
         for item in items {

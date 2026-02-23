@@ -145,14 +145,15 @@ impl<'a> ListForFiltersFn<'a> {
             })
             .collect();
 
-        // Determine which for_columns have individual methods for this by_col
+        // Determine which for_columns have individual methods for this by_col.
+        // Bare `list_for` (empty by_columns) = backward compat, paired with ALL list_by columns.
+        // `list_for(by(col))` = selective, only paired with declared columns.
         let paired_for_columns: Vec<_> = self
             .for_columns
             .iter()
             .filter(|fc| {
-                fc.list_for_by_columns()
-                    .iter()
-                    .any(|n| n == by_col_name)
+                let by_cols = fc.list_for_by_columns();
+                by_cols.is_empty() || by_cols.iter().any(|n| n == by_col_name)
             })
             .collect();
 
@@ -820,14 +821,14 @@ mod tests {
     }
 
     #[test]
-    fn list_for_filters_no_by_columns() {
+    fn list_for_filters_bare_list_for_backward_compat() {
+        // Bare list_for (no by(...)) should generate ALL pairings (backward compat)
         let entity = Ident::new("Order", Span::call_site());
         let error: syn::Type = syn::parse_str("es_entity::EsRepoError").unwrap();
         let id = syn::Ident::new("OrderId", proc_macro2::Span::call_site());
         let cursor_mod = Ident::new("cursor_mod", Span::call_site());
 
         let id_column = Column::for_id(syn::parse_str("OrderId").unwrap());
-        // Bare list_for with no by(...) columns
         let customer_id_column = Column::new_list_for(
             syn::Ident::new("customer_id", proc_macro2::Span::call_site()),
             syn::parse_str("CustomerId").unwrap(),
@@ -873,17 +874,17 @@ mod tests {
 
         let token_str = tokens.to_string();
 
-        // Should NOT contain individual list_for_X_by_Y dispatches
-        assert!(!token_str.contains("list_for_customer_id_by_id"));
-        assert!(!token_str.contains("list_for_status_by_id"));
-
-        // Should contain the unified filter dispatch
+        // Bare list_for should dispatch to individual methods (backward compat)
+        assert!(token_str.contains("list_for_customer_id_by_id"));
+        assert!(token_str.contains("list_for_status_by_id"));
         assert!(token_str.contains("list_for_filters_by_id"));
         assert!(token_str.contains("list_by_id"));
     }
 
     #[test]
     fn list_for_filters_mixed_by_columns() {
+        // Test: customer_id has list_for(by(id)), status has list_for(by(created_at))
+        // Only customer_id should dispatch to individual method for by_id sort
         let entity = Ident::new("Order", Span::call_site());
         let error: syn::Type = syn::parse_str("es_entity::EsRepoError").unwrap();
         let id = syn::Ident::new("OrderId", proc_macro2::Span::call_site());
@@ -891,17 +892,18 @@ mod tests {
 
         let id_column = Column::for_id(syn::parse_str("OrderId").unwrap());
         let id_ident = syn::Ident::new("id", proc_macro2::Span::call_site());
-        // customer_id has by(id) - gets individual method
+        let created_at_ident = syn::Ident::new("created_at", proc_macro2::Span::call_site());
+        // customer_id has by(id) - gets individual method for id sort
         let customer_id_column = Column::new_list_for(
             syn::Ident::new("customer_id", proc_macro2::Span::call_site()),
             syn::parse_str("CustomerId").unwrap(),
             vec![id_ident],
         );
-        // status has bare list_for - no individual method
+        // status has by(created_at) - NOT paired with id sort
         let status_column = Column::new_list_for(
             syn::Ident::new("status", proc_macro2::Span::call_site()),
             syn::parse_str("OrderStatus").unwrap(),
-            vec![],
+            vec![created_at_ident],
         );
 
         let for_columns = vec![&customer_id_column, &status_column];
@@ -940,7 +942,7 @@ mod tests {
 
         // customer_id has by(id), so dispatch should use list_for_customer_id_by_id
         assert!(token_str.contains("list_for_customer_id_by_id"));
-        // status has no by(id), so no individual dispatch
+        // status has by(created_at) not by(id), so no individual dispatch for id sort
         assert!(!token_str.contains("list_for_status_by_id"));
         // Should still have unified fallback
         assert!(token_str.contains("list_for_filters_by_id"));
