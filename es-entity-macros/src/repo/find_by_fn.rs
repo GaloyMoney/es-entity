@@ -12,6 +12,7 @@ pub struct FindByFn<'a> {
     error: &'a syn::Type,
     delete: DeleteOption,
     any_nested: bool,
+    include_deleted_queries: bool,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -26,6 +27,7 @@ impl<'a> FindByFn<'a> {
             error: opts.err(),
             delete: opts.delete,
             any_nested: opts.any_nested(),
+            include_deleted_queries: opts.include_deleted_queries,
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -154,7 +156,9 @@ impl ToTokens for FindByFn<'_> {
                     }
                 });
 
-                if delete == self.delete {
+                if delete == self.delete
+                    || (self.delete == DeleteOption::Soft && !self.include_deleted_queries)
+                {
                     break;
                 }
             }
@@ -182,6 +186,7 @@ mod tests {
             error: &error,
             delete: DeleteOption::No,
             any_nested: false,
+            include_deleted_queries: false,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -269,6 +274,7 @@ mod tests {
             error: &error,
             delete: DeleteOption::No,
             any_nested: false,
+            include_deleted_queries: false,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -353,6 +359,7 @@ mod tests {
             error: &error,
             delete: DeleteOption::Soft,
             any_nested: false,
+            include_deleted_queries: false,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -390,35 +397,6 @@ mod tests {
                 __result
             }
 
-            pub async fn find_by_id_include_deleted(
-                &self,
-                id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, es_entity::EsRepoError> {
-                self.find_by_id_include_deleted_in_op(self.pool(), id).await
-            }
-
-            pub async fn find_by_id_include_deleted_in_op<'a, OP>(
-                &self,
-                op: OP,
-                id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, es_entity::EsRepoError>
-                where
-                    OP: es_entity::IntoOneTimeExecutor<'a>
-            {
-                let __result: Result<Entity, es_entity::EsRepoError> = async {
-                    let id = id.borrow();
-                    es_entity::es_query!(
-                        entity = Entity,
-                        "SELECT id FROM entities WHERE id = $1",
-                        id as &EntityId,
-                    )
-                    .fetch_one(op)
-                    .await
-                }.await;
-
-                __result
-            }
-
             pub async fn maybe_find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
@@ -447,38 +425,36 @@ mod tests {
 
                 __result
             }
-
-            pub async fn maybe_find_by_id_include_deleted(
-                &self,
-                id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
-                self.maybe_find_by_id_include_deleted_in_op(self.pool(), id).await
-            }
-
-            pub async fn maybe_find_by_id_include_deleted_in_op<'a, OP>(
-                &self,
-                op: OP,
-                id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, es_entity::EsRepoError>
-                where
-                    OP: es_entity::IntoOneTimeExecutor<'a>
-            {
-                let __result: Result<Option<Entity>, es_entity::EsRepoError> = async {
-                    let id = id.borrow();
-                    es_entity::es_query!(
-                        entity = Entity,
-                        "SELECT id FROM entities WHERE id = $1",
-                        id as &EntityId,
-                    )
-                    .fetch_optional(op)
-                    .await
-                }.await;
-
-                __result
-            }
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn find_by_fn_with_soft_delete_include_deleted() {
+        let column = Column::for_id(syn::parse_str("EntityId").unwrap());
+        let entity = Ident::new("Entity", Span::call_site());
+        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
+
+        let persist_fn = FindByFn {
+            prefix: None,
+            column: &column,
+            entity: &entity,
+            table_name: "entities",
+            error: &error,
+            delete: DeleteOption::Soft,
+            any_nested: false,
+            include_deleted_queries: true,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        persist_fn.to_tokens(&mut tokens);
+
+        let token_str = tokens.to_string();
+        assert!(token_str.contains("find_by_id_include_deleted"));
+        assert!(token_str.contains("maybe_find_by_id_include_deleted"));
     }
 
     #[test]
@@ -495,6 +471,7 @@ mod tests {
             error: &error,
             delete: DeleteOption::No,
             any_nested: true,
+            include_deleted_queries: false,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

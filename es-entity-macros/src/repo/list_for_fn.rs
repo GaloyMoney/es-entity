@@ -15,6 +15,7 @@ pub struct ListForFn<'a> {
     delete: DeleteOption,
     cursor_mod: syn::Ident,
     any_nested: bool,
+    include_deleted_queries: bool,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -32,6 +33,7 @@ impl<'a> ListForFn<'a> {
             delete: opts.delete,
             cursor_mod: opts.cursor_mod(),
             any_nested: opts.any_nested(),
+            include_deleted_queries: opts.include_deleted_queries,
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -264,7 +266,9 @@ impl ToTokens for ListForFn<'_> {
                 }
             });
 
-            if delete == self.delete {
+            if delete == self.delete
+                || (self.delete == DeleteOption::Soft && !self.include_deleted_queries)
+            {
                 break;
             }
         }
@@ -300,6 +304,7 @@ mod tests {
             delete: DeleteOption::No,
             cursor_mod,
             any_nested: false,
+            include_deleted_queries: false,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -397,6 +402,7 @@ mod tests {
             delete: DeleteOption::No,
             cursor_mod,
             any_nested: false,
+            include_deleted_queries: false,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

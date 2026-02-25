@@ -5,7 +5,14 @@ Deleting data from the Database goes against these principles.
 Therefore `es-entity` does not provide a way to actually delete data.
 It is however possible to configure a soft delete option by marking `delete = soft` on the `EsRepo`.
 
-This will omit entities that have been flagged as deleted from all queries as well as generate additional queries that can include the deleted entities:
+This will omit entities that have been flagged as deleted from all queries.
+
+To also generate `_include_deleted` query variants, add `include_deleted_queries` to the `es_repo` attribute:
+```rust,ignore
+#[es_repo(entity = "User", columns(name = "String"), delete = "soft", include_deleted_queries)]
+```
+
+This generates additional methods:
 ```rust,ignore
 fn find_by_<column>_include_deleted
 fn maybe_find_by_<column>_include_deleted

@@ -94,6 +94,7 @@ pub struct ListForFiltersFn<'a> {
     ignore_prefix: Option<&'a syn::LitStr>,
     id: &'a syn::Ident,
     any_nested: bool,
+    include_deleted_queries: bool,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -118,6 +119,7 @@ impl<'a> ListForFiltersFn<'a> {
             ignore_prefix: opts.table_prefix(),
             id: opts.id(),
             any_nested: opts.any_nested(),
+            include_deleted_queries: opts.include_deleted_queries,
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -603,7 +605,9 @@ impl ToTokens for ListForFiltersFn<'_> {
                 }
             });
 
-            if delete == self.delete {
+            if delete == self.delete
+                || (self.delete == DeleteOption::Soft && !self.include_deleted_queries)
+            {
                 break;
             }
         }
@@ -689,6 +693,7 @@ mod tests {
             ignore_prefix: None,
             id: &id,
             any_nested: false,
+            include_deleted_queries: false,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

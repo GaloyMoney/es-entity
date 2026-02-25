@@ -107,6 +107,9 @@ pub struct RepositoryOptions {
     events_table_name: Option<String>,
 
     #[darling(default)]
+    pub include_deleted_queries: bool,
+
+    #[darling(default)]
     persist_event_context: Option<bool>,
 }
 
