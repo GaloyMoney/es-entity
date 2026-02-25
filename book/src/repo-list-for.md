@@ -79,8 +79,8 @@ pub struct UserDocument {
         // The column name in the schema
         user_id(
             ty = "UserId",
-            // generate the `list_for` fn
-            list_for,
+            // generate the `list_for` fn paired with created_at and id
+            list_for(by(id, created_at)),
             // The accessor on the `NewUserDocument` type
             create(accessor = "owner_id"),
             // Its immutable - so no need to ever update it

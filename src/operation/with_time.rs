@@ -31,10 +31,9 @@ impl<'a, Op: AtomicOperation + ?Sized> OpWithTime<'a, Op> {
         } else if let Some(artificial_time) = op.clock().artificial_now() {
             artificial_time
         } else {
-            let res = sqlx::query!("SELECT NOW()")
+            sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>("SELECT NOW()")
                 .fetch_one(op.as_executor())
-                .await?;
-            res.now.expect("could not fetch now")
+                .await?
         };
         Ok(Self { inner: op, now })
     }

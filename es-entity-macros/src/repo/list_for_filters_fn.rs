@@ -145,17 +145,21 @@ impl<'a> ListForFiltersFn<'a> {
             })
             .collect();
 
-        let single_filter_branches: TokenStream = self
+        // Determine which for_columns have individual methods for this by_col.
+        let paired_for_columns: Vec<_> = self
             .for_columns
             .iter()
-            .enumerate()
-            .map(|(i, for_col)| {
+            .filter(|fc| fc.list_for_by_columns().iter().any(|n| n == by_col_name))
+            .collect();
+
+        let single_filter_branches: TokenStream = paired_for_columns
+            .iter()
+            .map(|for_col| {
                 let others_none: Vec<_> = self
                     .for_columns
                     .iter()
-                    .enumerate()
-                    .filter(|(j, _)| *j != i)
-                    .map(|(_, c)| {
+                    .filter(|c| c.name() != for_col.name())
+                    .map(|c| {
                         let name = c.name();
                         quote! { filters.#name.is_none() }
                     })
@@ -186,7 +190,13 @@ impl<'a> ListForFiltersFn<'a> {
             })
             .collect();
 
-        let multi_filter_fallback = if self.for_columns.len() >= 2 {
+        // Need a fallback when:
+        // - there are unpaired for_columns (they need COALESCE)
+        // - there are 2+ paired columns (multi-filter case)
+        // - there are 2+ for_columns total (multi-filter case)
+        let has_unpaired = paired_for_columns.len() < self.for_columns.len();
+        let needs_fallback = has_unpaired || self.for_columns.len() >= 2;
+        let multi_filter_fallback = if needs_fallback {
             let list_for_filters_fn = syn::Ident::new(
                 &format!("list_for_filters_by_{}{}", by_col_name, delete_postfix),
                 Span::call_site(),
@@ -642,13 +652,16 @@ mod tests {
         let cursor_mod = Ident::new("cursor_mod", Span::call_site());
 
         let id_column = Column::for_id(syn::parse_str("OrderId").unwrap());
-        let customer_id_column = Column::new(
+        let id_ident = syn::Ident::new("id", proc_macro2::Span::call_site());
+        let customer_id_column = Column::new_list_for(
             syn::Ident::new("customer_id", proc_macro2::Span::call_site()),
             syn::parse_str("CustomerId").unwrap(),
+            vec![id_ident.clone()],
         );
-        let status_column = Column::new(
+        let status_column = Column::new_list_for(
             syn::Ident::new("status", proc_macro2::Span::call_site()),
             syn::parse_str("OrderStatus").unwrap(),
+            vec![id_ident],
         );
 
         let for_columns = vec![&customer_id_column, &status_column];
@@ -799,5 +812,134 @@ mod tests {
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn list_for_filters_bare_list_for_defaults_to_by_id() {
+        // Bare list_for defaults to by(id) only
+        let entity = Ident::new("Order", Span::call_site());
+        let error: syn::Type = syn::parse_str("es_entity::EsRepoError").unwrap();
+        let id = syn::Ident::new("OrderId", proc_macro2::Span::call_site());
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        let id_column = Column::for_id(syn::parse_str("OrderId").unwrap());
+        let id_ident = syn::Ident::new("id", proc_macro2::Span::call_site());
+        let customer_id_column = Column::new_list_for(
+            syn::Ident::new("customer_id", proc_macro2::Span::call_site()),
+            syn::parse_str("CustomerId").unwrap(),
+            vec![id_ident.clone()],
+        );
+        let status_column = Column::new_list_for(
+            syn::Ident::new("status", proc_macro2::Span::call_site()),
+            syn::parse_str("OrderStatus").unwrap(),
+            vec![id_ident],
+        );
+
+        let for_columns = vec![&customer_id_column, &status_column];
+        let by_columns = vec![&id_column];
+
+        let id_cursor = CursorStruct {
+            column: &id_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
+
+        let list_for_filters_fn = ListForFiltersFn {
+            filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
+            entity: &entity,
+            error: &error,
+            for_columns,
+            by_columns,
+            cursor: &combo_cursor,
+            delete: DeleteOption::No,
+            cursor_mod: cursor_mod.clone(),
+            table_name: "orders",
+            ignore_prefix: None,
+            id: &id,
+            any_nested: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        list_for_filters_fn.to_tokens(&mut tokens);
+
+        let token_str = tokens.to_string();
+
+        // Bare list_for defaults to by(id), so should dispatch to individual methods for id
+        assert!(token_str.contains("list_for_customer_id_by_id"));
+        assert!(token_str.contains("list_for_status_by_id"));
+        assert!(token_str.contains("list_for_filters_by_id"));
+        assert!(token_str.contains("list_by_id"));
+    }
+
+    #[test]
+    fn list_for_filters_mixed_by_columns() {
+        // Test: customer_id has list_for(by(id)), status has list_for(by(created_at))
+        // Only customer_id should dispatch to individual method for by_id sort
+        let entity = Ident::new("Order", Span::call_site());
+        let error: syn::Type = syn::parse_str("es_entity::EsRepoError").unwrap();
+        let id = syn::Ident::new("OrderId", proc_macro2::Span::call_site());
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        let id_column = Column::for_id(syn::parse_str("OrderId").unwrap());
+        let id_ident = syn::Ident::new("id", proc_macro2::Span::call_site());
+        let created_at_ident = syn::Ident::new("created_at", proc_macro2::Span::call_site());
+        // customer_id has by(id) - gets individual method for id sort
+        let customer_id_column = Column::new_list_for(
+            syn::Ident::new("customer_id", proc_macro2::Span::call_site()),
+            syn::parse_str("CustomerId").unwrap(),
+            vec![id_ident],
+        );
+        // status has by(created_at) - NOT paired with id sort
+        let status_column = Column::new_list_for(
+            syn::Ident::new("status", proc_macro2::Span::call_site()),
+            syn::parse_str("OrderStatus").unwrap(),
+            vec![created_at_ident],
+        );
+
+        let for_columns = vec![&customer_id_column, &status_column];
+        let by_columns = vec![&id_column];
+
+        let id_cursor = CursorStruct {
+            column: &id_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
+
+        let list_for_filters_fn = ListForFiltersFn {
+            filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
+            entity: &entity,
+            error: &error,
+            for_columns,
+            by_columns,
+            cursor: &combo_cursor,
+            delete: DeleteOption::No,
+            cursor_mod: cursor_mod.clone(),
+            table_name: "orders",
+            ignore_prefix: None,
+            id: &id,
+            any_nested: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        list_for_filters_fn.to_tokens(&mut tokens);
+
+        let token_str = tokens.to_string();
+
+        // customer_id has by(id), so dispatch should use list_for_customer_id_by_id
+        assert!(token_str.contains("list_for_customer_id_by_id"));
+        // status has by(created_at) not by(id), so no individual dispatch for id sort
+        assert!(!token_str.contains("list_for_status_by_id"));
+        // Should still have unified fallback
+        assert!(token_str.contains("list_for_filters_by_id"));
     }
 }
