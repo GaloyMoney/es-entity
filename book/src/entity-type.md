@@ -58,7 +58,7 @@ impl User {
         // It is not mandatory but very useful in the context of distributed / multi-thread
         // systems to protect against replays.
         idempotency_guard!(
-            self.events.iter_all().rev(),
+            self.events.iter_persisted().rev(),
             // If this pattern matches return Idempotent::AlreadyApplied
             UserEvent::NameUpdated { name } if name == &new_name,
             // Stop searching here
