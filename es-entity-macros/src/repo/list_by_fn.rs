@@ -254,10 +254,15 @@ impl ToTokens for ListByFn<'_> {
         let cursor_ident = cursor.ident();
         let cursor_mod = cursor.cursor_mod();
         let error = self.error;
-        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
-        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
-        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
-        let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
+
+        let (op_setup, op_ref) = if self.any_nested {
+            (
+                quote! { let mut op = self.pool().begin().await?; },
+                quote! { &mut op },
+            )
+        } else {
+            (quote! {}, quote! { self.pool() })
+        };
 
         let destructure_tokens = self.cursor().destructure_tokens();
         let select_columns = cursor.select_columns(None);
@@ -267,14 +272,6 @@ impl ToTokens for ListByFn<'_> {
             let fn_name = syn::Ident::new(
                 &format!(
                     "list_by_{}{}",
-                    column_name,
-                    delete.include_deletion_fn_postfix()
-                ),
-                Span::call_site(),
-            );
-            let fn_in_op = syn::Ident::new(
-                &format!(
-                    "list_by_{}{}_in_op",
                     column_name,
                     delete.include_deletion_fn_postfix()
                 ),
@@ -389,35 +386,24 @@ impl ToTokens for ListByFn<'_> {
             ) = (quote! {}, quote! {}, quote! {}, quote! {}, quote! {});
 
             tokens.append_all(quote! {
+                #instrument_attr
                 pub async fn #fn_name(
                     &self,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
-                    self.#fn_in_op(#query_fn_get_op, cursor, direction).await
-                }
-
-                #instrument_attr
-                pub async fn #fn_in_op #query_fn_generics(
-                    &self,
-                    #query_fn_op_arg,
-                    cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
-                    direction: es_entity::ListDirection,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
-                   where
-                       OP: #query_fn_op_traits
-                 {
                     let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> = async {
+                        #op_setup
                         #extract_has_cursor
                         #destructure_tokens
                         #record_fields
 
                         let (entities, has_next_page) = match direction {
                             es_entity::ListDirection::Ascending => {
-                                #es_query_asc_call.fetch_n(op, first).await?
+                                #es_query_asc_call.fetch_n(#op_ref, first).await?
                             },
                             es_entity::ListDirection::Descending => {
-                                #es_query_desc_call.fetch_n(op, first).await?
+                                #es_query_desc_call.fetch_n(#op_ref, first).await?
                             },
                         };
 
@@ -556,18 +542,6 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
-                self.list_by_id_in_op(self.pool(), cursor, direction).await
-            }
-
-            pub async fn list_by_id_in_op<'a, OP>(
-                &self,
-                op: OP,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError>
-                where
-                    OP: es_entity::IntoOneTimeExecutor<'a>
-            {
                 let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> = async {
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
                     let id = if let Some(after) = after {
@@ -584,7 +558,7 @@ mod tests {
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                             )
-                                .fetch_n(op, first)
+                                .fetch_n(self.pool(), first)
                                 .await?
                         },
                         es_entity::ListDirection::Descending => {
@@ -594,7 +568,7 @@ mod tests {
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                             )
-                                .fetch_n(op, first)
+                                .fetch_n(self.pool(), first)
                                 .await?
                         },
                     };
@@ -615,18 +589,6 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
-                self.list_by_id_include_deleted_in_op(self.pool(), cursor, direction).await
-            }
-
-            pub async fn list_by_id_include_deleted_in_op<'a, OP>(
-                &self,
-                op: OP,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError>
-            where
-                OP: es_entity::IntoOneTimeExecutor<'a>
-            {
                 let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> = async {
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
                     let id = if let Some(after) = after {
@@ -642,7 +604,7 @@ mod tests {
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                             )
-                                .fetch_n(op, first)
+                                .fetch_n(self.pool(), first)
                                 .await?
                         },
                         es_entity::ListDirection::Descending => {
@@ -652,7 +614,7 @@ mod tests {
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                             )
-                                .fetch_n(op, first)
+                                .fetch_n(self.pool(), first)
                                 .await?
                         },
                     };
@@ -705,18 +667,6 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByNameCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, es_entity::EsRepoError> {
-                self.list_by_name_in_op(self.pool(), cursor, direction).await
-            }
-
-            pub async fn list_by_name_in_op<'a, OP>(
-                &self,
-                op: OP,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByNameCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, es_entity::EsRepoError>
-                where
-                    OP: es_entity::IntoOneTimeExecutor<'a>
-            {
                 let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, es_entity::EsRepoError> = async {
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
                     let (id, name) = if let Some(after) = after {
@@ -734,7 +684,7 @@ mod tests {
                                 id as Option<EntityId>,
                                 name as Option<String>,
                             )
-                                .fetch_n(op, first)
+                                .fetch_n(self.pool(), first)
                                 .await?
                         },
                         es_entity::ListDirection::Descending => {
@@ -745,7 +695,7 @@ mod tests {
                                 id as Option<EntityId>,
                                 name as Option<String>,
                             )
-                                .fetch_n(op, first)
+                                .fetch_n(self.pool(), first)
                                 .await?
                         },
                     };
@@ -800,18 +750,6 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByValueCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, es_entity::EsRepoError> {
-                self.list_by_value_in_op(self.pool(), cursor, direction).await
-            }
-
-            pub async fn list_by_value_in_op<'a, OP>(
-                &self,
-                op: OP,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByValueCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, es_entity::EsRepoError>
-                where
-                    OP: es_entity::IntoOneTimeExecutor<'a>
-            {
                 let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, es_entity::EsRepoError> = async {
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
                     let (id, value) = if let Some(after) = after {
@@ -829,7 +767,7 @@ mod tests {
                                 id as Option<EntityId>,
                                 value as Option<rust_decimal::Decimal>,
                             )
-                                .fetch_n(op, first)
+                                .fetch_n(self.pool(), first)
                                 .await?
                         },
                         es_entity::ListDirection::Descending => {
@@ -840,7 +778,7 @@ mod tests {
                                 id as Option<EntityId>,
                                 value as Option<rust_decimal::Decimal>,
                             )
-                                .fetch_n(op, first)
+                                .fetch_n(self.pool(), first)
                                 .await?
                         },
                     };

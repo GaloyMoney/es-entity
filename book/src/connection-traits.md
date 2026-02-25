@@ -55,7 +55,7 @@ Both traits wrap access to an `sqlx::Executor` implementation that ultimately ex
 
 ## Method Variants
 
-All CRUD `fn`s that `es-entity` generates come in 2 variants:
+Most CRUD `fn`s that `es-entity` generates come in 2 variants (the exception being `list_by_*` which only has the base variant):
 ```rust,ignore
 async fn create(new_entity: NewEntity)
 async fn create_in_op(<connection>, new_entity: NewEntity)
