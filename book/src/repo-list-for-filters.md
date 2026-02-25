@@ -125,7 +125,7 @@ use es_entity::*;
 #[es_repo(
     entity = "User",
     columns(
-        name(ty = "String", list_for)
+        name(ty = "String", list_for(by(id, created_at)))
     )
 )]
 pub struct Users {

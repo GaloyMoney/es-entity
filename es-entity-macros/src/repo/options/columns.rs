@@ -42,6 +42,25 @@ impl Columns {
             .find(|c| c.name() == name && c.opts.list_by())
     }
 
+    pub fn validate_list_for_by_columns(&self) -> darling::Result<()> {
+        let mut errors = darling::Error::accumulator();
+        for col in self.all.iter().filter(|c| c.opts.list_for()) {
+            for by_name in col.list_for_by_columns() {
+                if self.find_list_by(by_name).is_none() {
+                    let available: Vec<_> =
+                        self.all_list_by().map(|c| c.name().to_string()).collect();
+                    errors.push(darling::Error::custom(format!(
+                        "column '{}' in list_for(by(...)) on '{}' is not a list_by column. Available list_by columns: {}",
+                        by_name,
+                        col.name(),
+                        available.join(", "),
+                    )));
+                }
+            }
+        }
+        errors.finish()
+    }
+
     pub fn parent(&self) -> Option<&Column> {
         self.all.iter().find(|c| c.opts.parent_opts.is_some())
     }
@@ -644,12 +663,14 @@ struct ListForOpts {
 
 impl FromMeta for ListForOpts {
     fn from_word() -> darling::Result<Self> {
-        Ok(ListForOpts::default())
+        Ok(ListForOpts {
+            by_columns: vec![syn::Ident::new("id", proc_macro2::Span::call_site())],
+        })
     }
 
     fn from_bool(value: bool) -> darling::Result<Self> {
         if value {
-            Ok(ListForOpts::default())
+            Self::from_word()
         } else {
             Err(darling::Error::custom(
                 "list_for = false is not supported; remove list_for entirely to disable",
@@ -778,7 +799,8 @@ mod tests {
         let input: syn::Meta = parse_quote!(thing(ty = "String", list_for));
         let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
         assert!(values.list_for());
-        assert!(values.list_for_by_columns().is_empty());
+        assert_eq!(values.list_for_by_columns().len(), 1);
+        assert_eq!(values.list_for_by_columns()[0].to_string(), "id");
     }
 
     #[test]
@@ -788,6 +810,41 @@ mod tests {
         assert!(values.list_for());
         assert_eq!(values.list_for_by_columns().len(), 1);
         assert_eq!(values.list_for_by_columns()[0].to_string(), "created_at");
+    }
+
+    #[test]
+    fn list_for_by_column_must_be_list_by() {
+        let id_ident: syn::Ident = parse_quote!(TestId);
+        let col = Column::new_list_for(
+            parse_quote!(status),
+            syn::parse_str("String").unwrap(),
+            vec![parse_quote!(nonexistent)],
+        );
+        let columns = Columns::new(&id_ident, vec![col]);
+        let result = columns.validate_list_for_by_columns();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("nonexistent"),
+            "error should mention the invalid column name: {err}"
+        );
+        assert!(
+            err.contains("list_by"),
+            "error should mention list_by: {err}"
+        );
+    }
+
+    #[test]
+    fn list_for_by_valid_column_passes_validation() {
+        let id_ident: syn::Ident = parse_quote!(TestId);
+        let col = Column::new_list_for(
+            parse_quote!(status),
+            syn::parse_str("String").unwrap(),
+            vec![parse_quote!(id)],
+        );
+        let columns = Columns::new(&id_ident, vec![col]);
+        let result = columns.validate_list_for_by_columns();
+        assert!(result.is_ok());
     }
 
     #[test]

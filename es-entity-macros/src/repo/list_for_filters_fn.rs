@@ -146,21 +146,15 @@ impl<'a> ListForFiltersFn<'a> {
             .collect();
 
         // Determine which for_columns have individual methods for this by_col.
-        // Bare `list_for` (empty by_columns) = backward compat, paired with ALL list_by columns.
-        // `list_for(by(col))` = selective, only paired with declared columns.
         let paired_for_columns: Vec<_> = self
             .for_columns
             .iter()
-            .filter(|fc| {
-                let by_cols = fc.list_for_by_columns();
-                by_cols.is_empty() || by_cols.iter().any(|n| n == by_col_name)
-            })
+            .filter(|fc| fc.list_for_by_columns().iter().any(|n| n == by_col_name))
             .collect();
 
         let single_filter_branches: TokenStream = paired_for_columns
             .iter()
-            .enumerate()
-            .map(|(_, for_col)| {
+            .map(|for_col| {
                 let others_none: Vec<_> = self
                     .for_columns
                     .iter()
@@ -821,23 +815,24 @@ mod tests {
     }
 
     #[test]
-    fn list_for_filters_bare_list_for_backward_compat() {
-        // Bare list_for (no by(...)) should generate ALL pairings (backward compat)
+    fn list_for_filters_bare_list_for_defaults_to_by_id() {
+        // Bare list_for defaults to by(id) only
         let entity = Ident::new("Order", Span::call_site());
         let error: syn::Type = syn::parse_str("es_entity::EsRepoError").unwrap();
         let id = syn::Ident::new("OrderId", proc_macro2::Span::call_site());
         let cursor_mod = Ident::new("cursor_mod", Span::call_site());
 
         let id_column = Column::for_id(syn::parse_str("OrderId").unwrap());
+        let id_ident = syn::Ident::new("id", proc_macro2::Span::call_site());
         let customer_id_column = Column::new_list_for(
             syn::Ident::new("customer_id", proc_macro2::Span::call_site()),
             syn::parse_str("CustomerId").unwrap(),
-            vec![],
+            vec![id_ident.clone()],
         );
         let status_column = Column::new_list_for(
             syn::Ident::new("status", proc_macro2::Span::call_site()),
             syn::parse_str("OrderStatus").unwrap(),
-            vec![],
+            vec![id_ident],
         );
 
         let for_columns = vec![&customer_id_column, &status_column];
@@ -874,7 +869,7 @@ mod tests {
 
         let token_str = tokens.to_string();
 
-        // Bare list_for should dispatch to individual methods (backward compat)
+        // Bare list_for defaults to by(id), so should dispatch to individual methods for id
         assert!(token_str.contains("list_for_customer_id_by_id"));
         assert!(token_str.contains("list_for_status_by_id"));
         assert!(token_str.contains("list_for_filters_by_id"));
