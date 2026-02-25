@@ -88,7 +88,8 @@ impl User {
 #[es_repo(
     entity = "User",
     columns(name = "String"),
-    delete = "soft"
+    delete = "soft",
+    include_deleted_queries
 )]
 pub struct Users {
     pool: sqlx::PgPool
