@@ -437,7 +437,7 @@ impl ToTokens for ListByFn<'_> {
                 }
             });
 
-            if delete == self.delete {
+            if delete == self.delete || self.delete == DeleteOption::SoftWithoutQueries {
                 break;
             }
         }
@@ -540,7 +540,7 @@ mod tests {
             entity: &entity,
             table_name: "entities",
             error: &error,
-            delete: DeleteOption::Soft,
+            delete: DeleteOption::SoftWithoutQueries,
             cursor_mod,
             any_nested: false,
             #[cfg(feature = "instrument")]
@@ -609,66 +609,38 @@ mod tests {
 
                 __result
             }
-
-            pub async fn list_by_id_include_deleted(
-                &self,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> {
-                self.list_by_id_include_deleted_in_op(self.pool(), cursor, direction).await
-            }
-
-            pub async fn list_by_id_include_deleted_in_op<'a, OP>(
-                &self,
-                op: OP,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError>
-            where
-                OP: es_entity::IntoOneTimeExecutor<'a>
-            {
-                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, es_entity::EsRepoError> = async {
-                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
-                    let id = if let Some(after) = after {
-                        Some(after.id)
-                    } else {
-                        None
-                    };
-                    let (entities, has_next_page) = match direction {
-                        es_entity::ListDirection::Ascending => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT id FROM entities WHERE (COALESCE(id > $2, true)) ORDER BY id ASC LIMIT $1",
-                                (first + 1) as i64,
-                                id as Option<EntityId>,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        es_entity::ListDirection::Descending => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT id FROM entities WHERE (COALESCE(id < $2, true)) ORDER BY id DESC LIMIT $1",
-                                (first + 1) as i64,
-                                id as Option<EntityId>,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                    };
-                    let end_cursor = entities.last().map(cursor_mod::EntitiesByIdCursor::from);
-                    Ok(es_entity::PaginatedQueryRet {
-                        entities,
-                        has_next_page,
-                        end_cursor,
-                    })
-                }.await;
-
-                __result
-            }
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn list_by_fn_with_soft_delete_include_deleted() {
+        let id_type = Ident::new("EntityId", Span::call_site());
+        let entity = Ident::new("Entity", Span::call_site());
+        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
+        let column = Column::for_id(syn::parse_str("EntityId").unwrap());
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        let persist_fn = ListByFn {
+            ignore_prefix: None,
+            column: &column,
+            id: &id_type,
+            entity: &entity,
+            table_name: "entities",
+            error: &error,
+            delete: DeleteOption::Soft,
+            cursor_mod,
+            any_nested: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        persist_fn.to_tokens(&mut tokens);
+
+        let token_str = tokens.to_string();
+        assert!(token_str.contains("list_by_id_include_deleted"));
     }
 
     #[test]

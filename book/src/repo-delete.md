@@ -5,12 +5,18 @@ Deleting data from the Database goes against these principles.
 Therefore `es-entity` does not provide a way to actually delete data.
 It is however possible to configure a soft delete option by marking `delete = soft` on the `EsRepo`.
 
-This will omit entities that have been flagged as deleted from all queries as well as generate additional queries that can include the deleted entities:
+This will omit entities that have been flagged as deleted from all queries,
+and also generate `_include_deleted` query variants:
 ```rust,ignore
 fn find_by_<column>_include_deleted
 fn maybe_find_by_<column>_include_deleted
 fn list_by_<column>_include_deleted
 fn list_for_<column>_by_<cursor>_include_deleted
+```
+
+If you don't need the `_include_deleted` query variants, use `delete = "soft_without_queries"` instead:
+```rust,ignore
+#[es_repo(entity = "User", columns(name = "String"), delete = "soft_without_queries")]
 ```
 
 As a prerequisite the `index` table must include a `deleted` column:
@@ -81,7 +87,7 @@ impl User {
 #[es_repo(
     entity = "User",
     columns(name = "String"),
-    delete = "soft"
+    delete = "soft",
 )]
 pub struct Users {
     pool: sqlx::PgPool

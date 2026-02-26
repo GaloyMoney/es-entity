@@ -5,21 +5,26 @@ pub enum DeleteOption {
     #[default]
     No,
     Soft,
+    SoftWithoutQueries,
 }
 
 impl DeleteOption {
     pub fn include_deletion_fn_postfix(&self) -> &'static str {
         match self {
-            DeleteOption::Soft => "_include_deleted",
+            DeleteOption::Soft | DeleteOption::SoftWithoutQueries => "_include_deleted",
             DeleteOption::No => "",
         }
     }
 
     pub fn not_deleted_condition(&self) -> &'static str {
         match self {
-            DeleteOption::Soft => " AND deleted = FALSE",
+            DeleteOption::Soft | DeleteOption::SoftWithoutQueries => " AND deleted = FALSE",
             DeleteOption::No => "",
         }
+    }
+
+    pub fn is_soft(&self) -> bool {
+        matches!(self, DeleteOption::Soft | DeleteOption::SoftWithoutQueries)
     }
 }
 
@@ -30,6 +35,7 @@ impl std::str::FromStr for DeleteOption {
         match s {
             "no" => Ok(DeleteOption::No),
             "soft" => Ok(DeleteOption::Soft),
+            "soft_without_queries" => Ok(DeleteOption::SoftWithoutQueries),
             _ => Err(darling::Error::unknown_value(s)),
         }
     }
