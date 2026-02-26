@@ -35,11 +35,7 @@ test-chapter:
 	CARGO_MANIFEST_DIR=$(shell pwd) mdbook test book -L ./target/mdbook-test,./target/mdbook-test/deps --chapter "$(CHAPTER)"
 
 check-code:
-	SQLX_OFFLINE=true cargo fmt --check --all
-	SQLX_OFFLINE=true cargo check --workspace
-	SQLX_OFFLINE=true cargo clippy --workspace --all-features
-	SQLX_OFFLINE=true cargo audit 
-	SQLX_OFFLINE=true cargo deny check
+	nix flake check
 
 sqlx-prepare:
 	cargo sqlx prepare --workspace
