@@ -36,14 +36,16 @@ jobs:
         platform: linux
         image_resource: #@ nix_task_image_config()
         inputs:
-          - name: pipeline-tasks
           - name: repo
-        caches:
-        - path: cargo-home/registry/index
-        - path: cargo-home/registry/cache
-        - path: cargo-target-dir
         run:
-          path: pipeline-tasks/ci/tasks/test.sh
+          path: sh
+          args:
+            - -exc
+            - |
+              set -euo pipefail
+              cd repo
+              cachix use $CACHIX_CACHE_NAME
+              nix run .#nextest
         params:
           CACHIX_AUTH_TOKEN: #@ data.values.cachix_auth_token
           CACHIX_CACHE_NAME: #@ data.values.cachix_cache_name
