@@ -40,6 +40,9 @@ impl<'a> ErrorTypes<'a> {
                 if col.is_id() {
                     constraint_names.push(format!("{table_name}_pkey"));
                 }
+                if let Some(custom) = col.custom_constraint() {
+                    constraint_names.push(custom.to_string());
+                }
                 ColumnVariant {
                     variant_name,
                     column_name: col_name,
@@ -206,7 +209,7 @@ impl<'a> ErrorTypes<'a> {
             #[derive(Debug)]
             pub enum #create_error {
                 Sqlx(sqlx::Error),
-                ConstraintViolation { column: Option<#column_enum>, inner: sqlx::Error },
+                ConstraintViolation { column: Option<#column_enum>, value: Option<String>, inner: sqlx::Error },
                 ConcurrentModification,
                 HydrationError(es_entity::EntityHydrationError),
                 PostPersistHookError(sqlx::Error),
@@ -217,7 +220,7 @@ impl<'a> ErrorTypes<'a> {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                     match self {
                         Self::Sqlx(e) => write!(f, "{}CreateError - Sqlx: {}", #entity_name, e),
-                        Self::ConstraintViolation { column, inner } => write!(f, "{}CreateError - ConstraintViolation({:?}): {}", #entity_name, column, inner),
+                        Self::ConstraintViolation { column, value, inner } => write!(f, "{}CreateError - ConstraintViolation({:?}, {:?}): {}", #entity_name, column, value, inner),
                         Self::ConcurrentModification => write!(f, "{}CreateError - ConcurrentModification", #entity_name),
                         Self::HydrationError(e) => write!(f, "{}CreateError - HydrationError: {}", #entity_name, e),
                         Self::PostPersistHookError(e) => write!(f, "{}CreateError - PostPersistHookError: {}", #entity_name, e),
@@ -270,6 +273,13 @@ impl<'a> ErrorTypes<'a> {
 
                 pub fn was_duplicate(&self, column: #column_enum) -> bool {
                     matches!(self, Self::ConstraintViolation { column: Some(c), .. } if *c == column)
+                }
+
+                pub fn duplicate_value(&self) -> Option<&str> {
+                    match self {
+                        Self::ConstraintViolation { value: Some(v), .. } => Some(v.as_str()),
+                        _ => None,
+                    }
                 }
             }
         }
@@ -381,7 +391,7 @@ impl<'a> ErrorTypes<'a> {
             #[derive(Debug)]
             pub enum #modify_error {
                 Sqlx(sqlx::Error),
-                ConstraintViolation { column: Option<#column_enum>, inner: sqlx::Error },
+                ConstraintViolation { column: Option<#column_enum>, value: Option<String>, inner: sqlx::Error },
                 ConcurrentModification,
                 PostPersistHookError(sqlx::Error),
                 #(#nested_variants)*
@@ -391,7 +401,7 @@ impl<'a> ErrorTypes<'a> {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                     match self {
                         Self::Sqlx(e) => write!(f, "{}ModifyError - Sqlx: {}", #entity_name, e),
-                        Self::ConstraintViolation { column, inner } => write!(f, "{}ModifyError - ConstraintViolation({:?}): {}", #entity_name, column, inner),
+                        Self::ConstraintViolation { column, value, inner } => write!(f, "{}ModifyError - ConstraintViolation({:?}, {:?}): {}", #entity_name, column, value, inner),
                         Self::ConcurrentModification => write!(f, "{}ModifyError - ConcurrentModification", #entity_name),
                         Self::PostPersistHookError(e) => write!(f, "{}ModifyError - PostPersistHookError: {}", #entity_name, e),
                         #(#nested_display_arms)*
@@ -436,6 +446,13 @@ impl<'a> ErrorTypes<'a> {
 
                 pub fn was_duplicate(&self, column: #column_enum) -> bool {
                     matches!(self, Self::ConstraintViolation { column: Some(c), .. } if *c == column)
+                }
+
+                pub fn duplicate_value(&self) -> Option<&str> {
+                    match self {
+                        Self::ConstraintViolation { value: Some(v), .. } => Some(v.as_str()),
+                        _ => None,
+                    }
                 }
             }
         }

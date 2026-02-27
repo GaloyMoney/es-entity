@@ -27,3 +27,81 @@ impl From<(&'static str, &'static str)> for CursorDestructureError {
         Self(name, variant)
     }
 }
+
+/// Extracts the conflicting value from a PostgreSQL constraint violation detail message.
+///
+/// PostgreSQL formats unique violation details as:
+/// `Key (column)=(value) already exists.`
+///
+/// Returns `None` if the detail is missing or doesn't match the expected format.
+pub fn parse_constraint_detail_value(detail: Option<&str>) -> Option<String> {
+    let detail = detail?;
+    let start = detail.find("=(")? + 2;
+    let end = detail.rfind(") already")?;
+    if start <= end {
+        Some(detail[start..end].to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_simple_uuid_value() {
+        let detail = Some("Key (id)=(550e8400-e29b-41d4-a716-446655440000) already exists.");
+        assert_eq!(
+            parse_constraint_detail_value(detail),
+            Some("550e8400-e29b-41d4-a716-446655440000".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_string_value() {
+        let detail = Some("Key (email)=(user@example.com) already exists.");
+        assert_eq!(
+            parse_constraint_detail_value(detail),
+            Some("user@example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_composite_key_value() {
+        let detail = Some("Key (tenant_id, email)=(abc, user@example.com) already exists.");
+        assert_eq!(
+            parse_constraint_detail_value(detail),
+            Some("abc, user@example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_none_detail() {
+        assert_eq!(parse_constraint_detail_value(None), None);
+    }
+
+    #[test]
+    fn parse_unexpected_format() {
+        let detail = Some("something unexpected");
+        assert_eq!(parse_constraint_detail_value(detail), None);
+    }
+
+    #[test]
+    fn parse_value_containing_parentheses() {
+        let detail = Some("Key (name)=(foo (bar)) already exists.");
+        assert_eq!(
+            parse_constraint_detail_value(detail),
+            Some("foo (bar)".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_empty_value() {
+        let detail = Some("Key (col)=() already exists.");
+        assert_eq!(
+            parse_constraint_detail_value(detail),
+            Some("".to_string())
+        );
+    }
+}

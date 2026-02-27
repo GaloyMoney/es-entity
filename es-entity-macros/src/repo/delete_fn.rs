@@ -106,6 +106,8 @@ impl ToTokens for DeleteFn<'_> {
                             sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
                                 #modify_error::ConstraintViolation {
                                     column: Self::map_constraint_column(db_err.constraint()),
+                                    value: db_err.try_downcast_ref::<es_entity::prelude::sqlx::postgres::PgDatabaseError>()
+                                    .and_then(|pg_err| es_entity::parse_constraint_detail_value(pg_err.detail())),
                                     inner: e,
                                 }
                             }
@@ -194,6 +196,8 @@ mod tests {
                             sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
                                 EntityModifyError::ConstraintViolation {
                                     column: Self::map_constraint_column(db_err.constraint()),
+                                    value: db_err.try_downcast_ref::<es_entity::prelude::sqlx::postgres::PgDatabaseError>()
+                                    .and_then(|pg_err| es_entity::parse_constraint_detail_value(pg_err.detail())),
                                     inner: e,
                                 }
                             }
@@ -284,6 +288,8 @@ mod tests {
                             sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
                                 EntityModifyError::ConstraintViolation {
                                     column: Self::map_constraint_column(db_err.constraint()),
+                                    value: db_err.try_downcast_ref::<es_entity::prelude::sqlx::postgres::PgDatabaseError>()
+                                    .and_then(|pg_err| es_entity::parse_constraint_detail_value(pg_err.detail())),
                                     inner: e,
                                 }
                             }
