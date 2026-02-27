@@ -202,7 +202,7 @@ where
             }
             let cur = current.as_mut().expect("Could not get current");
             let mut event_json = e.event;
-            if let Some(ref payload) = e.payload {
+            if let Some(payload) = e.payload {
                 crate::forgettable::inject_forgettable_payload(&mut event_json, payload);
             }
             cur.persisted_events.push(PersistedEvent {
@@ -249,7 +249,7 @@ where
             }
             let cur = current.as_mut().expect("Could not get current");
             let mut event_json = e.event;
-            if let Some(ref payload) = e.payload {
+            if let Some(payload) = e.payload {
                 crate::forgettable::inject_forgettable_payload(&mut event_json, payload);
             }
             cur.persisted_events.push(PersistedEvent {
