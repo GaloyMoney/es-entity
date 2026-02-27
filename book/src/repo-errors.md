@@ -7,8 +7,8 @@
 | `UserColumn` | Enum of indexed columns (e.g. `Id`, `Name`, `Email`) |
 | `UserCreateError` | `create`, `create_all` |
 | `UserModifyError` | `update`, `update_all`, `delete` |
-| `UserFindError` | `find_by_*`, `maybe_find_by_*`, `find_all` |
-| `UserQueryError` | `list_by_*`, `list_for_*`, `list_for_filters` |
+| `UserFindError` | `find_by_*`, `maybe_find_by_*` |
+| `UserQueryError` | `find_all`, `list_by_*`, `list_for_*`, `list_for_filters` |
 
 ## UserCreateError
 
@@ -70,6 +70,25 @@ if e.was_concurrent_modification() {
 ## UserModifyError
 
 `UserModifyError` has the same structure as `UserCreateError` (minus `HydrationError`) and is returned by `update`, `update_all`, and `delete`. It provides the same `was_duplicate`, `duplicate_value`, and `was_concurrent_modification` helpers.
+
+### Nested entity errors
+
+For aggregates with nested entities (e.g. `Order` containing `OrderItem`s), `CreateError` and `ModifyError` include additional variants for the child's errors. The `was_duplicate` and `duplicate_value` helpers only check the parent entity's constraint violations — they do **not** cascade into nested errors. Match nested variants explicitly:
+
+```rust,ignore
+match err {
+    OrderModifyError::OrderItemsCreate(item_err) => {
+        // Handle child constraint violation
+        if item_err.was_duplicate(OrderItemColumn::Sku) {
+            let val = item_err.duplicate_value();
+        }
+    }
+    _ if err.was_duplicate(OrderColumn::Id) => {
+        // Handle parent constraint violation
+    }
+    _ => return Err(err.into()),
+}
+```
 
 ## UserFindError
 

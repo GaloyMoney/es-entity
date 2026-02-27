@@ -28,6 +28,7 @@ impl From<(&'static str, &'static str)> for CursorDestructureError {
     }
 }
 
+#[doc(hidden)]
 /// Extracts the conflicting value from a PostgreSQL constraint violation detail message.
 ///
 /// PostgreSQL formats unique violation details as:

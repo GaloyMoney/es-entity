@@ -123,4 +123,19 @@ pub struct Users {
 }
 ```
 
+### Column options
+
+Each column supports the following options:
+
+| Option | Description |
+|--------|-------------|
+| `ty = "Type"` | **(required)** The Rust type of the column |
+| `create(accessor = "...")` | Custom accessor on `NewEntity` for insert (see [create](./repo-create.md)) |
+| `create(persist = false)` | Skip this column during insert |
+| `update(accessor = "...")` | Custom accessor on `Entity` for update (see [update](./repo-update.md)) |
+| `update(persist = false)` | Skip this column during update |
+| `list_by` | Generate `list_by_<column>` pagination query |
+| `list_for` | Include in `list_for_<column>` filtering |
+| `constraint = "name"` | Map a custom DB constraint name to this column for error reporting (see [Error Types](./repo-errors.md)) |
+
 Take a look at the next sections to see more information on how the options modify the generated code.
