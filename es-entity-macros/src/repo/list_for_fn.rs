@@ -16,6 +16,7 @@ pub struct ListForFn<'a> {
     cursor_mod: syn::Ident,
     any_nested: bool,
     post_hydrate_error: Option<&'a syn::Type>,
+    forgettable_table_name: Option<&'a str>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -34,6 +35,7 @@ impl<'a> ListForFn<'a> {
             cursor_mod: opts.cursor_mod(),
             any_nested: opts.any_nested(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
+            forgettable_table_name: opts.forgettable_table_name(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -128,10 +130,17 @@ impl ToTokens for ListForFn<'_> {
                 cursor.order_by(false)
             );
 
+            let forgettable_tbl_arg = if let Some(tbl) = self.forgettable_table_name {
+                quote! { forgettable_tbl = #tbl, }
+            } else {
+                quote! {}
+            };
+
             let es_query_asc_call = if let Some(prefix) = self.ignore_prefix {
                 quote! {
                     es_entity::es_query!(
                         tbl_prefix = #prefix,
+                        #forgettable_tbl_arg
                         #asc_query,
                         #filter_arg_name as &#for_column_type,
                         #arg_tokens
@@ -141,6 +150,7 @@ impl ToTokens for ListForFn<'_> {
                 quote! {
                     es_entity::es_query!(
                         entity = #entity,
+                        #forgettable_tbl_arg
                         #asc_query,
                         #filter_arg_name as &#for_column_type,
                         #arg_tokens
@@ -152,6 +162,7 @@ impl ToTokens for ListForFn<'_> {
                 quote! {
                     es_entity::es_query!(
                         tbl_prefix = #prefix,
+                        #forgettable_tbl_arg
                         #desc_query,
                         #filter_arg_name as &#for_column_type,
                         #arg_tokens
@@ -161,6 +172,7 @@ impl ToTokens for ListForFn<'_> {
                 quote! {
                     es_entity::es_query!(
                         entity = #entity,
+                        #forgettable_tbl_arg
                         #desc_query,
                         #filter_arg_name as &#for_column_type,
                         #arg_tokens
@@ -321,6 +333,7 @@ mod tests {
             cursor_mod,
             any_nested: false,
             post_hydrate_error: None,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -419,6 +432,7 @@ mod tests {
             cursor_mod,
             any_nested: false,
             post_hydrate_error: None,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

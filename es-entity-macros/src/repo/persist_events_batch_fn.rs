@@ -9,6 +9,7 @@ pub struct PersistEventsBatchFn<'a> {
     event: &'a syn::Ident,
     events_table_name: &'a str,
     event_ctx: bool,
+    forgettable_table_name: Option<&'a str>,
 }
 
 impl<'a> From<&'a RepositoryOptions> for PersistEventsBatchFn<'a> {
@@ -18,6 +19,7 @@ impl<'a> From<&'a RepositoryOptions> for PersistEventsBatchFn<'a> {
             event: opts.event(),
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
+            forgettable_table_name: opts.forgettable_table_name(),
         }
     }
 }
@@ -66,6 +68,49 @@ impl ToTokens for PersistEventsBatchFn<'_> {
             (quote! {}, quote! {}, quote! {})
         };
 
+        let forgettable_vars = if self.forgettable_table_name.is_some() {
+            quote! {
+                let mut payload_ids: Vec<&#id_type> = Vec::new();
+                let mut payload_sequences: Vec<i32> = Vec::new();
+                let mut payload_values: Vec<es_entity::prelude::serde_json::Value> = Vec::new();
+            }
+        } else {
+            quote! {}
+        };
+
+        let forgettable_extract = if self.forgettable_table_name.is_some() {
+            quote! {
+                for (idx, event_json) in serialized.iter_mut().enumerate() {
+                    if let Some(payload) = #event_type::extract_forgettable_payload(event_json) {
+                        payload_ids.push(id);
+                        payload_sequences.push((offset + idx) as i32);
+                        payload_values.push(payload);
+                    }
+                }
+            }
+        } else {
+            quote! {}
+        };
+
+        let forgettable_insert = if let Some(forgettable_tbl) = self.forgettable_table_name {
+            let payload_insert_query = format!(
+                "INSERT INTO {} (entity_id, sequence, payload) SELECT unnested.entity_id, unnested.sequence, unnested.payload FROM UNNEST($1, $2::INT[], $3::JSONB[]) AS unnested(entity_id, sequence, payload)",
+                forgettable_tbl
+            );
+            quote! {
+                if !payload_sequences.is_empty() {
+                    sqlx::query(#payload_insert_query)
+                        .bind(&payload_ids)
+                        .bind(&payload_sequences)
+                        .bind(&payload_values)
+                        .execute(op.as_executor())
+                        .await?;
+                }
+            }
+        } else {
+            quote! {}
+        };
+
         tokens.append_all(quote! {
             async fn persist_events_batch<OP, B>(
                 &self,
@@ -80,6 +125,7 @@ impl ToTokens for PersistEventsBatchFn<'_> {
 
                 let mut all_serialized = Vec::new();
                 #ctx_var
+                #forgettable_vars
                 let mut all_types = Vec::new();
                 let mut all_ids: Vec<&#id_type> = Vec::new();
                 let mut all_sequences = Vec::new();
@@ -91,8 +137,9 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
                     let types = events.new_event_types();
-                    let serialized = events.serialize_new_events();
+                    let mut serialized = events.serialize_new_events();
                     #ctx_extend
+                    #forgettable_extract
 
                     let n_events = serialized.len();
                     all_serialized.extend(serialized);
@@ -111,6 +158,8 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                         #ctx_bind
                         .fetch_all(op.as_executor())
                         .await?;
+
+                #forgettable_insert
 
                 let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
 
@@ -138,6 +187,7 @@ mod tests {
             event: &event,
             events_table_name: "entity_events",
             event_ctx: true,
+            forgettable_table_name: None,
         };
 
         let mut tokens = TokenStream::new();
@@ -168,7 +218,7 @@ mod tests {
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
                     let types = events.new_event_types();
-                    let serialized = events.serialize_new_events();
+                    let mut serialized = events.serialize_new_events();
                     let contexts = events.serialize_new_event_contexts();
                     if let Some(contexts) = contexts {
                         all_contexts.extend(contexts);
@@ -219,6 +269,7 @@ mod tests {
             event: &event,
             events_table_name: "entity_events",
             event_ctx: false,
+            forgettable_table_name: None,
         };
 
         let mut tokens = TokenStream::new();
@@ -248,7 +299,7 @@ mod tests {
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
                     let types = events.new_event_types();
-                    let serialized = events.serialize_new_events();
+                    let mut serialized = events.serialize_new_events();
 
                     let n_events = serialized.len();
                     all_serialized.extend(serialized);

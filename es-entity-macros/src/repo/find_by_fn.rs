@@ -16,6 +16,7 @@ pub struct FindByFn<'a> {
     delete: DeleteOption,
     any_nested: bool,
     post_hydrate_error: Option<&'a syn::Type>,
+    forgettable_table_name: Option<&'a str>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -33,6 +34,7 @@ impl<'a> FindByFn<'a> {
             delete: opts.delete,
             any_nested: opts.any_nested(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
+            forgettable_table_name: opts.forgettable_table_name(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -99,10 +101,17 @@ impl ToTokens for FindByFn<'_> {
                     }
                 );
 
+                let forgettable_tbl_arg = if let Some(tbl) = self.forgettable_table_name {
+                    quote! { forgettable_tbl = #tbl, }
+                } else {
+                    quote! {}
+                };
+
                 let es_query_call = if let Some(prefix) = self.prefix {
                     quote! {
                         es_entity::es_query!(
                             tbl_prefix = #prefix,
+                            #forgettable_tbl_arg
                             #query,
                             #column_name as &#column_type,
                         )
@@ -111,6 +120,7 @@ impl ToTokens for FindByFn<'_> {
                     quote! {
                         es_entity::es_query!(
                             entity = #entity,
+                            #forgettable_tbl_arg
                             #query,
                             #column_name as &#column_type,
                         )
@@ -251,6 +261,7 @@ mod tests {
             delete: DeleteOption::No,
             any_nested: false,
             post_hydrate_error: None,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -347,6 +358,7 @@ mod tests {
             delete: DeleteOption::No,
             any_nested: false,
             post_hydrate_error: None,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -440,6 +452,7 @@ mod tests {
             delete: DeleteOption::SoftWithoutQueries,
             any_nested: false,
             post_hydrate_error: None,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -533,6 +546,7 @@ mod tests {
             delete: DeleteOption::Soft,
             any_nested: false,
             post_hydrate_error: None,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -561,6 +575,7 @@ mod tests {
             delete: DeleteOption::Soft,
             any_nested: true,
             post_hydrate_error: None,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -591,6 +606,7 @@ mod tests {
             delete: DeleteOption::No,
             any_nested: true,
             post_hydrate_error: None,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

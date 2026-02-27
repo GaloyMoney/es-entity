@@ -6,6 +6,7 @@ mod delete_fn;
 mod error_types;
 mod find_all_fn;
 mod find_by_fn;
+mod forget_fn;
 mod list_by_fn;
 mod list_for_filters_fn;
 mod list_for_fn;
@@ -41,6 +42,7 @@ pub struct EsRepo<'a> {
     create_fn: create_fn::CreateFn<'a>,
     create_all_fn: create_all_fn::CreateAllFn<'a>,
     delete_fn: delete_fn::DeleteFn<'a>,
+    forget_fn: Option<forget_fn::ForgetFn<'a>>,
     find_by_fns: Vec<find_by_fn::FindByFn<'a>>,
     find_all_fn: find_all_fn::FindAllFn<'a>,
     post_hydrate_hook: post_hydrate_hook::PostHydrateHook<'a>,
@@ -96,6 +98,12 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             .map(|n| (n.find_nested_fn_name(), nested::Nested::new(n, opts)))
             .unzip();
 
+        let forget_fn = if opts.forgettable_enabled() {
+            Some(forget_fn::ForgetFn::from(opts))
+        } else {
+            None
+        };
+
         Self {
             repo: &opts.ident,
             generics: &opts.generics,
@@ -106,6 +114,7 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             create_fn: create_fn::CreateFn::from(opts),
             create_all_fn: create_all_fn::CreateAllFn::from(opts),
             delete_fn: delete_fn::DeleteFn::from(opts),
+            forget_fn,
             find_by_fns,
             find_all_fn: find_all_fn::FindAllFn::from(opts),
             post_hydrate_hook: post_hydrate_hook::PostHydrateHook::from(opts),
@@ -133,6 +142,7 @@ impl ToTokens for EsRepo<'_> {
         let create_fn = &self.create_fn;
         let create_all_fn = &self.create_all_fn;
         let delete_fn = &self.delete_fn;
+        let forget_fn = &self.forget_fn;
         let find_by_fns = &self.find_by_fns;
         let find_all_fn = &self.find_all_fn;
         let post_hydrate_hook = &self.post_hydrate_hook;
@@ -243,6 +253,7 @@ impl ToTokens for EsRepo<'_> {
                 #update_fn
                 #update_all_fn
                 #delete_fn
+                #forget_fn
                 #(#find_by_fns)*
                 #find_all_fn
                 #list_for_filters
