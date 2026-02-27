@@ -245,12 +245,9 @@ impl<'a> ErrorTypes<'a> {
                 }
             }
 
-            impl From<es_entity::EsRepoPersistError> for #create_error {
-                fn from(e: es_entity::EsRepoPersistError) -> Self {
-                    match e {
-                        es_entity::EsRepoPersistError::Sqlx(e) => Self::Sqlx(e),
-                        es_entity::EsRepoPersistError::ConcurrentModification => Self::ConcurrentModification,
-                    }
+            impl es_entity::FromConcurrentModification for #create_error {
+                fn concurrent_modification() -> Self {
+                    Self::ConcurrentModification
                 }
             }
 
@@ -420,12 +417,9 @@ impl<'a> ErrorTypes<'a> {
                 }
             }
 
-            impl From<es_entity::EsRepoPersistError> for #modify_error {
-                fn from(e: es_entity::EsRepoPersistError) -> Self {
-                    match e {
-                        es_entity::EsRepoPersistError::Sqlx(e) => Self::Sqlx(e),
-                        es_entity::EsRepoPersistError::ConcurrentModification => Self::ConcurrentModification,
-                    }
+            impl es_entity::FromConcurrentModification for #modify_error {
+                fn concurrent_modification() -> Self {
+                    Self::ConcurrentModification
                 }
             }
 

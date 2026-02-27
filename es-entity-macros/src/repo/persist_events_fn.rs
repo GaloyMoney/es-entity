@@ -54,23 +54,24 @@ impl ToTokens for PersistEventsFn<'_> {
         };
 
         tokens.append_all(quote! {
-            fn extract_concurrent_modification<T>(res: Result<T, sqlx::Error>) -> Result<T, es_entity::EsRepoPersistError> {
+            fn extract_concurrent_modification<T, E: From<sqlx::Error> + es_entity::FromConcurrentModification>(res: Result<T, sqlx::Error>) -> Result<T, E> {
                 match res {
                     Ok(entity) => Ok(entity),
                     Err(sqlx::Error::Database(db_error)) if db_error.is_unique_violation() => {
-                        Err(es_entity::EsRepoPersistError::ConcurrentModification)
+                        Err(E::concurrent_modification())
                     }
-                    Err(err) => Err(es_entity::EsRepoPersistError::Sqlx(err)),
+                    Err(err) => Err(err.into()),
                 }
             }
 
-            async fn persist_events<OP>(
+            async fn persist_events<OP, E>(
                 &self,
                 op: &mut OP,
                 events: &mut es_entity::EntityEvents<#event_type>
-            ) -> Result<usize, es_entity::EsRepoPersistError>
+            ) -> Result<usize, E>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation,
+                E: From<sqlx::Error> + es_entity::FromConcurrentModification,
             {
                 let id = events.id();
                 let offset = events.len_persisted();
@@ -79,7 +80,7 @@ impl ToTokens for PersistEventsFn<'_> {
                 let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
                 let now = op.maybe_now();
 
-                let rows = Self::extract_concurrent_modification(
+                let rows = Self::extract_concurrent_modification::<_, E>(
                     sqlx::query!(
                         #query,
                         #id_tokens,
@@ -118,23 +119,24 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            fn extract_concurrent_modification<T>(res: Result<T, sqlx::Error>) -> Result<T, es_entity::EsRepoPersistError> {
+            fn extract_concurrent_modification<T, E: From<sqlx::Error> + es_entity::FromConcurrentModification>(res: Result<T, sqlx::Error>) -> Result<T, E> {
                 match res {
                     Ok(entity) => Ok(entity),
                     Err(sqlx::Error::Database(db_error)) if db_error.is_unique_violation() => {
-                        Err(es_entity::EsRepoPersistError::ConcurrentModification)
+                        Err(E::concurrent_modification())
                     }
-                    Err(err) => Err(es_entity::EsRepoPersistError::Sqlx(err)),
+                    Err(err) => Err(err.into()),
                 }
             }
 
-            async fn persist_events<OP>(
+            async fn persist_events<OP, E>(
                 &self,
                 op: &mut OP,
                 events: &mut es_entity::EntityEvents<EntityEvent>
-            ) -> Result<usize, es_entity::EsRepoPersistError>
+            ) -> Result<usize, E>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation,
+                E: From<sqlx::Error> + es_entity::FromConcurrentModification,
             {
                 let id = events.id();
                 let offset = events.len_persisted();
@@ -143,7 +145,7 @@ mod tests {
                 let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
                 let now = op.maybe_now();
 
-                let rows = Self::extract_concurrent_modification(
+                let rows = Self::extract_concurrent_modification::<_, E>(
                     sqlx::query!(
                         "INSERT INTO entity_events (id, recorded_at, sequence, event_type, event, context) SELECT $1, COALESCE($2, NOW()), ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event, unnested.context FROM UNNEST($4::TEXT[], $5::JSONB[], $6::JSONB[]) AS unnested(event_type, event, context) RETURNING recorded_at",
                         id as &EntityId,
@@ -179,23 +181,24 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            fn extract_concurrent_modification<T>(res: Result<T, sqlx::Error>) -> Result<T, es_entity::EsRepoPersistError> {
+            fn extract_concurrent_modification<T, E: From<sqlx::Error> + es_entity::FromConcurrentModification>(res: Result<T, sqlx::Error>) -> Result<T, E> {
                 match res {
                     Ok(entity) => Ok(entity),
                     Err(sqlx::Error::Database(db_error)) if db_error.is_unique_violation() => {
-                        Err(es_entity::EsRepoPersistError::ConcurrentModification)
+                        Err(E::concurrent_modification())
                     }
-                    Err(err) => Err(es_entity::EsRepoPersistError::Sqlx(err)),
+                    Err(err) => Err(err.into()),
                 }
             }
 
-            async fn persist_events<OP>(
+            async fn persist_events<OP, E>(
                 &self,
                 op: &mut OP,
                 events: &mut es_entity::EntityEvents<EntityEvent>
-            ) -> Result<usize, es_entity::EsRepoPersistError>
+            ) -> Result<usize, E>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation,
+                E: From<sqlx::Error> + es_entity::FromConcurrentModification,
             {
                 let id = events.id();
                 let offset = events.len_persisted();
@@ -203,7 +206,7 @@ mod tests {
                 let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
                 let now = op.maybe_now();
 
-                let rows = Self::extract_concurrent_modification(
+                let rows = Self::extract_concurrent_modification::<_, E>(
                     sqlx::query!(
                         "INSERT INTO entity_events (id, recorded_at, sequence, event_type, event) SELECT $1, COALESCE($2, NOW()), ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event FROM UNNEST($4::TEXT[], $5::JSONB[]) AS unnested(event_type, event) RETURNING recorded_at",
                         id as &EntityId,
