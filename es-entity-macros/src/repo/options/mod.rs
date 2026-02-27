@@ -454,6 +454,13 @@ impl RepositoryOptions {
         )
     }
 
+    pub fn forget_error(&self) -> syn::Ident {
+        syn::Ident::new(
+            &format!("{}ForgetError", self.entity_ident),
+            Span::call_site(),
+        )
+    }
+
     pub fn column_enum(&self) -> syn::Ident {
         syn::Ident::new(&format!("{}Column", self.entity_ident), Span::call_site())
     }

@@ -5,6 +5,7 @@ use quote::{TokenStreamExt, quote};
 use super::options::*;
 
 pub struct DeleteFn<'a> {
+    id: &'a syn::Ident,
     modify_error: syn::Ident,
     entity: &'a syn::Ident,
     table_name: &'a str,
@@ -12,6 +13,7 @@ pub struct DeleteFn<'a> {
     delete_option: &'a DeleteOption,
     nested_delete_fn_names: Vec<syn::Ident>,
     post_persist_error: Option<&'a syn::Type>,
+    forgettable_table_name: Option<&'a str>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -19,6 +21,7 @@ pub struct DeleteFn<'a> {
 impl<'a> DeleteFn<'a> {
     pub fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
+            id: opts.id(),
             entity: opts.entity(),
             modify_error: opts.modify_error(),
             columns: &opts.columns,
@@ -29,6 +32,7 @@ impl<'a> DeleteFn<'a> {
                 .map(|f| f.delete_nested_fn_name())
                 .collect(),
             post_persist_error: opts.post_persist_hook.as_ref().map(|h| &h.error),
+            forgettable_table_name: opts.forgettable_table_name(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -94,6 +98,21 @@ impl ToTokens for DeleteFn<'_> {
             quote! {}
         };
 
+        let id_type = self.id;
+        let forget_payloads = if let Some(forgettable_tbl) = self.forgettable_table_name {
+            let forget_query = format!("DELETE FROM {} WHERE entity_id = $1", forgettable_tbl);
+            quote! {
+                sqlx::query!(
+                    #forget_query,
+                    id as &#id_type
+                )
+                .execute(op.as_executor())
+                .await?;
+            }
+        } else {
+            quote! {}
+        };
+
         tokens.append_all(quote! {
             pub async fn delete(
                 &self,
@@ -134,6 +153,8 @@ impl ToTokens for DeleteFn<'_> {
                             }
                             _ => #modify_error::Sqlx(e),
                         })?;
+
+                    #forget_payloads
 
                     let new_events = {
                         let events = Self::extract_events(&mut entity);
@@ -176,6 +197,7 @@ mod tests {
         columns.set_id_column(&id);
 
         let delete_fn = DeleteFn {
+            id: &id,
             entity: &entity,
             modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             table_name: "entities",
@@ -183,6 +205,7 @@ mod tests {
             delete_option: &DeleteOption::Soft,
             nested_delete_fn_names: Vec::new(),
             post_persist_error: None,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -268,6 +291,7 @@ mod tests {
         );
 
         let delete_fn = DeleteFn {
+            id: &id,
             entity: &entity,
             modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             table_name: "entities",
@@ -275,6 +299,7 @@ mod tests {
             delete_option: &DeleteOption::Soft,
             nested_delete_fn_names: Vec::new(),
             post_persist_error: None,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -322,6 +347,101 @@ mod tests {
                             }
                             _ => EntityModifyError::Sqlx(e),
                         })?;
+
+                    let new_events = {
+                        let events = Self::extract_events(&mut entity);
+                        events.any_new()
+                    };
+
+                    if new_events {
+                        let n_events = {
+                            let events = Self::extract_events(&mut entity);
+                            Self::extract_concurrent_modification(
+                                self.persist_events(op, events).await,
+                                EntityModifyError::ConcurrentModification,
+                            )?
+                        };
+                    }
+
+                    Ok(())
+                }.await;
+
+                __result
+            }
+        };
+
+        assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn delete_fn_with_forgettable() {
+        let id = Ident::new("EntityId", Span::call_site());
+        let entity = Ident::new("Entity", Span::call_site());
+        let mut columns = Columns::default();
+        columns.set_id_column(&id);
+
+        let delete_fn = DeleteFn {
+            id: &id,
+            entity: &entity,
+            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            table_name: "entities",
+            columns: &columns,
+            delete_option: &DeleteOption::Soft,
+            nested_delete_fn_names: Vec::new(),
+            post_persist_error: None,
+            forgettable_table_name: Some("entities_forgettable_payloads"),
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        delete_fn.to_tokens(&mut tokens);
+
+        let expected = quote! {
+            pub async fn delete(
+                &self,
+                entity: Entity
+            ) -> Result<(), EntityModifyError> {
+                let mut op = self.begin_op().await?;
+                let res = self.delete_in_op(&mut op, entity).await?;
+                op.commit().await?;
+                Ok(res)
+            }
+
+            pub async fn delete_in_op<OP>(
+                &self,
+                op: &mut OP,
+                mut entity: Entity
+            ) -> Result<(), EntityModifyError>
+            where
+                OP: es_entity::AtomicOperation
+            {
+                let __result: Result<(), EntityModifyError> = async {
+                    let id = &entity.id;
+
+                    sqlx::query!(
+                        "UPDATE entities SET deleted = TRUE WHERE id = $1",
+                        id as &EntityId
+                    )
+                        .execute(op.as_executor())
+                        .await
+                        .map_err(|e| match &e {
+                            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                                EntityModifyError::ConstraintViolation {
+                                    column: Self::map_constraint_column(db_err.constraint()),
+                                    value: es_entity::extract_constraint_value(db_err.as_ref()),
+                                    inner: e,
+                                }
+                            }
+                            _ => EntityModifyError::Sqlx(e),
+                        })?;
+
+                    sqlx::query!(
+                        "DELETE FROM entities_forgettable_payloads WHERE entity_id = $1",
+                        id as &EntityId
+                    )
+                    .execute(op.as_executor())
+                    .await?;
 
                     let new_events = {
                         let events = Self::extract_events(&mut entity);

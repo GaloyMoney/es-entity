@@ -11,6 +11,8 @@ pub struct ErrorTypes<'a> {
     modify_error: syn::Ident,
     find_error: syn::Ident,
     query_error: syn::Ident,
+    forget_error: syn::Ident,
+    forgettable: bool,
     column_variants: Vec<ColumnVariant>,
     nested: Vec<NestedErrorInfo>,
     post_hydrate_hook: &'a Option<PostHydrateHookConfig>,
@@ -115,6 +117,8 @@ impl<'a> ErrorTypes<'a> {
             modify_error: opts.modify_error(),
             find_error: opts.find_error(),
             query_error: opts.query_error(),
+            forget_error: opts.forget_error(),
+            forgettable: opts.forgettable_enabled(),
             column_variants,
             nested,
             post_hydrate_hook: &opts.post_hydrate_hook,
@@ -128,6 +132,11 @@ impl<'a> ErrorTypes<'a> {
         let modify_error = self.generate_modify_error();
         let find_error = self.generate_find_error();
         let query_error = self.generate_query_error();
+        let forget_error = if self.forgettable {
+            self.generate_forget_error()
+        } else {
+            quote! {}
+        };
 
         quote! {
             #column_enum
@@ -135,6 +144,50 @@ impl<'a> ErrorTypes<'a> {
             #modify_error
             #find_error
             #query_error
+            #forget_error
+        }
+    }
+
+    fn generate_forget_error(&self) -> TokenStream {
+        let forget_error = &self.forget_error;
+        let entity_name = self.entity.to_string();
+
+        quote! {
+            #[derive(Debug)]
+            pub enum #forget_error {
+                Sqlx(sqlx::Error),
+                HydrationError(es_entity::EntityHydrationError),
+            }
+
+            impl std::fmt::Display for #forget_error {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    match self {
+                        Self::Sqlx(e) => write!(f, "{}ForgetError - Sqlx: {}", #entity_name, e),
+                        Self::HydrationError(e) => write!(f, "{}ForgetError - HydrationError: {}", #entity_name, e),
+                    }
+                }
+            }
+
+            impl std::error::Error for #forget_error {
+                fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                    match self {
+                        Self::Sqlx(e) => Some(e),
+                        Self::HydrationError(e) => Some(e),
+                    }
+                }
+            }
+
+            impl From<sqlx::Error> for #forget_error {
+                fn from(e: sqlx::Error) -> Self {
+                    Self::Sqlx(e)
+                }
+            }
+
+            impl From<es_entity::EntityHydrationError> for #forget_error {
+                fn from(e: es_entity::EntityHydrationError) -> Self {
+                    Self::HydrationError(e)
+                }
+            }
         }
     }
 
@@ -905,6 +958,8 @@ mod tests {
             modify_error: Ident::new("OrderModifyError", Span::call_site()),
             find_error: Ident::new("OrderFindError", Span::call_site()),
             query_error: Ident::new("OrderQueryError", Span::call_site()),
+            forget_error: Ident::new("OrderForgetError", Span::call_site()),
+            forgettable: false,
             column_variants: vec![],
             nested,
             post_hydrate_hook,
@@ -1123,6 +1178,8 @@ mod tests {
             modify_error: Ident::new("OrderModifyError", Span::call_site()),
             find_error: Ident::new("OrderFindError", Span::call_site()),
             query_error: Ident::new("OrderQueryError", Span::call_site()),
+            forget_error: Ident::new("OrderForgetError", Span::call_site()),
+            forgettable: false,
             column_variants: vec![],
             nested,
             post_hydrate_hook: ph,
