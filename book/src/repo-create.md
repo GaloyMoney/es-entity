@@ -32,7 +32,7 @@ In the code below we want to include a `name` column in the `index` table that r
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         Ok(User { id: events.id().clone(), name: "Fred".to_string(), events })
 #     }
 # }
@@ -81,7 +81,7 @@ impl Users {
     pub async fn create(
         &self,
         new_entity: NewUser
-    ) -> Result<User, es_entity::EsRepoError> {
+    ) -> Result<User, UserCreateError> {
         let id = &new_entity.id;
         // The attribute specified in the `columns` option
         let name = &new_entity.name;
@@ -122,7 +122,7 @@ The `create(accessor = "<>")` option modifies how the field is accessed on the `
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         unimplemented!()
 #     }
 # }
@@ -178,7 +178,7 @@ This is useful for dynamic values that don't become known until later on in the 
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         unimplemented!()
 #     }
 # }

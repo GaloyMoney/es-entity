@@ -26,7 +26,7 @@ This is useful for situations where you have a `1-to-n` relationship between 2 e
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         unimplemented!()
 #     }
 # }
@@ -59,7 +59,7 @@ pub enum UserDocumentEvent {
 #     }
 # }
 # impl TryFromEvents<UserDocumentEvent> for UserDocument {
-#     fn try_from_events(events: EntityEvents<UserDocumentEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserDocumentEvent>) -> Result<Self, EntityHydrationError> {
 #         Ok(UserDocument { id: events.id().clone(), owner_id: UserId::new(), events })
 #     }
 # }

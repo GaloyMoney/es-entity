@@ -32,7 +32,7 @@ This will generate the `list_by_<column>` `fn`s and appropriate `cursor` structs
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         Ok(User { id: events.id().clone(), name: "Fred".to_string(), events })
 #     }
 # }

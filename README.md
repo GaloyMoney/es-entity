@@ -46,7 +46,7 @@ pub enum UserEvent {
 // Define your entity
 // derive_builder::Builder is optional but useful for hydrating
 #[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
+#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
 pub struct User {
     pub id: UserId,
     pub name: String,
@@ -74,7 +74,7 @@ impl User {
 
 // TryFromEvents hydrates the user entity from persisted events.
 impl TryFromEvents<UserEvent> for User {
-    fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+    fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
         // Using derive_builder::Builder to project the current state
         // while iterating over the persisted events
         let mut builder = UserBuilder::default();
@@ -128,15 +128,15 @@ pub struct Users {
 // // Generated Repository fns:
 // impl Users {
 //     // Create operations
-//     async fn create(&self, new: NewUser) -> Result<User, EsRepoError>;
-//     async fn create_all(&self, new: Vec<NewUser>) -> Result<Vec<User>, EsRepoError>;
-//     
+//     async fn create(&self, new: NewUser) -> Result<User, UserCreateError>;
+//     async fn create_all(&self, new: Vec<NewUser>) -> Result<Vec<User>, UserCreateError>;
+//
 //     // Query operations
-//     async fn find_by_id(&self, id: UserId) -> Result<User, EsRepoError>;
-//     async fn find_by_name(&self, name: &str) -> Result<User, EsRepoError>;
-//     
+//     async fn find_by_id(&self, id: UserId) -> Result<User, UserFindError>;
+//     async fn find_by_name(&self, name: &str) -> Result<User, UserFindError>;
+//
 //     // Update operations
-//     async fn update(&self, entity: &mut User) -> Result<(), EsRepoError>;
+//     async fn update(&self, entity: &mut User) -> Result<(), UserModifyError>;
 // 
 //     // Paginated listing
 //     async fn list_by_id(&self, args: PaginatedQueryArgs, direction: ListDirection) -> PaginatedQueryRet;

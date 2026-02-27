@@ -31,7 +31,7 @@ As a minimum you must specify the `entity` attribute and have a field that holds
 #     events: EntityEvents<UserEvent>,
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         unimplemented!()
 #     }
 # }
@@ -45,7 +45,7 @@ use es_entity::*;
     // id = "UserId",                  // The type of the `id`
     // new = "NewUser",                // The type of the `NewEntity`
     // event = "UserEvent",            // The type of the `Event` enum
-    // err = "EsRepoError",            // The Error type that should be returned from all fns.
+    // Per-operation error types are generated: UserCreateError, UserModifyError, UserFindError, UserQueryError
     // tbl = "users",                  // The name of the index table
     // events_tbl = "user_events",     // The name of the events table
     // tbl_prefix = "",                // A table prefix that should be added to the derived table names
@@ -88,7 +88,7 @@ The most important of which is the `columns` option that configures the mapping 
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         unimplemented!()
 #     }
 # }

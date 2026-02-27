@@ -101,7 +101,7 @@ The `list_for_filters` function matches on the sort column and intelligently del
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         let mut name = String::new();
 #         for event in events.iter_all() {
 #             match event {

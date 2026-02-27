@@ -10,6 +10,7 @@ Given the query we arrived at in the previous section - this is what a `find_by_
 # extern crate es_entity;
 # extern crate sqlx;
 # extern crate serde;
+# extern crate anyhow;
 # fn main () {}
 # use serde::{Deserialize, Serialize};
 # use es_entity::*;
@@ -32,7 +33,7 @@ Given the query we arrived at in the previous section - this is what a `find_by_
 #     events: EntityEvents<UserEvent>,
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         unimplemented!()
 #     }
 # }
@@ -43,7 +44,7 @@ pub struct Users {
     pool: PgPool
 }
 impl Users {
-    pub async fn find_by_name(&self, name: String) -> Result<User, EsRepoError> {
+    pub async fn find_by_name(&self, name: String) -> anyhow::Result<User> {
         let rows = sqlx::query_as!(
             GenericEvent::<UserId>,
             r#"
@@ -61,7 +62,8 @@ impl Users {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(EntityEvents::load_first(rows)?)
+        EntityEvents::load_first(rows.into_iter())?
+            .ok_or_else(|| anyhow::anyhow!("User not found"))
     }
 }
 ```
@@ -99,7 +101,7 @@ This simplifies the above implementation into:
 #     events: EntityEvents<UserEvent>,
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         unimplemented!()
 #     }
 # }
@@ -112,7 +114,7 @@ pub struct Users {
     pool: PgPool
 }
 impl Users {
-    pub async fn find_by_name(&self, name: String) -> Result<User, EsRepoError> {
+    pub async fn find_by_name(&self, name: String) -> Result<Option<User>, UserQueryError> {
         es_query!(
             "SELECT id FROM users WHERE name = $1",
             name
