@@ -61,14 +61,17 @@ impl ToTokens for EsQuery {
         let (payload_column, forgettable_join) =
             if let Some(ref forgettable_tbl) = self.input.forgettable_tbl {
                 (
-                    "p.payload as \"payload?\"".to_string(),
+                    "p.payload as \"forgettable_payload?\"".to_string(),
                     format!(
                         " LEFT JOIN {} p ON e.id = p.entity_id AND e.sequence = p.sequence",
                         forgettable_tbl
                     ),
                 )
             } else {
-                ("NULL::jsonb as \"payload?\"".to_string(), String::new())
+                (
+                    "NULL::jsonb as \"forgettable_payload?\"".to_string(),
+                    String::new(),
+                )
             };
 
         let query = format!(
@@ -117,7 +120,7 @@ mod tests {
                 es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
                     sqlx::query_as!(
                         Repo__DbEvent,
-                        "WITH entities AS (SELECT * FROM users WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, NULL::jsonb as \"payload?\" FROM entities i JOIN user_events e ON i.id = e.id ORDER BY i.id, e.sequence",
+                        "WITH entities AS (SELECT * FROM users WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, NULL::jsonb as \"forgettable_payload?\" FROM entities i JOIN user_events e ON i.id = e.id ORDER BY i.id, e.sequence",
                         id as UserId,
                         <<<Self as es_entity::EsRepo>::Entity as EsEntity>::Event>::event_context(),
                     )
@@ -147,7 +150,7 @@ mod tests {
                 es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
                     sqlx::query_as!(
                         Repo__DbEvent,
-                        "WITH entities AS (SELECT * FROM my_custom_table WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, NULL::jsonb as \"payload?\" FROM entities i JOIN my_custom_table_events e ON i.id = e.id ORDER BY i.id, e.sequence",
+                        "WITH entities AS (SELECT * FROM my_custom_table WHERE id = $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, NULL::jsonb as \"forgettable_payload?\" FROM entities i JOIN my_custom_table_events e ON i.id = e.id ORDER BY i.id, e.sequence",
                         id as MyCustomEntityId,
                         <<<Self as es_entity::EsRepo>::Entity as EsEntity>::Event>::event_context(),
                     )
@@ -180,7 +183,7 @@ mod tests {
                 es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
                     sqlx::query_as!(
                         Repo__DbEvent,
-                        "WITH entities AS (SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, CASE WHEN $4 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, NULL::jsonb as \"payload?\" FROM entities i JOIN entity_events e ON i.id = e.id ORDER BY i.name, i.id, i.id, e.sequence",
+                        "WITH entities AS (SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1) SELECT i.id AS \"entity_id: Repo__Id\", e.sequence, e.event, CASE WHEN $4 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, NULL::jsonb as \"forgettable_payload?\" FROM entities i JOIN entity_events e ON i.id = e.id ORDER BY i.name, i.id, i.id, e.sequence",
                         (first + 1) as i64,
                         id as Option<MyCustomEntityId>,
                         name as Option<String>,

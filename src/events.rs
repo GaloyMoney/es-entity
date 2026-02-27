@@ -18,7 +18,7 @@ pub struct GenericEvent<Id> {
     pub event: serde_json::Value,
     pub context: Option<crate::ContextData>,
     pub recorded_at: DateTime<Utc>,
-    pub payload: Option<serde_json::Value>,
+    pub forgettable_payload: Option<serde_json::Value>,
 }
 
 /// Strongly-typed event wrapper with metadata for successfully stored events.
@@ -202,7 +202,7 @@ where
             }
             let cur = current.as_mut().expect("Could not get current");
             let mut event_json = e.event;
-            if let Some(payload) = e.payload {
+            if let Some(payload) = e.forgettable_payload {
                 crate::forgettable::inject_forgettable_payload(&mut event_json, payload);
             }
             cur.persisted_events.push(PersistedEvent {
@@ -249,7 +249,7 @@ where
             }
             let cur = current.as_mut().expect("Could not get current");
             let mut event_json = e.event;
-            if let Some(payload) = e.payload {
+            if let Some(payload) = e.forgettable_payload {
                 crate::forgettable::inject_forgettable_payload(&mut event_json, payload);
             }
             cur.persisted_events.push(PersistedEvent {
@@ -414,7 +414,7 @@ mod tests {
                 .expect("Could not serialize"),
             context: None,
             recorded_at: chrono::Utc::now(),
-            payload: None,
+            forgettable_payload: None,
         }];
         let entity: DummyEntity = EntityEvents::load_first(generic_events).expect("Could not load");
         assert!(entity.name == "dummy-name");
@@ -430,7 +430,7 @@ mod tests {
                     .expect("Could not serialize"),
                 context: None,
                 recorded_at: chrono::Utc::now(),
-                payload: None,
+                forgettable_payload: None,
             },
             GenericEvent {
                 entity_id: Uuid::parse_str("00000000-0000-0000-0000-000000000003").unwrap(),
@@ -439,7 +439,7 @@ mod tests {
                     .expect("Could not serialize"),
                 context: None,
                 recorded_at: chrono::Utc::now(),
-                payload: None,
+                forgettable_payload: None,
             },
         ];
         let (entity, more): (Vec<DummyEntity>, _) =
