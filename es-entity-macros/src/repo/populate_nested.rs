@@ -43,14 +43,17 @@ impl ToTokens for PopulateNested<'_> {
         let (payload_column, forgettable_join) =
             if let Some(forgettable_tbl) = self.forgettable_table_name {
                 (
-                    "p.payload as \"payload?\"".to_string(),
+                    "p.payload as \"forgettable_payload?\"".to_string(),
                     format!(
                         " LEFT JOIN {} p ON e.id = p.entity_id AND e.sequence = p.sequence",
                         forgettable_tbl
                     ),
                 )
             } else {
-                ("NULL::jsonb as \"payload?\"".to_string(), String::new())
+                (
+                    "NULL::jsonb as \"forgettable_payload?\"".to_string(),
+                    String::new(),
+                )
             };
 
         let query = format!(
