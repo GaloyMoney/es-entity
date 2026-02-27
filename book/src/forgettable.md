@@ -86,7 +86,9 @@ The `EsEvent` derive macro detects `Forgettable` fields and generates the extrac
 # extern crate es_entity;
 use es_entity::Forgettable;
 
+// Create with Forgettable::new() or .into()
 let name: Forgettable<String> = Forgettable::new("Alice".to_string());
+let also_name: Forgettable<String> = "Alice".to_string().into();
 
 // .value() returns Option<ForgettableRef<T>>
 // ForgettableRef derefs to T but does NOT implement Serialize
@@ -94,7 +96,9 @@ if let Some(val) = name.value() {
     assert_eq!(&*val, "Alice");
 }
 
+// Forgettable::forgotten() or Default::default()
 let forgotten: Forgettable<String> = Forgettable::forgotten();
+let also_forgotten: Forgettable<String> = Default::default();
 assert!(forgotten.value().is_none());
 # fn main() {}
 ```
@@ -203,6 +207,27 @@ customers.forget(&mut customer).await?;
 assert_eq!(customer.name, "[forgotten]");
 ```
 
+## Custom Queries with `es_query!`
+
+If you write custom queries using `es_query!`, you must pass the `forgettable_tbl` parameter so the generated SQL includes the LEFT JOIN for forgettable payloads:
+
+```rust,ignore
+let query = es_query!(
+    entity = Customer,
+    sql = "SELECT * FROM customers WHERE email = $1",
+    args = [email as String],
+    forgettable_tbl = "customer_forgettable_payloads",
+);
+```
+
+If you omit `forgettable_tbl` on an event type that has `Forgettable<T>` fields, you get a **compile-time error**:
+
+```text
+error: es_query! requires `forgettable_tbl` parameter when the event type has Forgettable<T> fields
+```
+
+This prevents silently loading events without their forgettable data.
+
 ## Delete and Forgettable
 
 When `forgettable` is enabled and `delete = "soft"` is configured, calling `delete()` will also automatically delete all forgettable payloads for the entity. This prevents orphaned personal data from remaining in the database after a soft delete.
@@ -222,3 +247,5 @@ pub struct Customers {
 // Soft-delete also cleans up forgettable payloads
 customers.delete(customer).await?;
 ```
+
+**Important:** The payloads are *hard-deleted* even when the entity is only soft-deleted. If the entity is later restored, the forgettable fields will remain permanently forgotten.
