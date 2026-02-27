@@ -215,6 +215,7 @@ pub struct ListByFn<'a> {
     delete: DeleteOption,
     cursor_mod: syn::Ident,
     any_nested: bool,
+    forgettable_table_name: Option<&'a str>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -231,6 +232,7 @@ impl<'a> ListByFn<'a> {
             delete: opts.delete,
             cursor_mod: opts.cursor_mod(),
             any_nested: opts.any_nested(),
+            forgettable_table_name: opts.forgettable_table_name(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -306,10 +308,17 @@ impl ToTokens for ListByFn<'_> {
                 cursor.order_by(false),
             );
 
+            let forgettable_tbl_arg = if let Some(tbl) = self.forgettable_table_name {
+                quote! { forgettable_tbl = #tbl, }
+            } else {
+                quote! {}
+            };
+
             let es_query_asc_call = if let Some(prefix) = self.ignore_prefix {
                 quote! {
                     es_entity::es_query!(
                         tbl_prefix = #prefix,
+                        #forgettable_tbl_arg
                         #asc_query,
                         #arg_tokens
                     )
@@ -318,6 +327,7 @@ impl ToTokens for ListByFn<'_> {
                 quote! {
                     es_entity::es_query!(
                         entity = #entity,
+                        #forgettable_tbl_arg
                         #asc_query,
                         #arg_tokens
                     )
@@ -328,6 +338,7 @@ impl ToTokens for ListByFn<'_> {
                 quote! {
                     es_entity::es_query!(
                         tbl_prefix = #prefix,
+                        #forgettable_tbl_arg
                         #desc_query,
                         #arg_tokens
                     )
@@ -336,6 +347,7 @@ impl ToTokens for ListByFn<'_> {
                 quote! {
                     es_entity::es_query!(
                         entity = #entity,
+                        #forgettable_tbl_arg
                         #desc_query,
                         #arg_tokens
                     )
@@ -543,6 +555,7 @@ mod tests {
             delete: DeleteOption::SoftWithoutQueries,
             cursor_mod,
             any_nested: false,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -632,6 +645,7 @@ mod tests {
             delete: DeleteOption::Soft,
             cursor_mod,
             any_nested: false,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -664,6 +678,7 @@ mod tests {
             delete: DeleteOption::No,
             cursor_mod,
             any_nested: false,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -759,6 +774,7 @@ mod tests {
             delete: DeleteOption::No,
             cursor_mod,
             any_nested: false,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

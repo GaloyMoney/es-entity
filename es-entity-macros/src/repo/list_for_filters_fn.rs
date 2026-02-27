@@ -94,6 +94,7 @@ pub struct ListForFiltersFn<'a> {
     ignore_prefix: Option<&'a syn::LitStr>,
     id: &'a syn::Ident,
     any_nested: bool,
+    forgettable_table_name: Option<&'a str>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -118,6 +119,7 @@ impl<'a> ListForFiltersFn<'a> {
             ignore_prefix: opts.table_prefix(),
             id: opts.id(),
             any_nested: opts.any_nested(),
+            forgettable_table_name: opts.forgettable_table_name(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -333,10 +335,17 @@ impl<'a> ListForFiltersFn<'a> {
             n_filters + 1,
         );
 
+        let forgettable_tbl_arg = if let Some(tbl) = self.forgettable_table_name {
+            quote! { forgettable_tbl = #tbl, }
+        } else {
+            quote! {}
+        };
+
         let es_query_asc_call = if let Some(prefix) = self.ignore_prefix {
             quote! {
                 es_entity::es_query!(
                     tbl_prefix = #prefix,
+                    #forgettable_tbl_arg
                     #asc_query,
                     #filter_arg_bindings
                     #cursor_arg_tokens
@@ -346,6 +355,7 @@ impl<'a> ListForFiltersFn<'a> {
             quote! {
                 es_entity::es_query!(
                     entity = #entity,
+                    #forgettable_tbl_arg
                     #asc_query,
                     #filter_arg_bindings
                     #cursor_arg_tokens
@@ -357,6 +367,7 @@ impl<'a> ListForFiltersFn<'a> {
             quote! {
                 es_entity::es_query!(
                     tbl_prefix = #prefix,
+                    #forgettable_tbl_arg
                     #desc_query,
                     #filter_arg_bindings
                     #cursor_arg_tokens
@@ -366,6 +377,7 @@ impl<'a> ListForFiltersFn<'a> {
             quote! {
                 es_entity::es_query!(
                     entity = #entity,
+                    #forgettable_tbl_arg
                     #desc_query,
                     #filter_arg_bindings
                     #cursor_arg_tokens
@@ -689,6 +701,7 @@ mod tests {
             ignore_prefix: None,
             id: &id,
             any_nested: false,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -860,6 +873,7 @@ mod tests {
             ignore_prefix: None,
             id: &id,
             any_nested: false,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -926,6 +940,7 @@ mod tests {
             ignore_prefix: None,
             id: &id,
             any_nested: false,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

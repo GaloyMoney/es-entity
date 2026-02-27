@@ -13,6 +13,7 @@ pub struct PopulateNested<'a> {
     table_name: &'a str,
     events_table_name: &'a str,
     repo_types_mod: syn::Ident,
+    forgettable_table_name: Option<&'a str>,
 }
 
 impl<'a> PopulateNested<'a> {
@@ -26,6 +27,7 @@ impl<'a> PopulateNested<'a> {
             table_name: opts.table_name(),
             events_table_name: opts.events_table_name(),
             repo_types_mod: opts.repo_types_mod(),
+            forgettable_table_name: opts.forgettable_table_name(),
         }
     }
 }
@@ -38,12 +40,27 @@ impl ToTokens for PopulateNested<'_> {
         let repo_types_mod = &self.repo_types_mod;
         let accessor = self.column.parent_accessor();
 
+        let (payload_column, forgettable_join) =
+            if let Some(forgettable_tbl) = self.forgettable_table_name {
+                (
+                    "p.payload as \"payload?\"".to_string(),
+                    format!(
+                        " LEFT JOIN {} p ON e.id = p.entity_id AND e.sequence = p.sequence",
+                        forgettable_tbl
+                    ),
+                )
+            } else {
+                ("NULL::jsonb as \"payload?\"".to_string(), String::new())
+            };
+
         let query = format!(
-            "WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1))) SELECT i.id AS \"entity_id: {}\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY e.id, e.sequence",
+            "WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1))) SELECT i.id AS \"entity_id: {}\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, {} FROM entities i JOIN {} e ON i.id = e.id{} ORDER BY e.id, e.sequence",
             self.table_name,
             self.column.name(),
             self.id,
+            payload_column,
             self.events_table_name,
+            forgettable_join,
         );
 
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();

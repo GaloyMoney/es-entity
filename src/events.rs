@@ -18,6 +18,7 @@ pub struct GenericEvent<Id> {
     pub event: serde_json::Value,
     pub context: Option<crate::ContextData>,
     pub recorded_at: DateTime<Utc>,
+    pub payload: Option<serde_json::Value>,
 }
 
 /// Strongly-typed event wrapper with metadata for successfully stored events.
@@ -200,11 +201,15 @@ where
                 break;
             }
             let cur = current.as_mut().expect("Could not get current");
+            let mut event_json = e.event;
+            if let Some(ref payload) = e.payload {
+                crate::forgettable::inject_forgettable_payload(&mut event_json, payload);
+            }
             cur.persisted_events.push(PersistedEvent {
                 entity_id: e.entity_id,
                 recorded_at: e.recorded_at,
                 sequence: e.sequence as usize,
-                event: serde_json::from_value(e.event)?,
+                event: serde_json::from_value(event_json)?,
                 context: e.context,
             });
         }
@@ -243,11 +248,15 @@ where
                 });
             }
             let cur = current.as_mut().expect("Could not get current");
+            let mut event_json = e.event;
+            if let Some(ref payload) = e.payload {
+                crate::forgettable::inject_forgettable_payload(&mut event_json, payload);
+            }
             cur.persisted_events.push(PersistedEvent {
                 entity_id: e.entity_id,
                 recorded_at: e.recorded_at,
                 sequence: e.sequence as usize,
-                event: serde_json::from_value(e.event)?,
+                event: serde_json::from_value(event_json)?,
                 context: e.context,
             });
         }
@@ -379,6 +388,7 @@ mod tests {
                 .expect("Could not serialize"),
             context: None,
             recorded_at: chrono::Utc::now(),
+            payload: None,
         }];
         let entity: DummyEntity = EntityEvents::load_first(generic_events).expect("Could not load");
         assert!(entity.name == "dummy-name");
@@ -394,6 +404,7 @@ mod tests {
                     .expect("Could not serialize"),
                 context: None,
                 recorded_at: chrono::Utc::now(),
+                payload: None,
             },
             GenericEvent {
                 entity_id: Uuid::parse_str("00000000-0000-0000-0000-000000000003").unwrap(),
@@ -402,6 +413,7 @@ mod tests {
                     .expect("Could not serialize"),
                 context: None,
                 recorded_at: chrono::Utc::now(),
+                payload: None,
             },
         ];
         let (entity, more): (Vec<DummyEntity>, _) =

@@ -10,6 +10,7 @@ pub struct PersistEventsFn<'a> {
     error: &'a syn::Type,
     events_table_name: &'a str,
     event_ctx: bool,
+    forgettable_table_name: Option<&'a str>,
 }
 
 impl<'a> From<&'a RepositoryOptions> for PersistEventsFn<'a> {
@@ -20,6 +21,7 @@ impl<'a> From<&'a RepositoryOptions> for PersistEventsFn<'a> {
             error: opts.err(),
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
+            forgettable_table_name: opts.forgettable_table_name(),
         }
     }
 }
@@ -56,6 +58,35 @@ impl ToTokens for PersistEventsFn<'_> {
             id as &#id_type
         };
 
+        let forgettable_code = if let Some(forgettable_tbl) = self.forgettable_table_name {
+            let payload_insert_query = format!(
+                "INSERT INTO {} (entity_id, sequence, payload) SELECT $1, unnested.sequence, unnested.payload FROM UNNEST($2::INT[], $3::JSONB[]) AS unnested(sequence, payload)",
+                forgettable_tbl
+            );
+            quote! {
+                let mut payload_sequences: Vec<i32> = Vec::new();
+                let mut payload_values: Vec<es_entity::prelude::serde_json::Value> = Vec::new();
+                for (idx, event_json) in serialized_events.iter_mut().enumerate() {
+                    if let Some(payload) = #event_type::extract_forgettable_payload(event_json) {
+                        payload_sequences.push((offset + 1 + idx) as i32);
+                        payload_values.push(payload);
+                    }
+                }
+                if !payload_sequences.is_empty() {
+                    sqlx::query!(
+                        #payload_insert_query,
+                        id as &#id_type,
+                        &payload_sequences,
+                        &payload_values,
+                    )
+                    .execute(op.as_executor())
+                    .await?;
+                }
+            }
+        } else {
+            quote! {}
+        };
+
         tokens.append_all(quote! {
             fn extract_concurrent_modification<T>(res: Result<T, sqlx::Error>) -> Result<T, #error> {
                 match res {
@@ -77,8 +108,9 @@ impl ToTokens for PersistEventsFn<'_> {
             {
                 let id = events.id();
                 let offset = events.len_persisted();
-                let serialized_events = events.serialize_new_events();
+                let mut serialized_events = events.serialize_new_events();
                 #ctx_var
+                #forgettable_code
                 let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
                 let now = op.maybe_now();
 
@@ -117,6 +149,7 @@ mod tests {
             error: &error,
             events_table_name: "entity_events",
             event_ctx: true,
+            forgettable_table_name: None,
         };
 
         let mut tokens = TokenStream::new();
@@ -143,7 +176,7 @@ mod tests {
             {
                 let id = events.id();
                 let offset = events.len_persisted();
-                let serialized_events = events.serialize_new_events();
+                let mut serialized_events = events.serialize_new_events();
                 let contexts = events.serialize_new_event_contexts();
                 let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
                 let now = op.maybe_now();
@@ -180,6 +213,7 @@ mod tests {
             error: &error,
             events_table_name: "entity_events",
             event_ctx: false,
+            forgettable_table_name: None,
         };
 
         let mut tokens = TokenStream::new();
@@ -206,7 +240,7 @@ mod tests {
             {
                 let id = events.id();
                 let offset = events.len_persisted();
-                let serialized_events = events.serialize_new_events();
+                let mut serialized_events = events.serialize_new_events();
                 let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
                 let now = op.maybe_now();
 
