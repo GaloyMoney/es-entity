@@ -302,6 +302,27 @@ where
             .collect()
     }
 
+    /// Forgets all forgettable payloads in persisted events and returns the taken events.
+    ///
+    /// Applies `forget_fn` to each persisted event, then takes ownership of the event
+    /// stream, leaving `self` as an empty shell. The returned `EntityEvents` can be passed
+    /// to `TryFromEvents::try_from_events` to rebuild the entity with forgotten fields.
+    #[doc(hidden)]
+    pub fn forget_and_take(&mut self, mut forget_fn: impl FnMut(&mut T)) -> Self {
+        for persisted in &mut self.persisted_events {
+            forget_fn(&mut persisted.event);
+        }
+        let entity_id = self.entity_id.clone();
+        std::mem::replace(
+            self,
+            Self {
+                entity_id,
+                persisted_events: Vec::new(),
+                new_events: Vec::new(),
+            },
+        )
+    }
+
     #[doc(hidden)]
     pub fn serialize_new_event_contexts(&self) -> Option<Vec<crate::ContextData>> {
         if <T as EsEvent>::event_context() {

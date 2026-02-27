@@ -66,6 +66,32 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
         })
         .collect();
 
+    let forget_match_arms: Vec<_> = forgettable_info
+        .variants
+        .iter()
+        .map(|(variant_ident, _tag_value, field_idents)| {
+            if field_idents.is_empty() {
+                quote! {
+                    #ident::#variant_ident { .. } => {}
+                }
+            } else {
+                let assignments: Vec<_> = field_idents
+                    .iter()
+                    .map(|field_id| {
+                        quote! {
+                            *#field_id = es_entity::Forgettable::forgotten();
+                        }
+                    })
+                    .collect();
+                quote! {
+                    #ident::#variant_ident { #(#field_idents),*, .. } => {
+                        #(#assignments)*
+                    }
+                }
+            }
+        })
+        .collect();
+
     tokens.append_all(quote! {
         impl #ident {
             #[doc(hidden)]
@@ -75,6 +101,13 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
             pub fn extract_forgettable_payloads(&self) -> Option<es_entity::prelude::serde_json::Value> {
                 match self {
                     #(#match_arms)*
+                }
+            }
+
+            #[doc(hidden)]
+            pub fn forget_forgettable_payloads(&mut self) {
+                match self {
+                    #(#forget_match_arms)*
                 }
             }
         }

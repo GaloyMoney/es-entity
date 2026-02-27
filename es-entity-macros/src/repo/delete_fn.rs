@@ -5,11 +5,13 @@ use quote::{TokenStreamExt, quote};
 use super::options::*;
 
 pub struct DeleteFn<'a> {
+    id: &'a syn::Ident,
     error: &'a syn::Type,
     entity: &'a syn::Ident,
     table_name: &'a str,
     columns: &'a Columns,
     delete_option: &'a DeleteOption,
+    forgettable_table_name: Option<&'a str>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -17,11 +19,13 @@ pub struct DeleteFn<'a> {
 impl<'a> DeleteFn<'a> {
     pub fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
+            id: opts.id(),
             entity: opts.entity(),
             error: opts.err(),
             columns: &opts.columns,
             table_name: opts.table_name(),
             delete_option: &opts.delete,
+            forgettable_table_name: opts.forgettable_table_name(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -73,6 +77,21 @@ impl ToTokens for DeleteFn<'_> {
         #[cfg(not(feature = "instrument"))]
         let (instrument_attr, record_id, error_recording) = (quote! {}, quote! {}, quote! {});
 
+        let id_type = self.id;
+        let forget_payloads = if let Some(forgettable_tbl) = self.forgettable_table_name {
+            let forget_query = format!("DELETE FROM {} WHERE entity_id = $1", forgettable_tbl);
+            quote! {
+                sqlx::query!(
+                    #forget_query,
+                    id as &#id_type
+                )
+                .execute(op.as_executor())
+                .await?;
+            }
+        } else {
+            quote! {}
+        };
+
         tokens.append_all(quote! {
             pub async fn delete(
                 &self,
@@ -102,6 +121,8 @@ impl ToTokens for DeleteFn<'_> {
                     )
                         .execute(op.as_executor())
                         .await?;
+
+                    #forget_payloads
 
                     let new_events = {
                         let events = Self::extract_events(&mut entity);
@@ -142,11 +163,13 @@ mod tests {
         columns.set_id_column(&id);
 
         let delete_fn = DeleteFn {
+            id: &id,
             entity: &entity,
             error: &error,
             table_name: "entities",
             columns: &columns,
             delete_option: &DeleteOption::Soft,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -222,11 +245,13 @@ mod tests {
         );
 
         let delete_fn = DeleteFn {
+            id: &id,
             entity: &entity,
             error: &error,
             table_name: "entities",
             columns: &columns,
             delete_option: &DeleteOption::Soft,
+            forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -264,6 +289,89 @@ mod tests {
                     )
                         .execute(op.as_executor())
                         .await?;
+
+                    let new_events = {
+                        let events = Self::extract_events(&mut entity);
+                        events.any_new()
+                    };
+
+                    if new_events {
+                        let n_events = {
+                            let events = Self::extract_events(&mut entity);
+                            self.persist_events(op, events).await?
+                        };
+
+                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    }
+
+                    Ok(())
+                }.await;
+
+                __result
+            }
+        };
+
+        assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn delete_fn_with_forgettable() {
+        let id = Ident::new("EntityId", Span::call_site());
+        let entity = Ident::new("Entity", Span::call_site());
+        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
+        let mut columns = Columns::default();
+        columns.set_id_column(&id);
+
+        let delete_fn = DeleteFn {
+            id: &id,
+            entity: &entity,
+            error: &error,
+            table_name: "entities",
+            columns: &columns,
+            delete_option: &DeleteOption::Soft,
+            forgettable_table_name: Some("entities_forgettable_payloads"),
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        delete_fn.to_tokens(&mut tokens);
+
+        let expected = quote! {
+            pub async fn delete(
+                &self,
+                entity: Entity
+            ) -> Result<(), es_entity::EsRepoError> {
+                let mut op = self.begin_op().await?;
+                let res = self.delete_in_op(&mut op, entity).await?;
+                op.commit().await?;
+                Ok(res)
+            }
+
+            pub async fn delete_in_op<OP>(
+                &self,
+                op: &mut OP,
+                mut entity: Entity
+            ) -> Result<(), es_entity::EsRepoError>
+            where
+                OP: es_entity::AtomicOperation
+            {
+                let __result: Result<(), es_entity::EsRepoError> = async {
+                    let id = &entity.id;
+
+                    sqlx::query!(
+                        "UPDATE entities SET deleted = TRUE WHERE id = $1",
+                        id as &EntityId
+                    )
+                        .execute(op.as_executor())
+                        .await?;
+
+                    sqlx::query!(
+                        "DELETE FROM entities_forgettable_payloads WHERE entity_id = $1",
+                        id as &EntityId
+                    )
+                    .execute(op.as_executor())
+                    .await?;
 
                     let new_events = {
                         let events = Self::extract_events(&mut entity);

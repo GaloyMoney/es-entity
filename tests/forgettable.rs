@@ -71,14 +71,13 @@ async fn forget_removes_forgettable_data() -> anyhow::Result<()> {
     assert_eq!(loaded.name, "Robert Jones");
     assert_eq!(loaded.email, "bob@example.com");
 
-    // Forget the customer's personal data
-    customers.forget(id).await?;
+    // Forget the customer's personal data - entity is updated in-place
+    let mut loaded = customers.find_by_id(id).await?;
+    customers.forget(&mut loaded).await?;
 
-    // Load again - forgettable fields should be forgotten
-    let forgotten = customers.find_by_id(id).await?;
-    assert_eq!(forgotten.name, "[forgotten]");
+    assert_eq!(loaded.name, "[forgotten]");
     // Non-forgettable field should remain intact
-    assert_eq!(forgotten.email, "bob@example.com");
+    assert_eq!(loaded.email, "bob@example.com");
 
     Ok(())
 }
@@ -102,10 +101,10 @@ async fn forget_preserves_non_forgettable_events() -> anyhow::Result<()> {
     let _ = customer.update_email("charlie_new@example.com");
     customers.update(&mut customer).await?;
 
-    // Forget and verify
-    customers.forget(id).await?;
+    // Forget and verify - entity is updated in-place
+    let mut loaded = customers.find_by_id(id).await?;
+    customers.forget(&mut loaded).await?;
 
-    let loaded = customers.find_by_id(id).await?;
     assert_eq!(loaded.name, "[forgotten]");
     assert_eq!(loaded.email, "charlie_new@example.com");
 
@@ -141,8 +140,10 @@ async fn find_all_works_with_forgettable() -> anyhow::Result<()> {
     assert_eq!(all[&id1].name, "Dave");
     assert_eq!(all[&id2].name, "Eve");
 
-    // Forget one customer
-    customers.forget(id1).await?;
+    // Forget one customer - entity is updated in-place
+    let mut c1 = customers.find_by_id(id1).await?;
+    customers.forget(&mut c1).await?;
+    assert_eq!(c1.name, "[forgotten]");
 
     let all = customers.find_all::<Customer>(&[id1, id2]).await?;
     assert_eq!(all[&id1].name, "[forgotten]");
