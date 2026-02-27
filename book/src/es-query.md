@@ -10,7 +10,6 @@ Given the query we arrived at in the previous section - this is what a `find_by_
 # extern crate es_entity;
 # extern crate sqlx;
 # extern crate serde;
-# extern crate anyhow;
 # fn main () {}
 # use serde::{Deserialize, Serialize};
 # use es_entity::*;
@@ -40,11 +39,24 @@ Given the query we arrived at in the previous section - this is what a `find_by_
 use sqlx::PgPool;
 use es_entity::*;
 
+#[derive(Debug)]
+pub enum UserError {
+    Sqlx(sqlx::Error),
+    HydrationError(EntityHydrationError),
+    NotFound,
+}
+# impl From<sqlx::Error> for UserError {
+#     fn from(e: sqlx::Error) -> Self { Self::Sqlx(e) }
+# }
+# impl From<EntityHydrationError> for UserError {
+#     fn from(e: EntityHydrationError) -> Self { Self::HydrationError(e) }
+# }
+
 pub struct Users {
     pool: PgPool
 }
 impl Users {
-    pub async fn find_by_name(&self, name: String) -> anyhow::Result<User> {
+    pub async fn find_by_name(&self, name: String) -> Result<User, UserError> {
         let rows = sqlx::query_as!(
             GenericEvent::<UserId>,
             r#"
@@ -63,7 +75,7 @@ impl Users {
         .fetch_all(&self.pool)
         .await?;
         EntityEvents::load_first(rows.into_iter())?
-            .ok_or_else(|| anyhow::anyhow!("User not found"))
+            .ok_or(UserError::NotFound)
     }
 }
 ```
@@ -114,22 +126,30 @@ pub struct Users {
     pool: PgPool
 }
 impl Users {
-    pub async fn find_by_name(&self, name: String) -> Result<Option<User>, UserQueryError> {
+    pub async fn find_by_name(&self, name: String) -> Result<User, UserFindError> {
         es_query!(
             "SELECT id FROM users WHERE name = $1",
             name
-        ).fetch_optional(&self.pool).await
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| UserFindError::NotFound {
+            entity: "User",
+            column: "name",
+            value: name,
+        })
     }
 }
 ```
 
 The `es_query!` macro only works within `fn`s defined on structs with `EsRepo` derived.
 
-The functions intend to mimic the `sqlx` interface but instead of returning rows they return fully hydrated entities:
+`es_query!` provides `fetch_optional` which returns `Result<Option<Entity>, QueryError>`.
+To return a concrete entity (not `Option`), use `ok_or_else` to construct a `NotFound` error with context about what was searched for — the generated `FindError` type carries the entity name, column, and value:
 
 ```rust,ignore
-async fn fetch_optional(<executor>) -> Result<Option<Entity>, Repo::Err>
+async fn fetch_optional(<executor>) -> Result<Option<Entity>, Repo::QueryError>
 
 // The `(_, bool)` signifies whether or not the query could have fetched more or the list is exhausted:
-async fn fetch_n(<executor>, n) -> Result<(Vec<Entity>, bool), Repo::Err>
+async fn fetch_n(<executor>, n) -> Result<(Vec<Entity>, bool), Repo::QueryError>
 ```
