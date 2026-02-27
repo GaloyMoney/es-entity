@@ -153,7 +153,7 @@ impl ToTokens for FindByFn<'_> {
                         let __result: Result<#result_type, #error> = async {
                             let #column_name = #column_name.#access_expr;
                             #record_field
-                            #es_query_call.#fetch_fn.await.map_err(Into::into)
+                            #es_query_call.#fetch_fn.await
                         }.await;
 
                         #error_recording
@@ -220,7 +220,7 @@ mod tests {
                         id as &EntityId,
                     )
                     .fetch_one(op)
-                    .await.map_err(Into::into)
+                    .await
                 }.await;
 
                 __result
@@ -249,7 +249,7 @@ mod tests {
                         id as &EntityId,
                     )
                     .fetch_optional(op)
-                    .await.map_err(Into::into)
+                    .await
                 }.await;
 
                 __result
@@ -307,7 +307,7 @@ mod tests {
                         email as &str,
                     )
                     .fetch_one(op)
-                    .await.map_err(Into::into)
+                    .await
                 }.await;
 
                 __result
@@ -336,7 +336,7 @@ mod tests {
                         email as &str,
                     )
                     .fetch_optional(op)
-                    .await.map_err(Into::into)
+                    .await
                 }.await;
 
                 __result
@@ -391,7 +391,7 @@ mod tests {
                         id as &EntityId,
                     )
                     .fetch_one(op)
-                    .await.map_err(Into::into)
+                    .await
                 }.await;
 
                 __result
@@ -420,7 +420,7 @@ mod tests {
                         id as &EntityId,
                     )
                     .fetch_optional(op)
-                    .await.map_err(Into::into)
+                    .await
                 }.await;
 
                 __result
@@ -501,7 +501,7 @@ mod tests {
                         id as &EntityId,
                     )
                     .fetch_one(op)
-                    .await.map_err(Into::into)
+                    .await
                 }.await;
 
                 __result
@@ -530,7 +530,7 @@ mod tests {
                         id as &EntityId,
                     )
                     .fetch_optional(op)
-                    .await.map_err(Into::into)
+                    .await
                 }.await;
 
                 __result

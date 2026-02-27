@@ -178,6 +178,8 @@ impl ToTokens for EsRepo<'_> {
 
         let create_error = self.opts.create_error();
         let modify_error = self.opts.modify_error();
+        let find_error = self.opts.find_error();
+        let query_error = self.opts.query_error();
         let error_types = self.error_types.generate();
         let map_constraint_fn = self.error_types.generate_map_constraint_fn();
 
@@ -243,16 +245,19 @@ impl ToTokens for EsRepo<'_> {
                 type Entity = #entity;
                 type CreateError = #create_error;
                 type ModifyError = #modify_error;
+                type FindError = #find_error;
+                type QueryError = #query_error;
                 type EsQueryFlavor = #es_query_flavor;
 
                #[inline(always)]
-               async fn load_all_nested_in_op<OP>(
+               async fn load_all_nested_in_op<OP, E>(
                    op: &mut OP, entities: &mut [#entity]
-               ) -> Result<(), es_entity::EsRepoLoadError>
+               ) -> Result<(), E>
                    where
                        OP: es_entity::AtomicOperation,
+                       E: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
                {
-                   #(Self::#nested_fns(op, entities).await?;)*
+                   #(Self::#nested_fns::<_, _, E>(op, entities).await?;)*
                    Ok(())
                }
             }

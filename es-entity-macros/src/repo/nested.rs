@@ -57,14 +57,15 @@ impl ToTokens for Nested<'_> {
                 Ok(())
             }
 
-            async fn #find_fn_name<OP, P>(op: &mut OP, entities: &mut [P]) -> Result<(), es_entity::EsRepoLoadError>
+            async fn #find_fn_name<OP, P, E>(op: &mut OP, entities: &mut [P]) -> Result<(), E>
                 where
                     OP: es_entity::AtomicOperation,
                     P: es_entity::Parent<<#nested_repo_ty as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
                     #nested_repo_ty: es_entity::PopulateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
+                    E: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
             {
                 let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
-                <#nested_repo_ty>::populate_in_op(op, lookup).await?;
+                <#nested_repo_ty>::populate_in_op::<_, _, E>(op, lookup).await?;
                 Ok(())
             }
         });
@@ -127,14 +128,15 @@ mod tests {
                 Ok(())
             }
 
-            async fn find_nested_users_in_op<OP, P>(op: &mut OP, entities: &mut [P]) -> Result<(), es_entity::EsRepoLoadError>
+            async fn find_nested_users_in_op<OP, P, E>(op: &mut OP, entities: &mut [P]) -> Result<(), E>
                 where
                     OP: es_entity::AtomicOperation,
                     P: es_entity::Parent<<UserRepo as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
                     UserRepo: es_entity::PopulateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
+                    E: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
             {
                 let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
-                <UserRepo>::populate_in_op(op, lookup).await?;
+                <UserRepo>::populate_in_op::<_, _, E>(op, lookup).await?;
                 Ok(())
             }
         };

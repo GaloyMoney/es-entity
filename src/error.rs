@@ -17,15 +17,12 @@ pub enum EntityHydrationError {
 #[deprecated(note = "renamed to EntityHydrationError")]
 pub type EsEntityError = EntityHydrationError;
 
-/// Internal error type used by `EsQuery` and `PopulateNested` when loading entities.
-#[derive(Error, Debug)]
-pub enum EsRepoLoadError {
-    #[error("EsRepoLoadError - Sqlx: {0}")]
-    Sqlx(#[from] sqlx::Error),
-    #[error("EsRepoLoadError - HydrationError: {0}")]
-    HydrationError(#[from] EntityHydrationError),
-    #[error("EsRepoLoadError - NotFound")]
-    NotFound,
+/// Trait for error types that can represent a "not found" condition.
+///
+/// Implemented by error types used with `EsQuery::fetch_one`, which needs
+/// to produce a "not found" error when no rows match.
+pub trait FromNotFound {
+    fn not_found() -> Self;
 }
 
 /// Internal error type used by `persist_events` for event table unique violations.

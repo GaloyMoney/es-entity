@@ -3,7 +3,7 @@
 use serde::{Serialize, de::DeserializeOwned};
 
 use super::{
-    error::{EntityHydrationError, EsRepoLoadError},
+    error::{EntityHydrationError, FromNotFound},
     events::EntityEvents,
     operation::AtomicOperation,
 };
@@ -291,15 +291,18 @@ pub trait EsRepo: Send {
     type Entity: EsEntity;
     type CreateError;
     type ModifyError;
+    type FindError: From<sqlx::Error> + From<EntityHydrationError> + FromNotFound + Send;
+    type QueryError: From<sqlx::Error> + From<EntityHydrationError> + Send;
     type EsQueryFlavor;
 
     /// Loads all nested entities for a given set of parent entities within an atomic operation.
-    fn load_all_nested_in_op<OP>(
+    fn load_all_nested_in_op<OP, E>(
         op: &mut OP,
         entities: &mut [Self::Entity],
-    ) -> impl Future<Output = Result<(), EsRepoLoadError>> + Send
+    ) -> impl Future<Output = Result<(), E>> + Send
     where
-        OP: AtomicOperation;
+        OP: AtomicOperation,
+        E: From<sqlx::Error> + From<EntityHydrationError> + Send;
 }
 
 pub trait RetryableInto<T>: Into<T> + Copy + std::fmt::Debug {}

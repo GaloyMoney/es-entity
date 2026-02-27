@@ -486,13 +486,9 @@ impl<'a> ErrorTypes<'a> {
                 }
             }
 
-            impl From<es_entity::EsRepoLoadError> for #find_error {
-                fn from(e: es_entity::EsRepoLoadError) -> Self {
-                    match e {
-                        es_entity::EsRepoLoadError::Sqlx(e) => Self::Sqlx(e),
-                        es_entity::EsRepoLoadError::HydrationError(e) => Self::HydrationError(e),
-                        es_entity::EsRepoLoadError::NotFound => Self::NotFound,
-                    }
+            impl es_entity::FromNotFound for #find_error {
+                fn not_found() -> Self {
+                    Self::NotFound
                 }
             }
 
@@ -546,16 +542,6 @@ impl<'a> ErrorTypes<'a> {
             impl From<sqlx::Error> for #query_error {
                 fn from(e: sqlx::Error) -> Self {
                     Self::Sqlx(e)
-                }
-            }
-
-            impl From<es_entity::EsRepoLoadError> for #query_error {
-                fn from(e: es_entity::EsRepoLoadError) -> Self {
-                    match e {
-                        es_entity::EsRepoLoadError::Sqlx(e) => Self::Sqlx(e),
-                        es_entity::EsRepoLoadError::HydrationError(e) => Self::HydrationError(e),
-                        es_entity::EsRepoLoadError::NotFound => Self::Sqlx(sqlx::Error::RowNotFound),
-                    }
                 }
             }
 

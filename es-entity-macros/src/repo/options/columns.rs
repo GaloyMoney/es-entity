@@ -63,9 +63,7 @@ impl Columns {
 
     /// Returns columns for the Column enum (id + user columns, not created_at)
     pub fn column_enum_columns(&self) -> impl Iterator<Item = &Column> {
-        self.all
-            .iter()
-            .filter(|c| *c.name() != "created_at")
+        self.all.iter().filter(|c| *c.name() != "created_at")
     }
 
     pub fn parent(&self) -> Option<&Column> {
