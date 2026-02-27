@@ -264,7 +264,7 @@ impl ToTokens for ListForFn<'_> {
                 }
             });
 
-            if delete == self.delete {
+            if delete == self.delete || self.delete == DeleteOption::SoftWithoutQueries {
                 break;
             }
         }
