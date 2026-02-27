@@ -194,28 +194,6 @@ macro_rules! es_query {
     });
 }
 
-#[macro_export]
-macro_rules! from_es_entity_error {
-    ($name:ident) => {
-        impl $name {
-            pub fn was_not_found(&self) -> bool {
-                matches!(self, $name::EsEntityError($crate::EsEntityError::NotFound))
-            }
-            pub fn was_concurrent_modification(&self) -> bool {
-                matches!(
-                    self,
-                    $name::EsEntityError($crate::EsEntityError::ConcurrentModification)
-                )
-            }
-        }
-        impl From<$crate::EsEntityError> for $name {
-            fn from(e: $crate::EsEntityError) -> Self {
-                $name::EsEntityError(e)
-            }
-        }
-    };
-}
-
 // Helper macro for common entity_id implementations (internal use only)
 #[doc(hidden)]
 #[macro_export]

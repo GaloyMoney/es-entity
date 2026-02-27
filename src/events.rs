@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 
-use super::{error::EsEntityError, traits::*};
+use super::{error::EntityHydrationError, traits::*};
 
 /// An alias for iterator over the persisted events
 pub type LastPersisted<'a, E> = std::slice::Iter<'a, PersistedEvent<E>>;
@@ -181,10 +181,12 @@ where
             .chain(self.new_events.iter().map(|e| &e.event))
     }
 
-    /// Loads and reconstructs the first entity from a stream of GenericEvents, marking events as `persisted`
+    /// Loads and reconstructs the first entity from a stream of GenericEvents, marking events as `persisted`.
+    ///
+    /// Returns `Ok(None)` if no events are present, `Ok(Some(entity))` on success.
     pub fn load_first<E: EsEntity<Event = T>>(
         events: impl IntoIterator<Item = GenericEvent<<T as EsEvent>::EntityId>>,
-    ) -> Result<E, EsEntityError> {
+    ) -> Result<Option<E>, EntityHydrationError> {
         let mut current_id = None;
         let mut current = None;
         for e in events {
@@ -209,9 +211,9 @@ where
             });
         }
         if let Some(current) = current {
-            E::try_from_events(current)
+            Ok(Some(E::try_from_events(current)?))
         } else {
-            Err(EsEntityError::NotFound)
+            Ok(None)
         }
     }
 
@@ -222,7 +224,7 @@ where
     pub fn load_n<E: EsEntity<Event = T>>(
         events: impl IntoIterator<Item = GenericEvent<<T as EsEvent>::EntityId>>,
         n: usize,
-    ) -> Result<(Vec<E>, bool), EsEntityError> {
+    ) -> Result<(Vec<E>, bool), EntityHydrationError> {
         let mut ret: Vec<E> = Vec::new();
         let mut current_id = None;
         let mut current = None;
@@ -340,7 +342,9 @@ mod tests {
     }
 
     impl TryFromEvents<DummyEntityEvent> for DummyEntity {
-        fn try_from_events(events: EntityEvents<DummyEntityEvent>) -> Result<Self, EsEntityError> {
+        fn try_from_events(
+            events: EntityEvents<DummyEntityEvent>,
+        ) -> Result<Self, EntityHydrationError> {
             let name = events
                 .iter_persisted()
                 .map(|e| match &e.event {
@@ -367,7 +371,7 @@ mod tests {
     fn load_zero_events() {
         let generic_events = vec![];
         let res = EntityEvents::load_first::<DummyEntity>(generic_events);
-        assert!(matches!(res, Err(EsEntityError::NotFound)));
+        assert!(matches!(res, Ok(None)));
     }
 
     #[test]
@@ -380,7 +384,9 @@ mod tests {
             context: None,
             recorded_at: chrono::Utc::now(),
         }];
-        let entity: DummyEntity = EntityEvents::load_first(generic_events).expect("Could not load");
+        let entity: DummyEntity = EntityEvents::load_first(generic_events)
+            .expect("Could not load")
+            .expect("No entity found");
         assert!(entity.name == "dummy-name");
     }
 

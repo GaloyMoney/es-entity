@@ -5,7 +5,7 @@ use quote::{TokenStreamExt, quote};
 use super::options::*;
 
 pub struct DeleteFn<'a> {
-    error: &'a syn::Type,
+    modify_error: syn::Ident,
     entity: &'a syn::Ident,
     table_name: &'a str,
     columns: &'a Columns,
@@ -18,7 +18,7 @@ impl<'a> DeleteFn<'a> {
     pub fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
             entity: opts.entity(),
-            error: opts.err(),
+            modify_error: opts.modify_error(),
             columns: &opts.columns,
             table_name: opts.table_name(),
             delete_option: &opts.delete,
@@ -35,7 +35,7 @@ impl ToTokens for DeleteFn<'_> {
         }
 
         let entity = self.entity;
-        let error = self.error;
+        let modify_error = &self.modify_error;
 
         let assignments = self
             .columns
@@ -77,7 +77,7 @@ impl ToTokens for DeleteFn<'_> {
             pub async fn delete(
                 &self,
                 entity: #entity
-            ) -> Result<(), #error> {
+            ) -> Result<(), #modify_error> {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -88,11 +88,11 @@ impl ToTokens for DeleteFn<'_> {
             pub async fn delete_in_op<OP>(&self,
                 op: &mut OP,
                 mut entity: #entity
-            ) -> Result<(), #error>
+            ) -> Result<(), #modify_error>
             where
                 OP: es_entity::AtomicOperation
             {
-                let __result: Result<(), #error> = async {
+                let __result: Result<(), #modify_error> = async {
                     #assignments
                     #record_id
 
@@ -101,7 +101,16 @@ impl ToTokens for DeleteFn<'_> {
                         #(#args),*
                     )
                         .execute(op.as_executor())
-                        .await?;
+                        .await
+                        .map_err(|e| match &e {
+                            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                                #modify_error::ConstraintViolation {
+                                    column: Self::map_constraint_column(db_err.constraint()),
+                                    inner: e,
+                                }
+                            }
+                            _ => #modify_error::Sqlx(e),
+                        })?;
 
                     let new_events = {
                         let events = Self::extract_events(&mut entity);
@@ -114,7 +123,7 @@ impl ToTokens for DeleteFn<'_> {
                             self.persist_events(op, events).await?
                         };
 
-                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(#modify_error::PostPersistHookError)?;
                     }
 
                     Ok(())
@@ -137,13 +146,12 @@ mod tests {
     fn delete_fn() {
         let id = Ident::new("EntityId", Span::call_site());
         let entity = Ident::new("Entity", Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
         let mut columns = Columns::default();
         columns.set_id_column(&id);
 
         let delete_fn = DeleteFn {
             entity: &entity,
-            error: &error,
+            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             table_name: "entities",
             columns: &columns,
             delete_option: &DeleteOption::Soft,
@@ -158,7 +166,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), #error> {
+            ) -> Result<(), EntityModifyError> {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -169,11 +177,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), es_entity::EsRepoError>
+            ) -> Result<(), EntityModifyError>
             where
                 OP: es_entity::AtomicOperation
             {
-                let __result: Result<(), es_entity::EsRepoError> = async {
+                let __result: Result<(), EntityModifyError> = async {
                     let id = &entity.id;
 
                     sqlx::query!(
@@ -181,7 +189,16 @@ mod tests {
                         id as &EntityId
                     )
                         .execute(op.as_executor())
-                        .await?;
+                        .await
+                        .map_err(|e| match &e {
+                            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                                EntityModifyError::ConstraintViolation {
+                                    column: Self::map_constraint_column(db_err.constraint()),
+                                    inner: e,
+                                }
+                            }
+                            _ => EntityModifyError::Sqlx(e),
+                        })?;
 
                     let new_events = {
                         let events = Self::extract_events(&mut entity);
@@ -194,7 +211,7 @@ mod tests {
                             self.persist_events(op, events).await?
                         };
 
-                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(EntityModifyError::PostPersistHookError)?;
                     }
 
                     Ok(())
@@ -211,7 +228,6 @@ mod tests {
     fn delete_fn_with_update_columns() {
         let id = syn::parse_str("EntityId").unwrap();
         let entity = Ident::new("Entity", Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
         let columns = Columns::new(
             &id,
@@ -223,7 +239,7 @@ mod tests {
 
         let delete_fn = DeleteFn {
             entity: &entity,
-            error: &error,
+            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             table_name: "entities",
             columns: &columns,
             delete_option: &DeleteOption::Soft,
@@ -238,7 +254,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), #error> {
+            ) -> Result<(), EntityModifyError> {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -249,11 +265,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), es_entity::EsRepoError>
+            ) -> Result<(), EntityModifyError>
             where
                 OP: es_entity::AtomicOperation
             {
-                let __result: Result<(), es_entity::EsRepoError> = async {
+                let __result: Result<(), EntityModifyError> = async {
                     let id = &entity.id;
                     let name = &entity.name;
 
@@ -263,7 +279,16 @@ mod tests {
                         name as &String
                     )
                         .execute(op.as_executor())
-                        .await?;
+                        .await
+                        .map_err(|e| match &e {
+                            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                                EntityModifyError::ConstraintViolation {
+                                    column: Self::map_constraint_column(db_err.constraint()),
+                                    inner: e,
+                                }
+                            }
+                            _ => EntityModifyError::Sqlx(e),
+                        })?;
 
                     let new_events = {
                         let events = Self::extract_events(&mut entity);
@@ -276,7 +301,7 @@ mod tests {
                             self.persist_events(op, events).await?
                         };
 
-                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(EntityModifyError::PostPersistHookError)?;
                     }
 
                     Ok(())

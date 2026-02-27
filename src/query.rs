@@ -19,6 +19,7 @@
 //! See the `es_query!` macro documentation for more details.
 
 use crate::{
+    error::EsRepoLoadError,
     events::{EntityEvents, GenericEvent},
     one_time_executor::IntoOneTimeExecutor,
     operation::AtomicOperation,
@@ -64,30 +65,30 @@ where
     async fn fetch_optional_inner(
         self,
         op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::Err> {
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, EsRepoLoadError> {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
         if rows.is_empty() {
             return Ok(None);
         }
 
-        Ok(Some(EntityEvents::load_first(rows.into_iter())?))
+        Ok(EntityEvents::load_first(rows.into_iter())?)
     }
 
     async fn fetch_one_inner(
         self,
         op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<<Repo as EsRepo>::Entity, <Repo as EsRepo>::Err> {
+    ) -> Result<<Repo as EsRepo>::Entity, EsRepoLoadError> {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
-        Ok(EntityEvents::load_first(rows.into_iter())?)
+        EntityEvents::load_first(rows.into_iter())?.ok_or(EsRepoLoadError::NotFound)
     }
 
     async fn fetch_n_inner(
         self,
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
-    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::Err> {
+    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), EsRepoLoadError> {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
         Ok(EntityEvents::load_n(rows.into_iter(), first)?)
@@ -112,7 +113,7 @@ where
     pub async fn fetch_optional(
         self,
         op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::Err> {
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, EsRepoLoadError> {
         self.fetch_optional_inner(op).await
     }
 
@@ -122,7 +123,7 @@ where
     pub async fn fetch_one(
         self,
         op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<<Repo as EsRepo>::Entity, <Repo as EsRepo>::Err> {
+    ) -> Result<<Repo as EsRepo>::Entity, EsRepoLoadError> {
         self.fetch_one_inner(op).await
     }
 
@@ -134,7 +135,7 @@ where
         self,
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
-    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::Err> {
+    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), EsRepoLoadError> {
         self.fetch_n_inner(op, first).await
     }
 }
@@ -158,7 +159,7 @@ where
     pub async fn fetch_optional<OP>(
         self,
         op: &mut OP,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::Err>
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, EsRepoLoadError>
     where
         OP: AtomicOperation,
     {
@@ -178,7 +179,7 @@ where
     pub async fn fetch_one<OP>(
         self,
         op: &mut OP,
-    ) -> Result<<Repo as EsRepo>::Entity, <Repo as EsRepo>::Err>
+    ) -> Result<<Repo as EsRepo>::Entity, EsRepoLoadError>
     where
         OP: AtomicOperation,
     {
@@ -197,7 +198,7 @@ where
         self,
         op: &mut OP,
         first: usize,
-    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::Err>
+    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), EsRepoLoadError>
     where
         OP: AtomicOperation,
     {

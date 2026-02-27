@@ -8,7 +8,7 @@ pub struct CreateFn<'a> {
     entity: &'a syn::Ident,
     table_name: &'a str,
     columns: &'a Columns,
-    error: &'a syn::Type,
+    create_error: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
@@ -19,7 +19,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
         Self {
             table_name: opts.table_name(),
             entity: opts.entity(),
-            error: opts.err(),
+            create_error: opts.create_error(),
             nested_fn_names: opts
                 .all_nested()
                 .map(|f| f.create_nested_fn_name())
@@ -34,7 +34,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
 impl ToTokens for CreateFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let entity = self.entity;
-        let error = self.error;
+        let create_error = &self.create_error;
 
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
@@ -99,19 +99,18 @@ impl ToTokens for CreateFn<'_> {
             }
 
             #[inline(always)]
-            fn hydrate_entity<Entity, Event>(events: es_entity::EntityEvents<Event>) -> Result<Entity, #error>
+            fn hydrate_entity<Entity, Event>(events: es_entity::EntityEvents<Event>) -> Result<Entity, es_entity::EntityHydrationError>
             where
                 Entity: es_entity::TryFromEvents<Event>,
-                #error: From<es_entity::EsEntityError>,
                 Event: es_entity::EsEvent,
             {
-                Ok(Entity::try_from_events(events)?)
+                Entity::try_from_events(events)
             }
 
             pub async fn create(
                 &self,
                 new_entity: <#entity as es_entity::EsEntity>::New
-            ) -> Result<#entity, #error> {
+            ) -> Result<#entity, #create_error> {
                 let mut op = self.begin_op().await?;
                 let res = self.create_in_op(&mut op, new_entity).await?;
                 op.commit().await?;
@@ -123,11 +122,11 @@ impl ToTokens for CreateFn<'_> {
                 &self,
                 op: &mut OP,
                 new_entity: <#entity as es_entity::EsEntity>::New
-            ) -> Result<#entity, #error>
+            ) -> Result<#entity, #create_error>
             where
                 OP: es_entity::AtomicOperation
             {
-                let __result: Result<#entity, #error> = async {
+                let __result: Result<#entity, #create_error> = async {
                     #assignments
                     #record_id
 
@@ -137,7 +136,16 @@ impl ToTokens for CreateFn<'_> {
                          op.maybe_now()
                     )
                     .execute(op.as_executor())
-                    .await?;
+                    .await
+                    .map_err(|e| match &e {
+                        sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                            #create_error::ConstraintViolation {
+                                column: Self::map_constraint_column(db_err.constraint()),
+                                inner: e,
+                            }
+                        }
+                        _ => #create_error::Sqlx(e),
+                    })?;
 
                     let mut events = Self::convert_new(new_entity);
                     let n_events = self.persist_events(op, &mut events).await?;
@@ -145,7 +153,7 @@ impl ToTokens for CreateFn<'_> {
 
                     #(#nested)*
 
-                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(#create_error::PostPersistHookError)?;
                     Ok(entity)
                 }.await;
 
@@ -165,7 +173,7 @@ mod tests {
     #[test]
     fn create_fn() {
         let entity = Ident::new("Entity", Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
+        let create_error = syn::Ident::new("EntityCreateError", Span::call_site());
         let id = Ident::new("EntityId", Span::call_site());
         let mut columns = Columns::default();
         columns.set_id_column(&id);
@@ -173,7 +181,7 @@ mod tests {
         let create_fn = CreateFn {
             table_name: "entities",
             entity: &entity,
-            error: &error,
+            create_error,
             columns: &columns,
             nested_fn_names: Vec::new(),
             #[cfg(feature = "instrument")]
@@ -194,19 +202,18 @@ mod tests {
             }
 
             #[inline(always)]
-            fn hydrate_entity<Entity, Event>(events: es_entity::EntityEvents<Event>) -> Result<Entity, es_entity::EsRepoError>
+            fn hydrate_entity<Entity, Event>(events: es_entity::EntityEvents<Event>) -> Result<Entity, es_entity::EntityHydrationError>
             where
                 Entity: es_entity::TryFromEvents<Event>,
-                es_entity::EsRepoError: From<es_entity::EsEntityError>,
                 Event: es_entity::EsEvent,
             {
-                Ok(Entity::try_from_events(events)?)
+                Entity::try_from_events(events)
             }
 
             pub async fn create(
                 &self,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, es_entity::EsRepoError> {
+            ) -> Result<Entity, EntityCreateError> {
                 let mut op = self.begin_op().await?;
                 let res = self.create_in_op(&mut op, new_entity).await?;
                 op.commit().await?;
@@ -217,11 +224,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, es_entity::EsRepoError>
+            ) -> Result<Entity, EntityCreateError>
             where
                 OP: es_entity::AtomicOperation
             {
-                let __result: Result<Entity, es_entity::EsRepoError> = async {
+                let __result: Result<Entity, EntityCreateError> = async {
                     let id = &new_entity.id;
 
                     sqlx::query!("INSERT INTO entities (id, created_at) VALUES ($1, COALESCE($2, NOW()))",
@@ -229,13 +236,22 @@ mod tests {
                         op.maybe_now()
                     )
                     .execute(op.as_executor())
-                    .await?;
+                    .await
+                    .map_err(|e| match &e {
+                        sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                            EntityCreateError::ConstraintViolation {
+                                column: Self::map_constraint_column(db_err.constraint()),
+                                inner: e,
+                            }
+                        }
+                        _ => EntityCreateError::Sqlx(e),
+                    })?;
 
                     let mut events = Self::convert_new(new_entity);
                     let n_events = self.persist_events(op, &mut events).await?;
                     let entity = Self::hydrate_entity(events)?;
 
-                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(EntityCreateError::PostPersistHookError)?;
                     Ok(entity)
                 }.await;
 
@@ -249,7 +265,7 @@ mod tests {
     #[test]
     fn create_fn_with_columns() {
         let entity = Ident::new("Entity", Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
+        let create_error = syn::Ident::new("EntityCreateError", Span::call_site());
 
         use darling::FromMeta;
         let input: syn::Meta = syn::parse_quote!(columns(
@@ -261,7 +277,7 @@ mod tests {
         let create_fn = CreateFn {
             table_name: "entities",
             entity: &entity,
-            error: &error,
+            create_error,
             columns: &columns,
             nested_fn_names: Vec::new(),
             #[cfg(feature = "instrument")]
@@ -282,19 +298,18 @@ mod tests {
             }
 
             #[inline(always)]
-            fn hydrate_entity<Entity, Event>(events: es_entity::EntityEvents<Event>) -> Result<Entity, es_entity::EsRepoError>
+            fn hydrate_entity<Entity, Event>(events: es_entity::EntityEvents<Event>) -> Result<Entity, es_entity::EntityHydrationError>
             where
                 Entity: es_entity::TryFromEvents<Event>,
-                es_entity::EsRepoError: From<es_entity::EsEntityError>,
                 Event: es_entity::EsEvent,
             {
-                Ok(Entity::try_from_events(events)?)
+                Entity::try_from_events(events)
             }
 
             pub async fn create(
                 &self,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, es_entity::EsRepoError> {
+            ) -> Result<Entity, EntityCreateError> {
                 let mut op = self.begin_op().await?;
                 let res = self.create_in_op(&mut op, new_entity).await?;
                 op.commit().await?;
@@ -305,11 +320,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, es_entity::EsRepoError>
+            ) -> Result<Entity, EntityCreateError>
             where
                 OP: es_entity::AtomicOperation
             {
-                let __result: Result<Entity, es_entity::EsRepoError> = async {
+                let __result: Result<Entity, EntityCreateError> = async {
                     let id = &new_entity.id;
                     let name = &new_entity.name();
 
@@ -319,13 +334,22 @@ mod tests {
                         op.maybe_now()
                     )
                     .execute(op.as_executor())
-                    .await?;
+                    .await
+                    .map_err(|e| match &e {
+                        sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                            EntityCreateError::ConstraintViolation {
+                                column: Self::map_constraint_column(db_err.constraint()),
+                                inner: e,
+                            }
+                        }
+                        _ => EntityCreateError::Sqlx(e),
+                    })?;
 
                     let mut events = Self::convert_new(new_entity);
                     let n_events = self.persist_events(op, &mut events).await?;
                     let entity = Self::hydrate_entity(events)?;
 
-                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                    self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(EntityCreateError::PostPersistHookError)?;
                     Ok(entity)
                 }.await;
 

@@ -9,7 +9,7 @@ pub struct FindAllFn<'a> {
     id: &'a syn::Ident,
     entity: &'a syn::Ident,
     table_name: &'a str,
-    error: &'a syn::Type,
+    query_error: syn::Ident,
     any_nested: bool,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
@@ -22,7 +22,7 @@ impl<'a> From<&'a RepositoryOptions> for FindAllFn<'a> {
             id: opts.id(),
             entity: opts.entity(),
             table_name: opts.table_name(),
-            error: opts.err(),
+            query_error: opts.query_error(),
             any_nested: opts.any_nested(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
@@ -34,7 +34,7 @@ impl ToTokens for FindAllFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let id = self.id;
         let entity = self.entity;
-        let error = self.error;
+        let query_error = &self.query_error;
         let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
         let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
 
@@ -86,7 +86,7 @@ impl ToTokens for FindAllFn<'_> {
             pub async fn find_all<Out: From<#entity>>(
                 &self,
                 ids: &[#id]
-            ) -> Result<std::collections::HashMap<#id, Out>, #error> {
+            ) -> Result<std::collections::HashMap<#id, Out>, #query_error> {
                 self.find_all_in_op(#query_fn_get_op, ids).await
             }
 
@@ -95,7 +95,7 @@ impl ToTokens for FindAllFn<'_> {
                 &self,
                 #op_param,
                 ids: &[#id]
-            ) -> Result<std::collections::HashMap<#id, Out>, #error> {
+            ) -> Result<std::collections::HashMap<#id, Out>, #query_error> {
                  let (entities, _) = #es_query_call.fetch_n(op, ids.len()).await?;
                  Ok(entities.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
             }
@@ -113,14 +113,14 @@ mod tests {
     fn find_all_fn() {
         let id_type = Ident::new("EntityId", Span::call_site());
         let entity = Ident::new("Entity", Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
+        let query_error = syn::Ident::new("EntityQueryError", Span::call_site());
 
         let persist_fn = FindAllFn {
             prefix: None,
             id: &id_type,
             entity: &entity,
             table_name: "entities",
-            error: &error,
+            query_error,
             any_nested: false,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -133,7 +133,7 @@ mod tests {
             pub async fn find_all<Out: From<Entity>>(
                 &self,
                 ids: &[EntityId]
-            ) -> Result<std::collections::HashMap<EntityId, Out>, es_entity::EsRepoError> {
+            ) -> Result<std::collections::HashMap<EntityId, Out>, EntityQueryError> {
                 self.find_all_in_op(self.pool(), ids).await
             }
 
@@ -141,7 +141,7 @@ mod tests {
                 &self,
                 op: impl es_entity::IntoOneTimeExecutor<'a>,
                 ids: &[EntityId]
-            ) -> Result<std::collections::HashMap<EntityId, Out>, es_entity::EsRepoError> {
+            ) -> Result<std::collections::HashMap<EntityId, Out>, EntityQueryError> {
                 let (entities, _) = es_entity::es_query!(
                     entity = Entity,
                     "SELECT id FROM entities WHERE id = ANY($1)",

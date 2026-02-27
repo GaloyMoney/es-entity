@@ -7,7 +7,6 @@ use super::options::*;
 pub struct PersistEventsBatchFn<'a> {
     id: &'a syn::Ident,
     event: &'a syn::Ident,
-    error: &'a syn::Type,
     events_table_name: &'a str,
     event_ctx: bool,
 }
@@ -17,7 +16,6 @@ impl<'a> From<&'a RepositoryOptions> for PersistEventsBatchFn<'a> {
         Self {
             id: opts.id(),
             event: opts.event(),
-            error: opts.err(),
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
         }
@@ -28,7 +26,6 @@ impl ToTokens for PersistEventsBatchFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let id_type = &self.id;
         let event_type = &self.event;
-        let error = self.error;
 
         let query = format!(
             "INSERT INTO {} (id, recorded_at, sequence, event_type, event{}) \
@@ -74,7 +71,7 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                 &self,
                 op: &mut OP,
                 all_events: &mut [B]
-            ) -> Result<std::collections::HashMap<#id_type, usize>, #error>
+            ) -> Result<std::collections::HashMap<#id_type, usize>, es_entity::EsRepoPersistError>
             where
                 OP: es_entity::AtomicOperation,
                 B: std::borrow::BorrowMut<es_entity::EntityEvents<#event_type>>
@@ -143,11 +140,9 @@ mod tests {
     fn persist_events_fn() {
         let id = syn::parse_str("EntityId").unwrap();
         let event = syn::Ident::new("EntityEvent", proc_macro2::Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
         let persist_fn = PersistEventsBatchFn {
             id: &id,
             event: &event,
-            error: &error,
             events_table_name: "entity_events",
             event_ctx: true,
         };
@@ -160,7 +155,7 @@ mod tests {
                 &self,
                 op: &mut OP,
                 all_events: &mut [B]
-            ) -> Result<std::collections::HashMap<EntityId, usize>, es_entity::EsRepoError>
+            ) -> Result<std::collections::HashMap<EntityId, usize>, es_entity::EsRepoPersistError>
             where
                 OP: es_entity::AtomicOperation,
                 B: std::borrow::BorrowMut<es_entity::EntityEvents<EntityEvent>>
@@ -233,11 +228,9 @@ mod tests {
     fn persist_events_fn_without_event_context() {
         let id = syn::parse_str("EntityId").unwrap();
         let event = syn::Ident::new("EntityEvent", proc_macro2::Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
         let persist_fn = PersistEventsBatchFn {
             id: &id,
             event: &event,
-            error: &error,
             events_table_name: "entity_events",
             event_ctx: false,
         };
@@ -250,7 +243,7 @@ mod tests {
                 &self,
                 op: &mut OP,
                 all_events: &mut [B]
-            ) -> Result<std::collections::HashMap<EntityId, usize>, es_entity::EsRepoError>
+            ) -> Result<std::collections::HashMap<EntityId, usize>, es_entity::EsRepoPersistError>
             where
                 OP: es_entity::AtomicOperation,
                 B: std::borrow::BorrowMut<es_entity::EntityEvents<EntityEvent>>

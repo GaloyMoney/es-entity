@@ -16,7 +16,7 @@ pub enum UserEvent {
 }
 
 #[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
+#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
 pub struct User {
     pub id: UserId,
     pub name: String,
@@ -41,7 +41,7 @@ impl User {
 }
 
 impl TryFromEvents<UserEvent> for User {
-    fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+    fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
         let mut builder = UserBuilder::default();
         for event in events.iter_all() {
             match event {

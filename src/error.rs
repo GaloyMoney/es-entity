@@ -2,15 +2,38 @@
 
 use thiserror::Error;
 
+/// Error type for entity hydration failures (reconstructing entities from events).
+///
+/// Previously named `EsEntityError`. Now only contains hydration-related concerns.
 #[derive(Error, Debug)]
-pub enum EsEntityError {
-    #[error("EsEntityError - UninitializedFieldError: {0}")]
+pub enum EntityHydrationError {
+    #[error("EntityHydrationError - UninitializedFieldError: {0}")]
     UninitializedFieldError(#[from] derive_builder::UninitializedFieldError),
-    #[error("EsEntityError - Deserialization: {0}")]
+    #[error("EntityHydrationError - Deserialization: {0}")]
     EventDeserialization(#[from] serde_json::Error),
-    #[error("EntityError - NotFound")]
+}
+
+/// Deprecated alias for `EntityHydrationError`.
+#[deprecated(note = "renamed to EntityHydrationError")]
+pub type EsEntityError = EntityHydrationError;
+
+/// Internal error type used by `EsQuery` and `PopulateNested` when loading entities.
+#[derive(Error, Debug)]
+pub enum EsRepoLoadError {
+    #[error("EsRepoLoadError - Sqlx: {0}")]
+    Sqlx(#[from] sqlx::Error),
+    #[error("EsRepoLoadError - HydrationError: {0}")]
+    HydrationError(#[from] EntityHydrationError),
+    #[error("EsRepoLoadError - NotFound")]
     NotFound,
-    #[error("EntityError - ConcurrentModification")]
+}
+
+/// Internal error type used by `persist_events` for event table unique violations.
+#[derive(Error, Debug)]
+pub enum EsRepoPersistError {
+    #[error("EsRepoPersistError - Sqlx: {0}")]
+    Sqlx(#[from] sqlx::Error),
+    #[error("EsRepoPersistError - ConcurrentModification")]
     ConcurrentModification,
 }
 
@@ -23,15 +46,3 @@ impl From<(&'static str, &'static str)> for CursorDestructureError {
         Self(name, variant)
     }
 }
-
-#[derive(Error, Debug)]
-pub enum EsRepoError {
-    #[error("EsRepoError - Sqlx: {0}")]
-    Sqlx(#[from] sqlx::Error),
-    #[error("{0}")]
-    EsEntityError(EsEntityError),
-    #[error("{0}")]
-    CursorDestructureError(#[from] CursorDestructureError),
-}
-
-crate::from_es_entity_error!(EsRepoError);

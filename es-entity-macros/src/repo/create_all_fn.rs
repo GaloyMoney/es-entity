@@ -8,7 +8,7 @@ pub struct CreateAllFn<'a> {
     entity: &'a syn::Ident,
     table_name: &'a str,
     columns: &'a Columns,
-    error: &'a syn::Type,
+    create_error: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
@@ -19,7 +19,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateAllFn<'a> {
         Self {
             table_name: opts.table_name(),
             entity: opts.entity(),
-            error: opts.err(),
+            create_error: opts.create_error(),
             nested_fn_names: opts
                 .all_nested()
                 .map(|f| f.create_nested_fn_name())
@@ -34,7 +34,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateAllFn<'a> {
 impl ToTokens for CreateAllFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let entity = self.entity;
-        let error = self.error;
+        let create_error = &self.create_error;
 
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
@@ -92,7 +92,7 @@ impl ToTokens for CreateAllFn<'_> {
             pub async fn create_all(
                 &self,
                 new_entities: Vec<<#entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<#entity>, #error> {
+            ) -> Result<Vec<#entity>, #create_error> {
                 let mut op = self.begin_op().await?;
                 let res = self.create_all_in_op(&mut op, new_entities).await?;
                 op.commit().await?;
@@ -104,11 +104,11 @@ impl ToTokens for CreateAllFn<'_> {
                 &self,
                 op: &mut OP,
                 new_entities: Vec<<#entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<#entity>, #error>
+            ) -> Result<Vec<#entity>, #create_error>
             where
                 OP: es_entity::AtomicOperation
             {
-                let __result: Result<Vec<#entity>, #error> = async {
+                let __result: Result<Vec<#entity>, #create_error> = async {
                     let mut res = Vec::new();
                     if new_entities.is_empty() {
                         return Ok(res);
@@ -121,7 +121,16 @@ impl ToTokens for CreateAllFn<'_> {
                        .bind(now)
                        #(#bindings)*
                        .fetch_all(op.as_executor())
-                       .await?;
+                       .await
+                       .map_err(|e| match &e {
+                           sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                               #create_error::ConstraintViolation {
+                                   column: Self::map_constraint_column(db_err.constraint()),
+                                   inner: e,
+                               }
+                           }
+                           _ => #create_error::Sqlx(e),
+                       })?;
 
 
                     let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event>> = new_entities.into_iter().map(Self::convert_new).collect();
@@ -133,7 +142,7 @@ impl ToTokens for CreateAllFn<'_> {
 
                         #(#nested)*
 
-                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(#create_error::PostPersistHookError)?;
                         res.push(entity);
                     }
 
@@ -156,7 +165,7 @@ mod tests {
     #[test]
     fn create_all_fn() {
         let entity = Ident::new("Entity", Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
+        let create_error = syn::Ident::new("EntityCreateError", Span::call_site());
 
         use darling::FromMeta;
         let input: syn::Meta = syn::parse_quote!(columns(id = "EntityId", name = "String",));
@@ -165,7 +174,7 @@ mod tests {
         let create_fn = CreateAllFn {
             table_name: "entities",
             entity: &entity,
-            error: &error,
+            create_error,
             columns: &columns,
             nested_fn_names: Vec::new(),
             #[cfg(feature = "instrument")]
@@ -182,7 +191,7 @@ mod tests {
             pub async fn create_all(
                 &self,
                 new_entities: Vec<<Entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<Entity>, es_entity::EsRepoError> {
+            ) -> Result<Vec<Entity>, EntityCreateError> {
                 let mut op = self.begin_op().await?;
                 let res = self.create_all_in_op(&mut op, new_entities).await?;
                 op.commit().await?;
@@ -193,11 +202,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 new_entities: Vec<<Entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<Entity>, es_entity::EsRepoError>
+            ) -> Result<Vec<Entity>, EntityCreateError>
             where
                 OP: es_entity::AtomicOperation
             {
-                let __result: Result<Vec<Entity>, es_entity::EsRepoError> = async {
+                let __result: Result<Vec<Entity>, EntityCreateError> = async {
                     let mut res = Vec::new();
                     if new_entities.is_empty() {
                         return Ok(res);
@@ -221,7 +230,16 @@ mod tests {
                         .bind(id_collection)
                         .bind(name_collection)
                         .fetch_all(op.as_executor())
-                        .await?;
+                        .await
+                        .map_err(|e| match &e {
+                            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                                EntityCreateError::ConstraintViolation {
+                                    column: Self::map_constraint_column(db_err.constraint()),
+                                    inner: e,
+                                }
+                            }
+                            _ => EntityCreateError::Sqlx(e),
+                        })?;
 
 
                     let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event>> = new_entities.into_iter().map(Self::convert_new).collect();
@@ -231,7 +249,7 @@ mod tests {
                         let n_events = n_persisted.remove(events.id()).expect("n_events exists");
                         let entity = Self::hydrate_entity(events)?;
 
-                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(EntityCreateError::PostPersistHookError)?;
                         res.push(entity);
                     }
 
