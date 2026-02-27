@@ -67,6 +67,13 @@ pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
         + Sync;
 
     fn event_context() -> bool;
+
+    /// Whether this event type has any `Forgettable<T>` fields.
+    ///
+    /// The `#[derive(EsEvent)]` macro sets this automatically via an inherent const
+    /// that shadows this default. Manual implementors can override it if needed.
+    #[doc(hidden)]
+    const HAS_FORGETTABLE_FIELDS: bool = false;
 }
 
 /// Required trait for converting new entities into their initial events before persistence.

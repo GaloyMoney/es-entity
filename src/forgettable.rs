@@ -38,6 +38,19 @@ use std::{fmt, hash, ops::Deref};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Forgettable<T>(Option<T>);
 
+impl<T> Default for Forgettable<T> {
+    /// Returns a forgotten (empty) `Forgettable`.
+    fn default() -> Self {
+        Forgettable(None)
+    }
+}
+
+impl<T> From<T> for Forgettable<T> {
+    fn from(value: T) -> Self {
+        Forgettable(Some(value))
+    }
+}
+
 impl<T> Forgettable<T> {
     /// Creates a new `Forgettable` containing the given value.
     pub fn new(value: T) -> Self {
@@ -288,5 +301,19 @@ mod tests {
         let f = Forgettable::new("Alice".to_string());
         let r = f.value().unwrap();
         assert_eq!(r, "Alice".to_string());
+    }
+
+    #[test]
+    fn default_is_forgotten() {
+        let f: Forgettable<String> = Default::default();
+        assert!(f.is_forgotten());
+        assert!(f.value().is_none());
+    }
+
+    #[test]
+    fn from_value() {
+        let f: Forgettable<String> = "Alice".to_string().into();
+        assert!(f.is_set());
+        assert_eq!(&*f.value().unwrap(), "Alice");
     }
 }

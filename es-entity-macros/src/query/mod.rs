@@ -79,9 +79,22 @@ impl ToTokens for EsQuery {
             self.input.sql, context_arg, payload_column, events_table, forgettable_join, order_by
         );
 
+        let forgettable_check = if self.input.forgettable_tbl.is_none() {
+            quote! {
+                const _: () = assert!(
+                    !Repo__Event::HAS_FORGETTABLE_FIELDS,
+                    "es_query! requires `forgettable_tbl` parameter when the event type has Forgettable<T> fields"
+                );
+            }
+        } else {
+            quote! {}
+        };
+
         tokens.append_all(quote! {
             {
                 use #repo_types_mod::*;
+
+                #forgettable_check
 
                 es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
                     sqlx::query_as!(
@@ -117,6 +130,11 @@ mod tests {
             {
                 use user_repo_types::*;
 
+                const _: () = assert!(
+                    !Repo__Event::HAS_FORGETTABLE_FIELDS,
+                    "es_query! requires `forgettable_tbl` parameter when the event type has Forgettable<T> fields"
+                );
+
                 es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
                     sqlx::query_as!(
                         Repo__DbEvent,
@@ -146,6 +164,11 @@ mod tests {
         let expected = quote! {
             {
                 use my_custom_entity_repo_types::*;
+
+                const _: () = assert!(
+                    !Repo__Event::HAS_FORGETTABLE_FIELDS,
+                    "es_query! requires `forgettable_tbl` parameter when the event type has Forgettable<T> fields"
+                );
 
                 es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
                     sqlx::query_as!(
@@ -179,6 +202,11 @@ mod tests {
         let expected = quote! {
             {
                 use entity_repo_types::*;
+
+                const _: () = assert!(
+                    !Repo__Event::HAS_FORGETTABLE_FIELDS,
+                    "es_query! requires `forgettable_tbl` parameter when the event type has Forgettable<T> fields"
+                );
 
                 es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
                     sqlx::query_as!(
