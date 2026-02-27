@@ -57,11 +57,6 @@ impl<T> Forgettable<T> {
         self.0.as_ref().map(ForgettableRef)
     }
 
-    /// Consumes self and returns the inner value, or `None` if forgotten.
-    pub fn into_value(self) -> Option<T> {
-        self.0
-    }
-
     /// Returns `true` if the value is present.
     pub fn is_set(&self) -> bool {
         self.0.is_some()
@@ -70,13 +65,6 @@ impl<T> Forgettable<T> {
     /// Returns `true` if the value has been forgotten.
     pub fn is_forgotten(&self) -> bool {
         self.0.is_none()
-    }
-}
-
-impl<T: Clone> Forgettable<T> {
-    /// Returns a clone of the inner value, or `None` if forgotten.
-    pub fn value_cloned(&self) -> Option<T> {
-        self.0.clone()
     }
 }
 
@@ -159,11 +147,12 @@ impl<T: hash::Hash> hash::Hash for ForgettableRef<'_, T> {
 /// Merges all keys from the payload into the event JSON, overwriting `null` values
 /// with the original data.
 #[doc(hidden)]
-pub fn inject_forgettable_payload(event_json: &mut serde_json::Value, payload: &serde_json::Value) {
-    if let (Some(event_obj), Some(payload_obj)) = (event_json.as_object_mut(), payload.as_object())
+pub fn inject_forgettable_payload(event_json: &mut serde_json::Value, payload: serde_json::Value) {
+    if let (Some(event_obj), serde_json::Value::Object(payload_obj)) =
+        (event_json.as_object_mut(), payload)
     {
         for (key, value) in payload_obj {
-            event_obj.insert(key.clone(), value.clone());
+            event_obj.insert(key, value);
         }
     }
 }
@@ -247,7 +236,7 @@ mod tests {
         });
 
         let payload = serde_json::json!({"name": "Alice"});
-        inject_forgettable_payload(&mut json, &payload);
+        inject_forgettable_payload(&mut json, payload);
 
         assert_eq!(json["name"], serde_json::json!("Alice"));
         assert_eq!(json["email"], serde_json::json!("alice@test.com"));
@@ -264,15 +253,6 @@ mod tests {
         assert!(!forgotten.is_set());
         assert!(forgotten.is_forgotten());
         assert!(forgotten.value().is_none());
-    }
-
-    #[test]
-    fn value_cloned() {
-        let set: Forgettable<String> = Forgettable::new("hello".to_string());
-        assert_eq!(set.value_cloned(), Some("hello".to_string()));
-
-        let forgotten: Forgettable<String> = Forgettable::forgotten();
-        assert_eq!(forgotten.value_cloned(), None);
     }
 
     #[test]
@@ -308,14 +288,5 @@ mod tests {
         let f = Forgettable::new("Alice".to_string());
         let r = f.value().unwrap();
         assert_eq!(r, "Alice".to_string());
-    }
-
-    #[test]
-    fn into_value() {
-        let set: Forgettable<String> = Forgettable::new("test".to_string());
-        assert_eq!(set.into_value(), Some("test".to_string()));
-
-        let forgotten: Forgettable<String> = Forgettable::forgotten();
-        assert_eq!(forgotten.into_value(), None);
     }
 }

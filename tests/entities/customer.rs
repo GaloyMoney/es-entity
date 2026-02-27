@@ -61,12 +61,16 @@ impl TryFromEvents<CustomerEvent> for Customer {
                 CustomerEvent::Initialized { id, name, email } => {
                     builder = builder
                         .id(*id)
-                        .name(name.value_cloned().unwrap_or_else(|| "[forgotten]".into()))
+                        .name(
+                            name.value()
+                                .map(|r| r.clone())
+                                .unwrap_or_else(|| "[forgotten]".into()),
+                        )
                         .email(email.clone());
                 }
                 CustomerEvent::NameUpdated { name } => {
-                    if let Some(n) = name.value_cloned() {
-                        builder = builder.name(n);
+                    if let Some(n) = name.value() {
+                        builder = builder.name(n.clone());
                     }
                 }
                 CustomerEvent::EmailUpdated { email } => {
