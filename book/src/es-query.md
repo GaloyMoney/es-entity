@@ -116,7 +116,7 @@ impl Users {
         es_query!(
             "SELECT id FROM users WHERE name = $1",
             name
-        ).fetch_one(&self.pool).await
+        ).fetch_optional(&self.pool).await
     }
 }
 ```
@@ -126,8 +126,7 @@ The `es_query!` macro only works within `fn`s defined on structs with `EsRepo` d
 The functions intend to mimic the `sqlx` interface but instead of returning rows they return fully hydrated entities:
 
 ```rust,ignore
-async fn fetch_one(<executor>) -> Result<Entity, Repo::Err>
-async fn fetch_optional(<executor) -> Result<Option<Entity>, Repo::Err>
+async fn fetch_optional(<executor>) -> Result<Option<Entity>, Repo::Err>
 
 // The `(_, bool)` signifies whether or not the query could have fetched more or the list is exhausted:
 async fn fetch_n(<executor>, n) -> Result<(Vec<Entity>, bool), Repo::Err>

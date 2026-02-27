@@ -481,12 +481,6 @@ impl<'a> ErrorTypes<'a> {
                 }
             }
 
-            impl es_entity::FromNotFound for #find_error {
-                fn not_found(entity: &'static str, column: &'static str, value: String) -> Self {
-                    Self::NotFound { entity, column, value }
-                }
-            }
-
             impl From<es_entity::EntityHydrationError> for #find_error {
                 fn from(e: es_entity::EntityHydrationError) -> Self {
                     Self::HydrationError(e)

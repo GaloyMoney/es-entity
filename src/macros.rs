@@ -96,8 +96,7 @@ macro_rules! idempotency_guard {
 /// # Returns
 ///
 /// Returns an [`EsQuery`](crate::query::EsQuery) struct that provides methods
-/// like [`fetch_one()`](crate::query::EsQuery::fetch_one),
-/// [`fetch_optional()`](crate::query::EsQuery::fetch_optional), and
+/// like [`fetch_optional()`](crate::query::EsQuery::fetch_optional) and
 /// [`fetch_n()`](crate::query::EsQuery::fetch_n) for executing the
 /// query and retrieving hydrated entities.
 ///

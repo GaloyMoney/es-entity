@@ -13,13 +13,13 @@
 //! es_query!(
 //!     "SELECT id FROM users WHERE name = $1",
 //!     name
-//! ).fetch_one(&pool).await
+//! ).fetch_optional(&pool).await
 //! ```
 //!
 //! See the `es_query!` macro documentation for more details.
 
 use crate::{
-    error::{EntityHydrationError, FromNotFound},
+    error::EntityHydrationError,
     events::{EntityEvents, GenericEvent},
     one_time_executor::IntoOneTimeExecutor,
     operation::AtomicOperation,
@@ -75,16 +75,6 @@ where
         Ok(EntityEvents::load_first(rows.into_iter())?)
     }
 
-    async fn fetch_one_inner<E: From<sqlx::Error> + From<EntityHydrationError> + FromNotFound>(
-        self,
-        op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<<Repo as EsRepo>::Entity, E> {
-        let executor = op.into_executor();
-        let rows = executor.fetch_all(self.inner).await?;
-        EntityEvents::load_first(rows.into_iter())?
-            .ok_or_else(|| E::not_found("<unknown>", "<query>", String::new()))
-    }
-
     async fn fetch_n_inner<E: From<sqlx::Error> + From<EntityHydrationError>>(
         self,
         op: impl IntoOneTimeExecutor<'_>,
@@ -116,16 +106,6 @@ where
         op: impl IntoOneTimeExecutor<'_>,
     ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::QueryError> {
         self.fetch_optional_inner(op).await
-    }
-
-    /// Fetches exactly one entity from the query results.
-    ///
-    /// Returns an error if no entities match or if the entity cannot be loaded.
-    pub async fn fetch_one(
-        self,
-        op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<<Repo as EsRepo>::Entity, <Repo as EsRepo>::FindError> {
-        self.fetch_one_inner(op).await
     }
 
     /// Fetches up to `first` entities from the query results.
@@ -178,30 +158,6 @@ where
         .await?;
         let [entity] = entities;
         Ok(Some(entity))
-    }
-
-    /// Fetches exactly one entity and loads all nested relationships.
-    ///
-    /// Returns an error if no entities match or if the entity/nested relationships
-    /// cannot be loaded.
-    pub async fn fetch_one<OP>(
-        self,
-        op: &mut OP,
-    ) -> Result<<Repo as EsRepo>::Entity, <Repo as EsRepo>::FindError>
-    where
-        OP: AtomicOperation,
-    {
-        let entity = self
-            .fetch_one_inner::<<Repo as EsRepo>::FindError>(&mut *op)
-            .await?;
-        let mut entities = [entity];
-        <Repo as EsRepo>::load_all_nested_in_op::<_, <Repo as EsRepo>::FindError>(
-            op,
-            &mut entities,
-        )
-        .await?;
-        let [entity] = entities;
-        Ok(entity)
     }
 
     /// Fetches up to `first` entities and loads all nested relationships.

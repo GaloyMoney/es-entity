@@ -2,11 +2,7 @@
 
 use serde::{Serialize, de::DeserializeOwned};
 
-use super::{
-    error::{EntityHydrationError, FromNotFound},
-    events::EntityEvents,
-    operation::AtomicOperation,
-};
+use super::{error::EntityHydrationError, events::EntityEvents, operation::AtomicOperation};
 
 /// Required trait for all event enums to be compatible and recognised by es-entity.
 ///
@@ -291,7 +287,7 @@ pub trait EsRepo: Send {
     type Entity: EsEntity;
     type CreateError;
     type ModifyError;
-    type FindError: From<sqlx::Error> + From<EntityHydrationError> + FromNotFound + Send;
+    type FindError: From<sqlx::Error> + From<EntityHydrationError> + Send;
     type QueryError: From<sqlx::Error> + From<EntityHydrationError> + Send;
     type EsQueryFlavor;
 
