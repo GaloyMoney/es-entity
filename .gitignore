@@ -14,7 +14,7 @@ target/
 -
 .env
 .bacon-locations
-.claude/settings.local.json
+.claude/
 
 # mdBook generated files
 book/book/
