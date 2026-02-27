@@ -7,70 +7,93 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use std::{fmt, hash, ops::Deref};
+
 /// Wrapper for event fields containing data that can be forgotten (e.g., for GDPR).
 ///
-/// When present, holds the value via `Set(T)`. After `forget()` is called on the
-/// entity's repository, the value is permanently deleted and this becomes `Forgotten`.
+/// This is an opaque struct — internal state is private so callers cannot
+/// pattern-match to extract the raw value. Use [`Forgettable::value()`] to get
+/// a [`ForgettableRef`] that derefs to `T` but does **not** implement `Serialize`,
+/// preventing accidental re-serialization of personal data.
 ///
 /// # Serde Behavior
 ///
-/// - `Set(value)` serializes as the inner value (transparent)
-/// - `Forgotten` serializes as `null`
-/// - Deserializing `null` produces `Forgotten`, non-null produces `Set(value)`
+/// - **Both** set and forgotten values serialize as `null` to prevent data
+///   leakage when events are serialized to secondary stores.
+/// - Deserializing `null` produces a forgotten value, non-null produces a set value.
+/// - Real values are extracted via [`__extract_payload_value`] **before** serde runs,
+///   and stored in the forgettable payloads table.
 ///
 /// # Example
 ///
 /// ```rust
 /// use es_entity::Forgettable;
 ///
-/// let name: Forgettable<String> = Forgettable::Set("Alice".to_string());
-/// assert_eq!(name.value(), Some(&"Alice".to_string()));
+/// let name: Forgettable<String> = Forgettable::new("Alice".to_string());
+/// assert_eq!(&*name.value().unwrap(), "Alice");
 ///
-/// let forgotten: Forgettable<String> = Forgettable::Forgotten;
-/// assert_eq!(forgotten.value(), None);
+/// let forgotten: Forgettable<String> = Forgettable::forgotten();
+/// assert!(forgotten.value().is_none());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Forgettable<T> {
-    /// The value is present (not yet forgotten).
-    Set(T),
-    /// The value has been permanently deleted.
-    Forgotten,
-}
+pub struct Forgettable<T>(Option<T>);
 
 impl<T> Forgettable<T> {
-    /// Returns a reference to the inner value, or `None` if forgotten.
-    pub fn value(&self) -> Option<&T> {
-        match self {
-            Forgettable::Set(v) => Some(v),
-            Forgettable::Forgotten => None,
-        }
+    /// Creates a new `Forgettable` containing the given value.
+    pub fn new(value: T) -> Self {
+        Forgettable(Some(value))
+    }
+
+    /// Creates a forgotten (empty) `Forgettable`.
+    pub fn forgotten() -> Self {
+        Forgettable(None)
+    }
+
+    /// Returns a [`ForgettableRef`] wrapping the inner value, or `None` if forgotten.
+    ///
+    /// `ForgettableRef` implements `Deref<Target = T>` but **not** `Serialize`,
+    /// so you can read the value but cannot accidentally serialize it.
+    pub fn value(&self) -> Option<ForgettableRef<'_, T>> {
+        self.0.as_ref().map(ForgettableRef)
     }
 
     /// Consumes self and returns the inner value, or `None` if forgotten.
     pub fn into_value(self) -> Option<T> {
-        match self {
-            Forgettable::Set(v) => Some(v),
-            Forgettable::Forgotten => None,
-        }
+        self.0
     }
 
     /// Returns `true` if the value is present.
     pub fn is_set(&self) -> bool {
-        matches!(self, Forgettable::Set(_))
+        self.0.is_some()
     }
 
     /// Returns `true` if the value has been forgotten.
     pub fn is_forgotten(&self) -> bool {
-        matches!(self, Forgettable::Forgotten)
+        self.0.is_none()
+    }
+}
+
+impl<T: Clone> Forgettable<T> {
+    /// Returns a clone of the inner value, or `None` if forgotten.
+    pub fn value_cloned(&self) -> Option<T> {
+        self.0.clone()
+    }
+}
+
+impl<T: Serialize> Forgettable<T> {
+    /// Extracts the inner value as a `serde_json::Value` for storage in
+    /// the forgettable payloads table. Returns `None` if forgotten.
+    #[doc(hidden)]
+    pub fn __extract_payload_value(&self) -> Option<serde_json::Value> {
+        self.0
+            .as_ref()
+            .map(|v| serde_json::to_value(v).expect("Failed to serialize forgettable field"))
     }
 }
 
 impl<T: Serialize> Serialize for Forgettable<T> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Forgettable::Set(value) => value.serialize(serializer),
-            Forgettable::Forgotten => serializer.serialize_none(),
-        }
+        serializer.serialize_none()
     }
 }
 
@@ -78,40 +101,56 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Forgettable<T> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = Option::<T>::deserialize(deserializer)?;
         match value {
-            Some(v) => Ok(Forgettable::Set(v)),
-            None => Ok(Forgettable::Forgotten),
+            Some(v) => Ok(Forgettable(Some(v))),
+            None => Ok(Forgettable(None)),
         }
     }
 }
 
-/// Extracts forgettable field values from an event JSON object, replacing them with `null`.
+/// A non-serializable reference to the value inside a [`Forgettable<T>`].
 ///
-/// Returns `Some(payload)` containing the extracted values if any non-null forgettable
-/// fields were found, or `None` if all forgettable fields were already null.
-#[doc(hidden)]
-pub fn extract_forgettable_payload(
-    event_json: &mut serde_json::Value,
-    field_names: &[&str],
-) -> Option<serde_json::Value> {
-    if field_names.is_empty() {
-        return None;
+/// Implements `Deref<Target = T>` so you can use it like `&T`, but does **not**
+/// implement `Serialize` or `Clone`, preventing accidental re-serialization or
+/// extraction of personal data.
+pub struct ForgettableRef<'a, T>(&'a T);
+
+impl<T: fmt::Debug> fmt::Debug for ForgettableRef<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
-    let obj = event_json.as_object_mut()?;
-    let mut payload = serde_json::Map::new();
-    let mut any_extracted = false;
-    for &name in field_names {
-        if let Some(value) = obj.get(name)
-            && !value.is_null()
-        {
-            payload.insert(name.to_string(), value.clone());
-            obj.insert(name.to_string(), serde_json::Value::Null);
-            any_extracted = true;
-        }
+}
+
+impl<T: fmt::Display> fmt::Display for ForgettableRef<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
-    if any_extracted {
-        Some(serde_json::Value::Object(payload))
-    } else {
-        None
+}
+
+impl<T> Deref for ForgettableRef<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.0
+    }
+}
+
+impl<T: PartialEq> PartialEq<T> for ForgettableRef<'_, T> {
+    fn eq(&self, other: &T) -> bool {
+        self.0 == other
+    }
+}
+
+impl<T: PartialEq> PartialEq for ForgettableRef<'_, T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<T: Eq> Eq for ForgettableRef<'_, T> {}
+
+impl<T: hash::Hash> hash::Hash for ForgettableRef<'_, T> {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
     }
 }
 
@@ -134,15 +173,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn serialize_set() {
-        let value: Forgettable<String> = Forgettable::Set("Alice".to_string());
+    fn serialize_set_emits_null() {
+        let value: Forgettable<String> = Forgettable::new("Alice".to_string());
         let json = serde_json::to_value(&value).unwrap();
-        assert_eq!(json, serde_json::json!("Alice"));
+        assert_eq!(json, serde_json::json!(null));
     }
 
     #[test]
-    fn serialize_forgotten() {
-        let value: Forgettable<String> = Forgettable::Forgotten;
+    fn serialize_forgotten_emits_null() {
+        let value: Forgettable<String> = Forgettable::forgotten();
         let json = serde_json::to_value(&value).unwrap();
         assert_eq!(json, serde_json::json!(null));
     }
@@ -151,18 +190,18 @@ mod tests {
     fn deserialize_value() {
         let json = serde_json::json!("Alice");
         let value: Forgettable<String> = serde_json::from_value(json).unwrap();
-        assert_eq!(value, Forgettable::Set("Alice".to_string()));
+        assert_eq!(value, Forgettable::new("Alice".to_string()));
     }
 
     #[test]
     fn deserialize_null() {
         let json = serde_json::json!(null);
         let value: Forgettable<String> = serde_json::from_value(json).unwrap();
-        assert_eq!(value, Forgettable::Forgotten);
+        assert_eq!(value, Forgettable::forgotten());
     }
 
     #[test]
-    fn roundtrip_in_struct() {
+    fn serialize_struct_with_forgettable_emits_null() {
         #[derive(Serialize, Deserialize, Debug, PartialEq)]
         struct Event {
             #[serde(rename = "type")]
@@ -173,19 +212,22 @@ mod tests {
 
         let event = Event {
             kind: "initialized".to_string(),
-            name: Forgettable::Set("Alice".to_string()),
+            name: Forgettable::new("Alice".to_string()),
             email: "alice@test.com".to_string(),
         };
         let json = serde_json::to_value(&event).unwrap();
-        assert_eq!(json["name"], serde_json::json!("Alice"));
+        // Set serializes as null to prevent data leakage
+        assert_eq!(json["name"], serde_json::json!(null));
+        assert_eq!(json["email"], serde_json::json!("alice@test.com"));
 
+        // Deserializing null yields Forgotten (real values come from payload table)
         let deserialized: Event = serde_json::from_value(json).unwrap();
-        assert_eq!(deserialized, event);
+        assert_eq!(deserialized.name, Forgettable::forgotten());
 
-        // With forgotten
+        // Forgotten also serializes as null
         let event_forgotten = Event {
             kind: "initialized".to_string(),
-            name: Forgettable::Forgotten,
+            name: Forgettable::forgotten(),
             email: "alice@test.com".to_string(),
         };
         let json = serde_json::to_value(&event_forgotten).unwrap();
@@ -193,35 +235,6 @@ mod tests {
 
         let deserialized: Event = serde_json::from_value(json).unwrap();
         assert_eq!(deserialized, event_forgotten);
-    }
-
-    #[test]
-    fn extract_payload() {
-        let mut json = serde_json::json!({
-            "type": "initialized",
-            "id": "uuid",
-            "name": "Alice",
-            "email": "alice@test.com"
-        });
-
-        let payload = extract_forgettable_payload(&mut json, &["name"]);
-
-        assert_eq!(json["name"], serde_json::json!(null));
-        assert_eq!(json["email"], serde_json::json!("alice@test.com"));
-
-        let payload = payload.unwrap();
-        assert_eq!(payload["name"], serde_json::json!("Alice"));
-    }
-
-    #[test]
-    fn extract_payload_already_null() {
-        let mut json = serde_json::json!({
-            "type": "initialized",
-            "name": null
-        });
-
-        let payload = extract_forgettable_payload(&mut json, &["name"]);
-        assert!(payload.is_none());
     }
 
     #[test]
@@ -242,14 +255,67 @@ mod tests {
 
     #[test]
     fn value_helpers() {
-        let set: Forgettable<String> = Forgettable::Set("test".to_string());
+        let set: Forgettable<String> = Forgettable::new("test".to_string());
         assert!(set.is_set());
         assert!(!set.is_forgotten());
-        assert_eq!(set.value(), Some(&"test".to_string()));
+        assert_eq!(&*set.value().unwrap(), "test");
 
-        let forgotten: Forgettable<String> = Forgettable::Forgotten;
+        let forgotten: Forgettable<String> = Forgettable::forgotten();
         assert!(!forgotten.is_set());
         assert!(forgotten.is_forgotten());
-        assert_eq!(forgotten.value(), None);
+        assert!(forgotten.value().is_none());
+    }
+
+    #[test]
+    fn value_cloned() {
+        let set: Forgettable<String> = Forgettable::new("hello".to_string());
+        assert_eq!(set.value_cloned(), Some("hello".to_string()));
+
+        let forgotten: Forgettable<String> = Forgettable::forgotten();
+        assert_eq!(forgotten.value_cloned(), None);
+    }
+
+    #[test]
+    fn extract_payload_value() {
+        let set: Forgettable<String> = Forgettable::new("Alice".to_string());
+        assert_eq!(
+            set.__extract_payload_value(),
+            Some(serde_json::json!("Alice"))
+        );
+
+        let forgotten: Forgettable<String> = Forgettable::forgotten();
+        assert_eq!(forgotten.__extract_payload_value(), None);
+    }
+
+    #[test]
+    fn forgettable_ref_deref() {
+        let f = Forgettable::new("hello".to_string());
+        let r = f.value().unwrap();
+        // Deref to &String
+        assert_eq!(r.len(), 5);
+        assert_eq!(&*r, "hello");
+    }
+
+    #[test]
+    fn forgettable_ref_display() {
+        let f = Forgettable::new("Alice".to_string());
+        let r = f.value().unwrap();
+        assert_eq!(format!("{r}"), "Alice");
+    }
+
+    #[test]
+    fn forgettable_ref_partial_eq() {
+        let f = Forgettable::new("Alice".to_string());
+        let r = f.value().unwrap();
+        assert_eq!(r, "Alice".to_string());
+    }
+
+    #[test]
+    fn into_value() {
+        let set: Forgettable<String> = Forgettable::new("test".to_string());
+        assert_eq!(set.into_value(), Some("test".to_string()));
+
+        let forgotten: Forgettable<String> = Forgettable::forgotten();
+        assert_eq!(forgotten.into_value(), None);
     }
 }

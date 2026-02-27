@@ -39,7 +39,7 @@ impl Customer {
         let new_name = new_name.into();
         self.name = new_name.clone();
         self.events.push(CustomerEvent::NameUpdated {
-            name: Forgettable::Set(new_name),
+            name: Forgettable::new(new_name),
         });
         Idempotent::Executed(())
     }
@@ -61,16 +61,12 @@ impl TryFromEvents<CustomerEvent> for Customer {
                 CustomerEvent::Initialized { id, name, email } => {
                     builder = builder
                         .id(*id)
-                        .name(
-                            name.value()
-                                .cloned()
-                                .unwrap_or_else(|| "[forgotten]".into()),
-                        )
+                        .name(name.value_cloned().unwrap_or_else(|| "[forgotten]".into()))
                         .email(email.clone());
                 }
                 CustomerEvent::NameUpdated { name } => {
-                    if let Some(n) = name.value() {
-                        builder = builder.name(n.clone());
+                    if let Some(n) = name.value_cloned() {
+                        builder = builder.name(n);
                     }
                 }
                 CustomerEvent::EmailUpdated { email } => {
@@ -104,7 +100,7 @@ impl IntoEvents<CustomerEvent> for NewCustomer {
             self.id,
             [CustomerEvent::Initialized {
                 id: self.id,
-                name: Forgettable::Set(self.name),
+                name: Forgettable::new(self.name),
                 email: self.email,
             }],
         )

@@ -83,8 +83,8 @@ impl ToTokens for PersistEventsBatchFn<'_> {
 
         let forgettable_extract = if self.forgettable_table_name.is_some() {
             quote! {
-                for (idx, event_json) in serialized.iter_mut().enumerate() {
-                    if let Some(payload) = #event_type::extract_forgettable_payload(event_json) {
+                for (idx, event_with_ctx) in events.iter_new_events().enumerate() {
+                    if let Some(payload) = #event_type::extract_forgettable_payloads(&event_with_ctx.event) {
                         payload_ids.push(id);
                         payload_sequences.push((offset + idx) as i32);
                         payload_values.push(payload);
@@ -139,9 +139,9 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                     let events: &es_entity::EntityEvents<#event_type> = item.borrow();
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
-                    let mut serialized = events.serialize_new_events();
-                    #ctx_extend
                     #forgettable_extract
+                    let serialized = events.serialize_new_events();
+                    #ctx_extend
                     let types = serialized.iter()
                         .map(|e| e.get("type")
                             .and_then(es_entity::prelude::serde_json::Value::as_str)
@@ -229,7 +229,7 @@ mod tests {
                     let events: &es_entity::EntityEvents<EntityEvent> = item.borrow();
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
-                    let mut serialized = events.serialize_new_events();
+                    let serialized = events.serialize_new_events();
                     let contexts = events.serialize_new_event_contexts();
                     if let Some(contexts) = contexts {
                         all_contexts.extend(contexts);
@@ -319,7 +319,7 @@ mod tests {
                     let events: &es_entity::EntityEvents<EntityEvent> = item.borrow();
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
-                    let mut serialized = events.serialize_new_events();
+                    let serialized = events.serialize_new_events();
                     let types = serialized.iter()
                         .map(|e| e.get("type")
                             .and_then(es_entity::prelude::serde_json::Value::as_str)

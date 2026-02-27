@@ -66,8 +66,8 @@ impl ToTokens for PersistEventsFn<'_> {
             quote! {
                 let mut payload_sequences: Vec<i32> = Vec::new();
                 let mut payload_values: Vec<es_entity::prelude::serde_json::Value> = Vec::new();
-                for (idx, event_json) in serialized_events.iter_mut().enumerate() {
-                    if let Some(payload) = #event_type::extract_forgettable_payload(event_json) {
+                for (idx, event_with_ctx) in events.iter_new_events().enumerate() {
+                    if let Some(payload) = #event_type::extract_forgettable_payloads(&event_with_ctx.event) {
                         payload_sequences.push((offset + 1 + idx) as i32);
                         payload_values.push(payload);
                     }
@@ -108,9 +108,9 @@ impl ToTokens for PersistEventsFn<'_> {
             {
                 let id = events.id();
                 let offset = events.len_persisted();
-                let mut serialized_events = events.serialize_new_events();
-                #ctx_var
                 #forgettable_code
+                let serialized_events = events.serialize_new_events();
+                #ctx_var
                 let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
                 let now = op.maybe_now();
 
@@ -176,7 +176,7 @@ mod tests {
             {
                 let id = events.id();
                 let offset = events.len_persisted();
-                let mut serialized_events = events.serialize_new_events();
+                let serialized_events = events.serialize_new_events();
                 let contexts = events.serialize_new_event_contexts();
                 let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
                 let now = op.maybe_now();
@@ -240,7 +240,7 @@ mod tests {
             {
                 let id = events.id();
                 let offset = events.len_persisted();
-                let mut serialized_events = events.serialize_new_events();
+                let serialized_events = events.serialize_new_events();
                 let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
                 let now = op.maybe_now();
 

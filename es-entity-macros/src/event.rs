@@ -16,8 +16,8 @@ pub struct EsEvent {
 struct ForgettableInfo {
     /// Whether any variant has forgettable fields.
     has_forgettable: bool,
-    /// Per-variant: (serde_tag_value, list_of_forgettable_field_names)
-    variants: Vec<(String, Vec<String>)>,
+    /// Per-variant: (variant_ident, serde_tag_value, list_of_forgettable_field_idents)
+    variants: Vec<(syn::Ident, String, Vec<syn::Ident>)>,
 }
 
 pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream> {
@@ -33,10 +33,35 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
     let match_arms: Vec<_> = forgettable_info
         .variants
         .iter()
-        .map(|(tag_value, field_names)| {
-            let field_name_strs: Vec<&str> = field_names.iter().map(|s| s.as_str()).collect();
-            quote! {
-                Some(#tag_value) => &[#(#field_name_strs),*],
+        .map(|(variant_ident, _tag_value, field_idents)| {
+            if field_idents.is_empty() {
+                quote! {
+                    #ident::#variant_ident { .. } => None,
+                }
+            } else {
+                let field_name_strs: Vec<String> =
+                    field_idents.iter().map(|i| i.to_string()).collect();
+                let inserts: Vec<_> = field_idents
+                    .iter()
+                    .zip(field_name_strs.iter())
+                    .map(|(field_id, field_name)| {
+                        quote! {
+                            if let Some(v) = #field_id.__extract_payload_value() {
+                                payload.insert(
+                                    #field_name.to_string(),
+                                    v,
+                                );
+                            }
+                        }
+                    })
+                    .collect();
+                quote! {
+                    #ident::#variant_ident { #(#field_idents),*, .. } => {
+                        let mut payload = es_entity::prelude::serde_json::Map::new();
+                        #(#inserts)*
+                        if payload.is_empty() { None } else { Some(payload.into()) }
+                    }
+                }
             }
         })
         .collect();
@@ -47,21 +72,10 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
             pub const HAS_FORGETTABLE_FIELDS: bool = #has_forgettable;
 
             #[doc(hidden)]
-            pub fn forgettable_field_names(
-                event_json: &es_entity::prelude::serde_json::Value,
-            ) -> &'static [&'static str] {
-                match event_json.get("type").and_then(|v| v.as_str()) {
+            pub fn extract_forgettable_payloads(&self) -> Option<es_entity::prelude::serde_json::Value> {
+                match self {
                     #(#match_arms)*
-                    _ => &[],
                 }
-            }
-
-            #[doc(hidden)]
-            pub fn extract_forgettable_payload(
-                event_json: &mut es_entity::prelude::serde_json::Value,
-            ) -> Option<es_entity::prelude::serde_json::Value> {
-                let field_names = Self::forgettable_field_names(event_json);
-                es_entity::forgettable::extract_forgettable_payload(event_json, field_names)
             }
         }
     });
@@ -78,25 +92,26 @@ fn extract_forgettable_info(ast: &syn::DeriveInput) -> ForgettableInfo {
             .variants
             .iter()
             .map(|variant| {
+                let variant_ident = variant.ident.clone();
                 let tag_value = serde_variant_name(variant, &rename_rule);
                 let forgettable_fields = variant
                     .fields
                     .iter()
                     .filter_map(|field| {
                         if is_forgettable_type(&field.ty) {
-                            field.ident.as_ref().map(|i| i.to_string())
+                            field.ident.clone()
                         } else {
                             None
                         }
                     })
                     .collect::<Vec<_>>();
-                (tag_value, forgettable_fields)
+                (variant_ident, tag_value, forgettable_fields)
             })
             .collect(),
         _ => Vec::new(),
     };
 
-    let has_forgettable = variants.iter().any(|(_, fields)| !fields.is_empty());
+    let has_forgettable = variants.iter().any(|(_, _, fields)| !fields.is_empty());
 
     ForgettableInfo {
         has_forgettable,

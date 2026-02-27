@@ -267,6 +267,11 @@ where
     }
 
     #[doc(hidden)]
+    pub fn iter_new_events(&self) -> impl Iterator<Item = &EventWithContext<T>> {
+        self.new_events.iter()
+    }
+
+    #[doc(hidden)]
     pub fn mark_new_events_persisted_at(
         &mut self,
         recorded_at: chrono::DateTime<chrono::Utc>,
