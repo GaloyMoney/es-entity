@@ -1,3 +1,15 @@
+# [cala release v0.10.20](https://github.com/GaloyMoney/cala/releases/tag/0.10.20)
+
+
+
+### Bug Fixes
+
+- Add Cargo.lock to work with crane
+
+### Features
+
+- Soft without queries (#92)
+
 # [cala release v0.10.19](https://github.com/GaloyMoney/cala/releases/tag/0.10.19)
 
 
