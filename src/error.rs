@@ -3,8 +3,6 @@
 use thiserror::Error;
 
 /// Error type for entity hydration failures (reconstructing entities from events).
-///
-/// Previously named `EsEntityError`. Now only contains hydration-related concerns.
 #[derive(Error, Debug)]
 pub enum EntityHydrationError {
     #[error("EntityHydrationError - UninitializedFieldError: {0}")]
@@ -13,16 +11,12 @@ pub enum EntityHydrationError {
     EventDeserialization(#[from] serde_json::Error),
 }
 
-/// Deprecated alias for `EntityHydrationError`.
-#[deprecated(note = "renamed to EntityHydrationError")]
-pub type EsEntityError = EntityHydrationError;
-
 /// Trait for error types that can represent a "not found" condition.
 ///
 /// Implemented by error types used with `EsQuery::fetch_one`, which needs
 /// to produce a "not found" error when no rows match.
 pub trait FromNotFound {
-    fn not_found() -> Self;
+    fn not_found(entity: &'static str, column: &'static str, value: String) -> Self;
 }
 
 /// Trait for error types that can represent a concurrent modification conflict.

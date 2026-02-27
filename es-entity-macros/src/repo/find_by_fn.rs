@@ -51,10 +51,24 @@ impl ToTokens for FindByFn<'_> {
                 &self.query_error
             };
 
-            let (result_type, fetch_fn) = if maybe.is_empty() {
-                (quote! { #entity }, quote! { fetch_one(op) })
+            let (result_type, fetch_expr) = if maybe.is_empty() {
+                let entity_name_str = entity.to_string();
+                let column_name_str = column_name.to_string();
+                (
+                    quote! { #entity },
+                    quote! {
+                        fetch_optional(op).await?.ok_or_else(|| #error::NotFound {
+                            entity: #entity_name_str,
+                            column: #column_name_str,
+                            value: format!("{:?}", #column_name),
+                        })
+                    },
+                )
             } else {
-                (quote! { Option<#entity> }, quote! { fetch_optional(op) })
+                (
+                    quote! { Option<#entity> },
+                    quote! { fetch_optional(op).await },
+                )
             };
 
             for delete in [DeleteOption::No, DeleteOption::Soft] {
@@ -153,7 +167,7 @@ impl ToTokens for FindByFn<'_> {
                         let __result: Result<#result_type, #error> = async {
                             let #column_name = #column_name.#access_expr;
                             #record_field
-                            #es_query_call.#fetch_fn.await
+                            #es_query_call.#fetch_expr
                         }.await;
 
                         #error_recording
@@ -219,8 +233,11 @@ mod tests {
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                     )
-                    .fetch_one(op)
-                    .await
+                    .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
+                        entity: "Entity",
+                        column: "id",
+                        value: format!("{:?}", id),
+                    })
                 }.await;
 
                 __result
@@ -306,8 +323,11 @@ mod tests {
                         "SELECT id FROM entities WHERE email = $1",
                         email as &str,
                     )
-                    .fetch_one(op)
-                    .await
+                    .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
+                        entity: "Entity",
+                        column: "email",
+                        value: format!("{:?}", email),
+                    })
                 }.await;
 
                 __result
@@ -390,8 +410,11 @@ mod tests {
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
                     )
-                    .fetch_one(op)
-                    .await
+                    .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
+                        entity: "Entity",
+                        column: "id",
+                        value: format!("{:?}", id),
+                    })
                 }.await;
 
                 __result
@@ -500,8 +523,11 @@ mod tests {
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                     )
-                    .fetch_one(op)
-                    .await
+                    .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
+                        entity: "Entity",
+                        column: "id",
+                        value: format!("{:?}", id),
+                    })
                 }.await;
 
                 __result

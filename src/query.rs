@@ -81,7 +81,8 @@ where
     ) -> Result<<Repo as EsRepo>::Entity, E> {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
-        EntityEvents::load_first(rows.into_iter())?.ok_or_else(E::not_found)
+        EntityEvents::load_first(rows.into_iter())?
+            .ok_or_else(|| E::not_found("<unknown>", "<query>", String::new()))
     }
 
     async fn fetch_n_inner<E: From<sqlx::Error> + From<EntityHydrationError>>(

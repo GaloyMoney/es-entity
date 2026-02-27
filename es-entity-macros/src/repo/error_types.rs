@@ -443,6 +443,7 @@ impl<'a> ErrorTypes<'a> {
 
     fn generate_find_error(&self) -> TokenStream {
         let find_error = &self.find_error;
+        let query_error = &self.query_error;
         let entity = self.entity;
         let entity_name = entity.to_string();
 
@@ -450,7 +451,7 @@ impl<'a> ErrorTypes<'a> {
             #[derive(Debug)]
             pub enum #find_error {
                 Sqlx(sqlx::Error),
-                NotFound,
+                NotFound { entity: &'static str, column: &'static str, value: String },
                 HydrationError(es_entity::EntityHydrationError),
             }
 
@@ -458,7 +459,7 @@ impl<'a> ErrorTypes<'a> {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                     match self {
                         Self::Sqlx(e) => write!(f, "{}FindError - Sqlx: {}", #entity_name, e),
-                        Self::NotFound => write!(f, "{}FindError - NotFound", #entity_name),
+                        Self::NotFound { entity, column, value } => write!(f, "{}FindError - NotFound({column}={value})", entity),
                         Self::HydrationError(e) => write!(f, "{}FindError - HydrationError: {}", #entity_name, e),
                     }
                 }
@@ -468,7 +469,7 @@ impl<'a> ErrorTypes<'a> {
                 fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
                     match self {
                         Self::Sqlx(e) => Some(e),
-                        Self::NotFound => None,
+                        Self::NotFound { .. } => None,
                         Self::HydrationError(e) => Some(e),
                     }
                 }
@@ -481,8 +482,8 @@ impl<'a> ErrorTypes<'a> {
             }
 
             impl es_entity::FromNotFound for #find_error {
-                fn not_found() -> Self {
-                    Self::NotFound
+                fn not_found(entity: &'static str, column: &'static str, value: String) -> Self {
+                    Self::NotFound { entity, column, value }
                 }
             }
 
@@ -492,9 +493,19 @@ impl<'a> ErrorTypes<'a> {
                 }
             }
 
+            impl From<#query_error> for #find_error {
+                fn from(e: #query_error) -> Self {
+                    match e {
+                        #query_error::Sqlx(e) => Self::Sqlx(e),
+                        #query_error::HydrationError(e) => Self::HydrationError(e),
+                        #query_error::CursorDestructureError(_) => unreachable!("CursorDestructureError cannot occur in find operations"),
+                    }
+                }
+            }
+
             impl #find_error {
                 pub fn was_not_found(&self) -> bool {
-                    matches!(self, Self::NotFound)
+                    matches!(self, Self::NotFound { .. })
                 }
             }
         }
