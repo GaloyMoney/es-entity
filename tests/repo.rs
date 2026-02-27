@@ -542,18 +542,10 @@ async fn create_duplicate_id_returns_constraint_violation_with_value() -> anyhow
 
     let id = UserId::new();
 
-    let first = NewUser::builder()
-        .id(id)
-        .name("First")
-        .build()
-        .unwrap();
+    let first = NewUser::builder().id(id).name("First").build().unwrap();
     users.create(first).await?;
 
-    let duplicate = NewUser::builder()
-        .id(id)
-        .name("Second")
-        .build()
-        .unwrap();
+    let duplicate = NewUser::builder().id(id).name("Second").build().unwrap();
     let err = match users.create(duplicate).await {
         Err(e) => e,
         Ok(_) => panic!("expected constraint violation"),

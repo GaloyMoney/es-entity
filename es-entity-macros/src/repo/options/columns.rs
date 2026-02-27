@@ -875,12 +875,9 @@ mod tests {
     fn custom_constraint() {
         let input: syn::Meta =
             parse_quote!(job_type(ty = "String", constraint = "idx_unique_job_type"));
-        let column =
-            Column::from_nested_meta(&darling::ast::NestedMeta::Meta(input)).expect("Failed to parse Column");
+        let column = Column::from_nested_meta(&darling::ast::NestedMeta::Meta(input))
+            .expect("Failed to parse Column");
         assert_eq!(column.name().to_string(), "job_type");
-        assert_eq!(
-            column.custom_constraint(),
-            Some("idx_unique_job_type")
-        );
+        assert_eq!(column.custom_constraint(), Some("idx_unique_job_type"));
     }
 }

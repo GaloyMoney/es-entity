@@ -99,9 +99,6 @@ mod tests {
     #[test]
     fn parse_empty_value() {
         let detail = Some("Key (col)=() already exists.");
-        assert_eq!(
-            parse_constraint_detail_value(detail),
-            Some("".to_string())
-        );
+        assert_eq!(parse_constraint_detail_value(detail), Some("".to_string()));
     }
 }
