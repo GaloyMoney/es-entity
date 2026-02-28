@@ -189,6 +189,7 @@ impl ToTokens for EsRepo<'_> {
         let populate_nested = &self.populate_nested;
 
         let pool_field = self.opts.pool_field();
+        let has_tbl_prefix = self.opts.table_prefix().is_some();
         let es_query_flavor = if nested_fns.is_empty() {
             quote! {
                 es_entity::EsQueryFlavorFlat
@@ -229,6 +230,8 @@ impl ToTokens for EsRepo<'_> {
                 pub(super) type Repo__Entity = #entity;
                 #[allow(non_camel_case_types)]
                 pub(super) type Repo__DbEvent = es_entity::GenericEvent<#id>;
+                #[allow(dead_code)]
+                pub(super) const REPO__HAS_TBL_PREFIX: bool = #has_tbl_prefix;
             }
 
             #error_types

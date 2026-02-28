@@ -90,11 +90,23 @@ impl ToTokens for EsQuery {
             quote! {}
         };
 
+        let tbl_prefix_check = if self.input.tbl_prefix.is_none() && self.input.entity.is_none() {
+            quote! {
+                const _: () = assert!(
+                    !REPO__HAS_TBL_PREFIX,
+                    "es_query! requires `tbl_prefix` parameter when the repo uses tbl_prefix"
+                );
+            }
+        } else {
+            quote! {}
+        };
+
         tokens.append_all(quote! {
             {
                 use #repo_types_mod::*;
 
                 #forgettable_check
+                #tbl_prefix_check
 
                 es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
                     sqlx::query_as!(
@@ -133,6 +145,10 @@ mod tests {
                 const _: () = assert!(
                     !Repo__Event::HAS_FORGETTABLE_FIELDS,
                     "es_query! requires `forgettable_tbl` parameter when the event type has Forgettable<T> fields"
+                );
+                const _: () = assert!(
+                    !REPO__HAS_TBL_PREFIX,
+                    "es_query! requires `tbl_prefix` parameter when the repo uses tbl_prefix"
                 );
 
                 es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
@@ -206,6 +222,10 @@ mod tests {
                 const _: () = assert!(
                     !Repo__Event::HAS_FORGETTABLE_FIELDS,
                     "es_query! requires `forgettable_tbl` parameter when the event type has Forgettable<T> fields"
+                );
+                const _: () = assert!(
+                    !REPO__HAS_TBL_PREFIX,
+                    "es_query! requires `tbl_prefix` parameter when the repo uses tbl_prefix"
                 );
 
                 es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
