@@ -170,7 +170,10 @@ impl ToTokens for UpdateAllFn<'_> {
                             if events.any_new() { Some(events) } else { None }
                         })
                         .collect();
-                    let n_persisted = self.persist_events_batch::<_, _, #modify_error>(op, &mut all_event_refs).await?;
+                    let n_persisted = Self::extract_concurrent_modification(
+                        self.persist_events_batch(op, &mut all_event_refs).await,
+                        #modify_error::ConcurrentModification,
+                    )?;
                     drop(all_event_refs);
 
                     let mut total_events = 0usize;
@@ -292,7 +295,10 @@ mod tests {
                             if events.any_new() { Some(events) } else { None }
                         })
                         .collect();
-                    let n_persisted = self.persist_events_batch::<_, _, EntityModifyError>(op, &mut all_event_refs).await?;
+                    let n_persisted = Self::extract_concurrent_modification(
+                        self.persist_events_batch(op, &mut all_event_refs).await,
+                        EntityModifyError::ConcurrentModification,
+                    )?;
                     drop(all_event_refs);
 
                     let mut total_events = 0usize;
@@ -378,7 +384,10 @@ mod tests {
                             if events.any_new() { Some(events) } else { None }
                         })
                         .collect();
-                    let n_persisted = self.persist_events_batch::<_, _, EntityModifyError>(op, &mut all_event_refs).await?;
+                    let n_persisted = Self::extract_concurrent_modification(
+                        self.persist_events_batch(op, &mut all_event_refs).await,
+                        EntityModifyError::ConcurrentModification,
+                    )?;
                     drop(all_event_refs);
 
                     let mut total_events = 0usize;

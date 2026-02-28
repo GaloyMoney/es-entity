@@ -256,12 +256,6 @@ impl<'a> ErrorTypes<'a> {
                 }
             }
 
-            impl es_entity::FromConcurrentModification for #create_error {
-                fn concurrent_modification() -> Self {
-                    Self::ConcurrentModification
-                }
-            }
-
             impl From<es_entity::EntityHydrationError> for #create_error {
                 fn from(e: es_entity::EntityHydrationError) -> Self {
                     Self::HydrationError(e)
@@ -448,12 +442,6 @@ impl<'a> ErrorTypes<'a> {
             impl From<sqlx::Error> for #modify_error {
                 fn from(e: sqlx::Error) -> Self {
                     Self::Sqlx(e)
-                }
-            }
-
-            impl es_entity::FromConcurrentModification for #modify_error {
-                fn concurrent_modification() -> Self {
-                    Self::ConcurrentModification
                 }
             }
 
