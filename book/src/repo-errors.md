@@ -73,18 +73,22 @@ if e.was_concurrent_modification() {
 
 ### Nested entity errors
 
-For aggregates with nested entities (e.g. `Order` containing `OrderItem`s), `CreateError` and `ModifyError` include additional variants for the child's errors. The `was_duplicate` and `duplicate_value` helpers only check the parent entity's constraint violations — they do **not** cascade into nested errors. Match nested variants explicitly:
+For aggregates with nested entities (e.g. `Order` containing `OrderItem`s), `CreateError` and `ModifyError` include additional variants wrapping the child's errors. The `duplicate_value` and `was_concurrent_modification` helpers cascade into nested errors automatically:
+
+```rust,ignore
+// If a nested OrderItem creation triggers a constraint violation,
+// duplicate_value() still returns the conflicting value:
+let val = err.duplicate_value(); // cascades into nested variants
+```
+
+The `was_duplicate` helper does **not** cascade because nested entities have a different column enum. To check which nested column was violated, match the nested variant directly:
 
 ```rust,ignore
 match err {
-    OrderModifyError::OrderItemsCreate(item_err) => {
-        // Handle child constraint violation
-        if item_err.was_duplicate(OrderItemColumn::Sku) {
-            let val = item_err.duplicate_value();
-        }
-    }
-    _ if err.was_duplicate(OrderColumn::Id) => {
-        // Handle parent constraint violation
+    OrderModifyError::OrderItemsCreate(item_err)
+        if item_err.was_duplicate(OrderItemColumn::Sku) =>
+    {
+        let val = item_err.duplicate_value();
     }
     _ => return Err(err.into()),
 }

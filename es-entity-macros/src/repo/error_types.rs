@@ -202,6 +202,14 @@ impl<'a> ErrorTypes<'a> {
                 quote! { Self::#variant(e) => e.was_concurrent_modification(), }
             })
             .collect();
+        let nested_dv_checks: Vec<_> = self
+            .nested
+            .iter()
+            .map(|n| {
+                let variant = &n.variant_name;
+                quote! { Self::#variant(e) => e.duplicate_value(), }
+            })
+            .collect();
 
         let entity_name = entity.to_string();
 
@@ -278,6 +286,7 @@ impl<'a> ErrorTypes<'a> {
                 pub fn duplicate_value(&self) -> Option<&str> {
                     match self {
                         Self::ConstraintViolation { value: Some(v), .. } => Some(v.as_str()),
+                        #(#nested_dv_checks)*
                         _ => None,
                     }
                 }
@@ -349,6 +358,21 @@ impl<'a> ErrorTypes<'a> {
                 vec![
                     quote! { Self::#modify_variant(e) => e.was_concurrent_modification(), },
                     quote! { Self::#create_variant(e) => e.was_concurrent_modification(), },
+                ]
+            })
+            .collect();
+
+        let nested_dv_checks: Vec<_> = self
+            .nested
+            .iter()
+            .flat_map(|n| {
+                let modify_variant =
+                    syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
+                let create_variant =
+                    syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
+                vec![
+                    quote! { Self::#modify_variant(e) => e.duplicate_value(), },
+                    quote! { Self::#create_variant(e) => e.duplicate_value(), },
                 ]
             })
             .collect();
@@ -451,6 +475,7 @@ impl<'a> ErrorTypes<'a> {
                 pub fn duplicate_value(&self) -> Option<&str> {
                     match self {
                         Self::ConstraintViolation { value: Some(v), .. } => Some(v.as_str()),
+                        #(#nested_dv_checks)*
                         _ => None,
                     }
                 }
