@@ -7,7 +7,6 @@ use super::RepositoryOptions;
 pub struct PostPersistHook<'a> {
     event: &'a syn::Ident,
     entity: &'a syn::Ident,
-    error: &'a syn::Type,
     hook: &'a Option<syn::Ident>,
 }
 
@@ -16,7 +15,6 @@ impl<'a> From<&'a RepositoryOptions> for PostPersistHook<'a> {
         Self {
             event: opts.event(),
             entity: opts.entity(),
-            error: opts.err(),
             hook: &opts.post_persist_hook,
         }
     }
@@ -26,7 +24,6 @@ impl ToTokens for PostPersistHook<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let event = &self.event;
         let entity = &self.entity;
-        let error = &self.error;
 
         let hook = if let Some(hook) = self.hook {
             quote! {
@@ -46,7 +43,7 @@ impl ToTokens for PostPersistHook<'_> {
                 op: &mut OP,
                 entity: &#entity,
                 new_events: es_entity::LastPersisted<'_, #event>
-            ) -> Result<(), #error>
+            ) -> Result<(), sqlx::Error>
                 where
                     OP: es_entity::AtomicOperation
             {
@@ -64,13 +61,11 @@ mod tests {
     fn post_persist_hook() {
         let event = syn::Ident::new("EntityEvent", proc_macro2::Span::call_site());
         let entity = syn::Ident::new("Entity", proc_macro2::Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
         let hook = None;
 
         let hook = PostPersistHook {
             event: &event,
             entity: &entity,
-            error: &error,
             hook: &hook,
         };
 
@@ -82,8 +77,8 @@ mod tests {
             async fn execute_post_persist_hook<OP>(&self,
                 op: &mut OP,
                 entity: &Entity,
-                new_events: es_entity::LastPersisted<'_, #event>
-            ) -> Result<(), es_entity::EsRepoError>
+                new_events: es_entity::LastPersisted<'_, EntityEvent>
+            ) -> Result<(), sqlx::Error>
                 where
                     OP: es_entity::AtomicOperation
             {

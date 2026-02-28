@@ -1,6 +1,6 @@
 //! Handle operations for nested entities.
 
-use crate::{operation::AtomicOperation, traits::*};
+use crate::{error::EntityHydrationError, operation::AtomicOperation, traits::*};
 
 use std::collections::HashMap;
 
@@ -107,13 +107,14 @@ impl<T: EsEntity> Nested<T> {
 }
 
 pub trait PopulateNested<ID>: EsRepo {
-    fn populate_in_op<OP, P>(
+    fn populate_in_op<OP, P, E>(
         op: &mut OP,
         lookup: std::collections::HashMap<ID, &mut P>,
-    ) -> impl Future<Output = Result<(), <Self as EsRepo>::Err>> + Send
+    ) -> impl Future<Output = Result<(), E>> + Send
     where
         OP: AtomicOperation,
-        P: Parent<<Self as EsRepo>::Entity>;
+        P: Parent<<Self as EsRepo>::Entity>,
+        E: From<sqlx::Error> + From<EntityHydrationError> + Send;
 }
 
 /// Trait that entities implement for every field marked `#[es_entity(nested)]`

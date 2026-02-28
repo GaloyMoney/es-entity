@@ -9,7 +9,8 @@ pub struct FindByFn<'a> {
     entity: &'a syn::Ident,
     column: &'a Column,
     table_name: &'a str,
-    error: &'a syn::Type,
+    find_error: syn::Ident,
+    query_error: syn::Ident,
     delete: DeleteOption,
     any_nested: bool,
     #[cfg(feature = "instrument")]
@@ -23,7 +24,8 @@ impl<'a> FindByFn<'a> {
             column,
             entity: opts.entity(),
             table_name: opts.table_name(),
-            error: opts.err(),
+            find_error: opts.find_error(),
+            query_error: opts.query_error(),
             delete: opts.delete,
             any_nested: opts.any_nested(),
             #[cfg(feature = "instrument")]
@@ -37,17 +39,36 @@ impl ToTokens for FindByFn<'_> {
         let entity = self.entity;
         let column_name = &self.column.name();
         let (column_type, impl_expr, access_expr) = &self.column.ty_for_find_by();
-        let error = self.error;
         let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
         let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
         let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
         let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
 
         for maybe in ["", "maybe_"] {
-            let (result_type, fetch_fn) = if maybe.is_empty() {
-                (quote! { #entity }, quote! { fetch_one(op) })
+            let error = if maybe.is_empty() {
+                &self.find_error
             } else {
-                (quote! { Option<#entity> }, quote! { fetch_optional(op) })
+                &self.query_error
+            };
+
+            let (result_type, fetch_expr) = if maybe.is_empty() {
+                let entity_name_str = entity.to_string();
+                let column_name_str = column_name.to_string();
+                (
+                    quote! { #entity },
+                    quote! {
+                        fetch_optional(op).await?.ok_or_else(|| #error::NotFound {
+                            entity: #entity_name_str,
+                            column: #column_name_str,
+                            value: format!("{:?}", #column_name),
+                        })
+                    },
+                )
+            } else {
+                (
+                    quote! { Option<#entity> },
+                    quote! { fetch_optional(op).await },
+                )
             };
 
             for delete in [DeleteOption::No, DeleteOption::Soft] {
@@ -146,7 +167,7 @@ impl ToTokens for FindByFn<'_> {
                         let __result: Result<#result_type, #error> = async {
                             let #column_name = #column_name.#access_expr;
                             #record_field
-                            #es_query_call.#fetch_fn.await
+                            #es_query_call.#fetch_expr
                         }.await;
 
                         #error_recording
@@ -172,14 +193,14 @@ mod tests {
     fn find_by_fn() {
         let column = Column::for_id(syn::parse_str("EntityId").unwrap());
         let entity = Ident::new("Entity", Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
         let persist_fn = FindByFn {
             prefix: None,
             column: &column,
             entity: &entity,
             table_name: "entities",
-            error: &error,
+            find_error: syn::Ident::new("EntityFindError", Span::call_site()),
+            query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::No,
             any_nested: false,
             #[cfg(feature = "instrument")]
@@ -193,7 +214,7 @@ mod tests {
             pub async fn find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, es_entity::EsRepoError> {
+            ) -> Result<Entity, EntityFindError> {
                 self.find_by_id_in_op(self.pool(), id).await
             }
 
@@ -201,19 +222,22 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, es_entity::EsRepoError>
+            ) -> Result<Entity, EntityFindError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Entity, es_entity::EsRepoError> = async {
+                let __result: Result<Entity, EntityFindError> = async {
                     let id = id.borrow();
                     es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                     )
-                    .fetch_one(op)
-                    .await
+                    .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
+                        entity: "Entity",
+                        column: "id",
+                        value: format!("{:?}", id),
+                    })
                 }.await;
 
                 __result
@@ -222,7 +246,7 @@ mod tests {
             pub async fn maybe_find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+            ) -> Result<Option<Entity>, EntityQueryError> {
                 self.maybe_find_by_id_in_op(self.pool(), id).await
             }
 
@@ -230,11 +254,11 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, es_entity::EsRepoError>
+            ) -> Result<Option<Entity>, EntityQueryError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Option<Entity>, es_entity::EsRepoError> = async {
+                let __result: Result<Option<Entity>, EntityQueryError> = async {
                     let id = id.borrow();
                     es_entity::es_query!(
                         entity = Entity,
@@ -259,14 +283,14 @@ mod tests {
             syn::parse_str("String").unwrap(),
         );
         let entity = Ident::new("Entity", Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
         let persist_fn = FindByFn {
             prefix: None,
             column: &column,
             entity: &entity,
             table_name: "entities",
-            error: &error,
+            find_error: syn::Ident::new("EntityFindError", Span::call_site()),
+            query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::No,
             any_nested: false,
             #[cfg(feature = "instrument")]
@@ -280,7 +304,7 @@ mod tests {
             pub async fn find_by_email(
                 &self,
                 email: impl std::convert::AsRef<str>
-            ) -> Result<Entity, es_entity::EsRepoError> {
+            ) -> Result<Entity, EntityFindError> {
                 self.find_by_email_in_op(self.pool(), email).await
             }
 
@@ -288,19 +312,22 @@ mod tests {
                 &self,
                 op: OP,
                 email: impl std::convert::AsRef<str>
-            ) -> Result<Entity, es_entity::EsRepoError>
+            ) -> Result<Entity, EntityFindError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Entity, es_entity::EsRepoError> = async {
+                let __result: Result<Entity, EntityFindError> = async {
                     let email = email.as_ref();
                     es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE email = $1",
                         email as &str,
                     )
-                    .fetch_one(op)
-                    .await
+                    .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
+                        entity: "Entity",
+                        column: "email",
+                        value: format!("{:?}", email),
+                    })
                 }.await;
 
                 __result
@@ -309,7 +336,7 @@ mod tests {
             pub async fn maybe_find_by_email(
                 &self,
                 email: impl std::convert::AsRef<str>
-            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+            ) -> Result<Option<Entity>, EntityQueryError> {
                 self.maybe_find_by_email_in_op(self.pool(), email).await
             }
 
@@ -317,11 +344,11 @@ mod tests {
                 &self,
                 op: OP,
                 email: impl std::convert::AsRef<str>
-            ) -> Result<Option<Entity>, es_entity::EsRepoError>
+            ) -> Result<Option<Entity>, EntityQueryError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Option<Entity>, es_entity::EsRepoError> = async {
+                let __result: Result<Option<Entity>, EntityQueryError> = async {
                     let email = email.as_ref();
                     es_entity::es_query!(
                         entity = Entity,
@@ -343,14 +370,14 @@ mod tests {
     fn find_by_fn_with_soft_delete() {
         let column = Column::for_id(syn::parse_str("EntityId").unwrap());
         let entity = Ident::new("Entity", Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
         let persist_fn = FindByFn {
             prefix: None,
             column: &column,
             entity: &entity,
             table_name: "entities",
-            error: &error,
+            find_error: syn::Ident::new("EntityFindError", Span::call_site()),
+            query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::SoftWithoutQueries,
             any_nested: false,
             #[cfg(feature = "instrument")]
@@ -364,7 +391,7 @@ mod tests {
             pub async fn find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, es_entity::EsRepoError> {
+            ) -> Result<Entity, EntityFindError> {
                 self.find_by_id_in_op(self.pool(), id).await
             }
 
@@ -372,19 +399,22 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, es_entity::EsRepoError>
+            ) -> Result<Entity, EntityFindError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Entity, es_entity::EsRepoError> = async {
+                let __result: Result<Entity, EntityFindError> = async {
                     let id = id.borrow();
                     es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
                     )
-                    .fetch_one(op)
-                    .await
+                    .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
+                        entity: "Entity",
+                        column: "id",
+                        value: format!("{:?}", id),
+                    })
                 }.await;
 
                 __result
@@ -393,7 +423,7 @@ mod tests {
             pub async fn maybe_find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+            ) -> Result<Option<Entity>, EntityQueryError> {
                 self.maybe_find_by_id_in_op(self.pool(), id).await
             }
 
@@ -401,11 +431,11 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, es_entity::EsRepoError>
+            ) -> Result<Option<Entity>, EntityQueryError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Option<Entity>, es_entity::EsRepoError> = async {
+                let __result: Result<Option<Entity>, EntityQueryError> = async {
                     let id = id.borrow();
                     es_entity::es_query!(
                         entity = Entity,
@@ -427,14 +457,14 @@ mod tests {
     fn find_by_fn_with_soft_delete_include_deleted() {
         let column = Column::for_id(syn::parse_str("EntityId").unwrap());
         let entity = Ident::new("Entity", Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
         let persist_fn = FindByFn {
             prefix: None,
             column: &column,
             entity: &entity,
             table_name: "entities",
-            error: &error,
+            find_error: syn::Ident::new("EntityFindError", Span::call_site()),
+            query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::Soft,
             any_nested: false,
             #[cfg(feature = "instrument")]
@@ -453,14 +483,14 @@ mod tests {
     fn find_by_fn_nested() {
         let column = Column::for_id(syn::parse_str("EntityId").unwrap());
         let entity = Ident::new("Entity", Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
         let persist_fn = FindByFn {
             prefix: None,
             column: &column,
             entity: &entity,
             table_name: "entities",
-            error: &error,
+            find_error: syn::Ident::new("EntityFindError", Span::call_site()),
+            query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::No,
             any_nested: true,
             #[cfg(feature = "instrument")]
@@ -474,7 +504,7 @@ mod tests {
             pub async fn find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, es_entity::EsRepoError> {
+            ) -> Result<Entity, EntityFindError> {
                 self.find_by_id_in_op(&mut self.pool().begin().await?, id).await
             }
 
@@ -482,19 +512,22 @@ mod tests {
                 &self,
                 op: &mut OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, es_entity::EsRepoError>
+            ) -> Result<Entity, EntityFindError>
                 where
                     OP: es_entity::AtomicOperation
             {
-                let __result: Result<Entity, es_entity::EsRepoError> = async {
+                let __result: Result<Entity, EntityFindError> = async {
                     let id = id.borrow();
                     es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                     )
-                    .fetch_one(op)
-                    .await
+                    .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
+                        entity: "Entity",
+                        column: "id",
+                        value: format!("{:?}", id),
+                    })
                 }.await;
 
                 __result
@@ -503,7 +536,7 @@ mod tests {
             pub async fn maybe_find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, es_entity::EsRepoError> {
+            ) -> Result<Option<Entity>, EntityQueryError> {
                 self.maybe_find_by_id_in_op(&mut self.pool().begin().await?, id).await
             }
 
@@ -511,11 +544,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, es_entity::EsRepoError>
+            ) -> Result<Option<Entity>, EntityQueryError>
                 where
                     OP: es_entity::AtomicOperation
             {
-                let __result: Result<Option<Entity>, es_entity::EsRepoError> = async {
+                let __result: Result<Option<Entity>, EntityQueryError> = async {
                     let id = id.borrow();
                     es_entity::es_query!(
                         entity = Entity,

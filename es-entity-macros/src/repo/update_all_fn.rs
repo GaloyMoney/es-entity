@@ -8,7 +8,7 @@ pub struct UpdateAllFn<'a> {
     entity: &'a syn::Ident,
     table_name: &'a str,
     columns: &'a Columns,
-    error: &'a syn::Type,
+    modify_error: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
@@ -18,7 +18,7 @@ impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
             entity: opts.entity(),
-            error: opts.err(),
+            modify_error: opts.modify_error(),
             columns: &opts.columns,
             table_name: opts.table_name(),
             nested_fn_names: opts
@@ -34,7 +34,7 @@ impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
 impl ToTokens for UpdateAllFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let entity = self.entity;
-        let error = self.error;
+        let modify_error = &self.modify_error;
 
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
@@ -80,7 +80,18 @@ impl ToTokens for UpdateAllFn<'_> {
                     sqlx::query(#query)
                         #(#bind_tokens)*
                         .execute(op.as_executor())
-                        .await?;
+                        .await
+                        .map_err(|e| match &e {
+                            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                                #modify_error::ConstraintViolation {
+                                    column: Self::map_constraint_column(db_err.constraint()),
+                                    value: db_err.try_downcast_ref::<es_entity::prelude::sqlx::postgres::PgDatabaseError>()
+                                    .and_then(|pg_err| es_entity::parse_constraint_detail_value(pg_err.detail())),
+                                    inner: e,
+                                }
+                            }
+                            _ => #modify_error::Sqlx(e),
+                        })?;
                 }),
             )
         } else {
@@ -112,7 +123,7 @@ impl ToTokens for UpdateAllFn<'_> {
             pub async fn update_all(
                 &self,
                 entities: &mut [#entity]
-            ) -> Result<usize, #error> {
+            ) -> Result<usize, #modify_error> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_all_in_op(&mut op, entities).await?;
                 op.commit().await?;
@@ -124,11 +135,11 @@ impl ToTokens for UpdateAllFn<'_> {
                 &self,
                 op: &mut OP,
                 entities: &mut [#entity]
-            ) -> Result<usize, #error>
+            ) -> Result<usize, #modify_error>
             where
                 OP: es_entity::AtomicOperation
             {
-                let __result: Result<usize, #error> = async {
+                let __result: Result<usize, #modify_error> = async {
                     if entities.is_empty() {
                         return Ok(0);
                     }
@@ -159,14 +170,17 @@ impl ToTokens for UpdateAllFn<'_> {
                             if events.any_new() { Some(events) } else { None }
                         })
                         .collect();
-                    let n_persisted = self.persist_events_batch(op, &mut all_event_refs).await?;
+                    let n_persisted = Self::extract_concurrent_modification(
+                        self.persist_events_batch(op, &mut all_event_refs).await,
+                        #modify_error::ConcurrentModification,
+                    )?;
                     drop(all_event_refs);
 
                     let mut total_events = 0usize;
                     for entity in entities.iter_mut() {
                         if let Some(&n_events) = n_persisted.get(&entity.id) {
                             if n_events > 0 {
-                                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(#modify_error::PostPersistHookError)?;
                                 total_events += n_events;
                             }
                         }
@@ -192,7 +206,6 @@ mod tests {
     fn update_all_fn() {
         let id = syn::parse_str("EntityId").unwrap();
         let entity = Ident::new("Entity", Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
         let columns = Columns::new(
             &id,
@@ -205,7 +218,7 @@ mod tests {
         let update_all_fn = UpdateAllFn {
             entity: &entity,
             table_name: "entities",
-            error: &error,
+            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
             #[cfg(feature = "instrument")]
@@ -219,7 +232,7 @@ mod tests {
             pub async fn update_all(
                 &self,
                 entities: &mut [Entity]
-            ) -> Result<usize, es_entity::EsRepoError> {
+            ) -> Result<usize, EntityModifyError> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_all_in_op(&mut op, entities).await?;
                 op.commit().await?;
@@ -230,11 +243,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entities: &mut [Entity]
-            ) -> Result<usize, es_entity::EsRepoError>
+            ) -> Result<usize, EntityModifyError>
             where
                 OP: es_entity::AtomicOperation
             {
-                let __result: Result<usize, es_entity::EsRepoError> = async {
+                let __result: Result<usize, EntityModifyError> = async {
                     if entities.is_empty() {
                         return Ok(0);
                     }
@@ -263,7 +276,18 @@ mod tests {
                         .bind(id_collection)
                         .bind(name_collection)
                         .execute(op.as_executor())
-                        .await?;
+                        .await
+                        .map_err(|e| match &e {
+                            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                                EntityModifyError::ConstraintViolation {
+                                    column: Self::map_constraint_column(db_err.constraint()),
+                                    value: db_err.try_downcast_ref::<es_entity::prelude::sqlx::postgres::PgDatabaseError>()
+                                    .and_then(|pg_err| es_entity::parse_constraint_detail_value(pg_err.detail())),
+                                    inner: e,
+                                }
+                            }
+                            _ => EntityModifyError::Sqlx(e),
+                        })?;
 
                     let mut all_event_refs: Vec<_> = entities.iter_mut()
                         .filter_map(|entity| {
@@ -271,14 +295,17 @@ mod tests {
                             if events.any_new() { Some(events) } else { None }
                         })
                         .collect();
-                    let n_persisted = self.persist_events_batch(op, &mut all_event_refs).await?;
+                    let n_persisted = Self::extract_concurrent_modification(
+                        self.persist_events_batch(op, &mut all_event_refs).await,
+                        EntityModifyError::ConcurrentModification,
+                    )?;
                     drop(all_event_refs);
 
                     let mut total_events = 0usize;
                     for entity in entities.iter_mut() {
                         if let Some(&n_events) = n_persisted.get(&entity.id) {
                             if n_events > 0 {
-                                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(EntityModifyError::PostPersistHookError)?;
                                 total_events += n_events;
                             }
                         }
@@ -298,7 +325,6 @@ mod tests {
     fn update_all_fn_no_columns() {
         let id = syn::parse_str("EntityId").unwrap();
         let entity = Ident::new("Entity", Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
 
         let mut columns = Columns::default();
         columns.set_id_column(&id);
@@ -306,7 +332,7 @@ mod tests {
         let update_all_fn = UpdateAllFn {
             entity: &entity,
             table_name: "entities",
-            error: &error,
+            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
             #[cfg(feature = "instrument")]
@@ -320,7 +346,7 @@ mod tests {
             pub async fn update_all(
                 &self,
                 entities: &mut [Entity]
-            ) -> Result<usize, es_entity::EsRepoError> {
+            ) -> Result<usize, EntityModifyError> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_all_in_op(&mut op, entities).await?;
                 op.commit().await?;
@@ -331,11 +357,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entities: &mut [Entity]
-            ) -> Result<usize, es_entity::EsRepoError>
+            ) -> Result<usize, EntityModifyError>
             where
                 OP: es_entity::AtomicOperation
             {
-                let __result: Result<usize, es_entity::EsRepoError> = async {
+                let __result: Result<usize, EntityModifyError> = async {
                     if entities.is_empty() {
                         return Ok(0);
                     }
@@ -358,14 +384,17 @@ mod tests {
                             if events.any_new() { Some(events) } else { None }
                         })
                         .collect();
-                    let n_persisted = self.persist_events_batch(op, &mut all_event_refs).await?;
+                    let n_persisted = Self::extract_concurrent_modification(
+                        self.persist_events_batch(op, &mut all_event_refs).await,
+                        EntityModifyError::ConcurrentModification,
+                    )?;
                     drop(all_event_refs);
 
                     let mut total_events = 0usize;
                     for entity in entities.iter_mut() {
                         if let Some(&n_events) = n_persisted.get(&entity.id) {
                             if n_events > 0 {
-                                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
+                                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(EntityModifyError::PostPersistHookError)?;
                                 total_events += n_events;
                             }
                         }

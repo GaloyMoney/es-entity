@@ -3,6 +3,7 @@ mod combo_cursor;
 mod create_all_fn;
 mod create_fn;
 mod delete_fn;
+mod error_types;
 mod find_all_fn;
 mod find_by_fn;
 mod list_by_fn;
@@ -48,6 +49,7 @@ pub struct EsRepo<'a> {
     nested_fns: Vec<syn::Ident>,
     nested: Vec<nested::Nested<'a>>,
     populate_nested: Option<populate_nested::PopulateNested<'a>>,
+    error_types: error_types::ErrorTypes<'a>,
     opts: &'a RepositoryOptions,
 }
 
@@ -106,6 +108,7 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             nested_fns,
             nested,
             populate_nested,
+            error_types: error_types::ErrorTypes::new(opts),
             opts,
         }
     }
@@ -156,7 +159,6 @@ impl ToTokens for EsRepo<'_> {
         let entity = self.opts.entity();
         let event = self.opts.event();
         let id = self.opts.id();
-        let error = self.opts.err();
 
         let cursor_mod = self.opts.cursor_mod();
         let types_mod = self.opts.repo_types_mod();
@@ -173,6 +175,13 @@ impl ToTokens for EsRepo<'_> {
         } else {
             quote! { es_entity::EsQueryFlavorNested }
         };
+
+        let create_error = self.opts.create_error();
+        let modify_error = self.opts.modify_error();
+        let find_error = self.opts.find_error();
+        let query_error = self.opts.query_error();
+        let error_types = self.error_types.generate();
+        let map_constraint_fn = self.error_types.generate_map_constraint_fn();
 
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
 
@@ -198,10 +207,10 @@ impl ToTokens for EsRepo<'_> {
                 #[allow(non_camel_case_types)]
                 pub(super) type Repo__Entity = #entity;
                 #[allow(non_camel_case_types)]
-                pub(super) type Repo__Error = #error;
-                #[allow(non_camel_case_types)]
                 pub(super) type Repo__DbEvent = es_entity::GenericEvent<#id>;
             }
+
+            #error_types
 
             #list_for_filters_struct
             #sort_by
@@ -212,6 +221,7 @@ impl ToTokens for EsRepo<'_> {
                     &self.#pool_field
                 }
 
+                #map_constraint_fn
                 #begin
                 #post_persist_hook
                 #persist_events_fn
@@ -233,17 +243,21 @@ impl ToTokens for EsRepo<'_> {
 
             impl #impl_generics es_entity::EsRepo for #repo #ty_generics #where_clause {
                 type Entity = #entity;
-                type Err = #error;
+                type CreateError = #create_error;
+                type ModifyError = #modify_error;
+                type FindError = #find_error;
+                type QueryError = #query_error;
                 type EsQueryFlavor = #es_query_flavor;
 
                #[inline(always)]
-               async fn load_all_nested_in_op<OP>(
+               async fn load_all_nested_in_op<OP, E>(
                    op: &mut OP, entities: &mut [#entity]
-               ) -> Result<(), #error>
+               ) -> Result<(), E>
                    where
                        OP: es_entity::AtomicOperation,
+                       E: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
                {
-                   #(Self::#nested_fns(op, entities).await?;)*
+                   #(Self::#nested_fns::<_, _, E>(op, entities).await?;)*
                    Ok(())
                }
             }

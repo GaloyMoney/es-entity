@@ -30,7 +30,7 @@ pub struct ProfileData {
 }
 
 #[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
+#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
 pub struct Profile {
     pub id: ProfileId,
     pub data: ProfileData,
@@ -76,7 +76,7 @@ impl Profile {
 }
 
 impl TryFromEvents<ProfileEvent> for Profile {
-    fn try_from_events(events: EntityEvents<ProfileEvent>) -> Result<Self, EsEntityError> {
+    fn try_from_events(events: EntityEvents<ProfileEvent>) -> Result<Self, EntityHydrationError> {
         let mut builder = ProfileBuilder::default();
         for event in events.iter_all() {
             match event {

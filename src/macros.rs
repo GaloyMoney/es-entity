@@ -96,8 +96,7 @@ macro_rules! idempotency_guard {
 /// # Returns
 ///
 /// Returns an [`EsQuery`](crate::query::EsQuery) struct that provides methods
-/// like [`fetch_one()`](crate::query::EsQuery::fetch_one),
-/// [`fetch_optional()`](crate::query::EsQuery::fetch_optional), and
+/// like [`fetch_optional()`](crate::query::EsQuery::fetch_optional) and
 /// [`fetch_n()`](crate::query::EsQuery::fetch_n) for executing the
 /// query and retrieving hydrated entities.
 ///
@@ -192,28 +191,6 @@ macro_rules! es_query {
             sql = $query
         )
     });
-}
-
-#[macro_export]
-macro_rules! from_es_entity_error {
-    ($name:ident) => {
-        impl $name {
-            pub fn was_not_found(&self) -> bool {
-                matches!(self, $name::EsEntityError($crate::EsEntityError::NotFound))
-            }
-            pub fn was_concurrent_modification(&self) -> bool {
-                matches!(
-                    self,
-                    $name::EsEntityError($crate::EsEntityError::ConcurrentModification)
-                )
-            }
-        }
-        impl From<$crate::EsEntityError> for $name {
-            fn from(e: $crate::EsEntityError) -> Self {
-                $name::EsEntityError(e)
-            }
-        }
-    };
 }
 
 // Helper macro for common entity_id implementations (internal use only)

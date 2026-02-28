@@ -464,17 +464,21 @@ async fn update_all_with_custom_accessors() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let profiles = Profiles::new(pool);
 
+    let alice_email = format!("alice_{}@test.com", ProfileId::new());
+    let bob_email = format!("bob_{}@test.com", ProfileId::new());
+    let bob_new_email = format!("bob_new_{}@test.com", ProfileId::new());
+
     let new_profiles = vec![
         NewProfile::builder()
             .id(ProfileId::new())
             .name("Alice")
-            .email("alice@test.com")
+            .email(&alice_email)
             .build()
             .unwrap(),
         NewProfile::builder()
             .id(ProfileId::new())
             .name("Bob")
-            .email("bob@test.com")
+            .email(&bob_email)
             .build()
             .unwrap(),
     ];
@@ -483,18 +487,109 @@ async fn update_all_with_custom_accessors() -> anyhow::Result<()> {
     assert_eq!(created.len(), 2);
 
     let _ = created[0].update_name("Alice_updated");
-    let _ = created[1].update_email("bob_new@test.com");
+    let _ = created[1].update_email(bob_new_email.clone());
 
     let n_events = profiles.update_all(&mut created).await?;
     assert_eq!(n_events, 2);
 
     let loaded_alice = profiles.find_by_id(created[0].id).await?;
     assert_eq!(loaded_alice.data.name, "Alice_updated");
-    assert_eq!(loaded_alice.email, "alice@test.com");
+    assert_eq!(loaded_alice.email, alice_email);
 
     let loaded_bob = profiles.find_by_id(created[1].id).await?;
     assert_eq!(loaded_bob.data.name, "Bob");
-    assert_eq!(loaded_bob.email, "bob_new@test.com");
+    assert_eq!(loaded_bob.email, bob_new_email);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_duplicate_email_returns_constraint_violation_with_value() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let profiles = Profiles::new(pool);
+
+    let email = format!("unique_{}@test.com", ProfileId::new());
+
+    let first = NewProfile::builder()
+        .id(ProfileId::new())
+        .name("First")
+        .email(&email)
+        .build()
+        .unwrap();
+    profiles.create(first).await?;
+
+    let duplicate = NewProfile::builder()
+        .id(ProfileId::new())
+        .name("Second")
+        .email(&email)
+        .build()
+        .unwrap();
+    let err = match profiles.create(duplicate).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected constraint violation"),
+    };
+
+    assert!(err.was_duplicate(ProfileColumn::Email));
+    assert_eq!(err.duplicate_value(), Some(email.as_str()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_duplicate_id_returns_constraint_violation_with_value() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool);
+
+    let id = UserId::new();
+
+    let first = NewUser::builder().id(id).name("First").build().unwrap();
+    users.create(first).await?;
+
+    let duplicate = NewUser::builder().id(id).name("Second").build().unwrap();
+    let err = match users.create(duplicate).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected constraint violation"),
+    };
+
+    assert!(err.was_duplicate(UserColumn::Id));
+    assert_eq!(err.duplicate_value(), Some(id.to_string().as_str()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_to_duplicate_email_returns_constraint_violation_with_value() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let profiles = Profiles::new(pool);
+
+    let email_a = format!("update_a_{}@test.com", ProfileId::new());
+    let email_b = format!("update_b_{}@test.com", ProfileId::new());
+
+    let profile_a = NewProfile::builder()
+        .id(ProfileId::new())
+        .name("A")
+        .email(&email_a)
+        .build()
+        .unwrap();
+    profiles.create(profile_a).await?;
+
+    let profile_b = NewProfile::builder()
+        .id(ProfileId::new())
+        .name("B")
+        .email(&email_b)
+        .build()
+        .unwrap();
+    let mut b = profiles.create(profile_b).await?;
+
+    // Update B's email to A's email — should trigger constraint violation
+    let _ = b.update_email(email_a.clone());
+    let err = match profiles.update(&mut b).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected constraint violation"),
+    };
+
+    assert!(err.was_duplicate(ProfileColumn::Email));
+    assert_eq!(err.duplicate_value(), Some(email_a.as_str()));
 
     Ok(())
 }

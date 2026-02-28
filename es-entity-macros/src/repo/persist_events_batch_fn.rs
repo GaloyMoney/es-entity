@@ -7,7 +7,6 @@ use super::options::*;
 pub struct PersistEventsBatchFn<'a> {
     id: &'a syn::Ident,
     event: &'a syn::Ident,
-    error: &'a syn::Type,
     events_table_name: &'a str,
     event_ctx: bool,
 }
@@ -17,7 +16,6 @@ impl<'a> From<&'a RepositoryOptions> for PersistEventsBatchFn<'a> {
         Self {
             id: opts.id(),
             event: opts.event(),
-            error: opts.err(),
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
         }
@@ -28,7 +26,6 @@ impl ToTokens for PersistEventsBatchFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let id_type = &self.id;
         let event_type = &self.event;
-        let error = self.error;
 
         let query = format!(
             "INSERT INTO {} (id, recorded_at, sequence, event_type, event{}) \
@@ -74,10 +71,10 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                 &self,
                 op: &mut OP,
                 all_events: &mut [B]
-            ) -> Result<std::collections::HashMap<#id_type, usize>, #error>
+            ) -> Result<std::collections::HashMap<#id_type, usize>, sqlx::Error>
             where
                 OP: es_entity::AtomicOperation,
-                B: std::borrow::BorrowMut<es_entity::EntityEvents<#event_type>>
+                B: std::borrow::BorrowMut<es_entity::EntityEvents<#event_type>>,
             {
                 use es_entity::prelude::sqlx::Row;
 
@@ -110,8 +107,7 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                     n_events_map.insert(id.clone(), n_events);
                 }
 
-                let rows = Self::extract_concurrent_modification(
-                    sqlx::query(#query)
+                let rows = sqlx::query(#query)
                         .bind(now)
                         .bind(&all_ids)
                         .bind(&all_sequences)
@@ -119,8 +115,7 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                         .bind(&all_serialized)
                         #ctx_bind
                         .fetch_all(op.as_executor())
-                        .await
-                )?;
+                        .await?;
 
                 let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
 
@@ -143,11 +138,9 @@ mod tests {
     fn persist_events_fn() {
         let id = syn::parse_str("EntityId").unwrap();
         let event = syn::Ident::new("EntityEvent", proc_macro2::Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
         let persist_fn = PersistEventsBatchFn {
             id: &id,
             event: &event,
-            error: &error,
             events_table_name: "entity_events",
             event_ctx: true,
         };
@@ -160,10 +153,10 @@ mod tests {
                 &self,
                 op: &mut OP,
                 all_events: &mut [B]
-            ) -> Result<std::collections::HashMap<EntityId, usize>, es_entity::EsRepoError>
+            ) -> Result<std::collections::HashMap<EntityId, usize>, sqlx::Error>
             where
                 OP: es_entity::AtomicOperation,
-                B: std::borrow::BorrowMut<es_entity::EntityEvents<EntityEvent>>
+                B: std::borrow::BorrowMut<es_entity::EntityEvents<EntityEvent>>,
             {
                 use es_entity::prelude::sqlx::Row;
 
@@ -199,8 +192,7 @@ mod tests {
                     n_events_map.insert(id.clone(), n_events);
                 }
 
-                let rows = Self::extract_concurrent_modification(
-                    sqlx::query("INSERT INTO entity_events (id, recorded_at, sequence, event_type, event, context) SELECT unnested.id, COALESCE($1, NOW()), unnested.sequence, unnested.event_type, unnested.event, unnested.context FROM UNNEST($2, $3::INT[], $4::TEXT[], $5::JSONB[], $6::JSONB[]) AS unnested(id, sequence, event_type, event, context) RETURNING recorded_at")
+                let rows = sqlx::query("INSERT INTO entity_events (id, recorded_at, sequence, event_type, event, context) SELECT unnested.id, COALESCE($1, NOW()), unnested.sequence, unnested.event_type, unnested.event, unnested.context FROM UNNEST($2, $3::INT[], $4::TEXT[], $5::JSONB[], $6::JSONB[]) AS unnested(id, sequence, event_type, event, context) RETURNING recorded_at")
                         .bind(now)
                         .bind(&all_ids)
                         .bind(&all_sequences)
@@ -212,8 +204,7 @@ mod tests {
                              Some(all_contexts)
                         })
                         .fetch_all(op.as_executor())
-                        .await
-                )?;
+                        .await?;
 
                 let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
 
@@ -233,11 +224,9 @@ mod tests {
     fn persist_events_fn_without_event_context() {
         let id = syn::parse_str("EntityId").unwrap();
         let event = syn::Ident::new("EntityEvent", proc_macro2::Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
         let persist_fn = PersistEventsBatchFn {
             id: &id,
             event: &event,
-            error: &error,
             events_table_name: "entity_events",
             event_ctx: false,
         };
@@ -250,10 +239,10 @@ mod tests {
                 &self,
                 op: &mut OP,
                 all_events: &mut [B]
-            ) -> Result<std::collections::HashMap<EntityId, usize>, es_entity::EsRepoError>
+            ) -> Result<std::collections::HashMap<EntityId, usize>, sqlx::Error>
             where
                 OP: es_entity::AtomicOperation,
-                B: std::borrow::BorrowMut<es_entity::EntityEvents<EntityEvent>>
+                B: std::borrow::BorrowMut<es_entity::EntityEvents<EntityEvent>>,
             {
                 use es_entity::prelude::sqlx::Row;
 
@@ -284,16 +273,14 @@ mod tests {
                     n_events_map.insert(id.clone(), n_events);
                 }
 
-                let rows = Self::extract_concurrent_modification(
-                    sqlx::query("INSERT INTO entity_events (id, recorded_at, sequence, event_type, event) SELECT unnested.id, COALESCE($1, NOW()), unnested.sequence, unnested.event_type, unnested.event FROM UNNEST($2, $3::INT[], $4::TEXT[], $5::JSONB[]) AS unnested(id, sequence, event_type, event) RETURNING recorded_at")
+                let rows = sqlx::query("INSERT INTO entity_events (id, recorded_at, sequence, event_type, event) SELECT unnested.id, COALESCE($1, NOW()), unnested.sequence, unnested.event_type, unnested.event FROM UNNEST($2, $3::INT[], $4::TEXT[], $5::JSONB[]) AS unnested(id, sequence, event_type, event) RETURNING recorded_at")
                         .bind(now)
                         .bind(&all_ids)
                         .bind(&all_sequences)
                         .bind(&all_types)
                         .bind(&all_serialized)
                         .fetch_all(op.as_executor())
-                        .await
-                )?;
+                        .await?;
 
                 let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
 

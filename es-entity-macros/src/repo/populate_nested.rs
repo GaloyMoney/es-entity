@@ -8,7 +8,6 @@ pub struct PopulateNested<'a> {
     column: &'a Column,
     ident: &'a syn::Ident,
     generics: &'a syn::Generics,
-    error: &'a syn::Type,
     id: &'a syn::Ident,
     table_name: &'a str,
     events_table_name: &'a str,
@@ -21,7 +20,6 @@ impl<'a> PopulateNested<'a> {
             column,
             ident: &opts.ident,
             generics: &opts.generics,
-            error: opts.err(),
             id: opts.id(),
             table_name: opts.table_name(),
             events_table_name: opts.events_table_name(),
@@ -34,7 +32,6 @@ impl ToTokens for PopulateNested<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let ty = self.column.ty();
         let ident = self.ident;
-        let error = self.error;
         let repo_types_mod = &self.repo_types_mod;
         let accessor = self.column.parent_accessor();
 
@@ -50,13 +47,14 @@ impl ToTokens for PopulateNested<'_> {
 
         tokens.append_all(quote! {
             impl #impl_generics es_entity::PopulateNested<#ty> for #ident #ty_generics #where_clause {
-                async fn populate_in_op<OP, P>(
+                async fn populate_in_op<OP, P, E>(
                     op: &mut OP,
                     mut lookup: std::collections::HashMap<#ty, &mut P>,
-                ) -> Result<(), #error>
+                ) -> Result<(), E>
                 where
                     OP: es_entity::AtomicOperation,
-                    P: Parent<<Self as EsRepo>::Entity>
+                    P: Parent<<Self as EsRepo>::Entity>,
+                    E: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
                 {
                     let parent_ids: Vec<_> = lookup.keys().collect();
                     let rows = {
@@ -69,7 +67,7 @@ impl ToTokens for PopulateNested<'_> {
                     };
                     let n = rows.len();
                     let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(rows.into_iter(), n)?;
-                    Self::load_all_nested_in_op(op, &mut res).await?;
+                    Self::load_all_nested_in_op::<_, E>(op, &mut res).await?;
                     for entity in res.into_iter() {
                         let parent = lookup.get_mut(&entity.#accessor).expect("parent not present");
                         parent.inject_children(std::iter::once(entity));

@@ -31,7 +31,7 @@ As a minimum you must specify the `entity` attribute and have a field that holds
 #     events: EntityEvents<UserEvent>,
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         unimplemented!()
 #     }
 # }
@@ -45,7 +45,7 @@ use es_entity::*;
     // id = "UserId",                  // The type of the `id`
     // new = "NewUser",                // The type of the `NewEntity`
     // event = "UserEvent",            // The type of the `Event` enum
-    // err = "EsRepoError",            // The Error type that should be returned from all fns.
+    // Per-operation error types are generated: UserCreateError, UserModifyError, UserFindError, UserQueryError
     // tbl = "users",                  // The name of the index table
     // events_tbl = "user_events",     // The name of the events table
     // tbl_prefix = "",                // A table prefix that should be added to the derived table names
@@ -88,7 +88,7 @@ The most important of which is the `columns` option that configures the mapping 
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         unimplemented!()
 #     }
 # }
@@ -122,5 +122,20 @@ pub struct Users {
     pool: sqlx::PgPool
 }
 ```
+
+### Column options
+
+Each column supports the following options:
+
+| Option | Description |
+|--------|-------------|
+| `ty = "Type"` | **(required)** The Rust type of the column |
+| `create(accessor = "...")` | Custom accessor on `NewEntity` for insert (see [create](./repo-create.md)) |
+| `create(persist = false)` | Skip this column during insert |
+| `update(accessor = "...")` | Custom accessor on `Entity` for update (see [update](./repo-update.md)) |
+| `update(persist = false)` | Skip this column during update |
+| `list_by` | Generate `list_by_<column>` pagination query |
+| `list_for` | Include in `list_for_<column>` filtering |
+| `constraint = "name"` | Map a custom DB constraint name to this column for error reporting (see [Error Types](./repo-errors.md)) |
 
 Take a look at the next sections to see more information on how the options modify the generated code.

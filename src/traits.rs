@@ -2,7 +2,7 @@
 
 use serde::{Serialize, de::DeserializeOwned};
 
-use super::{error::EsEntityError, events::EntityEvents, operation::AtomicOperation};
+use super::{error::EntityHydrationError, events::EntityEvents, operation::AtomicOperation};
 
 /// Required trait for all event enums to be compatible and recognised by es-entity.
 ///
@@ -121,7 +121,7 @@ pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
 ///
 /// // The `TryFromEvents` implementation to hydrate entities by replaying events chronologically.
 /// impl TryFromEvents<UserEvent> for User {
-///     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+///     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 ///         let mut name = String::new();
 ///         for event in events.iter_all() {
 ///              match event {
@@ -190,7 +190,7 @@ pub trait IntoEvents<E: EsEvent> {
 /// // The `TryFromEvents` implementation to hydrate entities by replaying events chronologically.
 /// // Returns the re-constructed `User` entity
 /// impl TryFromEvents<UserEvent> for User {
-///     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+///     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 ///         let mut name = String::new();
 ///         for event in events.iter_all() {
 ///              match event {
@@ -205,7 +205,7 @@ pub trait IntoEvents<E: EsEvent> {
 /// ```
 pub trait TryFromEvents<E: EsEvent> {
     /// Method to implement which hydrates `Entity` by replaying its events chronologically
-    fn try_from_events(events: EntityEvents<E>) -> Result<Self, EsEntityError>
+    fn try_from_events(events: EntityEvents<E>) -> Result<Self, EntityHydrationError>
     where
         Self: Sized;
 }
@@ -285,16 +285,20 @@ pub trait EsEntity: TryFromEvents<Self::Event> + Send {
 /// ```
 pub trait EsRepo: Send {
     type Entity: EsEntity;
-    type Err: From<EsEntityError> + From<sqlx::Error>;
+    type CreateError;
+    type ModifyError;
+    type FindError: From<sqlx::Error> + From<EntityHydrationError> + Send;
+    type QueryError: From<sqlx::Error> + From<EntityHydrationError> + Send;
     type EsQueryFlavor;
 
     /// Loads all nested entities for a given set of parent entities within an atomic operation.
-    fn load_all_nested_in_op<OP>(
+    fn load_all_nested_in_op<OP, E>(
         op: &mut OP,
         entities: &mut [Self::Entity],
-    ) -> impl Future<Output = Result<(), Self::Err>> + Send
+    ) -> impl Future<Output = Result<(), E>> + Send
     where
-        OP: AtomicOperation;
+        OP: AtomicOperation,
+        E: From<sqlx::Error> + From<EntityHydrationError> + Send;
 }
 
 pub trait RetryableInto<T>: Into<T> + Copy + std::fmt::Debug {}
