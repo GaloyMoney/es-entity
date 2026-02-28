@@ -128,6 +128,33 @@ macro_rules! idempotency_guard {
 /// ```
 #[macro_export]
 macro_rules! es_query {
+    // With entity override + forgettable
+    (
+        entity = $entity:ident,
+        forgettable_tbl = $forgettable_tbl:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            entity = $entity,
+            forgettable_tbl = $forgettable_tbl,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // With entity override + forgettable - no args
+    (
+        entity = $entity:ident,
+        forgettable_tbl = $forgettable_tbl:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            entity = $entity,
+            forgettable_tbl = $forgettable_tbl,
+            sql = $query
+        )
+    });
+
     // With entity override
     (
         entity = $entity:ident,
@@ -147,6 +174,33 @@ macro_rules! es_query {
     ) => ({
         $crate::expand_es_query!(
             entity = $entity,
+            sql = $query
+        )
+    });
+
+    // With tbl_prefix + forgettable
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        forgettable_tbl = $forgettable_tbl:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            forgettable_tbl = $forgettable_tbl,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // With tbl_prefix + forgettable - no args
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        forgettable_tbl = $forgettable_tbl:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            forgettable_tbl = $forgettable_tbl,
             sql = $query
         )
     });

@@ -5,6 +5,7 @@ mod create_fn;
 mod delete_fn;
 mod find_all_fn;
 mod find_by_fn;
+mod forget_fn;
 mod list_by_fn;
 mod list_for_filters_fn;
 mod list_for_fn;
@@ -39,6 +40,7 @@ pub struct EsRepo<'a> {
     create_fn: create_fn::CreateFn<'a>,
     create_all_fn: create_all_fn::CreateAllFn<'a>,
     delete_fn: delete_fn::DeleteFn<'a>,
+    forget_fn: Option<forget_fn::ForgetFn<'a>>,
     find_by_fns: Vec<find_by_fn::FindByFn<'a>>,
     find_all_fn: find_all_fn::FindAllFn<'a>,
     post_persist_hook: post_persist_hook::PostPersistHook<'a>,
@@ -87,6 +89,12 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             .map(|n| (n.find_nested_fn_name(), nested::Nested::new(n, opts)))
             .unzip();
 
+        let forget_fn = if opts.forgettable_enabled() {
+            Some(forget_fn::ForgetFn::from(opts))
+        } else {
+            None
+        };
+
         Self {
             repo: &opts.ident,
             generics: &opts.generics,
@@ -97,6 +105,7 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             create_fn: create_fn::CreateFn::from(opts),
             create_all_fn: create_all_fn::CreateAllFn::from(opts),
             delete_fn: delete_fn::DeleteFn::from(opts),
+            forget_fn,
             find_by_fns,
             find_all_fn: find_all_fn::FindAllFn::from(opts),
             post_persist_hook: post_persist_hook::PostPersistHook::from(opts),
@@ -121,6 +130,7 @@ impl ToTokens for EsRepo<'_> {
         let create_fn = &self.create_fn;
         let create_all_fn = &self.create_all_fn;
         let delete_fn = &self.delete_fn;
+        let forget_fn = &self.forget_fn;
         let find_by_fns = &self.find_by_fns;
         let find_all_fn = &self.find_all_fn;
         let post_persist_hook = &self.post_persist_hook;
@@ -166,6 +176,7 @@ impl ToTokens for EsRepo<'_> {
         let populate_nested = &self.populate_nested;
 
         let pool_field = self.opts.pool_field();
+        let has_tbl_prefix = self.opts.table_prefix().is_some();
         let es_query_flavor = if nested_fns.is_empty() {
             quote! {
                 es_entity::EsQueryFlavorFlat
@@ -201,6 +212,8 @@ impl ToTokens for EsRepo<'_> {
                 pub(super) type Repo__Error = #error;
                 #[allow(non_camel_case_types)]
                 pub(super) type Repo__DbEvent = es_entity::GenericEvent<#id>;
+                #[allow(dead_code)]
+                pub(super) const REPO__HAS_TBL_PREFIX: bool = #has_tbl_prefix;
             }
 
             #list_for_filters_struct
@@ -221,6 +234,7 @@ impl ToTokens for EsRepo<'_> {
                 #update_fn
                 #update_all_fn
                 #delete_fn
+                #forget_fn
                 #(#find_by_fns)*
                 #find_all_fn
                 #list_for_filters

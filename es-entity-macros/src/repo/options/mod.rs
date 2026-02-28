@@ -108,6 +108,10 @@ pub struct RepositoryOptions {
 
     #[darling(default)]
     persist_event_context: Option<bool>,
+    #[darling(default)]
+    forgettable: bool,
+    #[darling(default, rename = "forgettable_tbl")]
+    forgettable_table_name: Option<String>,
 }
 
 impl RepositoryOptions {
@@ -143,6 +147,13 @@ impl RepositoryOptions {
         if self.events_table_name.is_none() {
             self.events_table_name =
                 Some(format!("{prefix}{entity_name}Events").to_case(Case::Snake));
+        }
+
+        if self.forgettable && self.forgettable_table_name.is_none() {
+            self.forgettable_table_name = Some(format!(
+                "{}_forgettable_payloads",
+                self.table_name.as_ref().expect("Table name not set")
+            ));
         }
 
         self.columns
@@ -304,5 +315,20 @@ impl RepositoryOptions {
 
     pub fn err(&self) -> &syn::Type {
         self.err_ty.as_ref().expect("Error identifier is not set")
+    }
+
+    pub fn forgettable_enabled(&self) -> bool {
+        self.forgettable
+    }
+
+    pub fn forgettable_table_name(&self) -> Option<&str> {
+        if self.forgettable {
+            Some(self.forgettable_table_name.as_deref().unwrap_or_else(|| {
+                // Lazy init not possible with &str, so we use a different approach
+                panic!("forgettable_table_name should have been set in update_defaults")
+            }))
+        } else {
+            None
+        }
     }
 }
