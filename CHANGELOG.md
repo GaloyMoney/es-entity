@@ -1,3 +1,11 @@
+# [cala release v0.10.21](https://github.com/GaloyMoney/cala/releases/tag/0.10.21)
+
+
+
+### Refactor
+
+- [**breaking**] Replace monolithic EsRepoError with per-repo per-operation … (#93)
+
 # [cala release v0.10.20](https://github.com/GaloyMoney/cala/releases/tag/0.10.20)
 
 
