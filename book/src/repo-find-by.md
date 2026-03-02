@@ -35,7 +35,7 @@ It is assumed that your database schema has a relevant `INDEX` on `<column>` to 
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         Ok(User { id: events.id().clone(), name: "Fred".to_string(), events })
 #     }
 # }

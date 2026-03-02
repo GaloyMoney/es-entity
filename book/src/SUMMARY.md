@@ -26,6 +26,7 @@
     - [list_for](./repo-list-for.md)
     - [list_for_filters](./repo-list-for-filters.md)
     - [delete](./repo-delete.md)
+    - [Error Types](./repo-errors.md)
 
 - [Transactions](./transactions.md)
   - [Connection Traits](./connection-traits.md)

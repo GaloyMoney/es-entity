@@ -3,11 +3,13 @@
 The `find_all` function allows you to fetch multiple entities by their IDs in a single database query.
 
 ```rust,ignore
-fn find_all(&self, ids: &[EntityId]) -> Result<HashMap<EntityId, Entity>, EntityError>
-fn find_all_in_op(&self, op: OP, ids: &[EntityId]) -> Result<HashMap<EntityId, Entity>, EntityError>
+fn find_all<Out: From<Entity>>(&self, ids: &[EntityId]) -> Result<HashMap<EntityId, Out>, EntityQueryError>
+fn find_all_in_op<Out: From<Entity>>(&self, op: OP, ids: &[EntityId]) -> Result<HashMap<EntityId, Out>, EntityQueryError>
 ```
 
 This is more efficient than calling `find_by_id` multiple times, as it performs a single database query with `WHERE id = ANY($1)`.
+
+Unlike `find_by_id`, `find_all` does **not** return a `NotFound` error for missing IDs. Any IDs that don't match a row are silently excluded from the returned `HashMap`. Check the map's length or use `contains_key` if you need to detect missing entities.
 
 ```rust
 # extern crate es_entity;
@@ -35,7 +37,7 @@ This is more efficient than calling `find_by_id` multiple times, as it performs 
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         Ok(User { id: events.id().clone(), name: "Fred".to_string(), events })
 #     }
 # }

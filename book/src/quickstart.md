@@ -91,7 +91,7 @@ pub enum UserEvent {
 // The `EsEntity` - using derive_builder is optional
 // but useful for hydrating in the `TryFromEvents` trait.
 #[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
+#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
 pub struct User {
     pub id: UserId,
     pub name: String,
@@ -127,7 +127,7 @@ impl User {
 // Any EsEntity must implement `TryFromEvents`.
 // This trait is what hydrates entities after loading the events from the database
 impl TryFromEvents<UserEvent> for User {
-    fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+    fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
         let mut builder = UserBuilder::default();
         for event in events.iter_all() {
             match event {

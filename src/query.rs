@@ -13,12 +13,13 @@
 //! es_query!(
 //!     "SELECT id FROM users WHERE name = $1",
 //!     name
-//! ).fetch_one(&pool).await
+//! ).fetch_optional(&pool).await
 //! ```
 //!
 //! See the `es_query!` macro documentation for more details.
 
 use crate::{
+    error::EntityHydrationError,
     events::{EntityEvents, GenericEvent},
     one_time_executor::IntoOneTimeExecutor,
     operation::AtomicOperation,
@@ -61,33 +62,24 @@ where
         }
     }
 
-    async fn fetch_optional_inner(
+    async fn fetch_optional_inner<E: From<sqlx::Error> + From<EntityHydrationError>>(
         self,
         op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::Err> {
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, E> {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
         if rows.is_empty() {
             return Ok(None);
         }
 
-        Ok(Some(EntityEvents::load_first(rows.into_iter())?))
-    }
-
-    async fn fetch_one_inner(
-        self,
-        op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<<Repo as EsRepo>::Entity, <Repo as EsRepo>::Err> {
-        let executor = op.into_executor();
-        let rows = executor.fetch_all(self.inner).await?;
         Ok(EntityEvents::load_first(rows.into_iter())?)
     }
 
-    async fn fetch_n_inner(
+    async fn fetch_n_inner<E: From<sqlx::Error> + From<EntityHydrationError>>(
         self,
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
-    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::Err> {
+    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), E> {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
         Ok(EntityEvents::load_n(rows.into_iter(), first)?)
@@ -112,18 +104,8 @@ where
     pub async fn fetch_optional(
         self,
         op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::Err> {
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::QueryError> {
         self.fetch_optional_inner(op).await
-    }
-
-    /// Fetches exactly one entity from the query results.
-    ///
-    /// Returns an error if no entities match or if the entity cannot be loaded.
-    pub async fn fetch_one(
-        self,
-        op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<<Repo as EsRepo>::Entity, <Repo as EsRepo>::Err> {
-        self.fetch_one_inner(op).await
     }
 
     /// Fetches up to `first` entities from the query results.
@@ -134,7 +116,7 @@ where
         self,
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
-    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::Err> {
+    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::QueryError> {
         self.fetch_n_inner(op, first).await
     }
 }
@@ -158,35 +140,24 @@ where
     pub async fn fetch_optional<OP>(
         self,
         op: &mut OP,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::Err>
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::QueryError>
     where
         OP: AtomicOperation,
     {
-        let Some(entity) = self.fetch_optional_inner(&mut *op).await? else {
+        let Some(entity) = self
+            .fetch_optional_inner::<<Repo as EsRepo>::QueryError>(&mut *op)
+            .await?
+        else {
             return Ok(None);
         };
         let mut entities = [entity];
-        <Repo as EsRepo>::load_all_nested_in_op(op, &mut entities).await?;
+        <Repo as EsRepo>::load_all_nested_in_op::<_, <Repo as EsRepo>::QueryError>(
+            op,
+            &mut entities,
+        )
+        .await?;
         let [entity] = entities;
         Ok(Some(entity))
-    }
-
-    /// Fetches exactly one entity and loads all nested relationships.
-    ///
-    /// Returns an error if no entities match or if the entity/nested relationships
-    /// cannot be loaded.
-    pub async fn fetch_one<OP>(
-        self,
-        op: &mut OP,
-    ) -> Result<<Repo as EsRepo>::Entity, <Repo as EsRepo>::Err>
-    where
-        OP: AtomicOperation,
-    {
-        let entity = self.fetch_one_inner(&mut *op).await?;
-        let mut entities = [entity];
-        <Repo as EsRepo>::load_all_nested_in_op(op, &mut entities).await?;
-        let [entity] = entities;
-        Ok(entity)
     }
 
     /// Fetches up to `first` entities and loads all nested relationships.
@@ -197,12 +168,18 @@ where
         self,
         op: &mut OP,
         first: usize,
-    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::Err>
+    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::QueryError>
     where
         OP: AtomicOperation,
     {
-        let (mut entities, more) = self.fetch_n_inner(&mut *op, first).await?;
-        <Repo as EsRepo>::load_all_nested_in_op(op, &mut entities).await?;
+        let (mut entities, more) = self
+            .fetch_n_inner::<<Repo as EsRepo>::QueryError>(&mut *op, first)
+            .await?;
+        <Repo as EsRepo>::load_all_nested_in_op::<_, <Repo as EsRepo>::QueryError>(
+            op,
+            &mut entities,
+        )
+        .await?;
         Ok((entities, more))
     }
 }

@@ -27,7 +27,7 @@ pub enum OrderItemEvent {
 }
 
 #[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
+#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
 pub struct OrderItem {
     pub id: OrderItemId,
     pub order_id: OrderId,
@@ -54,7 +54,7 @@ impl OrderItem {
 }
 
 impl TryFromEvents<OrderItemEvent> for OrderItem {
-    fn try_from_events(events: EntityEvents<OrderItemEvent>) -> Result<Self, EsEntityError> {
+    fn try_from_events(events: EntityEvents<OrderItemEvent>) -> Result<Self, EntityHydrationError> {
         let mut builder = OrderItemBuilder::default();
 
         for event in events.iter_all() {
@@ -123,7 +123,7 @@ pub enum OrderEvent {
 }
 
 #[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
+#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
 pub struct Order {
     pub id: OrderId,
     events: EntityEvents<OrderEvent>,
@@ -160,7 +160,7 @@ impl Order {
 }
 
 impl TryFromEvents<OrderEvent> for Order {
-    fn try_from_events(events: EntityEvents<OrderEvent>) -> Result<Self, EsEntityError> {
+    fn try_from_events(events: EntityEvents<OrderEvent>) -> Result<Self, EntityHydrationError> {
         let mut builder = OrderBuilder::default();
 
         for event in events.iter_all() {

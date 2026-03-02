@@ -32,7 +32,7 @@ In the code below we have a `name` column in the `index` table that needs to be 
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(mut events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(mut events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         let mut name = String::new();
 #         for event in events.iter_all() {
 #             match event {
@@ -100,7 +100,7 @@ impl Users {
     pub async fn update(
         &self,
         entity: &mut User
-    ) -> Result<usize, es_entity::EsRepoError> {
+    ) -> Result<usize, UserModifyError> {
         // Check if there are any new events to persist
         if !entity.events().any_new() {
             return Ok(0);
@@ -145,7 +145,7 @@ The `update(accessor = "<>")` option modifies how the field is accessed on the `
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         unimplemented!()
 #     }
 # }
@@ -202,7 +202,7 @@ This is useful for columns that should never change after creation.
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         unimplemented!()
 #     }
 # }

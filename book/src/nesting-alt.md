@@ -39,7 +39,7 @@ This leverages the rust module system to enforce that the children cannot be acc
 # }
 # 
 # #[derive(EsEntity, Builder)]
-# #[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
+# #[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
 # pub struct BillingPeriod {
 #     pub id: BillingPeriodId,
 #     pub subscription_id: SubscriptionId,
@@ -89,7 +89,7 @@ This leverages the rust module system to enforce that the children cannot be acc
 # }
 # 
 # impl TryFromEvents<BillingPeriodEvent> for BillingPeriod {
-#     fn try_from_events(events: EntityEvents<BillingPeriodEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<BillingPeriodEvent>) -> Result<Self, EntityHydrationError> {
 #         let mut builder = BillingPeriodBuilder::default().is_current(true);
 #         let mut line_items = Vec::new();
 # 
@@ -126,7 +126,7 @@ This leverages the rust module system to enforce that the children cannot be acc
 # }
 # 
 # #[derive(EsEntity, Builder)]
-# #[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
+# #[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
 # pub struct Subscription {
 #     pub id: SubscriptionId,
 #     current_period_id: Option<BillingPeriodId>,
@@ -179,7 +179,7 @@ This leverages the rust module system to enforce that the children cannot be acc
 # }
 # 
 # impl TryFromEvents<SubscriptionEvent> for Subscription {
-#     fn try_from_events(events: EntityEvents<SubscriptionEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<SubscriptionEvent>) -> Result<Self, EntityHydrationError> {
 #         let mut builder = SubscriptionBuilder::default();
 #         
 #         for event in events.iter_all() {
@@ -274,7 +274,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     Closed,
 # }
 # #[derive(EsEntity, Builder)]
-# #[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
+# #[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
 # pub struct BillingPeriod {
 #     pub id: BillingPeriodId,
 #     pub subscription_id: SubscriptionId,
@@ -318,7 +318,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     }
 # }
 # impl TryFromEvents<BillingPeriodEvent> for BillingPeriod {
-#     fn try_from_events(events: EntityEvents<BillingPeriodEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<BillingPeriodEvent>) -> Result<Self, EntityHydrationError> {
 #         let mut builder = BillingPeriodBuilder::default();
 #         let mut line_items = Vec::new();
 #         let mut is_current = true;
@@ -369,7 +369,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     BillingPeriodStarted { period_id: BillingPeriodId },
 # }
 # #[derive(EsEntity, Builder)]
-# #[builder(pattern = "owned", build_fn(error = "EsEntityError"))]
+# #[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
 # pub struct Subscription {
 #     pub id: SubscriptionId,
 #     current_period_id: Option<BillingPeriodId>,
@@ -412,7 +412,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     }
 # }
 # impl TryFromEvents<SubscriptionEvent> for Subscription {
-#     fn try_from_events(events: EntityEvents<SubscriptionEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<SubscriptionEvent>) -> Result<Self, EntityHydrationError> {
 #         let mut builder = SubscriptionBuilder::default();
 #         let mut current_period_id = None;
 #         for event in events.iter_all() {

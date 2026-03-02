@@ -31,7 +31,7 @@ Returns the total number of events persisted. Entities without new events are sk
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(mut events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(mut events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         let mut name = String::new();
 #         for event in events.iter_all() {
 #             match event {

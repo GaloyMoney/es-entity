@@ -7,7 +7,6 @@ use super::options::*;
 pub struct PersistEventsFn<'a> {
     id: &'a syn::Ident,
     event: &'a syn::Ident,
-    error: &'a syn::Type,
     events_table_name: &'a str,
     event_ctx: bool,
 }
@@ -17,7 +16,6 @@ impl<'a> From<&'a RepositoryOptions> for PersistEventsFn<'a> {
         Self {
             id: opts.id(),
             event: opts.event(),
-            error: opts.err(),
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
         }
@@ -51,19 +49,21 @@ impl ToTokens for PersistEventsFn<'_> {
         };
         let id_type = &self.id;
         let event_type = &self.event;
-        let error = self.error;
         let id_tokens = quote! {
             id as &#id_type
         };
 
         tokens.append_all(quote! {
-            fn extract_concurrent_modification<T>(res: Result<T, sqlx::Error>) -> Result<T, #error> {
+            fn extract_concurrent_modification<T, E: From<sqlx::Error>>(
+                res: Result<T, sqlx::Error>,
+                concurrent_modification: E,
+            ) -> Result<T, E> {
                 match res {
-                    Ok(entity) => Ok(entity),
-                    Err(sqlx::Error::Database(db_error)) if db_error.is_unique_violation() => {
-                        Err(#error::from(es_entity::EsEntityError::ConcurrentModification))
+                    Ok(v) => Ok(v),
+                    Err(sqlx::Error::Database(ref db_err)) if db_err.is_unique_violation() => {
+                        Err(concurrent_modification)
                     }
-                    Err(err) => Err(#error::from(err)),
+                    Err(e) => Err(E::from(e)),
                 }
             }
 
@@ -71,9 +71,9 @@ impl ToTokens for PersistEventsFn<'_> {
                 &self,
                 op: &mut OP,
                 events: &mut es_entity::EntityEvents<#event_type>
-            ) -> Result<usize, #error>
+            ) -> Result<usize, sqlx::Error>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation,
             {
                 let id = events.id();
                 let offset = events.len_persisted();
@@ -82,8 +82,7 @@ impl ToTokens for PersistEventsFn<'_> {
                 let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
                 let now = op.maybe_now();
 
-                let rows = Self::extract_concurrent_modification(
-                    sqlx::query!(
+                let rows = sqlx::query!(
                         #query,
                         #id_tokens,
                         now,
@@ -91,7 +90,7 @@ impl ToTokens for PersistEventsFn<'_> {
                         &events_types,
                         &serialized_events,
                         #ctx_arg
-                    ).fetch_all(op.as_executor()).await)?;
+                    ).fetch_all(op.as_executor()).await?;
 
                 let recorded_at = rows[0].recorded_at;
                 let n_events = events.mark_new_events_persisted_at(recorded_at);
@@ -110,11 +109,9 @@ mod tests {
     fn persist_events_fn() {
         let id = syn::parse_str("EntityId").unwrap();
         let event = syn::Ident::new("EntityEvent", proc_macro2::Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
         let persist_fn = PersistEventsFn {
             id: &id,
             event: &event,
-            error: &error,
             events_table_name: "entity_events",
             event_ctx: true,
         };
@@ -123,13 +120,16 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            fn extract_concurrent_modification<T>(res: Result<T, sqlx::Error>) -> Result<T, es_entity::EsRepoError> {
+            fn extract_concurrent_modification<T, E: From<sqlx::Error>>(
+                res: Result<T, sqlx::Error>,
+                concurrent_modification: E,
+            ) -> Result<T, E> {
                 match res {
-                    Ok(entity) => Ok(entity),
-                    Err(sqlx::Error::Database(db_error)) if db_error.is_unique_violation() => {
-                        Err(es_entity::EsRepoError::from(es_entity::EsEntityError::ConcurrentModification))
+                    Ok(v) => Ok(v),
+                    Err(sqlx::Error::Database(ref db_err)) if db_err.is_unique_violation() => {
+                        Err(concurrent_modification)
                     }
-                    Err(err) => Err(es_entity::EsRepoError::from(err)),
+                    Err(e) => Err(E::from(e)),
                 }
             }
 
@@ -137,9 +137,9 @@ mod tests {
                 &self,
                 op: &mut OP,
                 events: &mut es_entity::EntityEvents<EntityEvent>
-            ) -> Result<usize, es_entity::EsRepoError>
+            ) -> Result<usize, sqlx::Error>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation,
             {
                 let id = events.id();
                 let offset = events.len_persisted();
@@ -148,8 +148,7 @@ mod tests {
                 let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
                 let now = op.maybe_now();
 
-                let rows = Self::extract_concurrent_modification(
-                    sqlx::query!(
+                let rows = sqlx::query!(
                         "INSERT INTO entity_events (id, recorded_at, sequence, event_type, event, context) SELECT $1, COALESCE($2, NOW()), ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event, unnested.context FROM UNNEST($4::TEXT[], $5::JSONB[], $6::JSONB[]) AS unnested(event_type, event, context) RETURNING recorded_at",
                         id as &EntityId,
                         now,
@@ -157,7 +156,7 @@ mod tests {
                         &events_types,
                         &serialized_events,
                         contexts.as_deref() as Option<&[es_entity::ContextData]>,
-                    ).fetch_all(op.as_executor()).await)?;
+                    ).fetch_all(op.as_executor()).await?;
 
                 let recorded_at = rows[0].recorded_at;
                 let n_events = events.mark_new_events_persisted_at(recorded_at);
@@ -173,11 +172,9 @@ mod tests {
     fn persist_events_fn_without_event_context() {
         let id = syn::parse_str("EntityId").unwrap();
         let event = syn::Ident::new("EntityEvent", proc_macro2::Span::call_site());
-        let error = syn::parse_str("es_entity::EsRepoError").unwrap();
         let persist_fn = PersistEventsFn {
             id: &id,
             event: &event,
-            error: &error,
             events_table_name: "entity_events",
             event_ctx: false,
         };
@@ -186,13 +183,16 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            fn extract_concurrent_modification<T>(res: Result<T, sqlx::Error>) -> Result<T, es_entity::EsRepoError> {
+            fn extract_concurrent_modification<T, E: From<sqlx::Error>>(
+                res: Result<T, sqlx::Error>,
+                concurrent_modification: E,
+            ) -> Result<T, E> {
                 match res {
-                    Ok(entity) => Ok(entity),
-                    Err(sqlx::Error::Database(db_error)) if db_error.is_unique_violation() => {
-                        Err(es_entity::EsRepoError::from(es_entity::EsEntityError::ConcurrentModification))
+                    Ok(v) => Ok(v),
+                    Err(sqlx::Error::Database(ref db_err)) if db_err.is_unique_violation() => {
+                        Err(concurrent_modification)
                     }
-                    Err(err) => Err(es_entity::EsRepoError::from(err)),
+                    Err(e) => Err(E::from(e)),
                 }
             }
 
@@ -200,9 +200,9 @@ mod tests {
                 &self,
                 op: &mut OP,
                 events: &mut es_entity::EntityEvents<EntityEvent>
-            ) -> Result<usize, es_entity::EsRepoError>
+            ) -> Result<usize, sqlx::Error>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation,
             {
                 let id = events.id();
                 let offset = events.len_persisted();
@@ -210,15 +210,14 @@ mod tests {
                 let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
                 let now = op.maybe_now();
 
-                let rows = Self::extract_concurrent_modification(
-                    sqlx::query!(
+                let rows = sqlx::query!(
                         "INSERT INTO entity_events (id, recorded_at, sequence, event_type, event) SELECT $1, COALESCE($2, NOW()), ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event FROM UNNEST($4::TEXT[], $5::JSONB[]) AS unnested(event_type, event) RETURNING recorded_at",
                         id as &EntityId,
                         now,
                         offset as i32,
                         &events_types,
                         &serialized_events,
-                    ).fetch_all(op.as_executor()).await)?;
+                    ).fetch_all(op.as_executor()).await?;
 
                 let recorded_at = rows[0].recorded_at;
                 let n_events = events.mark_new_events_persisted_at(recorded_at);

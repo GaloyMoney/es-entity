@@ -84,7 +84,7 @@ impl ToTokens for FiltersStruct<'_> {
 pub struct ListForFiltersFn<'a> {
     pub filters_struct: FiltersStruct<'a>,
     entity: &'a syn::Ident,
-    error: &'a syn::Type,
+    query_error: syn::Ident,
     for_columns: Vec<&'a Column>,
     by_columns: Vec<&'a Column>,
     cursor: &'a ComboCursor<'a>,
@@ -108,7 +108,7 @@ impl<'a> ListForFiltersFn<'a> {
         Self {
             filters_struct: FiltersStruct::new(opts, for_columns.clone()),
             entity: opts.entity(),
-            error: opts.err(),
+            query_error: opts.query_error(),
             for_columns,
             by_columns,
             cursor,
@@ -221,7 +221,7 @@ impl<'a> ListForFiltersFn<'a> {
 
     fn generate_by_fn(&self, by_column: &'a Column, delete: DeleteOption) -> TokenStream {
         let entity = self.entity;
-        let error = self.error;
+        let error = &self.query_error;
         let cursor_mod = &self.cursor_mod;
         let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
         let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
@@ -469,7 +469,7 @@ impl ToTokens for ListForFiltersFn<'_> {
         let cursor_ident = self.cursor.ident();
 
         let entity = self.entity;
-        let error = self.error;
+        let error = &self.query_error;
         let cursor_mod = &self.cursor_mod;
 
         for delete in [DeleteOption::No, DeleteOption::Soft] {
@@ -580,7 +580,6 @@ impl ToTokens for ListForFiltersFn<'_> {
                     sort: es_entity::Sort<#sort_by_name>,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
-                    where #error: From<es_entity::CursorDestructureError>
                 {
                     let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> = async {
                         #extract_has_cursor
@@ -647,7 +646,7 @@ mod tests {
     #[test]
     fn list_for_filters_function_generation() {
         let entity = Ident::new("Order", Span::call_site());
-        let error: syn::Type = syn::parse_str("es_entity::EsRepoError").unwrap();
+        let query_error = syn::Ident::new("OrderQueryError", Span::call_site());
         let id = syn::Ident::new("OrderId", proc_macro2::Span::call_site());
         let cursor_mod = Ident::new("cursor_mod", Span::call_site());
 
@@ -679,7 +678,7 @@ mod tests {
         let list_for_filters_fn = ListForFiltersFn {
             filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
             entity: &entity,
-            error: &error,
+            query_error,
             for_columns,
             by_columns,
             cursor: &combo_cursor,
@@ -702,7 +701,7 @@ mod tests {
                 filters: OrdersFilters,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrdersByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersByIdCursor>, es_entity::EsRepoError> {
+            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersByIdCursor>, OrderQueryError> {
                 self.list_for_filters_by_id_in_op(self.pool(), filters, cursor, direction).await
             }
 
@@ -712,11 +711,11 @@ mod tests {
                 filters: OrdersFilters,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrdersByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersByIdCursor>, es_entity::EsRepoError>
+            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersByIdCursor>, OrderQueryError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersByIdCursor>, es_entity::EsRepoError> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersByIdCursor>, OrderQueryError> = async {
                     let filter_customer_id = filters.customer_id;
                     let filter_status = filters.status;
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
@@ -770,10 +769,9 @@ mod tests {
                 filters: OrdersFilters,
                 sort: es_entity::Sort<OrdersSortBy>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrdersCursor>,
-            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersCursor>, es_entity::EsRepoError>
-                where es_entity::EsRepoError: From<es_entity::CursorDestructureError>
+            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersCursor>, OrderQueryError>
             {
-                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersCursor>, es_entity::EsRepoError> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersCursor>, OrderQueryError> = async {
                     let es_entity::Sort { by, direction } = sort;
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
 
@@ -818,7 +816,7 @@ mod tests {
     fn list_for_filters_bare_list_for_defaults_to_by_id() {
         // Bare list_for defaults to by(id) only
         let entity = Ident::new("Order", Span::call_site());
-        let error: syn::Type = syn::parse_str("es_entity::EsRepoError").unwrap();
+        let query_error = syn::Ident::new("OrderQueryError", Span::call_site());
         let id = syn::Ident::new("OrderId", proc_macro2::Span::call_site());
         let cursor_mod = Ident::new("cursor_mod", Span::call_site());
 
@@ -850,7 +848,7 @@ mod tests {
         let list_for_filters_fn = ListForFiltersFn {
             filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
             entity: &entity,
-            error: &error,
+            query_error,
             for_columns,
             by_columns,
             cursor: &combo_cursor,
@@ -881,7 +879,7 @@ mod tests {
         // Test: customer_id has list_for(by(id)), status has list_for(by(created_at))
         // Only customer_id should dispatch to individual method for by_id sort
         let entity = Ident::new("Order", Span::call_site());
-        let error: syn::Type = syn::parse_str("es_entity::EsRepoError").unwrap();
+        let query_error = syn::Ident::new("OrderQueryError", Span::call_site());
         let id = syn::Ident::new("OrderId", proc_macro2::Span::call_site());
         let cursor_mod = Ident::new("cursor_mod", Span::call_site());
 
@@ -916,7 +914,7 @@ mod tests {
         let list_for_filters_fn = ListForFiltersFn {
             filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
             entity: &entity,
-            error: &error,
+            query_error,
             for_columns,
             by_columns,
             cursor: &combo_cursor,

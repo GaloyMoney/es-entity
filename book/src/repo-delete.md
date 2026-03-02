@@ -50,7 +50,7 @@ CREATE TABLE users (
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
-#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EsEntityError> {
+#     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
 #         Ok(User { id: events.id().clone(), name: "Delyth".to_string(), events })
 #     }
 # }

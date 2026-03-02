@@ -3,6 +3,7 @@ mod delete;
 
 use convert_case::{Case, Casing};
 use darling::{FromDeriveInput, FromField};
+use proc_macro2::Span;
 use quote::quote;
 
 pub use columns::*;
@@ -75,6 +76,14 @@ impl RepoField {
             proc_macro2::Span::call_site(),
         )
     }
+
+    /// PascalCase variant name derived from field name (e.g. `line_items` -> `LineItems`)
+    pub fn nested_variant_name(&self) -> syn::Ident {
+        syn::Ident::new(
+            &self.ident().to_string().to_case(Case::UpperCamel),
+            Span::call_site(),
+        )
+    }
 }
 
 #[derive(FromDeriveInput)]
@@ -97,8 +106,6 @@ pub struct RepositoryOptions {
     event_ident: Option<syn::Ident>,
     #[darling(default, rename = "id")]
     id_ty: Option<syn::Ident>,
-    #[darling(default, rename = "err")]
-    err_ty: Option<syn::Type>,
     #[darling(default, rename = "tbl_prefix")]
     prefix: Option<syn::LitStr>,
     #[darling(default, rename = "tbl")]
@@ -124,10 +131,6 @@ impl RepositoryOptions {
                 &format!("{entity_name}Id"),
                 proc_macro2::Span::call_site(),
             ));
-        }
-        if self.err_ty.is_none() {
-            self.err_ty =
-                Some(syn::parse_str("es_entity::EsRepoError").expect("Failed to parse error type"));
         }
         let prefix = if let Some(prefix) = &self.prefix {
             format!("{}_", prefix.value())
@@ -290,6 +293,38 @@ impl RepositoryOptions {
         }
     }
 
+    pub fn create_error(&self) -> syn::Ident {
+        syn::Ident::new(
+            &format!("{}CreateError", self.entity_ident),
+            Span::call_site(),
+        )
+    }
+
+    pub fn modify_error(&self) -> syn::Ident {
+        syn::Ident::new(
+            &format!("{}ModifyError", self.entity_ident),
+            Span::call_site(),
+        )
+    }
+
+    pub fn find_error(&self) -> syn::Ident {
+        syn::Ident::new(
+            &format!("{}FindError", self.entity_ident),
+            Span::call_site(),
+        )
+    }
+
+    pub fn query_error(&self) -> syn::Ident {
+        syn::Ident::new(
+            &format!("{}QueryError", self.entity_ident),
+            Span::call_site(),
+        )
+    }
+
+    pub fn column_enum(&self) -> syn::Ident {
+        syn::Ident::new(&format!("{}Column", self.entity_ident), Span::call_site())
+    }
+
     pub fn query_fn_get_op(nested: bool) -> proc_macro2::TokenStream {
         if nested {
             quote! {
@@ -300,9 +335,5 @@ impl RepositoryOptions {
                 self.pool()
             }
         }
-    }
-
-    pub fn err(&self) -> &syn::Type {
-        self.err_ty.as_ref().expect("Error identifier is not set")
     }
 }

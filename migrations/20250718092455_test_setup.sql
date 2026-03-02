@@ -144,6 +144,7 @@ CREATE TABLE profiles (
   email VARCHAR NOT NULL,
   created_at TIMESTAMPTZ NOT NULL
 );
+CREATE UNIQUE INDEX profiles_email_key ON profiles (email);
 
 CREATE TABLE profile_events (
   id UUID NOT NULL REFERENCES profiles(id),
