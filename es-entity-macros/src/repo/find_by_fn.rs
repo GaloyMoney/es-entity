@@ -1,3 +1,4 @@
+use convert_case::{Case, Casing};
 use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
 use quote::{TokenStreamExt, quote};
@@ -9,6 +10,7 @@ pub struct FindByFn<'a> {
     entity: &'a syn::Ident,
     column: &'a Column,
     table_name: &'a str,
+    column_enum: syn::Ident,
     find_error: syn::Ident,
     query_error: syn::Ident,
     delete: DeleteOption,
@@ -24,6 +26,7 @@ impl<'a> FindByFn<'a> {
             column,
             entity: opts.entity(),
             table_name: opts.table_name(),
+            column_enum: opts.column_enum(),
             find_error: opts.find_error(),
             query_error: opts.query_error(),
             delete: opts.delete,
@@ -53,13 +56,17 @@ impl ToTokens for FindByFn<'_> {
 
             let (result_type, fetch_expr) = if maybe.is_empty() {
                 let entity_name_str = entity.to_string();
-                let column_name_str = column_name.to_string();
+                let column_enum = &self.column_enum;
+                let column_variant = syn::Ident::new(
+                    &column_name.to_string().to_case(Case::UpperCamel),
+                    Span::call_site(),
+                );
                 (
                     quote! { #entity },
                     quote! {
                         fetch_optional(op).await?.ok_or_else(|| #error::NotFound {
                             entity: #entity_name_str,
-                            column: #column_name_str,
+                            column: Some(#column_enum::#column_variant),
                             value: format!("{:?}", #column_name),
                         })
                     },
@@ -199,6 +206,7 @@ mod tests {
             column: &column,
             entity: &entity,
             table_name: "entities",
+            column_enum: syn::Ident::new("EntityColumn", Span::call_site()),
             find_error: syn::Ident::new("EntityFindError", Span::call_site()),
             query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::No,
@@ -235,7 +243,7 @@ mod tests {
                     )
                     .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
                         entity: "Entity",
-                        column: "id",
+                        column: Some(EntityColumn::Id),
                         value: format!("{:?}", id),
                     })
                 }.await;
@@ -289,6 +297,7 @@ mod tests {
             column: &column,
             entity: &entity,
             table_name: "entities",
+            column_enum: syn::Ident::new("EntityColumn", Span::call_site()),
             find_error: syn::Ident::new("EntityFindError", Span::call_site()),
             query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::No,
@@ -325,7 +334,7 @@ mod tests {
                     )
                     .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
                         entity: "Entity",
-                        column: "email",
+                        column: Some(EntityColumn::Email),
                         value: format!("{:?}", email),
                     })
                 }.await;
@@ -376,6 +385,7 @@ mod tests {
             column: &column,
             entity: &entity,
             table_name: "entities",
+            column_enum: syn::Ident::new("EntityColumn", Span::call_site()),
             find_error: syn::Ident::new("EntityFindError", Span::call_site()),
             query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::SoftWithoutQueries,
@@ -412,7 +422,7 @@ mod tests {
                     )
                     .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
                         entity: "Entity",
-                        column: "id",
+                        column: Some(EntityColumn::Id),
                         value: format!("{:?}", id),
                     })
                 }.await;
@@ -463,6 +473,7 @@ mod tests {
             column: &column,
             entity: &entity,
             table_name: "entities",
+            column_enum: syn::Ident::new("EntityColumn", Span::call_site()),
             find_error: syn::Ident::new("EntityFindError", Span::call_site()),
             query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::Soft,
@@ -489,6 +500,7 @@ mod tests {
             column: &column,
             entity: &entity,
             table_name: "entities",
+            column_enum: syn::Ident::new("EntityColumn", Span::call_site()),
             find_error: syn::Ident::new("EntityFindError", Span::call_site()),
             query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::No,
@@ -525,7 +537,7 @@ mod tests {
                     )
                     .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
                         entity: "Entity",
-                        column: "id",
+                        column: Some(EntityColumn::Id),
                         value: format!("{:?}", id),
                     })
                 }.await;

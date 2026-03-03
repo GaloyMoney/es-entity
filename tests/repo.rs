@@ -529,7 +529,8 @@ async fn create_duplicate_email_returns_constraint_violation_with_value() -> any
         Ok(_) => panic!("expected constraint violation"),
     };
 
-    assert!(err.was_duplicate(ProfileColumn::Email));
+    assert!(err.was_duplicate());
+    assert!(err.was_duplicate_by(ProfileColumn::Email));
     assert_eq!(err.duplicate_value(), Some(email.as_str()));
 
     Ok(())
@@ -551,7 +552,8 @@ async fn create_duplicate_id_returns_constraint_violation_with_value() -> anyhow
         Ok(_) => panic!("expected constraint violation"),
     };
 
-    assert!(err.was_duplicate(UserColumn::Id));
+    assert!(err.was_duplicate());
+    assert!(err.was_duplicate_by(UserColumn::Id));
     assert_eq!(err.duplicate_value(), Some(id.to_string().as_str()));
 
     Ok(())
@@ -588,8 +590,82 @@ async fn update_to_duplicate_email_returns_constraint_violation_with_value() -> 
         Ok(_) => panic!("expected constraint violation"),
     };
 
-    assert!(err.was_duplicate(ProfileColumn::Email));
+    assert!(err.was_duplicate());
+    assert!(err.was_duplicate_by(ProfileColumn::Email));
     assert_eq!(err.duplicate_value(), Some(email_a.as_str()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn find_by_id_not_found_has_column_and_value() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool);
+
+    let missing_id = UserId::new();
+    let err = match users.find_by_id(missing_id).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected NotFound error"),
+    };
+
+    // Column-agnostic check
+    assert!(err.was_not_found());
+
+    // Column-specific check
+    assert!(err.was_not_found_by(UserColumn::Id));
+    assert!(!err.was_not_found_by(UserColumn::Name));
+
+    // Value extraction
+    let value = err.not_found_value().expect("should have a value");
+    assert!(
+        value.contains(&missing_id.to_string()),
+        "not_found_value should contain the id: got {value}"
+    );
+
+    // Pattern matching on the variant
+    match &err {
+        UserFindError::NotFound {
+            column: Some(UserColumn::Id),
+            value,
+            ..
+        } => {
+            assert!(value.contains(&missing_id.to_string()));
+        }
+        other => panic!("expected NotFound with column Id, got: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn find_by_name_not_found_has_column_and_value() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool);
+
+    let missing_name = format!("nonexistent_{}", UserId::new());
+    let err = match users.find_by_name(&missing_name).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected NotFound error"),
+    };
+
+    assert!(err.was_not_found());
+    assert!(err.was_not_found_by(UserColumn::Name));
+    assert!(!err.was_not_found_by(UserColumn::Id));
+
+    let value = err.not_found_value().expect("should have a value");
+    assert!(
+        value.contains(&missing_name),
+        "not_found_value should contain the name: got {value}"
+    );
+
+    // Pattern matching on the variant
+    match &err {
+        UserFindError::NotFound {
+            column: Some(UserColumn::Name),
+            ..
+        } => {}
+        other => panic!("expected NotFound with column Name, got: {other:?}"),
+    }
 
     Ok(())
 }

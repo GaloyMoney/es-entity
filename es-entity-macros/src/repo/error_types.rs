@@ -273,7 +273,11 @@ impl<'a> ErrorTypes<'a> {
                     }
                 }
 
-                pub fn was_duplicate(&self, column: #column_enum) -> bool {
+                pub fn was_duplicate(&self) -> bool {
+                    matches!(self, Self::ConstraintViolation { .. })
+                }
+
+                pub fn was_duplicate_by(&self, column: #column_enum) -> bool {
                     matches!(self, Self::ConstraintViolation { column: Some(c), .. } if *c == column)
                 }
 
@@ -456,7 +460,11 @@ impl<'a> ErrorTypes<'a> {
                     }
                 }
 
-                pub fn was_duplicate(&self, column: #column_enum) -> bool {
+                pub fn was_duplicate(&self) -> bool {
+                    matches!(self, Self::ConstraintViolation { .. })
+                }
+
+                pub fn was_duplicate_by(&self, column: #column_enum) -> bool {
                     matches!(self, Self::ConstraintViolation { column: Some(c), .. } if *c == column)
                 }
 
@@ -474,6 +482,7 @@ impl<'a> ErrorTypes<'a> {
     fn generate_find_error(&self) -> TokenStream {
         let find_error = &self.find_error;
         let query_error = &self.query_error;
+        let column_enum = &self.column_enum;
         let entity = self.entity;
         let entity_name = entity.to_string();
 
@@ -481,7 +490,7 @@ impl<'a> ErrorTypes<'a> {
             #[derive(Debug)]
             pub enum #find_error {
                 Sqlx(sqlx::Error),
-                NotFound { entity: &'static str, column: &'static str, value: String },
+                NotFound { entity: &'static str, column: Option<#column_enum>, value: String },
                 HydrationError(es_entity::EntityHydrationError),
             }
 
@@ -489,7 +498,8 @@ impl<'a> ErrorTypes<'a> {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                     match self {
                         Self::Sqlx(e) => write!(f, "{}FindError - Sqlx: {}", #entity_name, e),
-                        Self::NotFound { entity, column, value } => write!(f, "{}FindError - NotFound({column}={value})", entity),
+                        Self::NotFound { entity, column: Some(column), value } => write!(f, "{}FindError - NotFound({column}={value})", entity),
+                        Self::NotFound { entity, column: None, value } => write!(f, "{}FindError - NotFound({})", entity, value),
                         Self::HydrationError(e) => write!(f, "{}FindError - HydrationError: {}", #entity_name, e),
                     }
                 }
@@ -530,6 +540,17 @@ impl<'a> ErrorTypes<'a> {
             impl #find_error {
                 pub fn was_not_found(&self) -> bool {
                     matches!(self, Self::NotFound { .. })
+                }
+
+                pub fn was_not_found_by(&self, column: #column_enum) -> bool {
+                    matches!(self, Self::NotFound { column: Some(c), .. } if *c == column)
+                }
+
+                pub fn not_found_value(&self) -> Option<&str> {
+                    match self {
+                        Self::NotFound { value, .. } => Some(value.as_str()),
+                        _ => None,
+                    }
                 }
             }
         }

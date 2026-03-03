@@ -34,7 +34,7 @@ mod tbl_prefix_param {
             .await?
             .ok_or_else(|| UserFindError::NotFound {
                 entity: "User",
-                column: "id",
+                column: Some(UserColumn::Id),
                 value: format!("{:?}", id),
             })
         }
@@ -119,7 +119,7 @@ mod entity_param {
             .await?
             .ok_or_else(|| UserFindError::NotFound {
                 entity: "User",
-                column: "id",
+                column: Some(UserColumn::Id),
                 value: format!("{:?}", id),
             })
         }
@@ -192,7 +192,7 @@ mod no_params {
                 .await?
                 .ok_or_else(|| UserFindError::NotFound {
                     entity: "User",
-                    column: "id",
+                    column: Some(UserColumn::Id),
                     value: format!("{:?}", id),
                 })
         }
