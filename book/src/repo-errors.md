@@ -34,7 +34,17 @@ When a `create` or `create_all` operation violates a unique constraint, the erro
 let result = users.create(new_user).await;
 match result {
     Ok(user) => { /* success */ }
-    Err(e) if e.was_duplicate(UserColumn::Email) => {
+    // Column-agnostic check
+    Err(e) if e.was_duplicate() => {
+        println!("some unique constraint violated");
+    }
+    Err(e) => return Err(e.into()),
+}
+
+// Or check a specific column:
+match result {
+    Ok(user) => { /* success */ }
+    Err(e) if e.was_duplicate_by(UserColumn::Email) => {
         let value = e.duplicate_value(); // Option<&str>
         println!("email {} already taken", value.unwrap_or("unknown"));
     }
@@ -69,7 +79,7 @@ if e.was_concurrent_modification() {
 
 ## UserModifyError
 
-`UserModifyError` has the same structure as `UserCreateError` (minus `HydrationError`) and is returned by `update`, `update_all`, and `delete`. It provides the same `was_duplicate`, `duplicate_value`, and `was_concurrent_modification` helpers.
+`UserModifyError` has the same structure as `UserCreateError` (minus `HydrationError`) and is returned by `update`, `update_all`, and `delete`. It provides the same `was_duplicate`, `was_duplicate_by`, `duplicate_value`, and `was_concurrent_modification` helpers.
 
 ### Nested entity errors
 
@@ -81,12 +91,12 @@ For aggregates with nested entities (e.g. `Order` containing `OrderItem`s), `Cre
 let val = err.duplicate_value(); // cascades into nested variants
 ```
 
-The `was_duplicate` helper does **not** cascade because nested entities have a different column enum. To check which nested column was violated, match the nested variant directly:
+The `was_duplicate_by` helper does **not** cascade because nested entities have a different column enum. To check which nested column was violated, match the nested variant directly:
 
 ```rust,ignore
 match err {
     OrderModifyError::OrderItemsCreate(item_err)
-        if item_err.was_duplicate(OrderItemColumn::Sku) =>
+        if item_err.was_duplicate_by(OrderItemColumn::Sku) =>
     {
         let val = item_err.duplicate_value();
     }
@@ -99,12 +109,14 @@ match err {
 ```rust,ignore
 pub enum UserFindError {
     Sqlx(sqlx::Error),
-    NotFound { entity: &'static str, column: &'static str, value: String },
+    NotFound { entity: &'static str, column: Option<UserColumn>, value: String },
     HydrationError(EntityHydrationError),
 }
 ```
 
-The `NotFound` variant is returned by `find_by_*` methods when no matching row exists. It includes the entity name, column searched, and the value that was not found:
+The `NotFound` variant is returned by `find_by_*` methods when no matching row exists. It includes the entity name, the column searched (as the `UserColumn` enum), and the value that was not found.
+
+### Checking for not-found
 
 ```rust,ignore
 let result = users.find_by_id(some_id).await;
@@ -114,6 +126,37 @@ match result {
         println!("user not found");
     }
     Err(e) => return Err(e.into()),
+}
+```
+
+### Matching on a specific column
+
+Use `was_not_found_by` to check which column was searched, or pattern-match directly on the `NotFound` variant for full control:
+
+```rust,ignore
+// Helper method
+if e.was_not_found_by(UserColumn::Email) {
+    let value = e.not_found_value(); // Option<&str>
+    println!("no user with email {}", value.unwrap_or("unknown"));
+}
+
+// Pattern matching for custom error conversion
+impl From<UserFindError> for AppError {
+    fn from(error: UserFindError) -> Self {
+        match error {
+            UserFindError::NotFound {
+                column: Some(UserColumn::Id),
+                value,
+                ..
+            } => Self::UserNotFoundById(value),
+            UserFindError::NotFound {
+                column: Some(UserColumn::Email),
+                value,
+                ..
+            } => Self::UserNotFoundByEmail(value),
+            other => Self::Internal(other.into()),
+        }
+    }
 }
 ```
 

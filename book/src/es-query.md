@@ -135,7 +135,7 @@ impl Users {
         .await?
         .ok_or_else(|| UserFindError::NotFound {
             entity: "User",
-            column: "name",
+            column: Some(UserColumn::Name),
             value: name,
         })
     }
