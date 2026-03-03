@@ -39,6 +39,28 @@ pub fn parse_constraint_detail_value(detail: Option<&str>) -> Option<String> {
     }
 }
 
+#[doc(hidden)]
+/// Wrapper used by generated code to format not-found values.
+/// Prefers `Display` over `Debug` via inherent-vs-trait method resolution.
+pub struct NotFoundValue<'a, T: ?Sized>(pub &'a T);
+
+impl<T: std::fmt::Display + ?Sized> NotFoundValue<'_, T> {
+    pub fn to_not_found_value(&self) -> String {
+        self.0.to_string()
+    }
+}
+
+#[doc(hidden)]
+pub trait ToNotFoundValueFallback {
+    fn to_not_found_value(&self) -> String;
+}
+
+impl<T: std::fmt::Debug + ?Sized> ToNotFoundValueFallback for NotFoundValue<'_, T> {
+    fn to_not_found_value(&self) -> String {
+        format!("{:?}", self.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +116,32 @@ mod tests {
     fn parse_empty_value() {
         let detail = Some("Key (col)=() already exists.");
         assert_eq!(parse_constraint_detail_value(detail), Some("".to_string()));
+    }
+
+    #[test]
+    fn not_found_value_uses_display_when_available() {
+        #[allow(unused_imports)]
+        use crate::ToNotFoundValueFallback;
+
+        // String implements Display - should get clean output
+        let val = "hello";
+        assert_eq!(NotFoundValue(val).to_not_found_value(), "hello");
+
+        // i32 implements Display
+        let num = 42;
+        assert_eq!(NotFoundValue(&num).to_not_found_value(), "42");
+    }
+
+    #[test]
+    fn not_found_value_falls_back_to_debug() {
+        use crate::ToNotFoundValueFallback;
+
+        // A type with Debug but no Display
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        struct OnlyDebug(i32);
+
+        let val = OnlyDebug(7);
+        assert_eq!(NotFoundValue(&val).to_not_found_value(), "OnlyDebug(7)");
     }
 }

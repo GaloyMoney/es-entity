@@ -67,7 +67,10 @@ impl ToTokens for FindByFn<'_> {
                         fetch_optional(op).await?.ok_or_else(|| #error::NotFound {
                             entity: #entity_name_str,
                             column: Some(#column_enum::#column_variant),
-                            value: format!("{:?}", #column_name),
+                            value: {
+                                use es_entity::ToNotFoundValueFallback;
+                                es_entity::NotFoundValue(#column_name).to_not_found_value()
+                            },
                         })
                     },
                 )
@@ -244,7 +247,10 @@ mod tests {
                     .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
                         entity: "Entity",
                         column: Some(EntityColumn::Id),
-                        value: format!("{:?}", id),
+                        value: {
+                                use es_entity::ToNotFoundValueFallback;
+                                es_entity::NotFoundValue(id).to_not_found_value()
+                            },
                     })
                 }.await;
 
@@ -335,7 +341,10 @@ mod tests {
                     .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
                         entity: "Entity",
                         column: Some(EntityColumn::Email),
-                        value: format!("{:?}", email),
+                        value: {
+                                use es_entity::ToNotFoundValueFallback;
+                                es_entity::NotFoundValue(email).to_not_found_value()
+                            },
                     })
                 }.await;
 
@@ -423,7 +432,10 @@ mod tests {
                     .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
                         entity: "Entity",
                         column: Some(EntityColumn::Id),
-                        value: format!("{:?}", id),
+                        value: {
+                                use es_entity::ToNotFoundValueFallback;
+                                es_entity::NotFoundValue(id).to_not_found_value()
+                            },
                     })
                 }.await;
 
@@ -538,7 +550,10 @@ mod tests {
                     .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
                         entity: "Entity",
                         column: Some(EntityColumn::Id),
-                        value: format!("{:?}", id),
+                        value: {
+                                use es_entity::ToNotFoundValueFallback;
+                                es_entity::NotFoundValue(id).to_not_found_value()
+                            },
                     })
                 }.await;
 
