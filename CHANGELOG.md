@@ -1,3 +1,11 @@
+# [cala release v0.10.22](https://github.com/GaloyMoney/cala/releases/tag/0.10.22)
+
+
+
+### Features
+
+- Column enum in FindError::NotFound for granular pattern matching (#96)
+
 # [cala release v0.10.21](https://github.com/GaloyMoney/cala/releases/tag/0.10.21)
 
 
