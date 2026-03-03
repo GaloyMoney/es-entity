@@ -1,3 +1,15 @@
+# [cala release v0.10.23](https://github.com/GaloyMoney/cala/releases/tag/0.10.23)
+
+
+
+### Bug Fixes
+
+- Fmt
+
+### Features
+
+- Prefer Display over Debug for NotFound error values
+
 # [cala release v0.10.22](https://github.com/GaloyMoney/cala/releases/tag/0.10.22)
 
 
