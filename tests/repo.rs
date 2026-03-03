@@ -617,7 +617,9 @@ async fn find_by_id_not_found_has_column_and_value() -> anyhow::Result<()> {
 
     // Value should use Display format and be parseable back into the ID type
     let value = err.not_found_value().expect("should have a value");
-    let parsed: UserId = value.parse().expect("not_found_value should be parseable as UserId");
+    let parsed: UserId = value
+        .parse()
+        .expect("not_found_value should be parseable as UserId");
     assert_eq!(parsed, missing_id);
 
     // Pattern matching on the variant
