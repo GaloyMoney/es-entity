@@ -670,3 +670,22 @@ async fn find_by_name_not_found_has_column_and_value() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Regression test: repo structs with a generic parameter named 'E' must compile
+/// without conflicting with the macro's internal error generic.
+/// See: https://github.com/galoymoney/es-entity/issues/fix-generic-E-conflict
+mod generic_e_repo {
+    use es_entity::*;
+    use sqlx::PgPool;
+
+    use crate::entities::user::*;
+
+    pub trait EventMarker: std::fmt::Debug + Send + Sync + 'static {}
+
+    #[derive(EsRepo, Debug)]
+    #[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
+    pub struct UsersWithGenericE<E: EventMarker> {
+        pool: PgPool,
+        _marker: std::marker::PhantomData<E>,
+    }
+}

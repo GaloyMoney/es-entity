@@ -250,14 +250,14 @@ impl ToTokens for EsRepo<'_> {
                 type EsQueryFlavor = #es_query_flavor;
 
                #[inline(always)]
-               async fn load_all_nested_in_op<OP, E>(
+               async fn load_all_nested_in_op<OP, __EsErr>(
                    op: &mut OP, entities: &mut [#entity]
-               ) -> Result<(), E>
+               ) -> Result<(), __EsErr>
                    where
                        OP: es_entity::AtomicOperation,
-                       E: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
+                       __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
                {
-                   #(Self::#nested_fns::<_, _, E>(op, entities).await?;)*
+                   #(Self::#nested_fns::<_, _, __EsErr>(op, entities).await?;)*
                    Ok(())
                }
             }

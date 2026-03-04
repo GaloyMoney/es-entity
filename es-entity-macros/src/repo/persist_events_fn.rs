@@ -54,16 +54,16 @@ impl ToTokens for PersistEventsFn<'_> {
         };
 
         tokens.append_all(quote! {
-            fn extract_concurrent_modification<T, E: From<sqlx::Error>>(
+            fn extract_concurrent_modification<T, __EsErr: From<sqlx::Error>>(
                 res: Result<T, sqlx::Error>,
-                concurrent_modification: E,
-            ) -> Result<T, E> {
+                concurrent_modification: __EsErr,
+            ) -> Result<T, __EsErr> {
                 match res {
                     Ok(v) => Ok(v),
                     Err(sqlx::Error::Database(ref db_err)) if db_err.is_unique_violation() => {
                         Err(concurrent_modification)
                     }
-                    Err(e) => Err(E::from(e)),
+                    Err(e) => Err(__EsErr::from(e)),
                 }
             }
 
@@ -120,16 +120,16 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            fn extract_concurrent_modification<T, E: From<sqlx::Error>>(
+            fn extract_concurrent_modification<T, __EsErr: From<sqlx::Error>>(
                 res: Result<T, sqlx::Error>,
-                concurrent_modification: E,
-            ) -> Result<T, E> {
+                concurrent_modification: __EsErr,
+            ) -> Result<T, __EsErr> {
                 match res {
                     Ok(v) => Ok(v),
                     Err(sqlx::Error::Database(ref db_err)) if db_err.is_unique_violation() => {
                         Err(concurrent_modification)
                     }
-                    Err(e) => Err(E::from(e)),
+                    Err(e) => Err(__EsErr::from(e)),
                 }
             }
 
@@ -183,16 +183,16 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            fn extract_concurrent_modification<T, E: From<sqlx::Error>>(
+            fn extract_concurrent_modification<T, __EsErr: From<sqlx::Error>>(
                 res: Result<T, sqlx::Error>,
-                concurrent_modification: E,
-            ) -> Result<T, E> {
+                concurrent_modification: __EsErr,
+            ) -> Result<T, __EsErr> {
                 match res {
                     Ok(v) => Ok(v),
                     Err(sqlx::Error::Database(ref db_err)) if db_err.is_unique_violation() => {
                         Err(concurrent_modification)
                     }
-                    Err(e) => Err(E::from(e)),
+                    Err(e) => Err(__EsErr::from(e)),
                 }
             }
 
