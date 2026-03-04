@@ -86,6 +86,7 @@ mod tests {
             nested: true,
             pool: false,
             clock: false,
+            entity: None,
         };
 
         let cursor = Nested {
