@@ -86,9 +86,10 @@ impl<'a> ErrorTypes<'a> {
             .map(|f| {
                 let nested_entity = f.entity.clone().or_else(|| {
                     // Auto-derive entity name when the nested repo type uses parent generics.
-                    // Convention: strip the "Repo" suffix from the type name.
-                    // E.g., `ObligationRepo<Evt>` → entity "Obligation".
-                    // Override with `#[es_repo(nested, entity = "...")]` if convention doesn't match.
+                    // Conventions tried in order:
+                    //   1. Strip "Repo" suffix: `ObligationRepo<Evt>` → "Obligation"
+                    //   2. Singularize: `OrderItems<Evt>` → "OrderItem"
+                    // Override with `#[es_repo(nested, entity = "...")]` if neither matches.
                     if !type_param_idents.is_empty()
                         && type_uses_any_generic(&f.ty, &type_param_idents)
                     {
@@ -679,17 +680,28 @@ fn token_stream_contains_any(ts: proc_macro2::TokenStream, idents: &[&syn::Ident
     false
 }
 
-/// Derive the entity name from a repo type by stripping the `Repo` suffix.
-/// E.g., `ObligationRepo<Evt>` → `Obligation`.
+/// Derive the entity name from a repo type using conventions:
+/// 1. Strip `Repo` suffix: `ObligationRepo<Evt>` → `Obligation`
+/// 2. Singularize: `OrderItems<Evt>` → `OrderItem`
+///
+/// Returns `None` if neither convention matches.
 fn derive_entity_from_repo_type(ty: &syn::Type) -> Option<syn::Ident> {
     if let syn::Type::Path(type_path) = ty
         && let Some(segment) = type_path.path.segments.last()
     {
         let name = segment.ident.to_string();
+
+        // Convention 1: strip "Repo" suffix
         if let Some(entity_name) = name.strip_suffix("Repo")
             && !entity_name.is_empty()
         {
             return Some(syn::Ident::new(entity_name, segment.ident.span()));
+        }
+
+        // Convention 2: singularize plural name (e.g., OrderItems → OrderItem)
+        let singular = pluralizer::pluralize(&name, 1, false);
+        if singular != name {
+            return Some(syn::Ident::new(&singular, segment.ident.span()));
         }
     }
     None
@@ -874,13 +886,37 @@ mod tests {
         let entity = derive_entity_from_repo_type(&ty);
         assert_eq!(entity.unwrap().to_string(), "InterestAccrual");
 
-        // No Repo suffix → None
-        let ty: syn::Type = parse_quote! { SomeType<E> };
-        assert!(derive_entity_from_repo_type(&ty).is_none());
-
         // Non-generic also works
         let ty: syn::Type = parse_quote! { ItemRepo };
         let entity = derive_entity_from_repo_type(&ty);
         assert_eq!(entity.unwrap().to_string(), "Item");
+    }
+
+    #[test]
+    fn derive_entity_singularizes_plural_name() {
+        // Plural → singular convention
+        let ty: syn::Type = parse_quote! { OrderItems<Evt> };
+        let entity = derive_entity_from_repo_type(&ty);
+        assert_eq!(entity.unwrap().to_string(), "OrderItem");
+
+        let ty: syn::Type = parse_quote! { BillingPeriods<E> };
+        let entity = derive_entity_from_repo_type(&ty);
+        assert_eq!(entity.unwrap().to_string(), "BillingPeriod");
+
+        // Non-generic plural also works
+        let ty: syn::Type = parse_quote! { Users };
+        let entity = derive_entity_from_repo_type(&ty);
+        assert_eq!(entity.unwrap().to_string(), "User");
+    }
+
+    #[test]
+    fn derive_entity_returns_none_for_unrecognized() {
+        // Neither Repo suffix nor plural → None
+        let ty: syn::Type = parse_quote! { SomeType<E> };
+        assert!(derive_entity_from_repo_type(&ty).is_none());
+
+        // Singular name without Repo suffix → None
+        let ty: syn::Type = parse_quote! { Obligation<E> };
+        assert!(derive_entity_from_repo_type(&ty).is_none());
     }
 }
