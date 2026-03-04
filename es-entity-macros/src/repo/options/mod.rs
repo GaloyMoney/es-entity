@@ -31,6 +31,12 @@ pub struct RepoField {
     pub clock: bool,
     #[darling(default)]
     pub nested: bool,
+    /// For nested fields whose repo type is generic, specify the child entity name
+    /// so error types can be referenced concretely (e.g., `entity = "InterestAccrualCycle"`
+    /// generates `InterestAccrualCycleCreateError` instead of
+    /// `<InterestAccrualRepo<Evt> as EsRepo>::CreateError`).
+    #[darling(default)]
+    pub entity: Option<syn::Ident>,
 }
 
 impl RepoField {

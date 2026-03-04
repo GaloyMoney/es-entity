@@ -1,6 +1,6 @@
 use convert_case::{Case, Casing};
 use proc_macro2::{Span, TokenStream};
-use quote::quote;
+use quote::{ToTokens, quote};
 
 use super::options::RepositoryOptions;
 
@@ -24,6 +24,33 @@ struct ColumnVariant {
 struct NestedErrorInfo {
     child_repo_ty: syn::Type,
     variant_name: syn::Ident,
+    /// When set, error types are referenced by convention-based concrete names
+    /// (e.g., `FooCreateError`) instead of associated type projections
+    /// (`<RepoType as EsRepo>::CreateError`). This avoids generic params leaking
+    /// into module-level error enums.
+    nested_entity: Option<syn::Ident>,
+}
+
+impl NestedErrorInfo {
+    fn create_error_ty(&self) -> TokenStream {
+        if let Some(entity) = &self.nested_entity {
+            let error_ident = syn::Ident::new(&format!("{entity}CreateError"), Span::call_site());
+            quote! { #error_ident }
+        } else {
+            let child_repo_ty = &self.child_repo_ty;
+            quote! { <#child_repo_ty as es_entity::EsRepo>::CreateError }
+        }
+    }
+
+    fn modify_error_ty(&self) -> TokenStream {
+        if let Some(entity) = &self.nested_entity {
+            let error_ident = syn::Ident::new(&format!("{entity}ModifyError"), Span::call_site());
+            quote! { #error_ident }
+        } else {
+            let child_repo_ty = &self.child_repo_ty;
+            quote! { <#child_repo_ty as es_entity::EsRepo>::ModifyError }
+        }
+    }
 }
 
 impl<'a> ErrorTypes<'a> {
@@ -51,11 +78,30 @@ impl<'a> ErrorTypes<'a> {
             })
             .collect();
 
+        let type_param_idents: Vec<&syn::Ident> =
+            opts.generics.type_params().map(|p| &p.ident).collect();
+
         let nested: Vec<NestedErrorInfo> = opts
             .all_nested()
-            .map(|f| NestedErrorInfo {
-                child_repo_ty: f.ty.clone(),
-                variant_name: f.nested_variant_name(),
+            .map(|f| {
+                let nested_entity = f.entity.clone().or_else(|| {
+                    // Auto-derive entity name when the nested repo type uses parent generics.
+                    // Convention: strip the "Repo" suffix from the type name.
+                    // E.g., `ObligationRepo<Evt>` → entity "Obligation".
+                    // Override with `#[es_repo(nested, entity = "...")]` if convention doesn't match.
+                    if !type_param_idents.is_empty()
+                        && type_uses_any_generic(&f.ty, &type_param_idents)
+                    {
+                        derive_entity_from_repo_type(&f.ty)
+                    } else {
+                        None
+                    }
+                });
+                NestedErrorInfo {
+                    child_repo_ty: f.ty.clone(),
+                    variant_name: f.nested_variant_name(),
+                    nested_entity,
+                }
             })
             .collect();
 
@@ -159,8 +205,8 @@ impl<'a> ErrorTypes<'a> {
             .iter()
             .map(|n| {
                 let variant = &n.variant_name;
-                let child_repo_ty = &n.child_repo_ty;
-                quote! { #variant(<#child_repo_ty as es_entity::EsRepo>::CreateError), }
+                let child_error_ty = n.create_error_ty();
+                quote! { #variant(#child_error_ty), }
             })
             .collect();
         let nested_display_arms: Vec<_> = self
@@ -184,10 +230,10 @@ impl<'a> ErrorTypes<'a> {
             .iter()
             .map(|n| {
                 let variant = &n.variant_name;
-                let child_repo_ty = &n.child_repo_ty;
+                let child_error_ty = n.create_error_ty();
                 quote! {
-                    impl From<<#child_repo_ty as es_entity::EsRepo>::CreateError> for #create_error {
-                        fn from(e: <#child_repo_ty as es_entity::EsRepo>::CreateError) -> Self {
+                    impl From<#child_error_ty> for #create_error {
+                        fn from(e: #child_error_ty) -> Self {
                             Self::#variant(e)
                         }
                     }
@@ -306,10 +352,11 @@ impl<'a> ErrorTypes<'a> {
                     syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
                 let create_variant =
                     syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
-                let child_repo_ty = &n.child_repo_ty;
+                let child_modify_ty = n.modify_error_ty();
+                let child_create_ty = n.create_error_ty();
                 vec![
-                    quote! { #modify_variant(<#child_repo_ty as es_entity::EsRepo>::ModifyError), },
-                    quote! { #create_variant(<#child_repo_ty as es_entity::EsRepo>::CreateError), },
+                    quote! { #modify_variant(#child_modify_ty), },
+                    quote! { #create_variant(#child_create_ty), },
                 ]
             })
             .collect();
@@ -379,26 +426,23 @@ impl<'a> ErrorTypes<'a> {
             .nested
             .iter()
             .flat_map(|n| {
-                let modify_variant = syn::Ident::new(
-                    &format!("{}Modify", n.variant_name),
-                    Span::call_site(),
-                );
-                let create_variant = syn::Ident::new(
-                    &format!("{}Create", n.variant_name),
-                    Span::call_site(),
-                );
-                let child_repo_ty = &n.child_repo_ty;
+                let modify_variant =
+                    syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
+                let create_variant =
+                    syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
+                let child_modify_ty = n.modify_error_ty();
+                let child_create_ty = n.create_error_ty();
                 vec![
                     quote! {
-                        impl From<<#child_repo_ty as es_entity::EsRepo>::ModifyError> for #modify_error {
-                            fn from(e: <#child_repo_ty as es_entity::EsRepo>::ModifyError) -> Self {
+                        impl From<#child_modify_ty> for #modify_error {
+                            fn from(e: #child_modify_ty) -> Self {
                                 Self::#modify_variant(e)
                             }
                         }
                     },
                     quote! {
-                        impl From<<#child_repo_ty as es_entity::EsRepo>::CreateError> for #modify_error {
-                            fn from(e: <#child_repo_ty as es_entity::EsRepo>::CreateError) -> Self {
+                        impl From<#child_create_ty> for #modify_error {
+                            fn from(e: #child_create_ty) -> Self {
                                 Self::#create_variant(e)
                             }
                         }
@@ -607,5 +651,236 @@ impl<'a> ErrorTypes<'a> {
                 }
             }
         }
+    }
+}
+
+/// Check if a type references any of the given idents (generic type params).
+fn type_uses_any_generic(ty: &syn::Type, idents: &[&syn::Ident]) -> bool {
+    let ts = ty.to_token_stream();
+    token_stream_contains_any(ts, idents)
+}
+
+fn token_stream_contains_any(ts: proc_macro2::TokenStream, idents: &[&syn::Ident]) -> bool {
+    for tt in ts {
+        match tt {
+            proc_macro2::TokenTree::Ident(ref i) => {
+                if idents.iter().any(|id| *i == **id) {
+                    return true;
+                }
+            }
+            proc_macro2::TokenTree::Group(g) => {
+                if token_stream_contains_any(g.stream(), idents) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Derive the entity name from a repo type by stripping the `Repo` suffix.
+/// E.g., `ObligationRepo<Evt>` → `Obligation`.
+fn derive_entity_from_repo_type(ty: &syn::Type) -> Option<syn::Ident> {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+    {
+        let name = segment.ident.to_string();
+        if let Some(entity_name) = name.strip_suffix("Repo")
+            && !entity_name.is_empty()
+        {
+            return Some(syn::Ident::new(entity_name, segment.ident.span()));
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proc_macro2::Span;
+    use syn::{Ident, parse_quote};
+
+    fn make_error_types(nested: Vec<NestedErrorInfo>) -> ErrorTypes<'static> {
+        // Leak entity ident to get a 'static reference for tests
+        let entity: &'static syn::Ident =
+            Box::leak(Box::new(Ident::new("Order", Span::call_site())));
+        ErrorTypes {
+            entity,
+            column_enum: Ident::new("OrderColumn", Span::call_site()),
+            create_error: Ident::new("OrderCreateError", Span::call_site()),
+            modify_error: Ident::new("OrderModifyError", Span::call_site()),
+            find_error: Ident::new("OrderFindError", Span::call_site()),
+            query_error: Ident::new("OrderQueryError", Span::call_site()),
+            column_variants: vec![],
+            nested,
+        }
+    }
+
+    #[test]
+    fn non_generic_nested_uses_associated_type() {
+        let error_types = make_error_types(vec![NestedErrorInfo {
+            child_repo_ty: parse_quote! { ItemRepo },
+            variant_name: Ident::new("Items", Span::call_site()),
+            nested_entity: None,
+        }]);
+
+        let tokens = error_types.generate_create_error();
+        let output = tokens.to_string();
+
+        // Should use associated type projection (existing behavior)
+        assert!(
+            output.contains("< ItemRepo as es_entity :: EsRepo > :: CreateError"),
+            "Expected associated type projection, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn generic_nested_with_entity_uses_concrete_name() {
+        let error_types = make_error_types(vec![NestedErrorInfo {
+            child_repo_ty: parse_quote! { ItemRepo<Evt> },
+            variant_name: Ident::new("Items", Span::call_site()),
+            nested_entity: Some(Ident::new("InterestAccrualCycle", Span::call_site())),
+        }]);
+
+        let tokens = error_types.generate_create_error();
+        let output = tokens.to_string();
+
+        // Should use concrete error type name, NOT associated type projection
+        assert!(
+            output.contains("InterestAccrualCycleCreateError"),
+            "Expected concrete error type name, got: {}",
+            output
+        );
+        assert!(
+            !output.contains("ItemRepo"),
+            "Should not reference the generic repo type, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn generic_nested_modify_error_uses_concrete_names() {
+        let error_types = make_error_types(vec![NestedErrorInfo {
+            child_repo_ty: parse_quote! { ItemRepo<Evt> },
+            variant_name: Ident::new("Items", Span::call_site()),
+            nested_entity: Some(Ident::new("InterestAccrualCycle", Span::call_site())),
+        }]);
+
+        let tokens = error_types.generate_modify_error();
+        let output = tokens.to_string();
+
+        // Should use concrete error type names for both Modify and Create variants
+        assert!(
+            output.contains("InterestAccrualCycleModifyError"),
+            "Expected concrete modify error type, got: {}",
+            output
+        );
+        assert!(
+            output.contains("InterestAccrualCycleCreateError"),
+            "Expected concrete create error type, got: {}",
+            output
+        );
+        assert!(
+            !output.contains("ItemRepo"),
+            "Should not reference the generic repo type, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn mixed_nested_repos() {
+        let error_types = make_error_types(vec![
+            NestedErrorInfo {
+                child_repo_ty: parse_quote! { ItemRepo },
+                variant_name: Ident::new("Items", Span::call_site()),
+                nested_entity: None,
+            },
+            NestedErrorInfo {
+                child_repo_ty: parse_quote! { AccrualRepo<Evt> },
+                variant_name: Ident::new("Accruals", Span::call_site()),
+                nested_entity: Some(Ident::new("Accrual", Span::call_site())),
+            },
+        ]);
+
+        let tokens = error_types.generate_create_error();
+        let output = tokens.to_string();
+
+        // Non-generic nested should use associated type projection
+        assert!(
+            output.contains("< ItemRepo as es_entity :: EsRepo > :: CreateError"),
+            "Expected associated type projection for non-generic repo, got: {}",
+            output
+        );
+        // Generic nested with entity should use concrete name
+        assert!(
+            output.contains("AccrualCreateError"),
+            "Expected concrete error type for generic repo, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn auto_derive_entity_from_repo_type_name() {
+        // When nested_entity is derived automatically (via derive_entity_from_repo_type),
+        // it strips the "Repo" suffix: ObligationRepo<Evt> → Obligation
+        let error_types = make_error_types(vec![NestedErrorInfo {
+            child_repo_ty: parse_quote! { ObligationRepo<Evt> },
+            variant_name: Ident::new("Obligations", Span::call_site()),
+            nested_entity: derive_entity_from_repo_type(&parse_quote! { ObligationRepo<Evt> }),
+        }]);
+
+        let tokens = error_types.generate_create_error();
+        let output = tokens.to_string();
+
+        assert!(
+            output.contains("ObligationCreateError"),
+            "Expected auto-derived concrete error type, got: {}",
+            output
+        );
+        assert!(
+            !output.contains("ObligationRepo"),
+            "Should not reference the generic repo type, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn type_uses_any_generic_detects_params() {
+        let evt = Ident::new("Evt", Span::call_site());
+        let idents = vec![&evt];
+
+        // Type with generic param
+        let ty: syn::Type = parse_quote! { SomeRepo<Evt> };
+        assert!(type_uses_any_generic(&ty, &idents));
+
+        // Type without generic param
+        let ty: syn::Type = parse_quote! { SomeRepo };
+        assert!(!type_uses_any_generic(&ty, &idents));
+
+        // Type with different generic param
+        let ty: syn::Type = parse_quote! { SomeRepo<Other> };
+        assert!(!type_uses_any_generic(&ty, &idents));
+    }
+
+    #[test]
+    fn derive_entity_strips_repo_suffix() {
+        let ty: syn::Type = parse_quote! { ObligationRepo<Evt> };
+        let entity = derive_entity_from_repo_type(&ty);
+        assert_eq!(entity.unwrap().to_string(), "Obligation");
+
+        let ty: syn::Type = parse_quote! { InterestAccrualRepo<E> };
+        let entity = derive_entity_from_repo_type(&ty);
+        assert_eq!(entity.unwrap().to_string(), "InterestAccrual");
+
+        // No Repo suffix → None
+        let ty: syn::Type = parse_quote! { SomeType<E> };
+        assert!(derive_entity_from_repo_type(&ty).is_none());
+
+        // Non-generic also works
+        let ty: syn::Type = parse_quote! { ItemRepo };
+        let entity = derive_entity_from_repo_type(&ty);
+        assert_eq!(entity.unwrap().to_string(), "Item");
     }
 }
