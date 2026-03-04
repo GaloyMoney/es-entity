@@ -1,3 +1,11 @@
+# [cala release v0.10.25](https://github.com/GaloyMoney/cala/releases/tag/0.10.25)
+
+
+
+### Bug Fixes
+
+- Rename internal generic 'E' to '__EsErr' to avoid conflicts (#100)
+
 # [cala release v0.10.24](https://github.com/GaloyMoney/cala/releases/tag/0.10.24)
 
 
