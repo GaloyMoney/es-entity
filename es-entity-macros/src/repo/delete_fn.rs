@@ -10,6 +10,7 @@ pub struct DeleteFn<'a> {
     table_name: &'a str,
     columns: &'a Columns,
     delete_option: &'a DeleteOption,
+    post_persist_error: Option<&'a syn::Type>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -22,6 +23,7 @@ impl<'a> DeleteFn<'a> {
             columns: &opts.columns,
             table_name: opts.table_name(),
             delete_option: &opts.delete,
+            post_persist_error: opts.post_persist_hook.as_ref().map(|h| &h.error),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -72,6 +74,14 @@ impl ToTokens for DeleteFn<'_> {
         };
         #[cfg(not(feature = "instrument"))]
         let (instrument_attr, record_id, error_recording) = (quote! {}, quote! {}, quote! {});
+
+        let post_persist_check = if self.post_persist_error.is_some() {
+            quote! {
+                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(#modify_error::PostPersistHookError)?;
+            }
+        } else {
+            quote! {}
+        };
 
         tokens.append_all(quote! {
             pub async fn delete(
@@ -128,7 +138,7 @@ impl ToTokens for DeleteFn<'_> {
                             )?
                         };
 
-                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(#modify_error::PostPersistHookError)?;
+                        #post_persist_check
                     }
 
                     Ok(())
@@ -160,6 +170,7 @@ mod tests {
             table_name: "entities",
             columns: &columns,
             delete_option: &DeleteOption::Soft,
+            post_persist_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -220,8 +231,6 @@ mod tests {
                                 EntityModifyError::ConcurrentModification,
                             )?
                         };
-
-                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(EntityModifyError::PostPersistHookError)?;
                     }
 
                     Ok(())
@@ -253,6 +262,7 @@ mod tests {
             table_name: "entities",
             columns: &columns,
             delete_option: &DeleteOption::Soft,
+            post_persist_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -315,8 +325,6 @@ mod tests {
                                 EntityModifyError::ConcurrentModification,
                             )?
                         };
-
-                        self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(EntityModifyError::PostPersistHookError)?;
                     }
 
                     Ok(())

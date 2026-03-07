@@ -199,15 +199,6 @@ impl<'a> ErrorTypes<'a> {
         }
     }
 
-    fn post_persist_error_ty(&self) -> TokenStream {
-        if let Some(config) = &self.post_persist_hook {
-            let error = &config.error;
-            quote! { #error }
-        } else {
-            quote! { sqlx::Error }
-        }
-    }
-
     fn generate_create_error(&self) -> TokenStream {
         let create_error = &self.create_error;
         let column_enum = &self.column_enum;
@@ -286,7 +277,18 @@ impl<'a> ErrorTypes<'a> {
             (quote! {}, quote! {}, quote! {})
         };
 
-        let pp_error_ty = self.post_persist_error_ty();
+        let (pp_variant, pp_display_arm, pp_source_arm) = if let Some(config) =
+            &self.post_persist_hook
+        {
+            let error_ty = &config.error;
+            (
+                quote! { PostPersistHookError(#error_ty), },
+                quote! { Self::PostPersistHookError(e) => write!(f, "{}CreateError - PostPersistHookError: {}", #entity_name, e), },
+                quote! { Self::PostPersistHookError(e) => Some(e), },
+            )
+        } else {
+            (quote! {}, quote! {}, quote! {})
+        };
 
         quote! {
             #[derive(Debug)]
@@ -295,7 +297,7 @@ impl<'a> ErrorTypes<'a> {
                 ConstraintViolation { column: Option<#column_enum>, value: Option<String>, inner: sqlx::Error },
                 ConcurrentModification,
                 HydrationError(es_entity::EntityHydrationError),
-                PostPersistHookError(#pp_error_ty),
+                #pp_variant
                 #ph_variant
                 #(#nested_variants)*
             }
@@ -307,7 +309,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::ConstraintViolation { column, value, inner } => write!(f, "{}CreateError - ConstraintViolation({:?}, {:?}): {}", #entity_name, column, value, inner),
                         Self::ConcurrentModification => write!(f, "{}CreateError - ConcurrentModification", #entity_name),
                         Self::HydrationError(e) => write!(f, "{}CreateError - HydrationError: {}", #entity_name, e),
-                        Self::PostPersistHookError(e) => write!(f, "{}CreateError - PostPersistHookError: {}", #entity_name, e),
+                        #pp_display_arm
                         #ph_display_arm
                         #(#nested_display_arms)*
                     }
@@ -321,7 +323,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::ConstraintViolation { inner, .. } => Some(inner),
                         Self::ConcurrentModification => None,
                         Self::HydrationError(e) => Some(e),
-                        Self::PostPersistHookError(e) => Some(e),
+                        #pp_source_arm
                         #ph_source_arm
                         #(#nested_source_arms)*
                     }
@@ -484,7 +486,19 @@ impl<'a> ErrorTypes<'a> {
             .collect();
 
         let entity_name = entity.to_string();
-        let pp_error_ty = self.post_persist_error_ty();
+
+        let (pp_variant, pp_display_arm, pp_source_arm) = if let Some(config) =
+            &self.post_persist_hook
+        {
+            let error_ty = &config.error;
+            (
+                quote! { PostPersistHookError(#error_ty), },
+                quote! { Self::PostPersistHookError(e) => write!(f, "{}ModifyError - PostPersistHookError: {}", #entity_name, e), },
+                quote! { Self::PostPersistHookError(e) => Some(e), },
+            )
+        } else {
+            (quote! {}, quote! {}, quote! {})
+        };
 
         quote! {
             #[derive(Debug)]
@@ -492,7 +506,7 @@ impl<'a> ErrorTypes<'a> {
                 Sqlx(sqlx::Error),
                 ConstraintViolation { column: Option<#column_enum>, value: Option<String>, inner: sqlx::Error },
                 ConcurrentModification,
-                PostPersistHookError(#pp_error_ty),
+                #pp_variant
                 #(#nested_variants)*
             }
 
@@ -502,7 +516,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::Sqlx(e) => write!(f, "{}ModifyError - Sqlx: {}", #entity_name, e),
                         Self::ConstraintViolation { column, value, inner } => write!(f, "{}ModifyError - ConstraintViolation({:?}, {:?}): {}", #entity_name, column, value, inner),
                         Self::ConcurrentModification => write!(f, "{}ModifyError - ConcurrentModification", #entity_name),
-                        Self::PostPersistHookError(e) => write!(f, "{}ModifyError - PostPersistHookError: {}", #entity_name, e),
+                        #pp_display_arm
                         #(#nested_display_arms)*
                     }
                 }
@@ -514,7 +528,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::Sqlx(e) => Some(e),
                         Self::ConstraintViolation { inner, .. } => Some(inner),
                         Self::ConcurrentModification => None,
-                        Self::PostPersistHookError(e) => Some(e),
+                        #pp_source_arm
                         #(#nested_source_arms)*
                     }
                 }
