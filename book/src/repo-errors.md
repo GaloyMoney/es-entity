@@ -22,9 +22,12 @@ pub enum UserCreateError {
     },
     ConcurrentModification,
     HydrationError(EntityHydrationError),
-    PostPersistHookError(sqlx::Error),
+    PostPersistHookError(/* sqlx::Error or custom type */),
+    PostHydrateError(/* only if post_hydrate_hook configured */),
 }
 ```
+
+> `PostPersistHookError` wraps `sqlx::Error` by default, or a custom error type if configured via `post_persist_hook(error = "...")`. `PostHydrateError` is only present when `post_hydrate_hook` is configured. See [Hooks](./repo-hooks.md) for details.
 
 ### Handling constraint violations
 
@@ -111,6 +114,7 @@ pub enum UserFindError {
     Sqlx(sqlx::Error),
     NotFound { entity: &'static str, column: Option<UserColumn>, value: String },
     HydrationError(EntityHydrationError),
+    PostHydrateError(/* only if post_hydrate_hook configured */),
 }
 ```
 
@@ -169,6 +173,7 @@ pub enum UserQueryError {
     Sqlx(sqlx::Error),
     HydrationError(EntityHydrationError),
     CursorDestructureError(CursorDestructureError),
+    PostHydrateError(/* only if post_hydrate_hook configured */),
 }
 ```
 
