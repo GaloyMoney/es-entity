@@ -10,6 +10,62 @@ pub use columns::*;
 pub use delete::*;
 
 #[derive(Debug, Clone)]
+pub struct PostPersistHookConfig {
+    pub method: syn::Ident,
+    pub error: syn::Type,
+}
+
+impl FromMeta for PostPersistHookConfig {
+    /// Old syntax: `post_persist_hook = "method_name"` → defaults error to `sqlx::Error`
+    fn from_string(value: &str) -> darling::Result<Self> {
+        Ok(PostPersistHookConfig {
+            method: syn::Ident::new(value, Span::call_site()),
+            error: syn::parse_str("sqlx::Error")
+                .map_err(|e| darling::Error::custom(format!("invalid error type: {e}")))?,
+        })
+    }
+
+    /// New syntax: `post_persist_hook(method = "...", error = "...")`
+    /// `error` defaults to `sqlx::Error` if omitted
+    fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
+        let mut method: Option<syn::Ident> = None;
+        let mut error: Option<syn::Type> = None;
+
+        for item in items {
+            if let darling::ast::NestedMeta::Meta(syn::Meta::NameValue(nv)) = item {
+                if nv.path.is_ident("method")
+                    && let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(s),
+                        ..
+                    }) = &nv.value
+                {
+                    method = Some(syn::Ident::new(&s.value(), s.span()));
+                } else if nv.path.is_ident("error")
+                    && let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(s),
+                        ..
+                    }) = &nv.value
+                {
+                    error =
+                        Some(syn::parse_str(&s.value()).map_err(|e| {
+                            darling::Error::custom(format!("invalid error type: {e}"))
+                        })?);
+                }
+            }
+        }
+
+        let error = error
+            .unwrap_or_else(|| syn::parse_str("sqlx::Error").expect("sqlx::Error is a valid type"));
+
+        Ok(PostPersistHookConfig {
+            method: method
+                .ok_or_else(|| darling::Error::custom("missing `method` in post_persist_hook"))?,
+            error,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct PostHydrateHookConfig {
     pub method: syn::Ident,
     pub error: syn::Type,
@@ -144,7 +200,7 @@ pub struct RepositoryOptions {
     #[darling(default)]
     pub columns: Columns,
     #[darling(default)]
-    pub post_persist_hook: Option<syn::Ident>,
+    pub post_persist_hook: Option<PostPersistHookConfig>,
     #[darling(default)]
     pub post_hydrate_hook: Option<PostHydrateHookConfig>,
     #[darling(default)]

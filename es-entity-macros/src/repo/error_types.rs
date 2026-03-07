@@ -2,7 +2,7 @@ use convert_case::{Case, Casing};
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
 
-use super::options::{PostHydrateHookConfig, RepositoryOptions};
+use super::options::{PostHydrateHookConfig, PostPersistHookConfig, RepositoryOptions};
 
 pub struct ErrorTypes<'a> {
     entity: &'a syn::Ident,
@@ -14,6 +14,7 @@ pub struct ErrorTypes<'a> {
     column_variants: Vec<ColumnVariant>,
     nested: Vec<NestedErrorInfo>,
     post_hydrate_hook: &'a Option<PostHydrateHookConfig>,
+    post_persist_hook: &'a Option<PostPersistHookConfig>,
 }
 
 struct ColumnVariant {
@@ -117,6 +118,7 @@ impl<'a> ErrorTypes<'a> {
             column_variants,
             nested,
             post_hydrate_hook: &opts.post_hydrate_hook,
+            post_persist_hook: &opts.post_persist_hook,
         }
     }
 
@@ -194,6 +196,15 @@ impl<'a> ErrorTypes<'a> {
                     _ => None,
                 }
             }
+        }
+    }
+
+    fn post_persist_error_ty(&self) -> TokenStream {
+        if let Some(config) = &self.post_persist_hook {
+            let error = &config.error;
+            quote! { #error }
+        } else {
+            quote! { sqlx::Error }
         }
     }
 
@@ -275,6 +286,8 @@ impl<'a> ErrorTypes<'a> {
             (quote! {}, quote! {}, quote! {})
         };
 
+        let pp_error_ty = self.post_persist_error_ty();
+
         quote! {
             #[derive(Debug)]
             pub enum #create_error {
@@ -282,7 +295,7 @@ impl<'a> ErrorTypes<'a> {
                 ConstraintViolation { column: Option<#column_enum>, value: Option<String>, inner: sqlx::Error },
                 ConcurrentModification,
                 HydrationError(es_entity::EntityHydrationError),
-                PostPersistHookError(sqlx::Error),
+                PostPersistHookError(#pp_error_ty),
                 #ph_variant
                 #(#nested_variants)*
             }
@@ -471,6 +484,7 @@ impl<'a> ErrorTypes<'a> {
             .collect();
 
         let entity_name = entity.to_string();
+        let pp_error_ty = self.post_persist_error_ty();
 
         quote! {
             #[derive(Debug)]
@@ -478,7 +492,7 @@ impl<'a> ErrorTypes<'a> {
                 Sqlx(sqlx::Error),
                 ConstraintViolation { column: Option<#column_enum>, value: Option<String>, inner: sqlx::Error },
                 ConcurrentModification,
-                PostPersistHookError(sqlx::Error),
+                PostPersistHookError(#pp_error_ty),
                 #(#nested_variants)*
             }
 
@@ -788,6 +802,7 @@ mod tests {
         let entity: &'static syn::Ident =
             Box::leak(Box::new(Ident::new("Order", Span::call_site())));
         let post_hydrate_hook: &'static Option<PostHydrateHookConfig> = Box::leak(Box::new(None));
+        let post_persist_hook: &'static Option<PostPersistHookConfig> = Box::leak(Box::new(None));
         ErrorTypes {
             entity,
             column_enum: Ident::new("OrderColumn", Span::call_site()),
@@ -798,6 +813,7 @@ mod tests {
             column_variants: vec![],
             nested,
             post_hydrate_hook,
+            post_persist_hook,
         }
     }
 
