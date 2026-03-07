@@ -2,7 +2,7 @@ use convert_case::{Case, Casing};
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
 
-use super::options::RepositoryOptions;
+use super::options::{PostHydrateHookConfig, RepositoryOptions};
 
 pub struct ErrorTypes<'a> {
     entity: &'a syn::Ident,
@@ -13,6 +13,7 @@ pub struct ErrorTypes<'a> {
     query_error: syn::Ident,
     column_variants: Vec<ColumnVariant>,
     nested: Vec<NestedErrorInfo>,
+    post_hydrate_hook: &'a Option<PostHydrateHookConfig>,
 }
 
 struct ColumnVariant {
@@ -115,6 +116,7 @@ impl<'a> ErrorTypes<'a> {
             query_error: opts.query_error(),
             column_variants,
             nested,
+            post_hydrate_hook: &opts.post_hydrate_hook,
         }
     }
 
@@ -260,6 +262,19 @@ impl<'a> ErrorTypes<'a> {
 
         let entity_name = entity.to_string();
 
+        let (ph_variant, ph_display_arm, ph_source_arm) = if let Some(config) =
+            &self.post_hydrate_hook
+        {
+            let error_ty = &config.error;
+            (
+                quote! { PostHydrateError(#error_ty), },
+                quote! { Self::PostHydrateError(e) => write!(f, "{}CreateError - PostHydrateError: {}", #entity_name, e), },
+                quote! { Self::PostHydrateError(e) => Some(e), },
+            )
+        } else {
+            (quote! {}, quote! {}, quote! {})
+        };
+
         quote! {
             #[derive(Debug)]
             pub enum #create_error {
@@ -268,6 +283,7 @@ impl<'a> ErrorTypes<'a> {
                 ConcurrentModification,
                 HydrationError(es_entity::EntityHydrationError),
                 PostPersistHookError(sqlx::Error),
+                #ph_variant
                 #(#nested_variants)*
             }
 
@@ -279,6 +295,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::ConcurrentModification => write!(f, "{}CreateError - ConcurrentModification", #entity_name),
                         Self::HydrationError(e) => write!(f, "{}CreateError - HydrationError: {}", #entity_name, e),
                         Self::PostPersistHookError(e) => write!(f, "{}CreateError - PostPersistHookError: {}", #entity_name, e),
+                        #ph_display_arm
                         #(#nested_display_arms)*
                     }
                 }
@@ -292,6 +309,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::ConcurrentModification => None,
                         Self::HydrationError(e) => Some(e),
                         Self::PostPersistHookError(e) => Some(e),
+                        #ph_source_arm
                         #(#nested_source_arms)*
                     }
                 }
@@ -531,12 +549,34 @@ impl<'a> ErrorTypes<'a> {
         let entity = self.entity;
         let entity_name = entity.to_string();
 
+        let (ph_variant, ph_display_arm, ph_source_arm, ph_from_arm, ph_helper) = if let Some(
+            config,
+        ) =
+            &self.post_hydrate_hook
+        {
+            let error_ty = &config.error;
+            (
+                quote! { PostHydrateError(#error_ty), },
+                quote! { Self::PostHydrateError(e) => write!(f, "{}FindError - PostHydrateError: {}", #entity_name, e), },
+                quote! { Self::PostHydrateError(e) => Some(e), },
+                quote! { #query_error::PostHydrateError(e) => Self::PostHydrateError(e), },
+                quote! {
+                    pub fn was_post_hydrate_error(&self) -> bool {
+                        matches!(self, Self::PostHydrateError(..))
+                    }
+                },
+            )
+        } else {
+            (quote! {}, quote! {}, quote! {}, quote! {}, quote! {})
+        };
+
         quote! {
             #[derive(Debug)]
             pub enum #find_error {
                 Sqlx(sqlx::Error),
                 NotFound { entity: &'static str, column: Option<#column_enum>, value: String },
                 HydrationError(es_entity::EntityHydrationError),
+                #ph_variant
             }
 
             impl std::fmt::Display for #find_error {
@@ -546,6 +586,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::NotFound { entity, column: Some(column), value } => write!(f, "{}FindError - NotFound({column}={value})", entity),
                         Self::NotFound { entity, column: None, value } => write!(f, "{}FindError - NotFound({})", entity, value),
                         Self::HydrationError(e) => write!(f, "{}FindError - HydrationError: {}", #entity_name, e),
+                        #ph_display_arm
                     }
                 }
             }
@@ -556,6 +597,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::Sqlx(e) => Some(e),
                         Self::NotFound { .. } => None,
                         Self::HydrationError(e) => Some(e),
+                        #ph_source_arm
                     }
                 }
             }
@@ -578,6 +620,7 @@ impl<'a> ErrorTypes<'a> {
                         #query_error::Sqlx(e) => Self::Sqlx(e),
                         #query_error::HydrationError(e) => Self::HydrationError(e),
                         #query_error::CursorDestructureError(_) => unreachable!("CursorDestructureError cannot occur in find operations"),
+                        #ph_from_arm
                     }
                 }
             }
@@ -597,6 +640,8 @@ impl<'a> ErrorTypes<'a> {
                         _ => None,
                     }
                 }
+
+                #ph_helper
             }
         }
     }
@@ -606,12 +651,31 @@ impl<'a> ErrorTypes<'a> {
         let entity = self.entity;
         let entity_name = entity.to_string();
 
+        let (ph_variant, ph_display_arm, ph_source_arm, ph_helper) = if let Some(config) =
+            &self.post_hydrate_hook
+        {
+            let error_ty = &config.error;
+            (
+                quote! { PostHydrateError(#error_ty), },
+                quote! { Self::PostHydrateError(e) => write!(f, "{}QueryError - PostHydrateError: {}", #entity_name, e), },
+                quote! { Self::PostHydrateError(e) => Some(e), },
+                quote! {
+                    pub fn was_post_hydrate_error(&self) -> bool {
+                        matches!(self, Self::PostHydrateError(..))
+                    }
+                },
+            )
+        } else {
+            (quote! {}, quote! {}, quote! {}, quote! {})
+        };
+
         quote! {
             #[derive(Debug)]
             pub enum #query_error {
                 Sqlx(sqlx::Error),
                 HydrationError(es_entity::EntityHydrationError),
                 CursorDestructureError(es_entity::CursorDestructureError),
+                #ph_variant
             }
 
             impl std::fmt::Display for #query_error {
@@ -620,6 +684,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::Sqlx(e) => write!(f, "{}QueryError - Sqlx: {}", #entity_name, e),
                         Self::HydrationError(e) => write!(f, "{}QueryError - HydrationError: {}", #entity_name, e),
                         Self::CursorDestructureError(e) => write!(f, "{}QueryError - CursorDestructureError: {}", #entity_name, e),
+                        #ph_display_arm
                     }
                 }
             }
@@ -630,6 +695,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::Sqlx(e) => Some(e),
                         Self::HydrationError(e) => Some(e),
                         Self::CursorDestructureError(e) => Some(e),
+                        #ph_source_arm
                     }
                 }
             }
@@ -650,6 +716,10 @@ impl<'a> ErrorTypes<'a> {
                 fn from(e: es_entity::CursorDestructureError) -> Self {
                     Self::CursorDestructureError(e)
                 }
+            }
+
+            impl #query_error {
+                #ph_helper
             }
         }
     }
@@ -717,6 +787,7 @@ mod tests {
         // Leak entity ident to get a 'static reference for tests
         let entity: &'static syn::Ident =
             Box::leak(Box::new(Ident::new("Order", Span::call_site())));
+        let post_hydrate_hook: &'static Option<PostHydrateHookConfig> = Box::leak(Box::new(None));
         ErrorTypes {
             entity,
             column_enum: Ident::new("OrderColumn", Span::call_site()),
@@ -726,6 +797,7 @@ mod tests {
             query_error: Ident::new("OrderQueryError", Span::call_site()),
             column_variants: vec![],
             nested,
+            post_hydrate_hook,
         }
     }
 

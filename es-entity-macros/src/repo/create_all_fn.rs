@@ -10,6 +10,7 @@ pub struct CreateAllFn<'a> {
     columns: &'a Columns,
     create_error: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
+    post_hydrate_error: Option<&'a syn::Type>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -25,6 +26,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateAllFn<'a> {
                 .map(|f| f.create_nested_fn_name())
                 .collect(),
             columns: &opts.columns,
+            post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -88,6 +90,14 @@ impl ToTokens for CreateAllFn<'_> {
         #[cfg(not(feature = "instrument"))]
         let (instrument_attr, error_recording) = (quote! {}, quote! {});
 
+        let post_hydrate_check = if self.post_hydrate_error.is_some() {
+            quote! {
+                self.execute_post_hydrate_hook(&entity).map_err(#create_error::PostHydrateError)?;
+            }
+        } else {
+            quote! {}
+        };
+
         tokens.append_all(quote! {
             pub async fn create_all(
                 &self,
@@ -147,6 +157,7 @@ impl ToTokens for CreateAllFn<'_> {
 
                         #(#nested)*
 
+                        #post_hydrate_check
                         self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(#create_error::PostPersistHookError)?;
                         res.push(entity);
                     }
@@ -182,6 +193,7 @@ mod tests {
             create_error,
             columns: &columns,
             nested_fn_names: Vec::new(),
+            post_hydrate_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

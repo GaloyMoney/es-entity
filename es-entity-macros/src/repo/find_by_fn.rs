@@ -15,6 +15,7 @@ pub struct FindByFn<'a> {
     query_error: syn::Ident,
     delete: DeleteOption,
     any_nested: bool,
+    post_hydrate_error: Option<&'a syn::Type>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -31,6 +32,7 @@ impl<'a> FindByFn<'a> {
             query_error: opts.query_error(),
             delete: opts.delete,
             any_nested: opts.any_nested(),
+            post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -54,31 +56,10 @@ impl ToTokens for FindByFn<'_> {
                 &self.query_error
             };
 
-            let (result_type, fetch_expr) = if maybe.is_empty() {
-                let entity_name_str = entity.to_string();
-                let column_enum = &self.column_enum;
-                let column_variant = syn::Ident::new(
-                    &column_name.to_string().to_case(Case::UpperCamel),
-                    Span::call_site(),
-                );
-                (
-                    quote! { #entity },
-                    quote! {
-                        fetch_optional(op).await?.ok_or_else(|| #error::NotFound {
-                            entity: #entity_name_str,
-                            column: Some(#column_enum::#column_variant),
-                            value: {
-                                use es_entity::ToNotFoundValueFallback;
-                                es_entity::NotFoundValue(#column_name).to_not_found_value()
-                            },
-                        })
-                    },
-                )
+            let result_type = if maybe.is_empty() {
+                quote! { #entity }
             } else {
-                (
-                    quote! { Option<#entity> },
-                    quote! { fetch_optional(op).await },
-                )
+                quote! { Option<#entity> }
             };
 
             for delete in [DeleteOption::No, DeleteOption::Soft] {
@@ -130,6 +111,49 @@ impl ToTokens for FindByFn<'_> {
                     }
                 };
 
+                let fetch_and_validate = if maybe.is_empty() {
+                    let entity_name_str = entity.to_string();
+                    let column_enum = &self.column_enum;
+                    let column_variant = syn::Ident::new(
+                        &column_name.to_string().to_case(Case::UpperCamel),
+                        Span::call_site(),
+                    );
+                    let post_hydrate_check = if self.post_hydrate_error.is_some() {
+                        quote! {
+                            self.execute_post_hydrate_hook(&__entity).map_err(#error::PostHydrateError)?;
+                        }
+                    } else {
+                        quote! {}
+                    };
+                    quote! {
+                        let __entity = #es_query_call.fetch_optional(op).await?.ok_or_else(|| #error::NotFound {
+                            entity: #entity_name_str,
+                            column: Some(#column_enum::#column_variant),
+                            value: {
+                                use es_entity::ToNotFoundValueFallback;
+                                es_entity::NotFoundValue(#column_name).to_not_found_value()
+                            },
+                        })?;
+                        #post_hydrate_check
+                        Ok(__entity)
+                    }
+                } else {
+                    let post_hydrate_check = if self.post_hydrate_error.is_some() {
+                        quote! {
+                            if let Some(ref __entity) = __result {
+                                self.execute_post_hydrate_hook(__entity).map_err(#error::PostHydrateError)?;
+                            }
+                        }
+                    } else {
+                        quote! {}
+                    };
+                    quote! {
+                        let __result = #es_query_call.fetch_optional(op).await?;
+                        #post_hydrate_check
+                        Ok(__result)
+                    }
+                };
+
                 #[cfg(feature = "instrument")]
                 let (instrument_attr_in_op, record_field, error_recording) = {
                     let entity_name = entity.to_string();
@@ -177,7 +201,7 @@ impl ToTokens for FindByFn<'_> {
                         let __result: Result<#result_type, #error> = async {
                             let #column_name = #column_name.#access_expr;
                             #record_field
-                            #es_query_call.#fetch_expr
+                            #fetch_and_validate
                         }.await;
 
                         #error_recording
@@ -214,6 +238,7 @@ mod tests {
             query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::No,
             any_nested: false,
+            post_hydrate_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -239,7 +264,7 @@ mod tests {
             {
                 let __result: Result<Entity, EntityFindError> = async {
                     let id = id.borrow();
-                    es_entity::es_query!(
+                    let __entity = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
@@ -251,7 +276,8 @@ mod tests {
                                 use es_entity::ToNotFoundValueFallback;
                                 es_entity::NotFoundValue(id).to_not_found_value()
                             },
-                    })
+                    })?;
+                    Ok(__entity)
                 }.await;
 
                 __result
@@ -274,13 +300,13 @@ mod tests {
             {
                 let __result: Result<Option<Entity>, EntityQueryError> = async {
                     let id = id.borrow();
-                    es_entity::es_query!(
+                    let __result = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                     )
-                    .fetch_optional(op)
-                    .await
+                    .fetch_optional(op).await?;
+                    Ok(__result)
                 }.await;
 
                 __result
@@ -308,6 +334,7 @@ mod tests {
             query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::No,
             any_nested: false,
+            post_hydrate_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -333,7 +360,7 @@ mod tests {
             {
                 let __result: Result<Entity, EntityFindError> = async {
                     let email = email.as_ref();
-                    es_entity::es_query!(
+                    let __entity = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE email = $1",
                         email as &str,
@@ -345,7 +372,8 @@ mod tests {
                                 use es_entity::ToNotFoundValueFallback;
                                 es_entity::NotFoundValue(email).to_not_found_value()
                             },
-                    })
+                    })?;
+                    Ok(__entity)
                 }.await;
 
                 __result
@@ -368,13 +396,13 @@ mod tests {
             {
                 let __result: Result<Option<Entity>, EntityQueryError> = async {
                     let email = email.as_ref();
-                    es_entity::es_query!(
+                    let __result = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE email = $1",
                         email as &str,
                     )
-                    .fetch_optional(op)
-                    .await
+                    .fetch_optional(op).await?;
+                    Ok(__result)
                 }.await;
 
                 __result
@@ -399,6 +427,7 @@ mod tests {
             query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::SoftWithoutQueries,
             any_nested: false,
+            post_hydrate_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -424,7 +453,7 @@ mod tests {
             {
                 let __result: Result<Entity, EntityFindError> = async {
                     let id = id.borrow();
-                    es_entity::es_query!(
+                    let __entity = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
@@ -436,7 +465,8 @@ mod tests {
                                 use es_entity::ToNotFoundValueFallback;
                                 es_entity::NotFoundValue(id).to_not_found_value()
                             },
-                    })
+                    })?;
+                    Ok(__entity)
                 }.await;
 
                 __result
@@ -459,13 +489,13 @@ mod tests {
             {
                 let __result: Result<Option<Entity>, EntityQueryError> = async {
                     let id = id.borrow();
-                    es_entity::es_query!(
+                    let __result = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
                     )
-                    .fetch_optional(op)
-                    .await
+                    .fetch_optional(op).await?;
+                    Ok(__result)
                 }.await;
 
                 __result
@@ -490,6 +520,7 @@ mod tests {
             query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::Soft,
             any_nested: false,
+            post_hydrate_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -517,6 +548,7 @@ mod tests {
             query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::No,
             any_nested: true,
+            post_hydrate_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -542,7 +574,7 @@ mod tests {
             {
                 let __result: Result<Entity, EntityFindError> = async {
                     let id = id.borrow();
-                    es_entity::es_query!(
+                    let __entity = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
@@ -554,7 +586,8 @@ mod tests {
                                 use es_entity::ToNotFoundValueFallback;
                                 es_entity::NotFoundValue(id).to_not_found_value()
                             },
-                    })
+                    })?;
+                    Ok(__entity)
                 }.await;
 
                 __result
@@ -577,13 +610,13 @@ mod tests {
             {
                 let __result: Result<Option<Entity>, EntityQueryError> = async {
                     let id = id.borrow();
-                    es_entity::es_query!(
+                    let __result = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                     )
-                    .fetch_optional(op)
-                    .await
+                    .fetch_optional(op).await?;
+                    Ok(__result)
                 }.await;
 
                 __result
