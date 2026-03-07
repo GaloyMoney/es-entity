@@ -11,6 +11,7 @@ pub struct FindAllFn<'a> {
     table_name: &'a str,
     query_error: syn::Ident,
     any_nested: bool,
+    post_hydrate_error: Option<&'a syn::Type>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -24,6 +25,7 @@ impl<'a> From<&'a RepositoryOptions> for FindAllFn<'a> {
             table_name: opts.table_name(),
             query_error: opts.query_error(),
             any_nested: opts.any_nested(),
+            post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -82,6 +84,16 @@ impl ToTokens for FindAllFn<'_> {
         #[cfg(not(feature = "instrument"))]
         let instrument_attr = quote! {};
 
+        let post_hydrate_check = if self.post_hydrate_error.is_some() {
+            quote! {
+                for __entity in &entities {
+                    self.execute_post_hydrate_hook(__entity).map_err(#query_error::PostHydrateError)?;
+                }
+            }
+        } else {
+            quote! {}
+        };
+
         tokens.append_all(quote! {
             pub async fn find_all<Out: From<#entity>>(
                 &self,
@@ -97,6 +109,7 @@ impl ToTokens for FindAllFn<'_> {
                 ids: &[#id]
             ) -> Result<std::collections::HashMap<#id, Out>, #query_error> {
                  let (entities, _) = #es_query_call.fetch_n(op, ids.len()).await?;
+                 #post_hydrate_check
                  Ok(entities.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
             }
         });
@@ -122,6 +135,7 @@ mod tests {
             table_name: "entities",
             query_error,
             any_nested: false,
+            post_hydrate_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
