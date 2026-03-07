@@ -14,6 +14,7 @@ mod options;
 mod persist_events_batch_fn;
 mod persist_events_fn;
 mod populate_nested;
+mod post_hydrate_hook;
 mod post_persist_hook;
 mod update_all_fn;
 mod update_fn;
@@ -42,6 +43,7 @@ pub struct EsRepo<'a> {
     delete_fn: delete_fn::DeleteFn<'a>,
     find_by_fns: Vec<find_by_fn::FindByFn<'a>>,
     find_all_fn: find_all_fn::FindAllFn<'a>,
+    post_hydrate_hook: post_hydrate_hook::PostHydrateHook<'a>,
     post_persist_hook: post_persist_hook::PostPersistHook<'a>,
     begin: begin::Begin<'a>,
     list_by_fns: Vec<list_by_fn::ListByFn<'a>>,
@@ -101,6 +103,7 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             delete_fn: delete_fn::DeleteFn::from(opts),
             find_by_fns,
             find_all_fn: find_all_fn::FindAllFn::from(opts),
+            post_hydrate_hook: post_hydrate_hook::PostHydrateHook::from(opts),
             post_persist_hook: post_persist_hook::PostPersistHook::from(opts),
             begin: begin::Begin::from(opts),
             list_by_fns,
@@ -126,6 +129,7 @@ impl ToTokens for EsRepo<'_> {
         let delete_fn = &self.delete_fn;
         let find_by_fns = &self.find_by_fns;
         let find_all_fn = &self.find_all_fn;
+        let post_hydrate_hook = &self.post_hydrate_hook;
         let post_persist_hook = &self.post_persist_hook;
         let begin = &self.begin;
         let cursors = self.list_by_fns.iter().map(|l| l.cursor());
@@ -223,6 +227,7 @@ impl ToTokens for EsRepo<'_> {
 
                 #map_constraint_fn
                 #begin
+                #post_hydrate_hook
                 #post_persist_hook
                 #persist_events_fn
                 #persist_events_batch_fn
