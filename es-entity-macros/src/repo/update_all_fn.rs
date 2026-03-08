@@ -10,6 +10,7 @@ pub struct UpdateAllFn<'a> {
     columns: &'a Columns,
     modify_error: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
+    post_persist_error: Option<&'a syn::Type>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -25,6 +26,7 @@ impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
                 .all_nested()
                 .map(|f| f.update_nested_fn_name())
                 .collect(),
+            post_persist_error: opts.post_persist_hook.as_ref().map(|h| &h.error),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -119,6 +121,14 @@ impl ToTokens for UpdateAllFn<'_> {
         #[cfg(not(feature = "instrument"))]
         let (instrument_attr, error_recording) = (quote! {}, quote! {});
 
+        let post_persist_check = if self.post_persist_error.is_some() {
+            quote! {
+                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(#modify_error::PostPersistHookError)?;
+            }
+        } else {
+            quote! {}
+        };
+
         tokens.append_all(quote! {
             pub async fn update_all(
                 &self,
@@ -180,7 +190,7 @@ impl ToTokens for UpdateAllFn<'_> {
                     for entity in entities.iter_mut() {
                         if let Some(&n_events) = n_persisted.get(&entity.id) {
                             if n_events > 0 {
-                                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(#modify_error::PostPersistHookError)?;
+                                #post_persist_check
                                 total_events += n_events;
                             }
                         }
@@ -221,6 +231,7 @@ mod tests {
             modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
+            post_persist_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -305,7 +316,6 @@ mod tests {
                     for entity in entities.iter_mut() {
                         if let Some(&n_events) = n_persisted.get(&entity.id) {
                             if n_events > 0 {
-                                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(EntityModifyError::PostPersistHookError)?;
                                 total_events += n_events;
                             }
                         }
@@ -335,6 +345,7 @@ mod tests {
             modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
+            post_persist_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -394,7 +405,6 @@ mod tests {
                     for entity in entities.iter_mut() {
                         if let Some(&n_events) = n_persisted.get(&entity.id) {
                             if n_events > 0 {
-                                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(EntityModifyError::PostPersistHookError)?;
                                 total_events += n_events;
                             }
                         }

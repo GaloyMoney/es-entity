@@ -94,6 +94,7 @@ pub struct ListForFiltersFn<'a> {
     ignore_prefix: Option<&'a syn::LitStr>,
     id: &'a syn::Ident,
     any_nested: bool,
+    post_hydrate_error: Option<&'a syn::Type>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -118,6 +119,7 @@ impl<'a> ListForFiltersFn<'a> {
             ignore_prefix: opts.table_prefix(),
             id: opts.id(),
             any_nested: opts.any_nested(),
+            post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -408,6 +410,16 @@ impl<'a> ListForFiltersFn<'a> {
         let (instrument_attr, extract_has_cursor, record_fields, record_results, error_recording) =
             (quote! {}, quote! {}, quote! {}, quote! {}, quote! {});
 
+        let post_hydrate_check = if self.post_hydrate_error.is_some() {
+            quote! {
+                for __entity in &entities {
+                    self.execute_post_hydrate_hook(__entity).map_err(#error::PostHydrateError)?;
+                }
+            }
+        } else {
+            quote! {}
+        };
+
         quote! {
             pub async fn #fn_name(
                 &self,
@@ -444,6 +456,7 @@ impl<'a> ListForFiltersFn<'a> {
                         }
                     };
 
+                    #post_hydrate_check
                     #record_results
 
                     let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
@@ -688,6 +701,7 @@ mod tests {
             ignore_prefix: None,
             id: &id,
             any_nested: false,
+            post_hydrate_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -858,6 +872,7 @@ mod tests {
             ignore_prefix: None,
             id: &id,
             any_nested: false,
+            post_hydrate_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -924,6 +939,7 @@ mod tests {
             ignore_prefix: None,
             id: &id,
             any_nested: false,
+            post_hydrate_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
