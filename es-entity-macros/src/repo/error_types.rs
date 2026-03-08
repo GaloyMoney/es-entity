@@ -253,6 +253,14 @@ impl<'a> ErrorTypes<'a> {
                 quote! { Self::#variant(e) => e.was_concurrent_modification(), }
             })
             .collect();
+        let nested_wd_checks: Vec<_> = self
+            .nested
+            .iter()
+            .map(|n| {
+                let variant = &n.variant_name;
+                quote! { Self::#variant(e) => e.was_duplicate(), }
+            })
+            .collect();
         let nested_dv_checks: Vec<_> = self
             .nested
             .iter()
@@ -261,6 +269,19 @@ impl<'a> ErrorTypes<'a> {
                 quote! { Self::#variant(e) => e.duplicate_value(), }
             })
             .collect();
+        let nested_ph_checks: Vec<_> = self
+            .nested
+            .iter()
+            .map(|n| {
+                let variant = &n.variant_name;
+                quote! { Self::#variant(e) => e.was_post_hydrate_error(), }
+            })
+            .collect();
+        let create_ph_self_check = if self.post_hydrate_hook.is_some() {
+            quote! { Self::PostHydrateError(..) => true, }
+        } else {
+            quote! {}
+        };
 
         let entity_name = entity.to_string();
 
@@ -354,7 +375,11 @@ impl<'a> ErrorTypes<'a> {
                 }
 
                 pub fn was_duplicate(&self) -> bool {
-                    matches!(self, Self::ConstraintViolation { .. })
+                    match self {
+                        Self::ConstraintViolation { .. } => true,
+                        #(#nested_wd_checks)*
+                        _ => false,
+                    }
                 }
 
                 pub fn was_duplicate_by(&self, column: #column_enum) -> bool {
@@ -366,6 +391,14 @@ impl<'a> ErrorTypes<'a> {
                         Self::ConstraintViolation { value: Some(v), .. } => Some(v.as_str()),
                         #(#nested_dv_checks)*
                         _ => None,
+                    }
+                }
+
+                pub fn was_post_hydrate_error(&self) -> bool {
+                    match self {
+                        #create_ph_self_check
+                        #(#nested_ph_checks)*
+                        _ => false,
                     }
                 }
             }
@@ -441,6 +474,20 @@ impl<'a> ErrorTypes<'a> {
             })
             .collect();
 
+        let modify_nested_wd_checks: Vec<_> = self
+            .nested
+            .iter()
+            .flat_map(|n| {
+                let modify_variant =
+                    syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
+                let create_variant =
+                    syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
+                vec![
+                    quote! { Self::#modify_variant(e) => e.was_duplicate(), },
+                    quote! { Self::#create_variant(e) => e.was_duplicate(), },
+                ]
+            })
+            .collect();
         let nested_dv_checks: Vec<_> = self
             .nested
             .iter()
@@ -452,6 +499,21 @@ impl<'a> ErrorTypes<'a> {
                 vec![
                     quote! { Self::#modify_variant(e) => e.duplicate_value(), },
                     quote! { Self::#create_variant(e) => e.duplicate_value(), },
+                ]
+            })
+            .collect();
+
+        let modify_nested_ph_checks: Vec<_> = self
+            .nested
+            .iter()
+            .flat_map(|n| {
+                let modify_variant =
+                    syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
+                let create_variant =
+                    syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
+                vec![
+                    quote! { Self::#modify_variant(e) => e.was_post_hydrate_error(), },
+                    quote! { Self::#create_variant(e) => e.was_post_hydrate_error(), },
                 ]
             })
             .collect();
@@ -552,7 +614,11 @@ impl<'a> ErrorTypes<'a> {
                 }
 
                 pub fn was_duplicate(&self) -> bool {
-                    matches!(self, Self::ConstraintViolation { .. })
+                    match self {
+                        Self::ConstraintViolation { .. } => true,
+                        #(#modify_nested_wd_checks)*
+                        _ => false,
+                    }
                 }
 
                 pub fn was_duplicate_by(&self, column: #column_enum) -> bool {
@@ -566,6 +632,13 @@ impl<'a> ErrorTypes<'a> {
                         _ => None,
                     }
                 }
+
+                pub fn was_post_hydrate_error(&self) -> bool {
+                    match self {
+                        #(#modify_nested_ph_checks)*
+                        _ => false,
+                    }
+                }
             }
         }
     }
@@ -577,9 +650,7 @@ impl<'a> ErrorTypes<'a> {
         let entity = self.entity;
         let entity_name = entity.to_string();
 
-        let (ph_variant, ph_display_arm, ph_source_arm, ph_from_arm, ph_helper) = if let Some(
-            config,
-        ) =
+        let (ph_variant, ph_display_arm, ph_source_arm, ph_from_arm) = if let Some(config) =
             &self.post_hydrate_hook
         {
             let error_ty = &config.error;
@@ -588,14 +659,14 @@ impl<'a> ErrorTypes<'a> {
                 quote! { Self::PostHydrateError(e) => write!(f, "{}FindError - PostHydrateError: {}", #entity_name, e), },
                 quote! { Self::PostHydrateError(e) => Some(e), },
                 quote! { #query_error::PostHydrateError(e) => Self::PostHydrateError(e), },
-                quote! {
-                    pub fn was_post_hydrate_error(&self) -> bool {
-                        matches!(self, Self::PostHydrateError(..))
-                    }
-                },
             )
         } else {
-            (quote! {}, quote! {}, quote! {}, quote! {}, quote! {})
+            (quote! {}, quote! {}, quote! {}, quote! {})
+        };
+        let find_ph_self_check = if self.post_hydrate_hook.is_some() {
+            quote! { Self::PostHydrateError(..) => true, }
+        } else {
+            quote! {}
         };
 
         quote! {
@@ -669,7 +740,12 @@ impl<'a> ErrorTypes<'a> {
                     }
                 }
 
-                #ph_helper
+                pub fn was_post_hydrate_error(&self) -> bool {
+                    match self {
+                        #find_ph_self_check
+                        _ => false,
+                    }
+                }
             }
         }
     }
@@ -679,7 +755,7 @@ impl<'a> ErrorTypes<'a> {
         let entity = self.entity;
         let entity_name = entity.to_string();
 
-        let (ph_variant, ph_display_arm, ph_source_arm, ph_helper) = if let Some(config) =
+        let (ph_variant, ph_display_arm, ph_source_arm) = if let Some(config) =
             &self.post_hydrate_hook
         {
             let error_ty = &config.error;
@@ -687,14 +763,14 @@ impl<'a> ErrorTypes<'a> {
                 quote! { PostHydrateError(#error_ty), },
                 quote! { Self::PostHydrateError(e) => write!(f, "{}QueryError - PostHydrateError: {}", #entity_name, e), },
                 quote! { Self::PostHydrateError(e) => Some(e), },
-                quote! {
-                    pub fn was_post_hydrate_error(&self) -> bool {
-                        matches!(self, Self::PostHydrateError(..))
-                    }
-                },
             )
         } else {
-            (quote! {}, quote! {}, quote! {}, quote! {})
+            (quote! {}, quote! {}, quote! {})
+        };
+        let query_ph_self_check = if self.post_hydrate_hook.is_some() {
+            quote! { Self::PostHydrateError(..) => true, }
+        } else {
+            quote! {}
         };
 
         quote! {
@@ -747,7 +823,12 @@ impl<'a> ErrorTypes<'a> {
             }
 
             impl #query_error {
-                #ph_helper
+                pub fn was_post_hydrate_error(&self) -> bool {
+                    match self {
+                        #query_ph_self_check
+                        _ => false,
+                    }
+                }
             }
         }
     }

@@ -133,13 +133,13 @@ async fn post_hydrate_hook_error_propagates_through_create() -> anyhow::Result<(
     let result = users.create(new_user).await;
 
     match result {
-        Err(e) => {
-            let msg = e.to_string();
+        Err(users_with_hydrate_hook::UserCreateError::PostHydrateError(inner)) => {
             assert!(
-                msg.contains("PostHydrateError"),
-                "expected PostHydrateError, got: {msg}"
+                inner.to_string().contains("banned name"),
+                "expected banned name message, got: {inner}"
             );
         }
+        Err(e) => panic!("expected PostHydrateError, got: {e}"),
         Ok(_) => panic!("expected post_hydrate_hook to reject entity with banned name"),
     }
 
@@ -188,13 +188,13 @@ async fn post_hydrate_hook_error_propagates_through_find_by_id() -> anyhow::Resu
     // Now find_by_id should fail with the hydration hook error
     let result = users.find_by_id(id).await;
     match result {
-        Err(e) => {
-            let msg = e.to_string();
+        Err(users_with_hydrate_hook::UserFindError::PostHydrateError(inner)) => {
             assert!(
-                msg.contains("PostHydrateError"),
-                "expected PostHydrateError in find_by_id, got: {msg}"
+                inner.to_string().contains("banned name"),
+                "expected banned name message, got: {inner}"
             );
         }
+        Err(e) => panic!("expected PostHydrateError in find_by_id, got: {e}"),
         Ok(_) => panic!("expected post_hydrate_hook to reject entity loaded with banned name"),
     }
 
@@ -219,13 +219,13 @@ async fn post_persist_hook_error_propagates_through_create() -> anyhow::Result<(
     let result = users.create(new_user).await;
 
     match result {
-        Err(e) => {
-            let msg = e.to_string();
+        Err(users_with_persist_hook::UserCreateError::PostPersistHookError(inner)) => {
             assert!(
-                msg.contains("PostPersistHookError"),
-                "expected PostPersistHookError, got: {msg}"
+                inner.to_string().contains("blocked name"),
+                "expected blocked name message, got: {inner}"
             );
         }
+        Err(e) => panic!("expected PostPersistHookError, got: {e}"),
         Ok(_) => panic!("expected post_persist_hook to reject entity with blocked name"),
     }
 
@@ -266,13 +266,13 @@ async fn post_persist_hook_error_propagates_through_update() -> anyhow::Result<(
     let result = users.update(&mut user).await;
 
     match result {
-        Err(e) => {
-            let msg = e.to_string();
+        Err(users_with_persist_hook::UserModifyError::PostPersistHookError(inner)) => {
             assert!(
-                msg.contains("PostPersistHookError"),
-                "expected PostPersistHookError in update, got: {msg}"
+                inner.to_string().contains("blocked name"),
+                "expected blocked name message, got: {inner}"
             );
         }
+        Err(e) => panic!("expected PostPersistHookError in update, got: {e}"),
         Ok(_) => panic!("expected post_persist_hook to reject update to blocked name"),
     }
 
