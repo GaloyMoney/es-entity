@@ -1,3 +1,15 @@
+# [cala release v0.10.27](https://github.com/GaloyMoney/cala/releases/tag/0.10.27)
+
+
+
+### Bug Fixes
+
+- Return Vec<String> from new_event_types() for sqlx query! compatibility
+
+### Features
+
+- Add event_type() method to EsEvent trait
+
 # [cala release v0.10.26](https://github.com/GaloyMoney/cala/releases/tag/0.10.26)
 
 
