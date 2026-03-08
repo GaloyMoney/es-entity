@@ -9,6 +9,8 @@ use sqlx::PgPool;
 /// without conflicting with the macro's internal error generic.
 /// See: https://github.com/galoymoney/es-entity/issues/fix-generic-E-conflict
 mod generic_e_repo {
+    #![allow(dead_code)]
+
     use es_entity::*;
     use sqlx::PgPool;
 
