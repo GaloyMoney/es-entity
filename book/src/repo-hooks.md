@@ -61,7 +61,7 @@ match users.create(new_user).await {
 
 ## post_hydrate_hook
 
-Runs synchronously every time an entity is reconstructed from its event stream — on `create`, `find_by_*`, `list_by_*`, `list_for_*`, and `find_all`. This makes it suitable for invariant checks that depend on external state (e.g. configuration or governance rules) rather than the entity's own events.
+Runs synchronously every time an entity is reconstructed from its event stream — on `create`, `create_all`, `find_by_*`, `list_by_*`, `list_for_*`, and `find_all`. It does **not** run on `update` or `delete` since those operate on an already-hydrated entity. This makes it suitable for invariant checks that depend on external state (e.g. configuration or governance rules) rather than the entity's own events.
 
 ### Configuration
 
@@ -111,13 +111,15 @@ match users.find_by_id(id).await {
 
 ## Combining both hooks
 
-Both hooks can be used on the same repo. The execution order during `create` and `update` is:
+Both hooks can be used on the same repo. During `create`, both hooks run in this order:
 
 1. Events are persisted to the database
 2. `post_persist_hook` runs (async, inside transaction)
 3. Entity is hydrated from events
 4. `post_hydrate_hook` runs (sync)
 5. Entity is returned to the caller
+
+During `update`, only `post_persist_hook` runs — no hydration occurs because the entity is already in memory. Similarly, `find_by_*` and `list_*` operations only run `post_hydrate_hook` since they don't persist events.
 
 ```rust,ignore
 #[derive(EsRepo)]
