@@ -22,12 +22,12 @@ pub enum UserCreateError {
     },
     ConcurrentModification,
     HydrationError(EntityHydrationError),
-    PostPersistHookError(/* sqlx::Error or custom type */),
+    PostPersistHookError(/* only if post_persist_hook configured */),
     PostHydrateError(/* only if post_hydrate_hook configured */),
 }
 ```
 
-> `PostPersistHookError` wraps `sqlx::Error` by default, or a custom error type if configured via `post_persist_hook(error = "...")`. `PostHydrateError` is only present when `post_hydrate_hook` is configured. See [Hooks](./repo-hooks.md) for details.
+> `PostPersistHookError` and `PostHydrateError` are only present when the corresponding hook is configured. `PostPersistHookError` wraps `sqlx::Error` by default, or a custom error type if configured via `post_persist_hook(error = "...")`. See [Hooks](./repo-hooks.md) for details.
 
 ### Handling constraint violations
 
@@ -82,7 +82,7 @@ if e.was_concurrent_modification() {
 
 ## UserModifyError
 
-`UserModifyError` has the same structure as `UserCreateError` (minus `HydrationError`) and is returned by `update`, `update_all`, and `delete`. It provides the same `was_duplicate`, `was_duplicate_by`, `duplicate_value`, and `was_concurrent_modification` helpers.
+`UserModifyError` has the same structure as `UserCreateError` (minus `HydrationError` and `PostHydrateError`) and is returned by `update`, `update_all`, and `delete`. `PostPersistHookError` is only present when `post_persist_hook` is configured. It provides the same `was_duplicate`, `was_duplicate_by`, `duplicate_value`, and `was_concurrent_modification` helpers.
 
 ### Nested entity errors
 
