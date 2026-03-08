@@ -283,6 +283,14 @@ where
     }
 
     #[doc(hidden)]
+    pub fn new_event_types(&self) -> Vec<&'static str> {
+        self.new_events
+            .iter()
+            .map(|event| event.event.event_type())
+            .collect()
+    }
+
+    #[doc(hidden)]
     pub fn serialize_new_events(&self) -> Vec<serde_json::Value> {
         self.new_events
             .iter()
@@ -320,6 +328,11 @@ mod tests {
         type EntityId = Uuid;
         fn event_context() -> bool {
             true
+        }
+        fn event_type(&self) -> &'static str {
+            match self {
+                Self::Created(_) => "created",
+            }
         }
     }
 

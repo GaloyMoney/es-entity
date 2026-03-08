@@ -67,6 +67,7 @@ pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
         + Sync;
 
     fn event_context() -> bool;
+    fn event_type(&self) -> &'static str;
 }
 
 /// Required trait for converting new entities into their initial events before persistence.

@@ -77,9 +77,9 @@ impl ToTokens for PersistEventsFn<'_> {
             {
                 let id = events.id();
                 let offset = events.len_persisted();
+                let events_types = events.new_event_types();
                 let serialized_events = events.serialize_new_events();
                 #ctx_var
-                let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
                 let now = op.maybe_now();
 
                 let rows = sqlx::query!(
@@ -143,9 +143,9 @@ mod tests {
             {
                 let id = events.id();
                 let offset = events.len_persisted();
+                let events_types = events.new_event_types();
                 let serialized_events = events.serialize_new_events();
                 let contexts = events.serialize_new_event_contexts();
-                let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
                 let now = op.maybe_now();
 
                 let rows = sqlx::query!(
@@ -206,8 +206,8 @@ mod tests {
             {
                 let id = events.id();
                 let offset = events.len_persisted();
+                let events_types = events.new_event_types();
                 let serialized_events = events.serialize_new_events();
-                let events_types = serialized_events.iter().map(|e| e.get("type").and_then(es_entity::prelude::serde_json::Value::as_str).expect("Could not read event type").to_owned()).collect::<Vec<_>>();
                 let now = op.maybe_now();
 
                 let rows = sqlx::query!(

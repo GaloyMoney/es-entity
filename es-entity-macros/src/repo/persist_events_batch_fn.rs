@@ -90,14 +90,9 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                     let events: &es_entity::EntityEvents<#event_type> = item.borrow();
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
+                    let types = events.new_event_types();
                     let serialized = events.serialize_new_events();
                     #ctx_extend
-                    let types = serialized.iter()
-                        .map(|e| e.get("type")
-                            .and_then(es_entity::prelude::serde_json::Value::as_str)
-                            .expect("Could not read event type")
-                            .to_owned())
-                        .collect::<Vec<_>>();
 
                     let n_events = serialized.len();
                     all_serialized.extend(serialized);
@@ -172,17 +167,12 @@ mod tests {
                     let events: &es_entity::EntityEvents<EntityEvent> = item.borrow();
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
+                    let types = events.new_event_types();
                     let serialized = events.serialize_new_events();
                     let contexts = events.serialize_new_event_contexts();
                     if let Some(contexts) = contexts {
                         all_contexts.extend(contexts);
                     }
-                    let types = serialized.iter()
-                        .map(|e| e.get("type")
-                            .and_then(es_entity::prelude::serde_json::Value::as_str)
-                            .expect("Could not read event type")
-                            .to_owned())
-                        .collect::<Vec<_>>();
 
                     let n_events = serialized.len();
                     all_serialized.extend(serialized);
@@ -257,13 +247,8 @@ mod tests {
                     let events: &es_entity::EntityEvents<EntityEvent> = item.borrow();
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
+                    let types = events.new_event_types();
                     let serialized = events.serialize_new_events();
-                    let types = serialized.iter()
-                        .map(|e| e.get("type")
-                            .and_then(es_entity::prelude::serde_json::Value::as_str)
-                            .expect("Could not read event type")
-                            .to_owned())
-                        .collect::<Vec<_>>();
 
                     let n_events = serialized.len();
                     all_serialized.extend(serialized);
