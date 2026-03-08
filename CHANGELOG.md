@@ -1,3 +1,22 @@
+# [cala release v0.10.26](https://github.com/GaloyMoney/cala/releases/tag/0.10.26)
+
+
+
+### Features
+
+- Add post_hydrate_hook support to EsRepo derive macro (#102)
+
+### Miscellaneous Tasks
+
+- Bump pin-project from 1.1.10 to 1.1.11 (#95)
+- Bump quote from 1.0.44 to 1.0.45 (#97)
+- Bump tokio from 1.49.0 to 1.50.0 (#98)
+- Bump uuid from 1.21.0 to 1.22.0 (#101)
+
+### Refactor
+
+- Named parameters for idempotency_guard! macro (#103)
+
 # [cala release v0.10.25](https://github.com/GaloyMoney/cala/releases/tag/0.10.25)
 
 
