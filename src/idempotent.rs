@@ -25,7 +25,7 @@
 ///         let name = new_name.into();
 ///         idempotency_guard!(
 ///             self.events.iter().rev(),
-///             UserEvent::NameUpdated { name: existing_name } if existing_name == &name
+///             already_applied: UserEvent::NameUpdated { name: existing_name } if existing_name == &name
 ///         );
 ///         self.events.push(UserEvent::NameUpdated{name});
 ///         Idempotent::Executed(())

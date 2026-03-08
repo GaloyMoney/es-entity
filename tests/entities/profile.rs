@@ -48,8 +48,8 @@ impl Profile {
         let new_name = new_name.into();
         idempotency_guard!(
             self.events.iter_all().rev(),
-            ProfileEvent::NameUpdated { name } if name == &new_name,
-            => ProfileEvent::NameUpdated { .. }
+            already_applied: ProfileEvent::NameUpdated { name } if name == &new_name,
+            resets_on: ProfileEvent::NameUpdated { .. }
         );
 
         self.data.name = new_name.clone();
@@ -63,8 +63,8 @@ impl Profile {
         let new_email = new_email.into();
         idempotency_guard!(
             self.events.iter_all().rev(),
-            ProfileEvent::EmailUpdated { email } if email == &new_email,
-            => ProfileEvent::EmailUpdated { .. }
+            already_applied: ProfileEvent::EmailUpdated { email } if email == &new_email,
+            resets_on: ProfileEvent::EmailUpdated { .. }
         );
 
         self.email = new_email.clone();

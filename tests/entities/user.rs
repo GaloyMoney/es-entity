@@ -29,8 +29,8 @@ impl User {
         let new_name = new_name.into();
         idempotency_guard!(
             self.events.iter_all().rev(),
-            UserEvent::NameUpdated { name } if name == &new_name,
-            => UserEvent::NameUpdated { .. }
+            already_applied: UserEvent::NameUpdated { name } if name == &new_name,
+            resets_on: UserEvent::NameUpdated { .. }
         );
 
         self.name = new_name.clone();
