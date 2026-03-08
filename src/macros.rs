@@ -2,13 +2,18 @@
 ///
 /// Guards against replaying the same mutation in event-sourced systems.
 /// Returns [`AlreadyApplied`][crate::Idempotent::AlreadyApplied] early if matching events are found, allowing the caller
-/// to skip redundant operations. Use break pattern to allow re-applying past operations.
+/// to skip redundant operations. Use `resets_on` to allow re-applying after an intervening event.
 ///
 /// # Parameters
 ///
 /// - `$events`: Event collection to search (usually chronologically reversed)
-/// - `$pattern`: Event patterns that indicate operation already applied
-/// - `$break_pattern`: Optional break pattern to stop searching
+/// - `already_applied:` Event pattern that indicates operation already applied
+/// - `resets_on:` Optional event pattern that resets the guard, allowing re-execution
+///
+/// When iterating events in reverse, if a `resets_on` event is found before the
+/// `already_applied` event, the guard allows re-execution. This is useful for
+/// toggle-like operations (freeze/unfreeze) or when a state change should
+/// invalidate a previous idempotency check.
 ///
 /// # Examples
 ///
@@ -28,55 +33,56 @@
 ///         let name = new_name.into();
 ///         idempotency_guard!(
 ///             self.events.iter().rev(),
-///             UserEvent::NameUpdated { name: existing_name } if existing_name == &name
-///             // above line returns early if same name found
+///             already_applied: UserEvent::NameUpdated { name: existing_name } if existing_name == &name
 ///         );
 ///         self.events.push(UserEvent::NameUpdated{name});
 ///         Idempotent::Executed(())
 ///     }
-///     
-///     pub fn update_name_with_break(&mut self, new_name: impl Into<String>) -> Idempotent<()>{
+///
+///     pub fn update_name_resettable(&mut self, new_name: impl Into<String>) -> Idempotent<()>{
 ///         let name = new_name.into();
 ///         idempotency_guard!(
 ///             self.events.iter().rev(),
-///             UserEvent::NameUpdated { name: existing_name } if existing_name == &name,
-///             => UserEvent::NameUpdated {..}
-///             // above line breaks iteration if same event found
+///             already_applied: UserEvent::NameUpdated { name: existing_name } if existing_name == &name,
+///             resets_on: UserEvent::NameUpdated {..}
+///             // if any other NameUpdated happened more recently, allow re-applying
 ///        );
 ///        self.events.push(UserEvent::NameUpdated{name});
-///        Idempotent::Executed(())     
+///        Idempotent::Executed(())
 ///     }
 /// }
-///   
+///
 /// let mut user1 = User{ events: vec![] };
 /// let mut user2 = User{ events: vec![] };
 /// assert!(user1.update_name("Alice").did_execute());
-/// // updating "ALice" again ignored because same event with same name exists
+/// // updating "Alice" again ignored because same event with same name exists
 /// assert!(user1.update_name("Alice").was_already_applied());
-///     
-/// assert!(user2.update_name_with_break("Alice").did_execute());
-/// assert!(user2.update_name_with_break("Bob").did_execute());
-/// // updating "ALice" again works because of early break condition
-/// assert!(user2.update_name_with_break("Alice").did_execute());
+///
+/// assert!(user2.update_name_resettable("Alice").did_execute());
+/// assert!(user2.update_name_resettable("Bob").did_execute());
+/// // updating "Alice" again works because Bob's NameUpdated resets the guard
+/// assert!(user2.update_name_resettable("Alice").did_execute());
 /// ```
 #[macro_export]
 macro_rules! idempotency_guard {
-    ($events:expr, $( $pattern:pat $(if $guard:expr)? ),+ $(,)?) => {
+    // already_applied + resets_on (must come before already_applied-only to avoid ambiguity)
+    ($events:expr,
+     already_applied: $pattern:pat $(if $guard:expr)?,
+     resets_on: $break_pattern:pat $(if $break_guard:expr)? $(,)?) => {
         for event in $events {
             match event {
-                $(
-                    $pattern $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
-                )+
+                $pattern $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
+                $break_pattern $(if $break_guard)? => break,
                 _ => {}
             }
         }
     };
-    ($events:expr, $( $pattern:pat $(if $guard:expr)? ),+,
-     => $break_pattern:pat $(if $break_guard:expr)?) => {
+    // already_applied only
+    ($events:expr,
+     already_applied: $pattern:pat $(if $guard:expr)? $(,)?) => {
         for event in $events {
             match event {
-                $($pattern $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),)+
-                $break_pattern $(if $break_guard)? => break,
+                $pattern $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
                 _ => {}
             }
         }

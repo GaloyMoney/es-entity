@@ -41,8 +41,8 @@ impl OrderItem {
     pub fn update_quantity(&mut self, quantity: i32) -> Idempotent<()> {
         idempotency_guard!(
             self.events.iter_all().rev(),
-            OrderItemEvent::QuantityUpdated { quantity: q } if q == &quantity,
-            => OrderItemEvent::QuantityUpdated { .. }
+            already_applied: OrderItemEvent::QuantityUpdated { quantity: q } if q == &quantity,
+            resets_on: OrderItemEvent::QuantityUpdated { .. }
         );
 
         self.quantity = quantity;
