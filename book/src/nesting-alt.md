@@ -58,7 +58,7 @@ This leverages the rust module system to enforce that the children cannot be acc
 #     pub fn add_line_item(&mut self, amount: f64, description: String) -> Idempotent<usize> {
 #         idempotency_guard!(
 #             self.events.iter_all().rev(),
-#             BillingPeriodEvent::LineItemAdded { amount: a, description: d, .. }
+#             already_applied: BillingPeriodEvent::LineItemAdded { amount: a, description: d, .. }
 #                 if a == &amount && d == &description
 #         );
 # 
@@ -78,7 +78,7 @@ This leverages the rust module system to enforce that the children cannot be acc
 #     pub fn close(&mut self) -> Idempotent<()> {
 #         idempotency_guard!(
 #             self.events.iter_all().rev(),
-#             BillingPeriodEvent::Closed
+#             already_applied: BillingPeriodEvent::Closed
 #         );
 # 
 #         self.is_current = false;
@@ -294,7 +294,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #         }
 #         idempotency_guard!(
 #             self.events.iter_all().rev(),
-#             BillingPeriodEvent::LineItemAdded { amount: a, description: d, .. }
+#             already_applied: BillingPeriodEvent::LineItemAdded { amount: a, description: d, .. }
 #                 if a == &amount && d == &description
 #         );
 #         self.line_items.push(LineItem {
@@ -310,7 +310,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     pub fn close(&mut self) -> Idempotent<()> {
 #         idempotency_guard!(
 #             self.events.iter_all().rev(),
-#             BillingPeriodEvent::Closed
+#             already_applied: BillingPeriodEvent::Closed
 #         );
 #         self.is_current = false;
 #         self.events.push(BillingPeriodEvent::Closed);

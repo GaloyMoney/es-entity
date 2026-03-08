@@ -7,8 +7,10 @@
 /// # Parameters
 ///
 /// - `$events`: Event collection to search (usually chronologically reversed)
-/// - `already_applied:` Event pattern that indicates operation already applied
-/// - `resets_on:` Optional event pattern that resets the guard, allowing re-execution
+/// - `already_applied:` One or more event patterns that indicate the operation was already applied.
+///   Multiple patterns are supported — each is checked independently.
+/// - `resets_on:` Optional event pattern that resets the guard, allowing re-execution.
+///   Use Rust's native or-pattern (`P1 | P2`) to match multiple reset events.
 ///
 /// When iterating events in reverse, if a `resets_on` event is found before the
 /// `already_applied` event, the guard allows re-execution. This is useful for
@@ -63,15 +65,50 @@
 /// // updating "Alice" again works because Bob's NameUpdated resets the guard
 /// assert!(user2.update_name_resettable("Alice").did_execute());
 /// ```
+///
+/// ## Multiple `already_applied` patterns
+///
+/// ```rust
+/// use es_entity::{idempotency_guard, Idempotent};
+///
+/// pub enum ConfigEvent {
+///     Initialized { id: u64 },
+///     Updated { key: String, value: String },
+///     KeyRotated { key: String },
+/// }
+///
+/// pub struct Config {
+///     events: Vec<ConfigEvent>,
+/// }
+///
+/// impl Config {
+///     pub fn apply_change(&mut self, key: String, value: String) -> Idempotent<()> {
+///         idempotency_guard!(
+///             self.events.iter().rev(),
+///             already_applied: ConfigEvent::Updated { key: k, value: v } if k == &key && v == &value,
+///             already_applied: ConfigEvent::KeyRotated { key: k } if k == &key,
+///             resets_on: ConfigEvent::Initialized { .. }
+///         );
+///         self.events.push(ConfigEvent::Updated { key, value });
+///         Idempotent::Executed(())
+///     }
+/// }
+///
+/// let mut config = Config { events: vec![] };
+/// assert!(config.apply_change("k".into(), "v".into()).did_execute());
+/// assert!(config.apply_change("k".into(), "v".into()).was_already_applied());
+/// ```
 #[macro_export]
 macro_rules! idempotency_guard {
     // already_applied + resets_on (must come before already_applied-only to avoid ambiguity)
     ($events:expr,
-     already_applied: $pattern:pat $(if $guard:expr)?,
+     $(already_applied: $pattern:pat $(if $guard:expr)? ,)+
      resets_on: $break_pattern:pat $(if $break_guard:expr)? $(,)?) => {
         for event in $events {
             match event {
-                $pattern $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
+                $(
+                    $pattern $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
+                )+
                 $break_pattern $(if $break_guard)? => break,
                 _ => {}
             }
@@ -79,10 +116,12 @@ macro_rules! idempotency_guard {
     };
     // already_applied only
     ($events:expr,
-     already_applied: $pattern:pat $(if $guard:expr)? $(,)?) => {
+     $(already_applied: $pattern:pat $(if $guard:expr)?),+ $(,)?) => {
         for event in $events {
             match event {
-                $pattern $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
+                $(
+                    $pattern $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
+                )+
                 _ => {}
             }
         }

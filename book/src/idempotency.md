@@ -156,7 +156,7 @@ impl User {
             // The iterator of events
             self.events.iter().rev(),
             // The pattern match to check whether an operation was already applied
-            UserEvent::NameUpdated { name: existing_name } if existing_name == &name 
+            already_applied: UserEvent::NameUpdated { name: existing_name } if existing_name == &name
         );
         self.events.push(UserEvent::NameUpdated { name });
         Idempotent::Executed(())
@@ -188,9 +188,9 @@ impl User {
         let name = new_name.into();
         idempotency_guard!(
             self.events.iter().rev(),
-            UserEvent::NameUpdated { name: existing_name } if existing_name == &name,
-            // The `=>` signifies the pattern where to stop the iteration.
-            => UserEvent::NameUpdated { .. }
+            already_applied: UserEvent::NameUpdated { name: existing_name } if existing_name == &name,
+            // The `resets_on` signifies the pattern where to stop the iteration.
+            resets_on: UserEvent::NameUpdated { .. }
         );
         self.events.push(UserEvent::NameUpdated { name });
         Idempotent::Executed(())
@@ -205,4 +205,4 @@ fn main() {
 }
 ```
 
-Without the `=>` argument the second call of `assert!(user.update_name("Harrison").did_execute());` would fail.
+Without the `resets_on` argument the second call of `assert!(user.update_name("Harrison").did_execute());` would fail.

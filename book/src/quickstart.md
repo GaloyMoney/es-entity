@@ -112,9 +112,9 @@ impl User {
         idempotency_guard!(
             self.events.iter_all().rev(),
             // If this pattern matches return Idempotent::AlreadyApplied
-            UserEvent::NameUpdated { name } if name == &new_name,
+            already_applied: UserEvent::NameUpdated { name } if name == &new_name,
             // Stop searching here
-            => UserEvent::NameUpdated { .. }
+            resets_on: UserEvent::NameUpdated { .. }
         );
 
         self.name = new_name.clone();

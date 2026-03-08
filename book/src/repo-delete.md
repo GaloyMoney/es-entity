@@ -76,7 +76,7 @@ impl User {
     fn delete(&mut self) -> Idempotent<()> {
         idempotency_guard!(
             self.events.iter_all(),
-            UserEvent::Deleted
+            already_applied: UserEvent::Deleted
         );
         self.events.push(UserEvent::Deleted);
         Idempotent::Executed(())
