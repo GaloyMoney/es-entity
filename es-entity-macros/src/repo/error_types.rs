@@ -1102,4 +1102,248 @@ mod tests {
         let ty: syn::Type = parse_quote! { Obligation<E> };
         assert!(derive_entity_from_repo_type(&ty).is_none());
     }
+
+    // -----------------------------------------------------------------------
+    // Hook variant and helper method generation tests
+    // -----------------------------------------------------------------------
+
+    fn make_error_types_with_hooks(
+        nested: Vec<NestedErrorInfo>,
+        post_hydrate_hook: Option<PostHydrateHookConfig>,
+        post_persist_hook: Option<PostPersistHookConfig>,
+    ) -> ErrorTypes<'static> {
+        let entity: &'static syn::Ident =
+            Box::leak(Box::new(Ident::new("Order", Span::call_site())));
+        let ph: &'static Option<PostHydrateHookConfig> = Box::leak(Box::new(post_hydrate_hook));
+        let pp: &'static Option<PostPersistHookConfig> = Box::leak(Box::new(post_persist_hook));
+        ErrorTypes {
+            entity,
+            column_enum: Ident::new("OrderColumn", Span::call_site()),
+            create_error: Ident::new("OrderCreateError", Span::call_site()),
+            modify_error: Ident::new("OrderModifyError", Span::call_site()),
+            find_error: Ident::new("OrderFindError", Span::call_site()),
+            query_error: Ident::new("OrderQueryError", Span::call_site()),
+            column_variants: vec![],
+            nested,
+            post_hydrate_hook: ph,
+            post_persist_hook: pp,
+        }
+    }
+
+    fn ph_hook() -> PostHydrateHookConfig {
+        PostHydrateHookConfig {
+            method: Ident::new("validate", Span::call_site()),
+            error: syn::parse_str("MyHydrateError").unwrap(),
+        }
+    }
+
+    fn pp_hook() -> PostPersistHookConfig {
+        PostPersistHookConfig {
+            method: Ident::new("on_persist", Span::call_site()),
+            error: syn::parse_str("MyPersistError").unwrap(),
+        }
+    }
+
+    #[test]
+    fn create_error_without_hooks_omits_hook_variants() {
+        let et = make_error_types_with_hooks(vec![], None, None);
+        let output = et.generate_create_error().to_string();
+
+        assert!(
+            !output.contains("PostHydrateError"),
+            "should not contain PostHydrateError variant without hook: {output}"
+        );
+        assert!(
+            !output.contains("PostPersistHookError"),
+            "should not contain PostPersistHookError variant without hook: {output}"
+        );
+    }
+
+    #[test]
+    fn create_error_without_hooks_still_generates_was_post_hydrate_error() {
+        let et = make_error_types_with_hooks(vec![], None, None);
+        let output = et.generate_create_error().to_string();
+
+        assert!(
+            output.contains("was_post_hydrate_error"),
+            "was_post_hydrate_error should always be generated: {output}"
+        );
+    }
+
+    #[test]
+    fn create_error_with_post_hydrate_hook_has_variant_and_self_check() {
+        let et = make_error_types_with_hooks(vec![], Some(ph_hook()), None);
+        let output = et.generate_create_error().to_string();
+
+        assert!(
+            output.contains("PostHydrateError (MyHydrateError)"),
+            "should contain PostHydrateError variant with custom type: {output}"
+        );
+        assert!(
+            output.contains("was_post_hydrate_error"),
+            "should contain was_post_hydrate_error helper: {output}"
+        );
+    }
+
+    #[test]
+    fn create_error_with_post_persist_hook_has_variant() {
+        let et = make_error_types_with_hooks(vec![], None, Some(pp_hook()));
+        let output = et.generate_create_error().to_string();
+
+        assert!(
+            output.contains("PostPersistHookError (MyPersistError)"),
+            "should contain PostPersistHookError variant with custom type: {output}"
+        );
+    }
+
+    #[test]
+    fn create_error_nested_cascades_was_duplicate() {
+        let et = make_error_types(vec![NestedErrorInfo {
+            child_repo_ty: parse_quote! { ItemRepo },
+            variant_name: Ident::new("Items", Span::call_site()),
+            nested_entity: None,
+        }]);
+        let output = et.generate_create_error().to_string();
+
+        // was_duplicate should cascade into nested Items variant
+        assert!(
+            output.contains("Self :: Items (e) => e . was_duplicate ()"),
+            "was_duplicate should cascade into nested variant: {output}"
+        );
+    }
+
+    #[test]
+    fn create_error_nested_cascades_was_post_hydrate_error() {
+        let et = make_error_types_with_hooks(
+            vec![NestedErrorInfo {
+                child_repo_ty: parse_quote! { ItemRepo },
+                variant_name: Ident::new("Items", Span::call_site()),
+                nested_entity: None,
+            }],
+            Some(ph_hook()),
+            None,
+        );
+        let output = et.generate_create_error().to_string();
+
+        // was_post_hydrate_error should cascade into nested Items variant
+        assert!(
+            output.contains("Self :: Items (e) => e . was_post_hydrate_error ()"),
+            "was_post_hydrate_error should cascade into nested variant: {output}"
+        );
+    }
+
+    #[test]
+    fn modify_error_with_post_persist_hook_has_variant() {
+        let et = make_error_types_with_hooks(vec![], None, Some(pp_hook()));
+        let output = et.generate_modify_error().to_string();
+
+        assert!(
+            output.contains("PostPersistHookError (MyPersistError)"),
+            "should contain PostPersistHookError variant with custom type: {output}"
+        );
+        assert!(
+            !output.contains("PostHydrateError"),
+            "modify error should never have PostHydrateError: {output}"
+        );
+    }
+
+    #[test]
+    fn modify_error_without_hooks_still_generates_was_post_hydrate_error() {
+        let et = make_error_types_with_hooks(vec![], None, None);
+        let output = et.generate_modify_error().to_string();
+
+        assert!(
+            output.contains("was_post_hydrate_error"),
+            "was_post_hydrate_error should always be generated on ModifyError: {output}"
+        );
+    }
+
+    #[test]
+    fn modify_error_nested_cascades_was_duplicate_and_was_post_hydrate_error() {
+        let et = make_error_types(vec![NestedErrorInfo {
+            child_repo_ty: parse_quote! { ItemRepo },
+            variant_name: Ident::new("Items", Span::call_site()),
+            nested_entity: None,
+        }]);
+        let output = et.generate_modify_error().to_string();
+
+        // was_duplicate cascades into both Modify and Create nested variants
+        assert!(
+            output.contains("Self :: ItemsModify (e) => e . was_duplicate ()"),
+            "was_duplicate should cascade into nested Modify variant: {output}"
+        );
+        assert!(
+            output.contains("Self :: ItemsCreate (e) => e . was_duplicate ()"),
+            "was_duplicate should cascade into nested Create variant: {output}"
+        );
+        // was_post_hydrate_error cascades into both
+        assert!(
+            output.contains("Self :: ItemsModify (e) => e . was_post_hydrate_error ()"),
+            "was_post_hydrate_error should cascade into nested Modify variant: {output}"
+        );
+        assert!(
+            output.contains("Self :: ItemsCreate (e) => e . was_post_hydrate_error ()"),
+            "was_post_hydrate_error should cascade into nested Create variant: {output}"
+        );
+    }
+
+    #[test]
+    fn find_error_with_post_hydrate_hook_has_variant() {
+        let et = make_error_types_with_hooks(vec![], Some(ph_hook()), None);
+        let output = et.generate_find_error().to_string();
+
+        assert!(
+            output.contains("PostHydrateError (MyHydrateError)"),
+            "should contain PostHydrateError variant with custom type: {output}"
+        );
+        assert!(
+            output.contains("was_post_hydrate_error"),
+            "should contain was_post_hydrate_error helper: {output}"
+        );
+    }
+
+    #[test]
+    fn find_error_without_hooks_still_generates_was_post_hydrate_error() {
+        let et = make_error_types_with_hooks(vec![], None, None);
+        let output = et.generate_find_error().to_string();
+
+        assert!(
+            output.contains("was_post_hydrate_error"),
+            "was_post_hydrate_error should always be generated on FindError: {output}"
+        );
+        assert!(
+            !output.contains("PostHydrateError"),
+            "should not contain PostHydrateError variant without hook: {output}"
+        );
+    }
+
+    #[test]
+    fn query_error_with_post_hydrate_hook_has_variant() {
+        let et = make_error_types_with_hooks(vec![], Some(ph_hook()), None);
+        let output = et.generate_query_error().to_string();
+
+        assert!(
+            output.contains("PostHydrateError (MyHydrateError)"),
+            "should contain PostHydrateError variant with custom type: {output}"
+        );
+        assert!(
+            output.contains("was_post_hydrate_error"),
+            "should contain was_post_hydrate_error helper: {output}"
+        );
+    }
+
+    #[test]
+    fn query_error_without_hooks_still_generates_was_post_hydrate_error() {
+        let et = make_error_types_with_hooks(vec![], None, None);
+        let output = et.generate_query_error().to_string();
+
+        assert!(
+            output.contains("was_post_hydrate_error"),
+            "was_post_hydrate_error should always be generated on QueryError: {output}"
+        );
+        assert!(
+            !output.contains("PostHydrateError"),
+            "should not contain PostHydrateError variant without hook: {output}"
+        );
+    }
 }
