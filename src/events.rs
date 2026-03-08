@@ -283,10 +283,10 @@ where
     }
 
     #[doc(hidden)]
-    pub fn new_event_types(&self) -> Vec<&'static str> {
+    pub fn new_event_types(&self) -> Vec<String> {
         self.new_events
             .iter()
-            .map(|event| event.event.event_type())
+            .map(|event| event.event.event_type().to_string())
             .collect()
     }
 
