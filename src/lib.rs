@@ -25,6 +25,7 @@
 
 pub mod clock;
 pub mod context;
+pub mod db;
 pub mod error;
 pub mod events;
 pub mod idempotent;
