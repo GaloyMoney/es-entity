@@ -148,6 +148,8 @@ use std::{
     pin::Pin,
 };
 
+use crate::db;
+
 use super::AtomicOperation;
 
 /// Type alias for boxed async futures.
@@ -201,7 +203,7 @@ pub trait CommitHook: Send + 'static + Sized {
 /// Implements [`AtomicOperation`] to allow executing database queries within the transaction.
 pub struct HookOperation<'c> {
     now: Option<chrono::DateTime<chrono::Utc>>,
-    conn: &'c mut sqlx::PgConnection,
+    conn: &'c mut db::Connection,
 }
 
 impl<'c> HookOperation<'c> {
@@ -218,7 +220,7 @@ impl<'c> AtomicOperation for HookOperation<'c> {
         self.now
     }
 
-    fn as_executor(&mut self) -> &mut sqlx::PgConnection {
+    fn as_executor(&mut self) -> &mut db::Connection {
         self.conn
     }
 }

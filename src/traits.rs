@@ -2,7 +2,7 @@
 
 use serde::{Serialize, de::DeserializeOwned};
 
-use super::{error::EntityHydrationError, events::EntityEvents, operation::AtomicOperation};
+use super::{db, error::EntityHydrationError, events::EntityEvents, operation::AtomicOperation};
 
 /// Required trait for all event enums to be compatible and recognised by es-entity.
 ///
@@ -50,7 +50,7 @@ pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
     #[cfg(feature = "instrument")]
     type EntityId: Clone
         + PartialEq
-        + sqlx::Type<sqlx::Postgres>
+        + sqlx::Type<db::Db>
         + Eq
         + std::hash::Hash
         + Send
@@ -58,13 +58,7 @@ pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
         + std::fmt::Debug;
 
     #[cfg(not(feature = "instrument"))]
-    type EntityId: Clone
-        + PartialEq
-        + sqlx::Type<sqlx::Postgres>
-        + Eq
-        + std::hash::Hash
-        + Send
-        + Sync;
+    type EntityId: Clone + PartialEq + sqlx::Type<db::Db> + Eq + std::hash::Hash + Send + Sync;
 
     fn event_context() -> bool;
     fn event_type(&self) -> &'static str;

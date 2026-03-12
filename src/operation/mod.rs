@@ -3,9 +3,9 @@
 pub mod hooks;
 mod with_time;
 
-use sqlx::{Acquire, PgPool, Postgres, Transaction};
+use sqlx::{Acquire, Transaction};
 
-use crate::clock::ClockHandle;
+use crate::{clock::ClockHandle, db};
 
 pub use with_time::*;
 
@@ -18,7 +18,7 @@ pub use with_time::*;
 /// clock's time, enabling deterministic testing. This cached time will be used in all
 /// time-dependent operations.
 pub struct DbOp<'c> {
-    tx: Transaction<'c, Postgres>,
+    tx: Transaction<'c, db::Db>,
     clock: ClockHandle,
     now: Option<chrono::DateTime<chrono::Utc>>,
     commit_hooks: Option<hooks::CommitHooks>,
@@ -26,7 +26,7 @@ pub struct DbOp<'c> {
 
 impl<'c> DbOp<'c> {
     fn new(
-        tx: Transaction<'c, Postgres>,
+        tx: Transaction<'c, db::Db>,
         clock: ClockHandle,
         time: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Self {
@@ -41,7 +41,7 @@ impl<'c> DbOp<'c> {
     /// Initializes a transaction using the global clock.
     ///
     /// Delegates to [`init_with_clock`](Self::init_with_clock) using the global clock handle.
-    pub async fn init(pool: &PgPool) -> Result<DbOp<'static>, sqlx::Error> {
+    pub async fn init(pool: &db::Pool) -> Result<DbOp<'static>, sqlx::Error> {
         Self::init_with_clock(pool, crate::clock::Clock::handle()).await
     }
 
@@ -49,7 +49,7 @@ impl<'c> DbOp<'c> {
     ///
     /// If the clock is artificial, its current time will be cached in the transaction.
     pub async fn init_with_clock(
-        pool: &PgPool,
+        pool: &db::Pool,
         clock: &ClockHandle,
     ) -> Result<DbOp<'static>, sqlx::Error> {
         let tx = pool.begin().await?;
@@ -118,7 +118,7 @@ impl<'c> DbOp<'c> {
     }
 
     /// Gets a mutable handle to the inner transaction
-    pub fn tx_mut(&mut self) -> &mut Transaction<'c, Postgres> {
+    pub fn tx_mut(&mut self) -> &mut Transaction<'c, db::Db> {
         &mut self.tx
     }
 }
@@ -132,7 +132,7 @@ impl<'o> AtomicOperation for DbOp<'o> {
         &self.clock
     }
 
-    fn as_executor(&mut self) -> &mut sqlx::PgConnection {
+    fn as_executor(&mut self) -> &mut db::Connection {
         self.tx.as_executor()
     }
 
@@ -172,7 +172,7 @@ impl<'c> DbOpWithTime<'c> {
     }
 
     /// Gets a mutable handle to the inner transaction
-    pub fn tx_mut(&mut self) -> &mut Transaction<'c, Postgres> {
+    pub fn tx_mut(&mut self) -> &mut Transaction<'c, db::Db> {
         self.inner.tx_mut()
     }
 }
@@ -186,7 +186,7 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
         self.inner.clock()
     }
 
-    fn as_executor(&mut self) -> &mut sqlx::PgConnection {
+    fn as_executor(&mut self) -> &mut db::Connection {
         self.inner.as_executor()
     }
 
@@ -233,7 +233,7 @@ pub trait AtomicOperation: Send {
     /// ```
     ///
     /// But GATs don't play well with `async_trait::async_trait` due to lifetime constraints
-    /// so we return the concrete [`&mut sqlx::PgConnection`](`sqlx::PgConnection`) instead as a work around.
+    /// so we return the concrete [`&mut db::Connection`](`crate::db::Connection`) instead as a work around.
     ///
     /// Since this trait is generally applied to types that wrap a [`sqlx::Transaction`]
     /// there is no variance in the return type - so its fine.
@@ -246,8 +246,8 @@ pub trait AtomicOperation: Send {
     }
 }
 
-impl<'c> AtomicOperation for sqlx::Transaction<'c, Postgres> {
-    fn as_executor(&mut self) -> &mut sqlx::PgConnection {
+impl<'c> AtomicOperation for sqlx::Transaction<'c, db::Db> {
+    fn as_executor(&mut self) -> &mut db::Connection {
         &mut *self
     }
 }

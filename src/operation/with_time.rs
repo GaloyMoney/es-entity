@@ -1,4 +1,4 @@
-use crate::clock::ClockHandle;
+use crate::{clock::ClockHandle, db};
 
 use super::{AtomicOperation, hooks};
 
@@ -66,7 +66,7 @@ impl<'a, Op: AtomicOperation + ?Sized> AtomicOperation for OpWithTime<'a, Op> {
         self.inner.clock()
     }
 
-    fn as_executor(&mut self) -> &mut sqlx::PgConnection {
+    fn as_executor(&mut self) -> &mut db::Connection {
         self.inner.as_executor()
     }
 
