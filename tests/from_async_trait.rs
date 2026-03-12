@@ -3,7 +3,6 @@ mod helpers;
 
 use es_entity::*;
 use helpers::init_pool;
-use sqlx::PgPool;
 
 use entities::order::*;
 
@@ -18,7 +17,7 @@ trait RunJob {
 }
 
 struct TestJob {
-    pool: PgPool,
+    pool: es_entity::db::Pool,
 }
 
 #[async_trait::async_trait]
@@ -43,13 +42,13 @@ impl RunJob for TestJob {
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Order")]
 pub struct Orders {
-    pool: PgPool,
+    pool: es_entity::db::Pool,
     #[es_repo(nested)]
     items: OrderItems,
 }
 
 impl Orders {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: es_entity::db::Pool) -> Self {
         Self {
             pool: pool.clone(),
             items: OrderItems::new(pool),
@@ -63,11 +62,11 @@ impl Orders {
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
 pub struct OrderItems {
-    pool: PgPool,
+    pool: es_entity::db::Pool,
 }
 
 impl OrderItems {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: es_entity::db::Pool) -> Self {
         Self { pool }
     }
 }

@@ -1,3 +1,5 @@
+#![cfg(feature = "postgres")]
+
 mod entities;
 mod helpers;
 

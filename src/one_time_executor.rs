@@ -11,7 +11,7 @@ use crate::{db, operation::AtomicOperation};
 ///
 /// In order to make the consumption of the executor work we have to pass the query to the
 /// executor:
-/// ```rust
+/// ```rust,ignore
 /// async fn query(ex: impl es_entity::IntoOneTimeExecutor<'_>) -> Result<(), sqlx::Error> {
 ///     ex.into_executor().fetch_optional(
 ///         sqlx::query!(
@@ -62,12 +62,12 @@ where
     /// Proxy call to `query.fetch_all` but guarantees the inner executor will only be used once.
     pub async fn fetch_all<'q, F, O, A>(
         self,
-        query: sqlx::query::Map<'q, sqlx::Postgres, F, A>,
+        query: sqlx::query::Map<'q, db::Db, F, A>,
     ) -> Result<Vec<O>, sqlx::Error>
     where
-        F: FnMut(sqlx::postgres::PgRow) -> Result<O, sqlx::Error> + Send,
+        F: FnMut(db::Row) -> Result<O, sqlx::Error> + Send,
         O: Send + Unpin,
-        A: 'q + Send + sqlx::IntoArguments<'q, sqlx::Postgres>,
+        A: 'q + Send + sqlx::IntoArguments<'q, db::Db>,
     {
         query.fetch_all(self.executor).await
     }
@@ -75,18 +75,18 @@ where
     /// Proxy call to `query.fetch_optional` but guarantees the inner executor will only be used once.
     pub async fn fetch_optional<'q, F, O, A>(
         self,
-        query: sqlx::query::Map<'q, sqlx::Postgres, F, A>,
+        query: sqlx::query::Map<'q, db::Db, F, A>,
     ) -> Result<Option<O>, sqlx::Error>
     where
-        F: FnMut(sqlx::postgres::PgRow) -> Result<O, sqlx::Error> + Send,
+        F: FnMut(db::Row) -> Result<O, sqlx::Error> + Send,
         O: Send + Unpin,
-        A: 'q + Send + sqlx::IntoArguments<'q, sqlx::Postgres>,
+        A: 'q + Send + sqlx::IntoArguments<'q, db::Db>,
     {
         query.fetch_optional(self.executor).await
     }
 }
 
-/// Marker trait for [`IntoOneTimeExecutorAt<'a> + 'a`](`IntoOneTimeExecutorAt`). Do not implement directly.
+/// Marker trait for [`IntoOnetOneExecutorAt<'a> + 'a`](`IntoOneTimeExecutorAt`). Do not implement directly.
 ///
 /// Used as sugar to avoid writing:
 /// ```rust,ignore

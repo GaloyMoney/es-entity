@@ -3,19 +3,18 @@ mod helpers;
 
 use entities::order::*;
 use es_entity::*;
-use sqlx::PgPool;
 
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Order")]
 pub struct Orders {
-    pool: PgPool,
+    pool: es_entity::db::Pool,
 
     #[es_repo(nested)]
     items: OrderItems,
 }
 
 impl Orders {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: es_entity::db::Pool) -> Self {
         Self {
             pool: pool.clone(),
             items: OrderItems::new(pool),
@@ -29,11 +28,11 @@ impl Orders {
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
 pub struct OrderItems {
-    pool: PgPool,
+    pool: es_entity::db::Pool,
 }
 
 impl OrderItems {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: es_entity::db::Pool) -> Self {
         Self { pool }
     }
 }

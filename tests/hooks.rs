@@ -18,10 +18,8 @@ impl CommitHook for FullCommitHook {
         self,
         mut op: HookOperation<'_>,
     ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
-        let result = sqlx::query!("SELECT NOW() as now")
-            .fetch_one(op.as_executor())
-            .await?;
-        *self.pre_result.lock().unwrap() = result.now;
+        let now = es_entity::db::database_now(op.as_executor()).await?;
+        *self.pre_result.lock().unwrap() = Some(now);
         PreCommitRet::ok(self, op)
     }
 

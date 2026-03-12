@@ -3,16 +3,15 @@ mod helpers;
 
 use entities::user::*;
 use es_entity::{clock::*, *};
-use sqlx::PgPool;
 
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
 pub struct Users {
-    pool: PgPool,
+    pool: es_entity::db::Pool,
 }
 
 impl Users {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: es_entity::db::Pool) -> Self {
         Self { pool }
     }
 }
@@ -20,7 +19,6 @@ impl Users {
 /// A separate module for the clock field repo to avoid type conflicts
 mod users_with_clock {
     use es_entity::{EsEntity, EsEvent, EsRepo, clock::ClockHandle};
-    use sqlx::PgPool;
 
     use crate::entities::user::*;
 
@@ -28,16 +26,16 @@ mod users_with_clock {
     #[derive(EsRepo, Debug)]
     #[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
     pub struct UsersWithClock {
-        pool: PgPool,
+        pool: es_entity::db::Pool,
         clock: Option<ClockHandle>,
     }
 
     impl UsersWithClock {
-        pub fn new(pool: PgPool) -> Self {
+        pub fn new(pool: es_entity::db::Pool) -> Self {
             Self { pool, clock: None }
         }
 
-        pub fn with_clock(pool: PgPool, clock: ClockHandle) -> Self {
+        pub fn with_clock(pool: es_entity::db::Pool, clock: ClockHandle) -> Self {
             Self {
                 pool,
                 clock: Some(clock),
@@ -51,7 +49,6 @@ use users_with_clock::UsersWithClock;
 /// A separate module for the required clock field repo
 mod users_with_required_clock {
     use es_entity::{EsEntity, EsEvent, EsRepo, clock::ClockHandle};
-    use sqlx::PgPool;
 
     use crate::entities::user::*;
 
@@ -59,12 +56,12 @@ mod users_with_required_clock {
     #[derive(EsRepo, Debug)]
     #[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
     pub struct UsersWithRequiredClock {
-        pool: PgPool,
+        pool: es_entity::db::Pool,
         clock: ClockHandle,
     }
 
     impl UsersWithRequiredClock {
-        pub fn new(pool: PgPool, clock: ClockHandle) -> Self {
+        pub fn new(pool: es_entity::db::Pool, clock: ClockHandle) -> Self {
             Self { pool, clock }
         }
     }

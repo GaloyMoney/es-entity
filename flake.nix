@@ -145,10 +145,15 @@
 
         checks = {
           workspace-fmt = craneLib.cargoFmt commonArgs;
-          workspace-clippy = craneLib.cargoClippy (commonArgs
+          workspace-clippy-pg = craneLib.cargoClippy (commonArgs
             // {
               inherit cargoArtifacts;
-              cargoClippyExtraArgs = "--all-features -- --deny warnings";
+              cargoClippyExtraArgs = "--workspace --features postgres,graphql,event-context,instrument,tracing-context,json-schema -- --deny warnings";
+            });
+          workspace-clippy-sqlite = craneLib.cargoClippy (commonArgs
+            // {
+              inherit cargoArtifacts;
+              cargoClippyExtraArgs = "--workspace --no-default-features --features sqlite,graphql,event-context,instrument,json-schema -- --deny warnings";
             });
           workspace-audit = craneLib.cargoAudit {
             inherit advisory-db;

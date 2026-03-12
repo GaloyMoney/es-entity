@@ -3,7 +3,6 @@ mod helpers;
 
 use entities::profile::*;
 use es_entity::*;
-use sqlx::PgPool;
 
 /// Profiles repo with custom accessors:
 /// - `name`: field-path accessor (`data.name`) — accesses nested struct field
@@ -23,11 +22,11 @@ use sqlx::PgPool;
     )
 )]
 pub struct Profiles {
-    pool: PgPool,
+    pool: es_entity::db::Pool,
 }
 
 impl Profiles {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: es_entity::db::Pool) -> Self {
         Self { pool }
     }
 }

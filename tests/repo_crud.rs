@@ -3,7 +3,6 @@ mod helpers;
 
 use entities::user::*;
 use es_entity::*;
-use sqlx::PgPool;
 
 /// Regression test: repo structs with a generic parameter named 'E' must compile
 /// without conflicting with the macro's internal error generic.
@@ -12,7 +11,6 @@ mod generic_e_repo {
     #![allow(dead_code)]
 
     use es_entity::*;
-    use sqlx::PgPool;
 
     use crate::entities::user::*;
 
@@ -21,7 +19,7 @@ mod generic_e_repo {
     #[derive(EsRepo, Debug)]
     #[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
     pub struct UsersWithGenericE<E: EventMarker> {
-        pool: PgPool,
+        pool: es_entity::db::Pool,
         _marker: std::marker::PhantomData<E>,
     }
 }
@@ -29,11 +27,11 @@ mod generic_e_repo {
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
 pub struct Users {
-    pool: PgPool,
+    pool: es_entity::db::Pool,
 }
 
 impl Users {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: es_entity::db::Pool) -> Self {
         Self { pool }
     }
 }
@@ -103,6 +101,14 @@ async fn list_for_filters() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
 
     let users = Users::new(pool);
+
+    // Seed a user so the table isn't empty
+    let seed_user = NewUser::builder()
+        .id(UserId::new())
+        .name("SeedUser")
+        .build()
+        .unwrap();
+    users.create(seed_user).await?;
 
     // Test with default filters (no filter) - should return all entities
     let PaginatedQueryRet {

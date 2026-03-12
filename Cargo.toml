@@ -13,17 +13,22 @@ inherits = "dev"
 
 [features]
 
-fail-on-warnings = ["es-entity-macros/fail-on-warnings"]
+default = ["postgres"]
+postgres = ["sqlx/postgres", "dep:es-entity-macros"]
+sqlite = ["sqlx/sqlite", "dep:es-entity-macros-sqlite"]
+
+fail-on-warnings = ["es-entity-macros?/fail-on-warnings", "es-entity-macros-sqlite?/fail-on-warnings"]
 tracing-context = ["dep:tracing", "dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk"]
-graphql = ["es-entity-macros/graphql", "dep:async-graphql", "dep:base64"]
-event-context = ["es-entity-macros/event-context", "event-context-enabled"]
-event-context-enabled = ["es-entity-macros/event-context-enabled"]
+graphql = ["es-entity-macros?/graphql", "es-entity-macros-sqlite?/graphql", "dep:async-graphql", "dep:base64"]
+event-context = ["es-entity-macros?/event-context", "es-entity-macros-sqlite?/event-context", "event-context-enabled"]
+event-context-enabled = ["es-entity-macros?/event-context-enabled", "es-entity-macros-sqlite?/event-context-enabled"]
 json-schema = ["dep:schemars"]
 mdbook-test = ["dep:anyhow"]
-instrument = ["es-entity-macros/instrument", "dep:tracing"]
+instrument = ["es-entity-macros?/instrument", "es-entity-macros-sqlite?/instrument", "dep:tracing"]
 
 [dependencies]
-es-entity-macros = { workspace = true }
+es-entity-macros = { workspace = true, optional = true }
+es-entity-macros-sqlite = { workspace = true, optional = true }
 
 base64 = { workspace = true, optional = true }
 sqlx = { workspace = true }
@@ -53,16 +58,19 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
+sqlx = { workspace = true, features = ["migrate"] }
 
 [workspace]
 resolver = "2"
 members = [
   "es-entity-macros",
+  "es-entity-macros-sqlite",
 ]
 
 [workspace.dependencies]
 
 es-entity-macros = { path = "es-entity-macros", version = "0.10.28-dev" }
+es-entity-macros-sqlite = { path = "es-entity-macros-sqlite", version = "0.10.28-dev" }
 
 anyhow = "1.0"
 async-graphql = { version = "8.0.0-rc.3", default-features = false }
@@ -74,7 +82,7 @@ schemars = { version = "1.0", features = ["uuid1"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_with = "3.15"
-sqlx = { version = "0.8", default-features = false, features = ["macros", "runtime-tokio-rustls", "postgres", "uuid", "chrono", "json" ] }
+sqlx = { version = "0.8", default-features = false, features = ["macros", "runtime-tokio-rustls", "uuid", "chrono", "json" ] }
 tokio = { version = "1.50", features = ["rt-multi-thread", "macros", "time"] }
 thiserror = "2.0"
 uuid = { version = "1.22", features = ["serde", "v7"] }
