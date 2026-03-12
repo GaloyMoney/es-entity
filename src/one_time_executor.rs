@@ -90,11 +90,11 @@ where
 ///
 /// Used as sugar to avoid writing:
 /// ```rust,ignore
-/// fn some_query<'a>(op: impl IntoOnetOneExecutorAt<'a> + 'a)
+/// fn some_query<'a>(op: impl IntoOneTimeExecutorAt<'a> + 'a)
 /// ```
 /// Instead we can shorten the signature by using elision:
 /// ```rust,ignore
-/// fn some_query(op: impl IntoOnetOneExecutor<'_>)
+/// fn some_query(op: impl IntoOneTimeExecutor<'_>)
 /// ```
 pub trait IntoOneTimeExecutor<'c>: IntoOneTimeExecutorAt<'c> + 'c {}
 impl<'c, T> IntoOneTimeExecutor<'c> for T where T: IntoOneTimeExecutorAt<'c> + 'c {}

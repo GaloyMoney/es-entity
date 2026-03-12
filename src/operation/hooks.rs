@@ -100,7 +100,7 @@
 //!
 //! ```no_run
 //! # use es_entity::{AtomicOperation, DbOp, operation::hooks::{CommitHook, HookOperation, PreCommitRet}};
-//! # use sqlx::PgPool;
+//! # use es_entity::db;
 //! # #[derive(Debug, Clone)]
 //! # struct Event { entity_id: uuid::Uuid, event_type: String }
 //! # #[derive(Debug)]
@@ -118,7 +118,7 @@
 //! #     fn post_commit(self) { for event in self.events { let _ = self.tx.send(event); } }
 //! #     fn merge(&mut self, other: &mut Self) -> bool { self.events.append(&mut other.events); true }
 //! # }
-//! # async fn example(pool: PgPool) -> Result<(), sqlx::Error> {
+//! # async fn example(pool: db::Pool) -> Result<(), sqlx::Error> {
 //! let user_id = uuid::Uuid::nil();
 //! let (tx, _rx) = std::sync::mpsc::channel();
 //! let mut op = DbOp::init(&pool).await?;
