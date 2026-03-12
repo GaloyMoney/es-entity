@@ -137,10 +137,35 @@
 
         echo "Tests completed successfully!"
       '';
+
+      nextest-sqlite-runner = pkgs.writeShellScriptBin "nextest-sqlite-runner" ''
+        set -e
+
+        export PATH="${pkgs.lib.makeBinPath [
+          pkgs.cargo-nextest
+          pkgs.coreutils
+          rustToolchain
+          pkgs.stdenv.cc
+        ]}:$PATH"
+
+        export SQLX_OFFLINE=true
+
+        echo "Running SQLite macro tests..."
+        cargo nextest run -p es-entity-macros-sqlite --verbose
+
+        echo "Running SQLite integration tests..."
+        cargo nextest run -p es-entity --no-default-features --features sqlite,graphql,event-context,instrument,json-schema --verbose
+
+        echo "Running SQLite doc tests..."
+        cargo test --doc -p es-entity --no-default-features --features sqlite,graphql,event-context,instrument,json-schema
+
+        echo "SQLite tests completed successfully!"
+      '';
     in
       with pkgs; {
         packages = {
           nextest = nextest-runner;
+          nextest-sqlite = nextest-sqlite-runner;
         };
 
         checks = {
