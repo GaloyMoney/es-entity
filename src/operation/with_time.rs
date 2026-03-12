@@ -1,4 +1,4 @@
-use crate::clock::ClockHandle;
+use crate::{clock::ClockHandle, db};
 
 use super::{AtomicOperation, hooks};
 
@@ -31,9 +31,7 @@ impl<'a, Op: AtomicOperation + ?Sized> OpWithTime<'a, Op> {
         } else if let Some(artificial_time) = op.clock().artificial_now() {
             artificial_time
         } else {
-            sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>("SELECT NOW()")
-                .fetch_one(op.as_executor())
-                .await?
+            db::database_now(op.as_executor()).await?
         };
         Ok(Self { inner: op, now })
     }
@@ -66,7 +64,7 @@ impl<'a, Op: AtomicOperation + ?Sized> AtomicOperation for OpWithTime<'a, Op> {
         self.inner.clock()
     }
 
-    fn as_executor(&mut self) -> &mut sqlx::PgConnection {
+    fn as_executor(&mut self) -> &mut db::Connection {
         self.inner.as_executor()
     }
 

@@ -221,7 +221,7 @@ impl ToTokens for EsRepo<'_> {
 
              impl #impl_generics #repo #ty_generics #where_clause {
                 #[inline(always)]
-                pub fn pool(&self) -> &sqlx::PgPool {
+                pub fn pool(&self) -> &es_entity::db::Pool {
                     &self.#pool_field
                 }
 

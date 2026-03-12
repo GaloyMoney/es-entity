@@ -1,6 +1,6 @@
 //! Type-safe wrapper to ensure one database operation per executor.
 
-use crate::operation::AtomicOperation;
+use crate::{db, operation::AtomicOperation};
 
 /// A struct that owns an [`sqlx::Executor`].
 ///
@@ -23,7 +23,7 @@ use crate::operation::AtomicOperation;
 /// ```
 pub struct OneTimeExecutor<'c, E>
 where
-    E: sqlx::PgExecutor<'c>,
+    E: sqlx::Executor<'c, Database = db::Db>,
 {
     now: Option<chrono::DateTime<chrono::Utc>>,
     executor: E,
@@ -32,7 +32,7 @@ where
 
 impl<'c, E> OneTimeExecutor<'c, E>
 where
-    E: sqlx::PgExecutor<'c>,
+    E: sqlx::Executor<'c, Database = db::Db>,
 {
     fn new(executor: E, now: Option<chrono::DateTime<chrono::Utc>>) -> Self {
         OneTimeExecutor {
@@ -49,12 +49,12 @@ where
     /// Proxy call to `query.fetch_one` but guarantees the inner executor will only be used once.
     pub async fn fetch_one<'q, F, O, A>(
         self,
-        query: sqlx::query::Map<'q, sqlx::Postgres, F, A>,
+        query: sqlx::query::Map<'q, db::Db, F, A>,
     ) -> Result<O, sqlx::Error>
     where
-        F: FnMut(sqlx::postgres::PgRow) -> Result<O, sqlx::Error> + Send,
+        F: FnMut(db::Row) -> Result<O, sqlx::Error> + Send,
         O: Send + Unpin,
-        A: 'q + Send + sqlx::IntoArguments<'q, sqlx::Postgres>,
+        A: 'q + Send + sqlx::IntoArguments<'q, db::Db>,
     {
         query.fetch_one(self.executor).await
     }
@@ -90,11 +90,11 @@ where
 ///
 /// Used as sugar to avoid writing:
 /// ```rust,ignore
-/// fn some_query<'a>(op: impl IntoOnetOneExecutorAt<'a> + 'a)
+/// fn some_query<'a>(op: impl IntoOneTimeExecutorAt<'a> + 'a)
 /// ```
 /// Instead we can shorten the signature by using elision:
 /// ```rust,ignore
-/// fn some_query(op: impl IntoOnetOneExecutor<'_>)
+/// fn some_query(op: impl IntoOneTimeExecutor<'_>)
 /// ```
 pub trait IntoOneTimeExecutor<'c>: IntoOneTimeExecutorAt<'c> + 'c {}
 impl<'c, T> IntoOneTimeExecutor<'c> for T where T: IntoOneTimeExecutorAt<'c> + 'c {}
@@ -102,10 +102,10 @@ impl<'c, T> IntoOneTimeExecutor<'c> for T where T: IntoOneTimeExecutorAt<'c> + '
 /// A trait to signify that we can use an argument for 1 round trip to the database
 ///
 /// Auto implemented on all [`&mut AtomicOperation`](`AtomicOperation`) types and
-/// [`&sqlx::PgPool`](`sqlx::PgPool`).
+/// [`&db::Pool`](`crate::db::Pool`).
 pub trait IntoOneTimeExecutorAt<'c> {
     /// The concrete executor type.
-    type Executor: sqlx::PgExecutor<'c>;
+    type Executor: sqlx::Executor<'c, Database = db::Db>;
 
     /// Transforms into a [`OneTimeExecutor`] which can be used to execute a round trip.
     fn into_executor(self) -> OneTimeExecutor<'c, Self::Executor>
@@ -115,7 +115,7 @@ pub trait IntoOneTimeExecutorAt<'c> {
 
 impl<'c, E> IntoOneTimeExecutorAt<'c> for OneTimeExecutor<'c, E>
 where
-    E: sqlx::PgExecutor<'c> + 'c,
+    E: sqlx::Executor<'c, Database = db::Db> + 'c,
 {
     type Executor = E;
 
@@ -127,8 +127,8 @@ where
     }
 }
 
-impl<'c> IntoOneTimeExecutorAt<'c> for &sqlx::PgPool {
-    type Executor = &'c sqlx::PgPool;
+impl<'c> IntoOneTimeExecutorAt<'c> for &db::Pool {
+    type Executor = &'c db::Pool;
 
     fn into_executor(self) -> OneTimeExecutor<'c, Self::Executor>
     where
@@ -142,7 +142,7 @@ impl<'c, O> IntoOneTimeExecutorAt<'c> for &mut O
 where
     O: AtomicOperation,
 {
-    type Executor = &'c mut sqlx::PgConnection;
+    type Executor = &'c mut db::Connection;
 
     fn into_executor(self) -> OneTimeExecutor<'c, Self::Executor>
     where

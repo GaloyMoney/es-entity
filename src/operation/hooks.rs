@@ -100,7 +100,7 @@
 //!
 //! ```no_run
 //! # use es_entity::{AtomicOperation, DbOp, operation::hooks::{CommitHook, HookOperation, PreCommitRet}};
-//! # use sqlx::PgPool;
+//! # use es_entity::db;
 //! # #[derive(Debug, Clone)]
 //! # struct Event { entity_id: uuid::Uuid, event_type: String }
 //! # #[derive(Debug)]
@@ -118,7 +118,7 @@
 //! #     fn post_commit(self) { for event in self.events { let _ = self.tx.send(event); } }
 //! #     fn merge(&mut self, other: &mut Self) -> bool { self.events.append(&mut other.events); true }
 //! # }
-//! # async fn example(pool: PgPool) -> Result<(), sqlx::Error> {
+//! # async fn example(pool: db::Pool) -> Result<(), sqlx::Error> {
 //! let user_id = uuid::Uuid::nil();
 //! let (tx, _rx) = std::sync::mpsc::channel();
 //! let mut op = DbOp::init(&pool).await?;
@@ -147,6 +147,8 @@ use std::{
     future::Future,
     pin::Pin,
 };
+
+use crate::db;
 
 use super::AtomicOperation;
 
@@ -201,7 +203,7 @@ pub trait CommitHook: Send + 'static + Sized {
 /// Implements [`AtomicOperation`] to allow executing database queries within the transaction.
 pub struct HookOperation<'c> {
     now: Option<chrono::DateTime<chrono::Utc>>,
-    conn: &'c mut sqlx::PgConnection,
+    conn: &'c mut db::Connection,
 }
 
 impl<'c> HookOperation<'c> {
@@ -218,7 +220,7 @@ impl<'c> AtomicOperation for HookOperation<'c> {
         self.now
     }
 
-    fn as_executor(&mut self) -> &mut sqlx::PgConnection {
+    fn as_executor(&mut self) -> &mut db::Connection {
         self.conn
     }
 }

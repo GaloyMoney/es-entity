@@ -40,6 +40,16 @@ pub fn parse_constraint_detail_value(detail: Option<&str>) -> Option<String> {
 }
 
 #[doc(hidden)]
+/// Extracts the conflicting value from a database error's constraint violation.
+///
+/// Downcasts to [`sqlx::postgres::PgDatabaseError`], reads its `detail()`,
+/// and parses the conflicting value.
+pub fn extract_constraint_value(db_err: &dyn sqlx::error::DatabaseError) -> Option<String> {
+    let pg_err = db_err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()?;
+    parse_constraint_detail_value(pg_err.detail())
+}
+
+#[doc(hidden)]
 /// Wrapper used by generated code to format not-found values.
 /// Prefers `Display` over `Debug` via inherent-vs-trait method resolution.
 pub struct NotFoundValue<'a, T: ?Sized>(pub &'a T);
