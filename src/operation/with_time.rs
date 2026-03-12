@@ -31,9 +31,7 @@ impl<'a, Op: AtomicOperation + ?Sized> OpWithTime<'a, Op> {
         } else if let Some(artificial_time) = op.clock().artificial_now() {
             artificial_time
         } else {
-            sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>("SELECT NOW()")
-                .fetch_one(op.as_executor())
-                .await?
+            db::database_now(op.as_executor()).await?
         };
         Ok(Self { inner: op, now })
     }

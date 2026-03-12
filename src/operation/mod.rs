@@ -86,9 +86,7 @@ impl<'c> DbOp<'c> {
         } else if let Some(artificial_time) = self.clock.artificial_now() {
             artificial_time
         } else {
-            sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>("SELECT NOW()")
-                .fetch_one(&mut *self.tx)
-                .await?
+            db::database_now(&mut *self.tx).await?
         };
 
         Ok(DbOpWithTime::new(self, time))

@@ -9,3 +9,12 @@ pub use sqlx::Postgres as Db;
 pub use sqlx::postgres::{
     PgArgumentBuffer as ArgumentBuffer, PgRow as Row, PgTypeInfo as TypeInfo,
 };
+
+/// Fetches the current timestamp from the database via `SELECT NOW()`.
+pub async fn database_now(
+    executor: impl sqlx::Executor<'_, Database = Db>,
+) -> Result<chrono::DateTime<chrono::Utc>, sqlx::Error> {
+    sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>("SELECT NOW()")
+        .fetch_one(executor)
+        .await
+}
