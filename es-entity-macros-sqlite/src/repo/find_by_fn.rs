@@ -82,8 +82,9 @@ impl ToTokens for FindByFn<'_> {
                     Span::call_site(),
                 );
 
+                let eq_op = if self.column.is_optional() { "IS" } else { "=" };
                 let query = format!(
-                    r#"SELECT id FROM {} WHERE {} = $1{}"#,
+                    r#"SELECT id FROM {} WHERE {} {eq_op} $1{}"#,
                     self.table_name,
                     column_name,
                     if delete == DeleteOption::No {
@@ -410,6 +411,44 @@ mod tests {
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn find_by_fn_optional_column_uses_is() {
+        let column = Column::new(
+            syn::Ident::new("project_id", proc_macro2::Span::call_site()),
+            syn::parse_str("Option<ProjectId>").unwrap(),
+        );
+        let entity = Ident::new("Entity", Span::call_site());
+
+        let persist_fn = FindByFn {
+            prefix: None,
+            column: &column,
+            entity: &entity,
+            table_name: "entities",
+            column_enum: syn::Ident::new("EntityColumn", Span::call_site()),
+            find_error: syn::Ident::new("EntityFindError", Span::call_site()),
+            query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
+            delete: DeleteOption::No,
+            any_nested: false,
+            post_hydrate_error: None,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        persist_fn.to_tokens(&mut tokens);
+
+        let token_str = tokens.to_string();
+        assert!(
+            token_str.contains("project_id IS $1"),
+            "Expected 'IS' for Option<T> column, got: {}",
+            token_str
+        );
+        assert!(
+            !token_str.contains("project_id = $1"),
+            "Should not use '=' for Option<T> column"
+        );
     }
 
     #[test]

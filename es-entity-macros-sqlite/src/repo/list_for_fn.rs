@@ -94,8 +94,13 @@ impl ToTokens for ListForFn<'_> {
                 Span::call_site(),
             );
 
+            let eq_op = if self.for_column.is_optional() {
+                "IS"
+            } else {
+                "="
+            };
             let asc_query = format!(
-                r#"SELECT {} FROM {} WHERE (({} = $1) AND ({})){} ORDER BY {} LIMIT $2"#,
+                r#"SELECT {} FROM {} WHERE (({} {eq_op} $1) AND ({})){} ORDER BY {} LIMIT $2"#,
                 select_columns,
                 self.table_name,
                 for_column_name,
@@ -108,7 +113,7 @@ impl ToTokens for ListForFn<'_> {
                 cursor.order_by(true)
             );
             let desc_query = format!(
-                r#"SELECT {} FROM {} WHERE (({} = $1) AND ({})){} ORDER BY {} LIMIT $2"#,
+                r#"SELECT {} FROM {} WHERE (({} {eq_op} $1) AND ({})){} ORDER BY {} LIMIT $2"#,
                 select_columns,
                 self.table_name,
                 for_column_name,
@@ -387,6 +392,49 @@ mod tests {
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn list_for_optional_column_uses_is() {
+        let entity = Ident::new("Entity", Span::call_site());
+        let query_error = syn::Ident::new("EntityQueryError", Span::call_site());
+        let id = syn::Ident::new("EntityId", proc_macro2::Span::call_site());
+        let by_column = Column::for_id(syn::parse_str("EntityId").unwrap());
+        let for_column = Column::new(
+            syn::Ident::new("project_id", proc_macro2::Span::call_site()),
+            syn::parse_str("Option<ProjectId>").unwrap(),
+        );
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        let persist_fn = ListForFn {
+            ignore_prefix: None,
+            entity: &entity,
+            id: &id,
+            for_column: &for_column,
+            by_column: &by_column,
+            table_name: "entities",
+            query_error,
+            delete: DeleteOption::No,
+            cursor_mod,
+            any_nested: false,
+            post_hydrate_error: None,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        persist_fn.to_tokens(&mut tokens);
+
+        let token_str = tokens.to_string();
+        assert!(
+            token_str.contains("project_id IS $1"),
+            "Expected 'IS' for Option<T> column, got: {}",
+            token_str
+        );
+        assert!(
+            !token_str.contains("project_id = $1"),
+            "Should not use '=' for Option<T> column"
+        );
     }
 
     #[test]
