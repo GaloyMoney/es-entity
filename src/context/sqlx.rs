@@ -1,37 +1,85 @@
-use sqlx::postgres::{PgHasArrayType, PgValueRef};
-
-use crate::db;
-
 use super::ContextData;
 
-impl sqlx::Type<db::Db> for ContextData {
-    fn type_info() -> db::TypeInfo {
-        <serde_json::Value as sqlx::Type<db::Db>>::type_info()
+// ── Postgres implementation ──────────────────────────────────────────────
+
+#[cfg(feature = "postgres")]
+mod pg {
+    use sqlx::{
+        Postgres,
+        postgres::{PgArgumentBuffer, PgHasArrayType, PgTypeInfo, PgValueRef},
+    };
+
+    use super::ContextData;
+
+    impl sqlx::Type<Postgres> for ContextData {
+        fn type_info() -> PgTypeInfo {
+            <serde_json::Value as sqlx::Type<Postgres>>::type_info()
+        }
+    }
+
+    impl<'q> sqlx::Encode<'q, Postgres> for ContextData {
+        fn encode_by_ref(
+            &self,
+            buf: &mut PgArgumentBuffer,
+        ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync + 'static>>
+        {
+            let json_value = serde_json::to_value(&self.0)?;
+            <serde_json::Value as sqlx::Encode<Postgres>>::encode_by_ref(&json_value, buf)
+        }
+    }
+
+    impl<'r> sqlx::Decode<'r, Postgres> for ContextData {
+        fn decode(
+            value: PgValueRef<'r>,
+        ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+            let json_value = <serde_json::Value as sqlx::Decode<Postgres>>::decode(value)?;
+            let res: ContextData = serde_json::from_value(json_value)?;
+            Ok(res)
+        }
+    }
+
+    impl PgHasArrayType for ContextData {
+        fn array_type_info() -> PgTypeInfo {
+            <serde_json::Value as sqlx::postgres::PgHasArrayType>::array_type_info()
+        }
     }
 }
 
-impl<'q> sqlx::Encode<'q, db::Db> for ContextData {
-    fn encode_by_ref(
-        &self,
-        buf: &mut db::ArgumentBuffer,
-    ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync + 'static>> {
-        let json_value = serde_json::to_value(&self.0)?;
-        <serde_json::Value as sqlx::Encode<db::Db>>::encode_by_ref(&json_value, buf)
-    }
-}
+// ── SQLite implementation ────────────────────────────────────────────────
 
-impl<'r> sqlx::Decode<'r, db::Db> for ContextData {
-    fn decode(
-        value: PgValueRef<'r>,
-    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
-        let json_value = <serde_json::Value as sqlx::Decode<db::Db>>::decode(value)?;
-        let res: ContextData = serde_json::from_value(json_value)?;
-        Ok(res)
-    }
-}
+#[cfg(feature = "sqlite")]
+mod sqlite {
+    use sqlx::{
+        Sqlite,
+        sqlite::{SqliteTypeInfo, SqliteValueRef},
+    };
 
-impl PgHasArrayType for ContextData {
-    fn array_type_info() -> db::TypeInfo {
-        <serde_json::Value as PgHasArrayType>::array_type_info()
+    use super::ContextData;
+
+    impl sqlx::Type<Sqlite> for ContextData {
+        fn type_info() -> SqliteTypeInfo {
+            <String as sqlx::Type<Sqlite>>::type_info()
+        }
+    }
+
+    impl<'q> sqlx::Encode<'q, Sqlite> for ContextData {
+        fn encode_by_ref(
+            &self,
+            buf: &mut Vec<sqlx::sqlite::SqliteArgumentValue<'q>>,
+        ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync + 'static>>
+        {
+            let json_str = serde_json::to_string(self)?;
+            <String as sqlx::Encode<Sqlite>>::encode(json_str, buf)
+        }
+    }
+
+    impl<'r> sqlx::Decode<'r, Sqlite> for ContextData {
+        fn decode(
+            value: SqliteValueRef<'r>,
+        ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+            let json_str = <String as sqlx::Decode<Sqlite>>::decode(value)?;
+            let res: ContextData = serde_json::from_str(&json_str)?;
+            Ok(res)
+        }
     }
 }

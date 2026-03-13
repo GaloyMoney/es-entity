@@ -44,9 +44,17 @@ pub fn parse_constraint_detail_value(detail: Option<&str>) -> Option<String> {
 ///
 /// Downcasts to [`sqlx::postgres::PgDatabaseError`], reads its `detail()`,
 /// and parses the conflicting value.
+#[cfg(feature = "postgres")]
 pub fn extract_constraint_value(db_err: &dyn sqlx::error::DatabaseError) -> Option<String> {
     let pg_err = db_err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()?;
     parse_constraint_detail_value(pg_err.detail())
+}
+
+#[doc(hidden)]
+/// SQLite does not provide detail messages like PostgreSQL, so this always returns `None`.
+#[cfg(feature = "sqlite")]
+pub fn extract_constraint_value(_db_err: &dyn sqlx::error::DatabaseError) -> Option<String> {
+    None
 }
 
 #[doc(hidden)]

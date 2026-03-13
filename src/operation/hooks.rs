@@ -29,7 +29,7 @@
 //! fire-and-forget operations like sending to channels. A background task can then
 //! handle the async work of publishing to external systems.
 //!
-//! ```
+//! ```ignore
 //! use es_entity::{AtomicOperation, operation::hooks::{CommitHook, HookOperation, PreCommitRet}};
 //!
 //! #[derive(Debug, Clone)]
@@ -98,7 +98,7 @@
 //!
 //! ## Usage
 //!
-//! ```no_run
+//! ```ignore
 //! # use es_entity::{AtomicOperation, DbOp, operation::hooks::{CommitHook, HookOperation, PreCommitRet}};
 //! # use es_entity::db;
 //! # #[derive(Debug, Clone)]

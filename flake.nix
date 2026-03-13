@@ -137,18 +137,48 @@
 
         echo "Tests completed successfully!"
       '';
+
+      nextest-sqlite-runner = pkgs.writeShellScriptBin "nextest-sqlite-runner" ''
+        set -e
+
+        export PATH="${pkgs.lib.makeBinPath [
+          pkgs.cargo-nextest
+          pkgs.coreutils
+          rustToolchain
+          pkgs.stdenv.cc
+        ]}:$PATH"
+
+        export SQLX_OFFLINE=true
+
+        echo "Running SQLite macro tests..."
+        cargo nextest run -p es-entity-macros-sqlite --verbose
+
+        echo "Running SQLite integration tests..."
+        cargo nextest run -p es-entity --no-default-features --features sqlite,graphql,event-context,instrument,json-schema --verbose
+
+        echo "Running SQLite doc tests..."
+        cargo test --doc -p es-entity --no-default-features --features sqlite,graphql,event-context,instrument,json-schema
+
+        echo "SQLite tests completed successfully!"
+      '';
     in
       with pkgs; {
         packages = {
           nextest = nextest-runner;
+          nextest-sqlite = nextest-sqlite-runner;
         };
 
         checks = {
           workspace-fmt = craneLib.cargoFmt commonArgs;
-          workspace-clippy = craneLib.cargoClippy (commonArgs
+          workspace-clippy-pg = craneLib.cargoClippy (commonArgs
             // {
               inherit cargoArtifacts;
-              cargoClippyExtraArgs = "--all-features -- --deny warnings";
+              cargoClippyExtraArgs = "--workspace --features postgres,graphql,event-context,instrument,tracing-context,json-schema -- --deny warnings";
+            });
+          workspace-clippy-sqlite = craneLib.cargoClippy (commonArgs
+            // {
+              inherit cargoArtifacts;
+              cargoClippyExtraArgs = "--workspace --no-default-features --features sqlite,graphql,event-context,instrument,json-schema -- --deny warnings";
             });
           workspace-audit = craneLib.cargoAudit {
             inherit advisory-db;

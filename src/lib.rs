@@ -1,7 +1,7 @@
-//! A Rust library for persisting Event Sourced entities to PostgreSQL
+//! A Rust library for persisting Event Sourced entities to PostgreSQL or SQLite
 //!
 //! This crate simplifies Event Sourcing persistence by automatically generating type-safe
-//! queries and operations for PostgreSQL. It decouples domain logic from persistence
+//! queries and operations. It decouples domain logic from persistence
 //! concerns while ensuring compile-time query verification via [sqlx](https://crates.io/crates/sqlx).
 //!
 //! # Documentation
@@ -54,12 +54,35 @@ pub mod prelude {
 pub use context::*;
 #[doc(inline)]
 pub use error::*;
+
+// ── Derive macro re-exports (backend-gated) ──────────────────────────────
+
+#[cfg(feature = "postgres")]
 pub use es_entity_macros::EsEntity;
+#[cfg(feature = "postgres")]
 pub use es_entity_macros::EsEvent;
+#[cfg(feature = "postgres")]
 pub use es_entity_macros::EsRepo;
+#[cfg(feature = "postgres")]
 pub use es_entity_macros::es_event_context;
+#[cfg(feature = "postgres")]
 pub use es_entity_macros::expand_es_query;
+#[cfg(feature = "postgres")]
 pub use es_entity_macros::retry_on_concurrent_modification;
+
+#[cfg(feature = "sqlite")]
+pub use es_entity_macros_sqlite::EsEntity;
+#[cfg(feature = "sqlite")]
+pub use es_entity_macros_sqlite::EsEvent;
+#[cfg(feature = "sqlite")]
+pub use es_entity_macros_sqlite::EsRepo;
+#[cfg(feature = "sqlite")]
+pub use es_entity_macros_sqlite::es_event_context;
+#[cfg(feature = "sqlite")]
+pub use es_entity_macros_sqlite::expand_es_query;
+#[cfg(feature = "sqlite")]
+pub use es_entity_macros_sqlite::retry_on_concurrent_modification;
+
 #[doc(inline)]
 pub use events::*;
 #[doc(inline)]

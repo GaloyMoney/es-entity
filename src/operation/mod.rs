@@ -79,7 +79,7 @@ impl<'c> DbOp<'c> {
     /// Priority order:
     /// 1. Cached time if present
     /// 2. Artificial clock time if the clock is artificial (and hasn't transitioned)
-    /// 3. Database time via `SELECT NOW()`
+    /// 3. Database time via `SELECT NOW()` (Postgres) or application time (SQLite)
     pub async fn with_db_time(mut self) -> Result<DbOpWithTime<'c>, sqlx::Error> {
         let time = if let Some(time) = self.now {
             time
@@ -223,7 +223,7 @@ pub trait AtomicOperation: Send {
     /// The desired way to represent this would actually be as a GAT:
     /// ```rust
     /// trait AtomicOperation {
-    ///     type Executor<'c>: sqlx::PgExecutor<'c>
+    ///     type Executor<'c>: sqlx::Executor<'c>
     ///         where Self: 'c;
     ///
     ///     fn as_executor<'c>(&'c mut self) -> Self::Executor<'c>;
@@ -235,7 +235,7 @@ pub trait AtomicOperation: Send {
     ///
     /// Since this trait is generally applied to types that wrap a [`sqlx::Transaction`]
     /// there is no variance in the return type - so its fine.
-    fn as_executor(&mut self) -> &mut sqlx::PgConnection;
+    fn as_executor(&mut self) -> &mut db::Connection;
 
     /// Registers a commit hook that will run pre_commit before and post_commit after the transaction commits.
     /// Returns Ok(()) if the hook was registered, Err(hook) if hooks are not supported.
