@@ -110,8 +110,6 @@ let now = ctrl.now();
 // Check pending sleep count
 let count = ctrl.pending_wake_count();
 
-// Transition to realtime mode
-ctrl.transition_to_realtime();
 ```
 
 ## Integration with DbOp

@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 use std::{
     cmp::Ordering as CmpOrdering,
     collections::BinaryHeap,
-    sync::atomic::{AtomicI64, AtomicU8, AtomicU64, Ordering},
+    sync::atomic::{AtomicI64, AtomicU64, Ordering},
     task::Waker,
     time::Duration,
 };
@@ -19,14 +19,8 @@ pub(crate) fn next_sleep_id() -> u64 {
     NEXT_SLEEP_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-// Mode constants for atomic storage
-const MODE_MANUAL: u8 = 0;
-const MODE_REALTIME: u8 = 2;
-
-/// Artificial clock with support for manual and realtime modes.
+/// Artificial clock where time only advances via explicit controller calls.
 pub(crate) struct ArtificialClock {
-    /// Current mode (manual or realtime).
-    mode: AtomicU8,
     /// Current artificial time as epoch milliseconds.
     current_ms: AtomicI64,
     /// Priority queue of pending wake events (earliest first).
@@ -72,7 +66,6 @@ impl ArtificialClock {
     /// Create a new artificial clock with the given configuration.
     pub fn new(config: ArtificialClockConfig) -> Self {
         Self {
-            mode: AtomicU8::new(MODE_MANUAL),
             current_ms: AtomicI64::new(config.start_at.timestamp_millis()),
             pending_wakes: Mutex::new(BinaryHeap::new()),
         }
@@ -85,37 +78,7 @@ impl ArtificialClock {
 
     /// Get the current time as epoch milliseconds.
     pub fn now_ms(&self) -> i64 {
-        match self.mode.load(Ordering::Acquire) {
-            MODE_REALTIME => Utc::now().timestamp_millis(),
-            MODE_MANUAL => self.current_ms.load(Ordering::SeqCst),
-            _ => unreachable!(),
-        }
-    }
-
-    /// Check if this has transitioned to realtime.
-    pub fn is_realtime(&self) -> bool {
-        self.mode.load(Ordering::Acquire) == MODE_REALTIME
-    }
-
-    /// Transition to realtime mode.
-    ///
-    /// After this call, `now()` returns `Utc::now()` and sleeps use real tokio timers.
-    pub fn transition_to_realtime(&self) {
-        self.mode.store(MODE_REALTIME, Ordering::Release);
-        self.wake_all_pending();
-    }
-
-    /// Wake all pending tasks.
-    fn wake_all_pending(&self) {
-        // Collect wakers while holding the lock, then wake after releasing.
-        // This avoids potential deadlock if a woken task tries to re-acquire the lock.
-        let wakers: Vec<Waker> = {
-            let mut pending = self.pending_wakes.lock();
-            pending.drain().map(|w| w.waker).collect()
-        };
-        for waker in wakers {
-            waker.wake();
-        }
+        self.current_ms.load(Ordering::SeqCst)
     }
 
     /// Register a pending wake event.
@@ -184,10 +147,6 @@ impl ArtificialClock {
     /// Advance time by the given duration, processing wake events in order.
     /// Returns the number of wake events processed.
     pub async fn advance(&self, duration: Duration) -> usize {
-        if self.is_realtime() {
-            return 0;
-        }
-
         let start_ms = self.current_ms.load(Ordering::SeqCst);
         let target_ms = start_ms + duration.as_millis() as i64;
         let mut total_woken = 0;
@@ -221,10 +180,6 @@ impl ArtificialClock {
     /// Advance to the next pending wake event.
     /// Returns the time advanced to, or None if no pending wakes.
     pub async fn advance_to_next_wake(&self) -> Option<DateTime<Utc>> {
-        if self.is_realtime() {
-            return None;
-        }
-
         let next_wake_ms = self.next_wake_time()?;
 
         self.current_ms.store(next_wake_ms, Ordering::SeqCst);
@@ -253,23 +208,6 @@ mod tests {
         // Time doesn't advance on its own
         std::thread::sleep(Duration::from_millis(10));
         assert_eq!(clock.now(), start);
-    }
-
-    #[test]
-    fn test_transition_to_realtime() {
-        let clock = ArtificialClock::new(ArtificialClockConfig::manual());
-
-        assert!(!clock.is_realtime());
-
-        clock.transition_to_realtime();
-
-        assert!(clock.is_realtime());
-
-        // now() should return approximately Utc::now()
-        let clock_now = clock.now();
-        let utc_now = Utc::now();
-        let diff = (clock_now - utc_now).num_milliseconds().abs();
-        assert!(diff < 100); // Within 100ms
     }
 
     #[test]

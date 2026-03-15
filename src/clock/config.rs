@@ -33,7 +33,6 @@ impl ArtificialClockConfig {
             mode: ArtificialMode::Manual,
         }
     }
-
 }
 
 impl Default for ArtificialClockConfig {

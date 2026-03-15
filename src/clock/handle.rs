@@ -143,26 +143,18 @@ impl ClockHandle {
         self.now().date_naive()
     }
 
-    /// Get the current artificial time, if this is an artificial clock that
-    /// hasn't transitioned to realtime.
+    /// Get the current artificial time, if this is an artificial clock.
     ///
     /// Returns:
     /// - `None` for realtime clocks
-    /// - `None` for artificial clocks that have transitioned to realtime
-    /// - `Some(time)` for artificial clocks that are still artificial
+    /// - `Some(time)` for artificial clocks
     ///
     /// This is useful for code that needs to cache time when running under
     /// artificial clocks but use fresh time for realtime clocks.
     pub fn artificial_now(&self) -> Option<DateTime<Utc>> {
         match &*self.inner {
             ClockInner::Realtime(_) => None,
-            ClockInner::Artificial(clock) => {
-                if clock.is_realtime() {
-                    None
-                } else {
-                    Some(clock.now())
-                }
-            }
+            ClockInner::Artificial(clock) => Some(clock.now()),
         }
     }
 }
