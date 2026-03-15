@@ -29,13 +29,7 @@ enum ClockSleepInner {
         #[pin]
         sleep: Sleep,
     },
-    ArtificialAuto {
-        #[pin]
-        sleep: Sleep,
-        wake_at_ms: i64,
-        clock: Arc<ArtificialClock>,
-    },
-    ArtificialManual {
+    Artificial {
         wake_at_ms: i64,
         sleep_id: u64,
         clock: Arc<ArtificialClock>,
@@ -55,22 +49,12 @@ impl ClockSleep {
             ClockInner::Artificial(artificial) => {
                 let wake_at_ms = artificial.now_ms() + duration.as_millis() as i64;
 
-                if artificial.is_manual() {
-                    ClockSleepInner::ArtificialManual {
-                        wake_at_ms,
-                        sleep_id: next_sleep_id(),
-                        clock: Arc::clone(artificial),
-                        registered: false,
-                        realtime_fallback: None,
-                    }
-                } else {
-                    // Auto-advance mode uses real tokio sleep with scaled duration
-                    let real_duration = artificial.real_duration(duration);
-                    ClockSleepInner::ArtificialAuto {
-                        sleep: tokio::time::sleep(real_duration),
-                        wake_at_ms,
-                        clock: Arc::clone(artificial),
-                    }
+                ClockSleepInner::Artificial {
+                    wake_at_ms,
+                    sleep_id: next_sleep_id(),
+                    clock: Arc::clone(artificial),
+                    registered: false,
+                    realtime_fallback: None,
                 }
             }
         };
@@ -88,20 +72,7 @@ impl Future for ClockSleep {
         match this.inner.project() {
             ClockSleepInnerProj::Realtime { sleep } => sleep.poll(cx),
 
-            ClockSleepInnerProj::ArtificialAuto {
-                sleep,
-                wake_at_ms,
-                clock,
-            } => {
-                // Check if artificial time has reached wake time
-                if clock.now_ms() >= *wake_at_ms {
-                    return Poll::Ready(());
-                }
-                // Otherwise wait for real timer
-                sleep.poll(cx)
-            }
-
-            ClockSleepInnerProj::ArtificialManual {
+            ClockSleepInnerProj::Artificial {
                 wake_at_ms,
                 sleep_id,
                 clock,
@@ -145,7 +116,7 @@ impl Future for ClockSleep {
 impl PinnedDrop for ClockSleep {
     fn drop(self: Pin<&mut Self>) {
         // Clean up pending wake registration if cancelled
-        if let ClockSleepInner::ArtificialManual {
+        if let ClockSleepInner::Artificial {
             sleep_id,
             clock,
             registered: true,

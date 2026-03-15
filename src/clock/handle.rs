@@ -82,9 +82,6 @@ impl ClockHandle {
     /// // Manual mode - time only advances via controller.advance()
     /// let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     ///
-    /// // Auto mode - time advances 1000x faster than real time
-    /// let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::auto(1000.0));
-    ///
     /// // Start at a specific time
     /// let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig {
     ///     start_at: Utc::now() - chrono::Duration::days(30),
@@ -117,8 +114,7 @@ impl ClockHandle {
     /// Sleep for the given duration.
     ///
     /// For real-time clocks, this delegates to `tokio::time::sleep`.
-    /// For artificial clocks in manual mode, this waits until time is advanced.
-    /// For artificial clocks in auto mode, this sleeps for a scaled real duration.
+    /// For artificial clocks, this waits until time is advanced via the controller.
     pub fn sleep(&self, duration: Duration) -> ClockSleep {
         ClockSleep::new(&self.inner, duration)
     }
@@ -153,7 +149,7 @@ impl ClockHandle {
     /// Returns:
     /// - `None` for realtime clocks
     /// - `None` for artificial clocks that have transitioned to realtime
-    /// - `Some(time)` for artificial clocks (manual or auto) that are still artificial
+    /// - `Some(time)` for artificial clocks that are still artificial
     ///
     /// This is useful for code that needs to cache time when running under
     /// artificial clocks but use fresh time for realtime clocks.

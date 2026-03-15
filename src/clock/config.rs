@@ -34,21 +34,6 @@ impl ArtificialClockConfig {
         }
     }
 
-    /// Create an auto-advancing config.
-    pub fn auto(time_scale: f64) -> Self {
-        Self {
-            start_at: truncate_to_millis(Utc::now()),
-            mode: ArtificialMode::AutoAdvance { time_scale },
-        }
-    }
-
-    /// Create an auto-advancing config starting at a specific time.
-    pub fn auto_at(start_at: DateTime<Utc>, time_scale: f64) -> Self {
-        Self {
-            start_at: truncate_to_millis(start_at),
-            mode: ArtificialMode::AutoAdvance { time_scale },
-        }
-    }
 }
 
 impl Default for ArtificialClockConfig {
@@ -61,12 +46,6 @@ impl Default for ArtificialClockConfig {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ArtificialMode {
-    /// Time advances automatically at the given scale.
-    /// A time_scale of 1000.0 means 1 real second = 1000 artificial seconds.
-    AutoAdvance {
-        /// Multiplier for time passage (e.g., 1000.0 = 1000x faster)
-        time_scale: f64,
-    },
     /// Time only advances via explicit `advance()` or `set_time()` calls.
     /// This is ideal for deterministic testing.
     Manual,

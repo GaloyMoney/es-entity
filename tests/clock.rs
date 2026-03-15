@@ -47,21 +47,6 @@ async fn test_artificial_manual_advance() {
 }
 
 #[tokio::test]
-async fn test_artificial_auto_advance() {
-    // 10000x speed: 1ms real = 10 seconds artificial
-    let (clock, _ctrl) = ClockHandle::artificial(ArtificialClockConfig::auto(10000.0));
-
-    let start = clock.now();
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    let end = clock.now();
-
-    let elapsed = end - start;
-    // Should have advanced ~100 seconds (10ms * 10000x)
-    assert!(elapsed.num_seconds() >= 50);
-    assert!(elapsed.num_seconds() <= 200);
-}
-
-#[tokio::test]
 async fn test_manual_sleep_wakes_on_advance() {
     let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
     let t0 = clock.now();
