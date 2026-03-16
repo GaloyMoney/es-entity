@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use super::{artificial::ArtificialClock, realtime::RealtimeClock};
+use super::{manual::ManualClock, realtime::RealtimeClock};
 
 /// Internal clock implementation.
 pub(crate) enum ClockInner {
     Realtime(RealtimeClock),
-    Artificial(Arc<ArtificialClock>),
+    Manual(Arc<ManualClock>),
 }

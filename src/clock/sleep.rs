@@ -10,8 +10,8 @@ use std::{
 };
 
 use super::{
-    artificial::{ArtificialClock, next_sleep_id},
     inner::ClockInner,
+    manual::{ManualClock, next_sleep_id},
 };
 
 /// A future that completes after a duration has elapsed on the clock.
@@ -29,10 +29,10 @@ enum ClockSleepInner {
         #[pin]
         sleep: Sleep,
     },
-    Artificial {
+    Manual {
         wake_at_ms: i64,
         sleep_id: u64,
-        clock: Arc<ArtificialClock>,
+        clock: Arc<ManualClock>,
         registered: bool,
     },
 }
@@ -43,13 +43,13 @@ impl ClockSleep {
             ClockInner::Realtime(rt) => ClockSleepInner::Realtime {
                 sleep: rt.sleep(duration),
             },
-            ClockInner::Artificial(artificial) => {
-                let wake_at_ms = artificial.now_ms() + duration.as_millis() as i64;
+            ClockInner::Manual(manual) => {
+                let wake_at_ms = manual.now_ms() + duration.as_millis() as i64;
 
-                ClockSleepInner::Artificial {
+                ClockSleepInner::Manual {
                     wake_at_ms,
                     sleep_id: next_sleep_id(),
-                    clock: Arc::clone(artificial),
+                    clock: Arc::clone(manual),
                     registered: false,
                 }
             }
@@ -68,7 +68,7 @@ impl Future for ClockSleep {
         match this.inner.project() {
             ClockSleepInnerProj::Realtime { sleep } => sleep.poll(cx),
 
-            ClockSleepInnerProj::Artificial {
+            ClockSleepInnerProj::Manual {
                 wake_at_ms,
                 sleep_id,
                 clock,
@@ -95,7 +95,7 @@ impl Future for ClockSleep {
 impl PinnedDrop for ClockSleep {
     fn drop(self: Pin<&mut Self>) {
         // Clean up pending wake registration if cancelled
-        if let ClockSleepInner::Artificial {
+        if let ClockSleepInner::Manual {
             sleep_id,
             clock,
             registered: true,

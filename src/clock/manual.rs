@@ -9,8 +9,6 @@ use std::{
     time::Duration,
 };
 
-use super::config::ArtificialClockConfig;
-
 /// Counter for unique sleep IDs.
 static NEXT_SLEEP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -19,9 +17,15 @@ pub(crate) fn next_sleep_id() -> u64 {
     NEXT_SLEEP_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Artificial clock where time only advances via explicit controller calls.
-pub(crate) struct ArtificialClock {
-    /// Current artificial time as epoch milliseconds.
+/// Truncate a DateTime to millisecond precision.
+/// This ensures consistency since we store time as epoch milliseconds.
+fn truncate_to_millis(time: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::from_timestamp_millis(time.timestamp_millis()).expect("valid timestamp")
+}
+
+/// Manual clock where time only advances via explicit controller calls.
+pub(crate) struct ManualClock {
+    /// Current time as epoch milliseconds.
     current_ms: AtomicI64,
     /// Priority queue of pending wake events (earliest first).
     pending_wakes: Mutex<BinaryHeap<PendingWake>>,
@@ -29,7 +33,7 @@ pub(crate) struct ArtificialClock {
 
 /// A pending wake event in the priority queue.
 pub(crate) struct PendingWake {
-    /// When to wake (artificial epoch ms).
+    /// When to wake (epoch ms).
     wake_at_ms: i64,
     /// Unique ID for this sleep (for cancellation).
     sleep_id: u64,
@@ -62,16 +66,21 @@ impl Ord for PendingWake {
     }
 }
 
-impl ArtificialClock {
-    /// Create a new artificial clock with the given configuration.
-    pub fn new(config: ArtificialClockConfig) -> Self {
+impl ManualClock {
+    /// Create a new manual clock starting at the current time.
+    pub fn new() -> Self {
+        Self::new_at(Utc::now())
+    }
+
+    /// Create a new manual clock starting at a specific time.
+    pub fn new_at(start_at: DateTime<Utc>) -> Self {
         Self {
-            current_ms: AtomicI64::new(config.start_at.timestamp_millis()),
+            current_ms: AtomicI64::new(truncate_to_millis(start_at).timestamp_millis()),
             pending_wakes: Mutex::new(BinaryHeap::new()),
         }
     }
 
-    /// Get the current artificial time.
+    /// Get the current time.
     pub fn now(&self) -> DateTime<Utc> {
         DateTime::from_timestamp_millis(self.now_ms()).expect("valid timestamp")
     }
@@ -201,7 +210,7 @@ mod tests {
 
     #[test]
     fn test_manual_now() {
-        let clock = ArtificialClock::new(ArtificialClockConfig::manual());
+        let clock = ManualClock::new();
 
         let start = clock.now();
 
@@ -212,7 +221,7 @@ mod tests {
 
     #[test]
     fn test_pending_wake_ordering() {
-        let clock = ArtificialClock::new(ArtificialClockConfig::manual());
+        let clock = ManualClock::new();
 
         let waker = futures::task::noop_waker();
 
@@ -233,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_clear_pending_wakes() {
-        let clock = ArtificialClock::new(ArtificialClockConfig::manual());
+        let clock = ManualClock::new();
         let waker = futures::task::noop_waker();
 
         clock.register_wake(1000, 1, waker.clone());

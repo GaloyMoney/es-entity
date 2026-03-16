@@ -1,7 +1,7 @@
-//! Time abstraction for es-entity with support for real and artificial time.
+//! Time abstraction for es-entity with support for real and manual time.
 //!
 //! This crate provides a unified interface for time operations that works
-//! identically whether using real time or artificial time for testing.
+//! identically whether using real time or manual time for testing.
 //!
 //! # Overview
 //!
@@ -10,25 +10,24 @@
 //! - `sleep(duration)` - Sleep for a duration
 //! - `timeout(duration, future)` - Timeout a future
 //!
-//! For artificial clocks, a [`ClockController`] is also provided for controlling time.
+//! For manual clocks, a [`ClockController`] is also provided for controlling time.
 //!
 //! # Clock Types
 //!
 //! - **Realtime**: Uses system clock and tokio timers
-//! - **Artificial (Auto)**: Time advances automatically at a configurable scale
-//! - **Artificial (Manual)**: Time only advances via explicit `advance()` calls
+//! - **Manual**: Time only advances via explicit `advance()` calls
 //!
 //! # Example
 //!
 //! ```rust
-//! use es_entity::clock::{ClockHandle, ArtificialClockConfig};
+//! use es_entity::clock::ClockHandle;
 //! use std::time::Duration;
 //!
 //! // Production: use real time
 //! let clock = ClockHandle::realtime();
 //!
-//! // Testing: use artificial clock with manual advancement
-//! let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+//! // Testing: use manual clock
+//! let (clock, ctrl) = ClockHandle::manual();
 //!
 //! // Same interface regardless of clock type
 //! let now = clock.now();
@@ -41,11 +40,11 @@
 //! the correct time when they wake:
 //!
 //! ```rust
-//! use es_entity::clock::{ClockHandle, ArtificialClockConfig};
+//! use es_entity::clock::ClockHandle;
 //! use std::time::Duration;
 //!
 //! # async fn example() {
-//! let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+//! let (clock, ctrl) = ClockHandle::manual();
 //!
 //! let clock2 = clock.clone();
 //! tokio::spawn(async move {
@@ -63,17 +62,15 @@
 #![cfg_attr(feature = "fail-on-warnings", deny(clippy::all))]
 #![forbid(unsafe_code)]
 
-mod artificial;
-mod config;
 mod controller;
 mod global;
 mod handle;
 mod inner;
+mod manual;
 mod realtime;
 mod sleep;
 
 // Re-export public API
-pub use config::{ArtificialClockConfig, ArtificialMode};
 pub use controller::ClockController;
 pub use global::Clock;
 pub use handle::{ClockHandle, Elapsed};

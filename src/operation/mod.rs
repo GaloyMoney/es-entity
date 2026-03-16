@@ -14,7 +14,7 @@ pub use with_time::*;
 /// Used as a wrapper of a [`sqlx::Transaction`] but can also cache the time at which the
 /// transaction is taking place.
 ///
-/// When an artificial clock is provided, the transaction will automatically cache that
+/// When a manual clock is provided, the transaction will automatically cache that
 /// clock's time, enabling deterministic testing. This cached time will be used in all
 /// time-dependent operations.
 pub struct DbOp<'c> {
@@ -47,16 +47,16 @@ impl<'c> DbOp<'c> {
 
     /// Initializes a transaction with the specified clock.
     ///
-    /// If the clock is artificial, its current time will be cached in the transaction.
+    /// If the clock is manual, its current time will be cached in the transaction.
     pub async fn init_with_clock(
         pool: &db::Pool,
         clock: &ClockHandle,
     ) -> Result<DbOp<'static>, sqlx::Error> {
         let tx = pool.begin().await?;
 
-        // If an artificial clock is provided (and hasn't transitioned to realtime),
-        // cache its time for consistent timestamps within the transaction.
-        let time = clock.artificial_now();
+        // If a manual clock is provided, cache its time for consistent
+        // timestamps within the transaction.
+        let time = clock.manual_now();
 
         Ok(DbOp::new(tx, clock.clone(), time))
     }
@@ -78,13 +78,13 @@ impl<'c> DbOp<'c> {
     ///
     /// Priority order:
     /// 1. Cached time if present
-    /// 2. Artificial clock time if the clock is artificial (and hasn't transitioned)
+    /// 2. Manual clock time if the clock is manual
     /// 3. Database time via `SELECT NOW()`
     pub async fn with_db_time(mut self) -> Result<DbOpWithTime<'c>, sqlx::Error> {
         let time = if let Some(time) = self.now {
             time
-        } else if let Some(artificial_time) = self.clock.artificial_now() {
-            artificial_time
+        } else if let Some(manual_time) = self.clock.manual_now() {
+            manual_time
         } else {
             db::database_now(&mut *self.tx).await?
         };

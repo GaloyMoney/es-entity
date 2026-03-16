@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use super::{ArtificialClockConfig, ClockController, ClockHandle, ClockSleep, ClockTimeout};
+use super::{ClockController, ClockHandle, ClockSleep, ClockTimeout};
 
 struct GlobalState {
     handle: ClockHandle,
@@ -50,24 +50,24 @@ impl Clock {
             .handle
     }
 
-    /// Install an artificial clock globally.
+    /// Install a manual clock globally.
     ///
-    /// - If not initialized: installs artificial clock, returns controller
-    /// - If already artificial: returns existing controller (idempotent)
+    /// - If not initialized: installs manual clock, returns controller
+    /// - If already manual: returns existing controller (idempotent)
     /// - If already realtime: panics
     ///
-    /// Must be called before any `Clock::now()` calls if you want artificial time.
-    pub fn install_artificial(config: ArtificialClockConfig) -> ClockController {
+    /// Must be called before any `Clock::now()` calls if you want manual time.
+    pub fn install_manual() -> ClockController {
         // Check if already initialized
         if let Some(state) = GLOBAL.get() {
             return state
                 .controller
                 .clone()
-                .expect("Cannot install artificial clock: realtime clock already initialized");
+                .expect("Cannot install manual clock: realtime clock already initialized");
         }
 
         // Try to initialize
-        let (handle, ctrl) = ClockHandle::artificial(config);
+        let (handle, ctrl) = ClockHandle::manual();
 
         match GLOBAL.set(GlobalState {
             handle,
@@ -81,28 +81,58 @@ impl Clock {
                     .unwrap()
                     .controller
                     .clone()
-                    .expect("Cannot install artificial clock: realtime clock already initialized")
+                    .expect("Cannot install manual clock: realtime clock already initialized")
             }
         }
     }
 
-    /// Check if an artificial clock is installed.
-    pub fn is_artificial() -> bool {
+    /// Install a manual clock globally starting at a specific time.
+    ///
+    /// See [`install_manual`](Self::install_manual) for details.
+    pub fn install_manual_at(start_at: DateTime<Utc>) -> ClockController {
+        // Check if already initialized
+        if let Some(state) = GLOBAL.get() {
+            return state
+                .controller
+                .clone()
+                .expect("Cannot install manual clock: realtime clock already initialized");
+        }
+
+        // Try to initialize
+        let (handle, ctrl) = ClockHandle::manual_at(start_at);
+
+        match GLOBAL.set(GlobalState {
+            handle,
+            controller: Some(ctrl.clone()),
+        }) {
+            Ok(()) => ctrl,
+            Err(_) => {
+                // Race: someone else initialized between our check and set
+                GLOBAL
+                    .get()
+                    .unwrap()
+                    .controller
+                    .clone()
+                    .expect("Cannot install manual clock: realtime clock already initialized")
+            }
+        }
+    }
+
+    /// Check if a manual clock is installed.
+    pub fn is_manual() -> bool {
         GLOBAL
             .get()
             .map(|s| s.controller.is_some())
             .unwrap_or(false)
     }
 
-    /// Get the current artificial time, if an artificial clock is installed
-    /// and hasn't transitioned to realtime.
+    /// Get the current manual time, if a manual clock is installed.
     ///
     /// Returns:
     /// - `None` if no clock is initialized (doesn't initialize one)
     /// - `None` for realtime clocks
-    /// - `None` for artificial clocks that have transitioned to realtime
-    /// - `Some(time)` for artificial clocks that are still artificial
-    pub fn artificial_now() -> Option<DateTime<Utc>> {
-        GLOBAL.get().and_then(|s| s.handle.artificial_now())
+    /// - `Some(time)` for manual clocks
+    pub fn manual_now() -> Option<DateTime<Utc>> {
+        GLOBAL.get().and_then(|s| s.handle.manual_now())
     }
 }
