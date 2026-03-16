@@ -83,9 +83,6 @@ use chrono::Utc;
 // Manual mode - time only advances via controller.advance()
 let config = ArtificialClockConfig::manual();
 
-// Auto mode - time advances automatically at 1000x speed
-let config = ArtificialClockConfig::auto(1000.0);
-
 // Start at a specific time
 let config = ArtificialClockConfig {
     start_at: Utc::now() - chrono::Duration::days(30),
@@ -113,8 +110,6 @@ let now = ctrl.now();
 // Check pending sleep count
 let count = ctrl.pending_wake_count();
 
-// Transition to realtime mode
-ctrl.transition_to_realtime();
 ```
 
 ## Integration with DbOp
@@ -278,7 +273,7 @@ async fn test_subscription_expiry() {
 
 2. **Install artificial clock early in tests** - Call `Clock::install_artificial()` before any code that uses time.
 
-3. **Use manual mode for deterministic tests** - Auto mode is useful for simulations but manual mode gives you full control.
+3. **Use manual mode for deterministic tests** - Manual mode gives you full control over time advancement.
 
 4. **Advance time explicitly** - In tests, use `ctrl.advance()` to move time forward in a controlled way.
 
