@@ -1,3 +1,4 @@
+use chrono::{TimeZone, Utc};
 use es_entity::clock::{Clock, ClockHandle};
 
 use std::sync::Arc;
@@ -24,6 +25,17 @@ async fn test_realtime_sleep() {
 
     assert!(elapsed >= Duration::from_millis(40));
     assert!(elapsed < Duration::from_millis(150));
+}
+
+#[tokio::test]
+async fn test_manual_at_starts_at_specified_time() {
+    let start = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
+    let (clock, ctrl) = ClockHandle::manual_at(start);
+
+    assert_eq!(clock.now(), start);
+
+    ctrl.advance(Duration::from_secs(3600)).await;
+    assert_eq!(clock.now(), start + chrono::Duration::hours(1));
 }
 
 #[tokio::test]

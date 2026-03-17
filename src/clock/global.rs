@@ -58,32 +58,7 @@ impl Clock {
     ///
     /// Must be called before any `Clock::now()` calls if you want manual time.
     pub fn install_manual() -> ClockController {
-        // Check if already initialized
-        if let Some(state) = GLOBAL.get() {
-            return state
-                .controller
-                .clone()
-                .expect("Cannot install manual clock: realtime clock already initialized");
-        }
-
-        // Try to initialize
-        let (handle, ctrl) = ClockHandle::manual();
-
-        match GLOBAL.set(GlobalState {
-            handle,
-            controller: Some(ctrl.clone()),
-        }) {
-            Ok(()) => ctrl,
-            Err(_) => {
-                // Race: someone else initialized between our check and set
-                GLOBAL
-                    .get()
-                    .unwrap()
-                    .controller
-                    .clone()
-                    .expect("Cannot install manual clock: realtime clock already initialized")
-            }
-        }
+        Self::install_manual_at(Utc::now())
     }
 
     /// Install a manual clock globally starting at a specific time.

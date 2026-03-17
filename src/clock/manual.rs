@@ -4,18 +4,10 @@ use parking_lot::Mutex;
 use std::{
     cmp::Ordering as CmpOrdering,
     collections::BinaryHeap,
-    sync::atomic::{AtomicI64, AtomicU64, Ordering},
+    sync::atomic::{AtomicI64, Ordering},
     task::Waker,
     time::Duration,
 };
-
-/// Counter for unique sleep IDs.
-static NEXT_SLEEP_ID: AtomicU64 = AtomicU64::new(0);
-
-/// Generate a unique sleep ID.
-pub(crate) fn next_sleep_id() -> u64 {
-    NEXT_SLEEP_ID.fetch_add(1, Ordering::Relaxed)
-}
 
 /// Truncate a DateTime to millisecond precision.
 /// This ensures consistency since we store time as epoch milliseconds.
