@@ -4,15 +4,23 @@ use tokio::time::Sleep;
 use std::{
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     task::{Context, Poll},
     time::Duration,
 };
 
-use super::{
-    inner::ClockInner,
-    manual::{ManualClock, next_sleep_id},
-};
+use super::{inner::ClockInner, manual::ManualClock};
+
+/// Counter for unique sleep IDs.
+static NEXT_SLEEP_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Generate a unique sleep ID.
+fn next_sleep_id() -> u64 {
+    NEXT_SLEEP_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// A future that completes after a duration has elapsed on the clock.
 ///
