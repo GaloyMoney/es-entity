@@ -1,3 +1,12 @@
+# [cala release v0.10.28](https://github.com/GaloyMoney/cala/releases/tag/0.10.28)
+
+
+
+### Refactor
+
+- Remove auto_advance mode (#108)
+- Centralize database types and fix doc typos (#106)
+
 # [cala release v0.10.27](https://github.com/GaloyMoney/cala/releases/tag/0.10.27)
 
 
