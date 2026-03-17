@@ -3,10 +3,9 @@ use chrono::{DateTime, Utc};
 use std::{sync::Arc, time::Duration};
 
 use super::{
-    artificial::ArtificialClock,
-    config::ArtificialClockConfig,
     controller::ClockController,
     inner::ClockInner,
+    manual::ManualClock,
     realtime::RealtimeClock,
     sleep::{ClockSleep, ClockTimeout},
 };
@@ -22,13 +21,13 @@ pub use super::sleep::Elapsed;
 /// # Creating a Clock
 ///
 /// ```rust
-/// use es_entity::clock::{ClockHandle, ArtificialClockConfig};
+/// use es_entity::clock::ClockHandle;
 ///
 /// // Real-time clock for production
 /// let clock = ClockHandle::realtime();
 ///
-/// // Artificial clock for testing - returns (handle, controller)
-/// let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+/// // Manual clock for testing - returns (handle, controller)
+/// let (clock, ctrl) = ClockHandle::manual();
 /// ```
 ///
 /// # Basic Operations
@@ -67,7 +66,7 @@ impl ClockHandle {
         }
     }
 
-    /// Create an artificial clock with the given configuration.
+    /// Create a manual clock starting at the current time.
     ///
     /// Returns a tuple of `(ClockHandle, ClockController)`. The handle provides
     /// the common time interface, while the controller provides operations
@@ -76,25 +75,37 @@ impl ClockHandle {
     /// # Example
     ///
     /// ```rust
-    /// use es_entity::clock::{ClockHandle, ArtificialClockConfig, ArtificialMode};
+    /// use es_entity::clock::ClockHandle;
+    ///
+    /// let (clock, ctrl) = ClockHandle::manual();
+    /// ```
+    pub fn manual() -> (Self, ClockController) {
+        let clock = Arc::new(ManualClock::new());
+        let handle = Self {
+            inner: Arc::new(ClockInner::Manual(Arc::clone(&clock))),
+        };
+        let controller = ClockController { clock };
+        (handle, controller)
+    }
+
+    /// Create a manual clock starting at a specific time.
+    ///
+    /// Returns a tuple of `(ClockHandle, ClockController)`. The handle provides
+    /// the common time interface, while the controller provides operations
+    /// for advancing time.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use es_entity::clock::ClockHandle;
     /// use chrono::Utc;
     ///
-    /// // Manual mode - time only advances via controller.advance()
-    /// let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
-    ///
-    /// // Auto mode - time advances 1000x faster than real time
-    /// let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::auto(1000.0));
-    ///
-    /// // Start at a specific time
-    /// let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig {
-    ///     start_at: Utc::now() - chrono::Duration::days(30),
-    ///     mode: ArtificialMode::Manual,
-    /// });
+    /// let (clock, ctrl) = ClockHandle::manual_at(Utc::now() - chrono::Duration::days(30));
     /// ```
-    pub fn artificial(config: ArtificialClockConfig) -> (Self, ClockController) {
-        let clock = Arc::new(ArtificialClock::new(config));
+    pub fn manual_at(start_at: DateTime<Utc>) -> (Self, ClockController) {
+        let clock = Arc::new(ManualClock::new_at(start_at));
         let handle = Self {
-            inner: Arc::new(ClockInner::Artificial(Arc::clone(&clock))),
+            inner: Arc::new(ClockInner::Manual(Arc::clone(&clock))),
         };
         let controller = ClockController { clock };
         (handle, controller)
@@ -105,20 +116,19 @@ impl ClockHandle {
     /// This is a fast, synchronous operation regardless of clock type.
     ///
     /// For real-time clocks, this returns `Utc::now()`.
-    /// For artificial clocks, this returns the current artificial time.
+    /// For manual clocks, this returns the current manual time.
     #[inline]
     pub fn now(&self) -> DateTime<Utc> {
         match &*self.inner {
             ClockInner::Realtime(rt) => rt.now(),
-            ClockInner::Artificial(clock) => clock.now(),
+            ClockInner::Manual(clock) => clock.now(),
         }
     }
 
     /// Sleep for the given duration.
     ///
     /// For real-time clocks, this delegates to `tokio::time::sleep`.
-    /// For artificial clocks in manual mode, this waits until time is advanced.
-    /// For artificial clocks in auto mode, this sleeps for a scaled real duration.
+    /// For manual clocks, this waits until time is advanced.
     pub fn sleep(&self, duration: Duration) -> ClockSleep {
         ClockSleep::new(&self.inner, duration)
     }
@@ -134,9 +144,9 @@ impl ClockHandle {
         ClockTimeout::new(&self.inner, duration, future)
     }
 
-    /// Check if this clock is artificial (as opposed to realtime).
-    pub fn is_artificial(&self) -> bool {
-        matches!(&*self.inner, ClockInner::Artificial(_))
+    /// Check if this clock is manual (as opposed to realtime).
+    pub fn is_manual(&self) -> bool {
+        matches!(&*self.inner, ClockInner::Manual(_))
     }
 
     /// Get the current date (without time component).
@@ -147,26 +157,18 @@ impl ClockHandle {
         self.now().date_naive()
     }
 
-    /// Get the current artificial time, if this is an artificial clock that
-    /// hasn't transitioned to realtime.
+    /// Get the current manual time, if this is a manual clock.
     ///
     /// Returns:
     /// - `None` for realtime clocks
-    /// - `None` for artificial clocks that have transitioned to realtime
-    /// - `Some(time)` for artificial clocks (manual or auto) that are still artificial
+    /// - `Some(time)` for manual clocks
     ///
     /// This is useful for code that needs to cache time when running under
-    /// artificial clocks but use fresh time for realtime clocks.
-    pub fn artificial_now(&self) -> Option<DateTime<Utc>> {
+    /// manual clocks but use fresh time for realtime clocks.
+    pub fn manual_now(&self) -> Option<DateTime<Utc>> {
         match &*self.inner {
             ClockInner::Realtime(_) => None,
-            ClockInner::Artificial(clock) => {
-                if clock.is_realtime() {
-                    None
-                } else {
-                    Some(clock.now())
-                }
-            }
+            ClockInner::Manual(clock) => Some(clock.now()),
         }
     }
 }
@@ -175,8 +177,8 @@ impl std::fmt::Debug for ClockHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &*self.inner {
             ClockInner::Realtime(_) => f.debug_struct("ClockHandle::Realtime").finish(),
-            ClockInner::Artificial(clock) => f
-                .debug_struct("ClockHandle::Artificial")
+            ClockInner::Manual(clock) => f
+                .debug_struct("ClockHandle::Manual")
                 .field("now", &clock.now())
                 .finish(),
         }

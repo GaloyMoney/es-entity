@@ -1,4 +1,4 @@
-use es_entity::clock::{ArtificialClockConfig, Clock, ClockHandle};
+use es_entity::clock::{Clock, ClockHandle};
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -27,8 +27,8 @@ async fn test_realtime_sleep() {
 }
 
 #[tokio::test]
-async fn test_artificial_manual_time_stands_still() {
-    let (clock, _ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+async fn test_manual_time_stands_still() {
+    let (clock, _ctrl) = ClockHandle::manual();
     let t0 = clock.now();
 
     // Time doesn't advance on its own
@@ -37,8 +37,8 @@ async fn test_artificial_manual_time_stands_still() {
 }
 
 #[tokio::test]
-async fn test_artificial_manual_advance() {
-    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+async fn test_manual_advance() {
+    let (clock, ctrl) = ClockHandle::manual();
     let t0 = clock.now();
 
     ctrl.advance(Duration::from_secs(3600)).await;
@@ -47,23 +47,8 @@ async fn test_artificial_manual_advance() {
 }
 
 #[tokio::test]
-async fn test_artificial_auto_advance() {
-    // 10000x speed: 1ms real = 10 seconds artificial
-    let (clock, _ctrl) = ClockHandle::artificial(ArtificialClockConfig::auto(10000.0));
-
-    let start = clock.now();
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    let end = clock.now();
-
-    let elapsed = end - start;
-    // Should have advanced ~100 seconds (10ms * 10000x)
-    assert!(elapsed.num_seconds() >= 50);
-    assert!(elapsed.num_seconds() <= 200);
-}
-
-#[tokio::test]
 async fn test_manual_sleep_wakes_on_advance() {
-    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+    let (clock, ctrl) = ClockHandle::manual();
     let t0 = clock.now();
 
     let woke = Arc::new(AtomicUsize::new(0));
@@ -92,7 +77,7 @@ async fn test_manual_sleep_wakes_on_advance() {
 
 #[tokio::test]
 async fn test_multiple_sleeps_wake_in_order() {
-    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+    let (clock, ctrl) = ClockHandle::manual();
     let t0 = clock.now();
 
     let wake_order = Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -146,7 +131,7 @@ async fn test_multiple_sleeps_wake_in_order() {
 
 #[tokio::test]
 async fn test_advance_to_next_wake() {
-    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+    let (clock, ctrl) = ClockHandle::manual();
     let t0 = clock.now();
 
     let c = clock.clone();
@@ -170,7 +155,7 @@ async fn test_advance_to_next_wake() {
 
 #[tokio::test]
 async fn test_timeout_success() {
-    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+    let (clock, ctrl) = ClockHandle::manual();
 
     let c = clock.clone();
     let result =
@@ -185,7 +170,7 @@ async fn test_timeout_success() {
 
 #[tokio::test]
 async fn test_timeout_elapsed() {
-    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+    let (clock, ctrl) = ClockHandle::manual();
 
     let c = clock.clone();
     let result_handle = tokio::spawn(async move {
@@ -207,7 +192,7 @@ async fn test_timeout_elapsed() {
 
 #[tokio::test]
 async fn test_cloned_handles_share_time() {
-    let (clock1, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+    let (clock1, ctrl) = ClockHandle::manual();
     let clock2 = clock1.clone();
     let clock3 = clock1.clone();
 
@@ -224,7 +209,7 @@ async fn test_cloned_handles_share_time() {
 
 #[tokio::test]
 async fn test_set_time_jumps_directly() {
-    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+    let (clock, ctrl) = ClockHandle::manual();
     let t0 = clock.now();
 
     let target = t0 + chrono::Duration::days(30);
@@ -235,7 +220,7 @@ async fn test_set_time_jumps_directly() {
 
 #[tokio::test]
 async fn test_cancelled_sleep_cleanup() {
-    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+    let (clock, ctrl) = ClockHandle::manual();
 
     // Start a sleep
     let c = clock.clone();
@@ -259,7 +244,7 @@ async fn test_cancelled_sleep_cleanup() {
 #[tokio::test]
 async fn test_concurrent_system_coordination() {
     // Simulate multiple systems that need coordinated time
-    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+    let (clock, ctrl) = ClockHandle::manual();
     let t0 = clock.now();
 
     // System A: Job scheduler - runs job every hour
@@ -301,7 +286,7 @@ async fn test_concurrent_system_coordination() {
 
 #[tokio::test]
 async fn test_same_time_wakes() {
-    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+    let (clock, ctrl) = ClockHandle::manual();
     let t0 = clock.now();
 
     let wake_count = Arc::new(AtomicUsize::new(0));
@@ -333,9 +318,9 @@ async fn test_debug_output() {
     let debug = format!("{:?}", clock);
     assert!(debug.contains("Realtime"));
 
-    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+    let (clock, ctrl) = ClockHandle::manual();
     let debug = format!("{:?}", clock);
-    assert!(debug.contains("Artificial"));
+    assert!(debug.contains("Manual"));
 
     let debug = format!("{:?}", ctrl);
     assert!(debug.contains("ClockController"));
@@ -343,7 +328,7 @@ async fn test_debug_output() {
 
 #[tokio::test]
 async fn test_controller_now() {
-    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+    let (clock, ctrl) = ClockHandle::manual();
 
     // Both should return the same time
     assert_eq!(clock.now(), ctrl.now());
@@ -356,7 +341,7 @@ async fn test_controller_now() {
 
 #[tokio::test]
 async fn test_controller_clone() {
-    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+    let (clock, ctrl) = ClockHandle::manual();
     let ctrl2 = ctrl.clone();
 
     let t0 = clock.now();
@@ -369,14 +354,15 @@ async fn test_controller_clone() {
     assert_eq!(ctrl2.now(), t0 + chrono::Duration::seconds(50));
     assert_eq!(ctrl.pending_wake_count(), ctrl2.pending_wake_count());
 }
+
 #[tokio::test]
 async fn test_global_clock_api() {
-    // Install artificial clock
-    let ctrl = Clock::install_artificial(ArtificialClockConfig::manual());
+    // Install manual clock
+    let ctrl = Clock::install_manual();
     let t0 = Clock::now();
 
-    // Verify it's artificial
-    assert!(Clock::is_artificial());
+    // Verify it's manual
+    assert!(Clock::is_manual());
 
     // Verify handle access
     let handle = Clock::handle();
@@ -387,49 +373,4 @@ async fn test_global_clock_api() {
 
     // Verify time advanced
     assert_eq!(Clock::now(), t0 + chrono::Duration::seconds(100));
-}
-
-#[tokio::test]
-async fn test_transition_to_realtime_wakes_pending_sleeps() {
-    let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
-
-    let completed = Arc::new(AtomicUsize::new(0));
-    let completed_clone = completed.clone();
-    let clock_clone = clock.clone();
-
-    // Sleep for 100ms in artificial time
-    let handle = tokio::spawn(async move {
-        clock_clone.sleep(Duration::from_millis(100)).await;
-        completed_clone.fetch_add(1, Ordering::SeqCst);
-    });
-
-    // Let task register its sleep
-    tokio::task::yield_now().await;
-    assert_eq!(ctrl.pending_wake_count(), 1);
-    assert_eq!(completed.load(Ordering::SeqCst), 0);
-
-    // Advance to 50ms - halfway, sleep should not complete yet
-    ctrl.advance(Duration::from_millis(50)).await;
-    tokio::task::yield_now().await;
-    assert_eq!(completed.load(Ordering::SeqCst), 0);
-
-    // Transition to realtime - pending sleeps should be woken and re-register with real timers
-    ctrl.transition_to_realtime();
-
-    // After transition, the sleep should complete using a real timer for the remaining duration.
-    // Since artificial clock started at Utc::now() and we only advanced 50ms artificially,
-    // the remaining time is approximately 50-100ms (depending on how much real time passed).
-    // Wait up to 200ms to give plenty of margin for the real timer to complete.
-    let result = tokio::time::timeout(Duration::from_millis(200), handle).await;
-
-    // Task should complete (not timeout)
-    assert!(
-        result.is_ok(),
-        "Sleep should complete using real timer after transition_to_realtime"
-    );
-    assert_eq!(
-        completed.load(Ordering::SeqCst),
-        1,
-        "Sleep should complete after transition_to_realtime"
-    );
 }

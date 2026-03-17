@@ -114,9 +114,8 @@ use std::{
 
 // Internal modules
 use crate::{
-    artificial::ArtificialClock,
-    config::ArtificialClockConfig,
     inner::ClockInner,
+    manual::ManualClock,
 };
 
 // Public re-exports (if any)

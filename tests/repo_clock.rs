@@ -73,22 +73,18 @@ mod users_with_required_clock {
 use users_with_required_clock::UsersWithRequiredClock;
 
 #[tokio::test]
-async fn create_with_artificial_clock() -> anyhow::Result<()> {
+async fn create_with_manual_clock() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let users = Users::new(pool);
 
-    // Create an artificial clock at a specific time (truncated to millis for DB compatibility)
+    // Create a manual clock at a specific time (truncated to millis for DB compatibility)
     let fixed_time = {
         let t = chrono::Utc::now() - chrono::Duration::days(30);
         chrono::DateTime::from_timestamp_millis(t.timestamp_millis()).unwrap()
     };
-    let config = ArtificialClockConfig {
-        start_at: fixed_time,
-        mode: ArtificialMode::Manual,
-    };
-    let (clock, _ctrl) = ClockHandle::artificial(config);
+    let (clock, _ctrl) = ClockHandle::manual_at(fixed_time);
 
-    // Begin operation with the artificial clock
+    // Begin operation with the manual clock
     let mut op = users.begin_op_with_clock(&clock).await?;
 
     let new_user = NewUser::builder()
@@ -108,7 +104,7 @@ async fn create_with_artificial_clock() -> anyhow::Result<()> {
         .entity_first_persisted_at()
         .expect("should have recorded_at");
 
-    // The recorded_at should match the artificial clock's time
+    // The recorded_at should match the manual clock's time
     assert_eq!(recorded_at, fixed_time);
 
     Ok(())
@@ -118,16 +114,12 @@ async fn create_with_artificial_clock() -> anyhow::Result<()> {
 async fn create_with_repo_clock_field() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
 
-    // Create an artificial clock at a specific time (truncated to millis for DB compatibility)
+    // Create a manual clock at a specific time (truncated to millis for DB compatibility)
     let fixed_time = {
         let t = chrono::Utc::now() - chrono::Duration::days(60);
         chrono::DateTime::from_timestamp_millis(t.timestamp_millis()).unwrap()
     };
-    let config = ArtificialClockConfig {
-        start_at: fixed_time,
-        mode: ArtificialMode::Manual,
-    };
-    let (clock, _ctrl) = ClockHandle::artificial(config);
+    let (clock, _ctrl) = ClockHandle::manual_at(fixed_time);
 
     // Create repo with the clock field set
     let users = UsersWithClock::with_clock(pool, clock);
@@ -149,7 +141,7 @@ async fn create_with_repo_clock_field() -> anyhow::Result<()> {
         .entity_first_persisted_at()
         .expect("should have recorded_at");
 
-    // The recorded_at should match the artificial clock's time
+    // The recorded_at should match the manual clock's time
     assert_eq!(recorded_at, fixed_time);
 
     Ok(())
@@ -194,16 +186,12 @@ async fn create_with_repo_clock_field_none() -> anyhow::Result<()> {
 async fn create_with_required_clock_field() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
 
-    // Create an artificial clock at a specific time (truncated to millis for DB compatibility)
+    // Create a manual clock at a specific time (truncated to millis for DB compatibility)
     let fixed_time = {
         let t = chrono::Utc::now() - chrono::Duration::days(90);
         chrono::DateTime::from_timestamp_millis(t.timestamp_millis()).unwrap()
     };
-    let config = ArtificialClockConfig {
-        start_at: fixed_time,
-        mode: ArtificialMode::Manual,
-    };
-    let (clock, _ctrl) = ClockHandle::artificial(config);
+    let (clock, _ctrl) = ClockHandle::manual_at(fixed_time);
 
     // Create repo with the required clock field
     let users = UsersWithRequiredClock::new(pool, clock);
@@ -225,7 +213,7 @@ async fn create_with_required_clock_field() -> anyhow::Result<()> {
         .entity_first_persisted_at()
         .expect("should have recorded_at");
 
-    // The recorded_at should match the artificial clock's time
+    // The recorded_at should match the manual clock's time
     assert_eq!(recorded_at, fixed_time);
 
     Ok(())

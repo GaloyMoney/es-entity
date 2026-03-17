@@ -23,10 +23,10 @@ let mut op = MyEntityRepo::begin_op(&pool).await?;
 
 `DbOp` supports caching the transaction timestamp, which is useful for:
 - Ensuring consistent timestamps across multiple operations in a transaction
-- Deterministic testing with artificial time (see [clock module](./clock.md))
+- Deterministic testing with manual time (see [clock module](./clock.md))
 - Avoiding multiple `NOW()` database queries
 
-When a global artificial clock is installed via `Clock::install_artificial()`, `DbOp::init()` automatically caches the artificial time.
+When a global manual clock is installed via `Clock::install_manual()`, `DbOp::init()` automatically caches the manual time.
 
 ```rust,ignore
 // Get cached time if available
@@ -35,11 +35,11 @@ let maybe_time: Option<DateTime<Utc>> = op.maybe_now();
 // Transition to DbOpWithTime with specific time
 let op_with_time = op.with_time(my_timestamp);
 
-// Transition to DbOpWithTime using Clock::now() (artificial or system time)
+// Transition to DbOpWithTime using Clock::now() (manual or system time)
 let op_with_time = op.with_system_time();
 
 // Transition to DbOpWithTime with database time
-// Uses artificial time if installed, otherwise executes SELECT NOW()
+// Uses manual time if installed, otherwise executes SELECT NOW()
 let op_with_time = op.with_db_time().await?;
 ```
 

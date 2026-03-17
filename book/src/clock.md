@@ -1,6 +1,6 @@
 # Clock Module
 
-The `es_entity::clock` module provides a time abstraction that works identically whether using real time or artificial time for testing. This enables deterministic testing of time-dependent logic without waiting for real time to pass.
+The `es_entity::clock` module provides a time abstraction that works identically whether using real time or manual time for testing. This enables deterministic testing of time-dependent logic without waiting for real time to pass.
 
 ## Overview
 
@@ -8,8 +8,7 @@ The clock module provides:
 
 - **`ClockHandle`** - A cheap-to-clone handle for time operations
 - **`Clock`** - Global clock access (like `Utc::now()` but testable)
-- **`ClockController`** - Control artificial time advancement
-- **`ArtificialClockConfig`** - Configure artificial clock behavior
+- **`ClockController`** - Control manual time advancement
 
 ## Clock Types
 
@@ -24,15 +23,15 @@ let clock = ClockHandle::realtime();
 let now = clock.now(); // Returns Utc::now()
 ```
 
-### Artificial Clock
+### Manual Clock
 
 Time only advances when explicitly controlled. Perfect for deterministic testing.
 
 ```rust,ignore
-use es_entity::clock::{ClockHandle, ArtificialClockConfig};
+use es_entity::clock::ClockHandle;
 
-// Create artificial clock with manual advancement
-let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+// Create manual clock
+let (clock, ctrl) = ClockHandle::manual();
 
 let t0 = clock.now();
 
@@ -45,21 +44,30 @@ ctrl.advance(Duration::from_secs(3600)).await;
 assert_eq!(clock.now(), t0 + chrono::Duration::hours(1));
 ```
 
+You can also start at a specific time:
+
+```rust,ignore
+use es_entity::clock::ClockHandle;
+use chrono::Utc;
+
+let (clock, ctrl) = ClockHandle::manual_at(Utc::now() - chrono::Duration::days(30));
+```
+
 ## Global Clock API
 
 The `Clock` struct provides static methods for global clock access, similar to `Utc::now()`:
 
 ```rust,ignore
-use es_entity::clock::{Clock, ArtificialClockConfig};
+use es_entity::clock::Clock;
 
-// For testing: install artificial clock (returns controller)
-let ctrl = Clock::install_artificial(ArtificialClockConfig::manual());
+// For testing: install manual clock (returns controller)
+let ctrl = Clock::install_manual();
 
-// Get current time (works with both artificial and real time)
+// Get current time (works with both manual and real time)
 let now = Clock::now();
 
-// Check if artificial clock is installed
-if Clock::is_artificial() {
+// Check if manual clock is installed
+if Clock::is_manual() {
     // We're in test mode with controlled time
 }
 
@@ -70,32 +78,11 @@ Clock::timeout(Duration::from_secs(5), some_future).await;
 
 ### Lazy Initialization
 
-If you call `Clock::now()` without installing an artificial clock, it lazily initializes to realtime mode. This means production code can use `Clock::now()` without any setup.
-
-## ArtificialClockConfig
-
-Configure how the artificial clock behaves:
-
-```rust,ignore
-use es_entity::clock::{ArtificialClockConfig, ArtificialMode};
-use chrono::Utc;
-
-// Manual mode - time only advances via controller.advance()
-let config = ArtificialClockConfig::manual();
-
-// Auto mode - time advances automatically at 1000x speed
-let config = ArtificialClockConfig::auto(1000.0);
-
-// Start at a specific time
-let config = ArtificialClockConfig {
-    start_at: Utc::now() - chrono::Duration::days(30),
-    mode: ArtificialMode::Manual,
-};
-```
+If you call `Clock::now()` without installing a manual clock, it lazily initializes to realtime mode. This means production code can use `Clock::now()` without any setup.
 
 ## ClockController
 
-The controller is returned when creating an artificial clock and provides:
+The controller is returned when creating a manual clock and provides:
 
 ```rust,ignore
 // Advance time by duration (wakes sleeping tasks in order)
@@ -112,28 +99,25 @@ let now = ctrl.now();
 
 // Check pending sleep count
 let count = ctrl.pending_wake_count();
-
-// Transition to realtime mode
-ctrl.transition_to_realtime();
 ```
 
 ## Integration with DbOp
 
-When a global artificial clock is installed, database operations automatically use it:
+When a global manual clock is installed, database operations automatically use it:
 
 ```rust,ignore
-use es_entity::clock::{Clock, ArtificialClockConfig};
+use es_entity::clock::Clock;
 
-// Install artificial clock for testing
-let ctrl = Clock::install_artificial(ArtificialClockConfig::manual());
+// Install manual clock for testing
+let ctrl = Clock::install_manual();
 
-// DbOp::init() now caches the artificial time
+// DbOp::init() now caches the manual time
 let op = DbOp::init(&pool).await?;
 
 // with_clock_time() uses the operation's clock
 let op_with_time = op.with_clock_time();
 
-// with_db_time() uses artificial time instead of SELECT NOW()
+// with_db_time() uses manual time instead of SELECT NOW()
 let op_with_time = op.with_db_time().await?;
 ```
 
@@ -144,10 +128,10 @@ This ensures all operations within a transaction use consistent, controlled time
 For more control, you can inject a specific clock into database operations without modifying global state. This is useful when you want isolated clocks per test or need different clocks for different operations:
 
 ```rust,ignore
-use es_entity::clock::{ClockHandle, ArtificialClockConfig};
+use es_entity::clock::ClockHandle;
 
-// Create an artificial clock (not installed globally)
-let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+// Create a manual clock (not installed globally)
+let (clock, ctrl) = ClockHandle::manual();
 
 // Pass the clock explicitly to DbOp
 let op = DbOp::init_with_clock(&pool, &clock).await?;
@@ -162,7 +146,7 @@ Repositories generated with `#[derive(EsRepo)]` also support this pattern:
 // Using the repo's begin_op_with_clock method
 let mut op = users.begin_op_with_clock(&clock).await?;
 
-// Create entity - recorded_at will use the artificial clock's time
+// Create entity - recorded_at will use the manual clock's time
 let user = users.create_in_op(&mut op, new_user).await?;
 op.commit().await?;
 ```
@@ -194,7 +178,7 @@ impl Users {
         Self { pool, clock: None }
     }
 
-    // Testing: with artificial clock
+    // Testing: with manual clock
     pub fn with_clock(pool: PgPool, clock: ClockHandle) -> Self {
         Self { pool, clock: Some(clock) }
     }
@@ -208,10 +192,10 @@ Usage:
 let users = Users::new(pool);
 let user = users.create(new_user).await?;
 
-// Test code - uses artificial clock
-let (clock, ctrl) = ClockHandle::artificial(ArtificialClockConfig::manual());
+// Test code - uses manual clock
+let (clock, ctrl) = ClockHandle::manual();
 let users = Users::with_clock(pool, clock);
-let user = users.create(new_user).await?;  // Uses artificial clock!
+let user = users.create(new_user).await?;  // Uses manual clock!
 ```
 
 #### Required Clock Field
@@ -246,17 +230,14 @@ The macro detects a field named `clock` (or marked with `#[es_repo(clock)]`) and
 ## Example: Testing Time-Dependent Logic
 
 ```rust,ignore
-use es_entity::clock::{Clock, ArtificialClockConfig};
+use es_entity::clock::Clock;
 use std::time::Duration;
 
 #[tokio::test]
 async fn test_subscription_expiry() {
-    // Install artificial clock starting 30 days ago
+    // Install manual clock starting 30 days ago
     let start = Utc::now() - chrono::Duration::days(30);
-    let ctrl = Clock::install_artificial(ArtificialClockConfig {
-        start_at: start,
-        mode: ArtificialMode::Manual,
-    });
+    let ctrl = Clock::install_manual_at(start);
 
     // Create subscription that expires in 7 days
     let subscription = create_subscription_expiring_in(7).await;
@@ -274,12 +255,10 @@ async fn test_subscription_expiry() {
 
 ## Best Practices
 
-1. **Use `Clock::now()` instead of `Utc::now()`** - This makes your code testable with artificial time.
+1. **Use `Clock::now()` instead of `Utc::now()`** - This makes your code testable with manual time.
 
-2. **Install artificial clock early in tests** - Call `Clock::install_artificial()` before any code that uses time.
+2. **Install manual clock early in tests** - Call `Clock::install_manual()` before any code that uses time.
 
-3. **Use manual mode for deterministic tests** - Auto mode is useful for simulations but manual mode gives you full control.
+3. **Advance time explicitly** - In tests, use `ctrl.advance()` to move time forward in a controlled way.
 
-4. **Advance time explicitly** - In tests, use `ctrl.advance()` to move time forward in a controlled way.
-
-5. **Check `is_artificial()` sparingly** - Most code shouldn't need to know if time is artificial; it should just use `Clock::now()`.
+4. **Check `is_manual()` sparingly** - Most code shouldn't need to know if time is manual; it should just use `Clock::now()`.

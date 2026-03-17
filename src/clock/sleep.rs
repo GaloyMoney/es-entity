@@ -10,8 +10,8 @@ use std::{
 };
 
 use super::{
-    artificial::{ArtificialClock, next_sleep_id},
     inner::ClockInner,
+    manual::{ManualClock, next_sleep_id},
 };
 
 /// A future that completes after a duration has elapsed on the clock.
@@ -29,20 +29,11 @@ enum ClockSleepInner {
         #[pin]
         sleep: Sleep,
     },
-    ArtificialAuto {
-        #[pin]
-        sleep: Sleep,
-        wake_at_ms: i64,
-        clock: Arc<ArtificialClock>,
-    },
-    ArtificialManual {
+    Manual {
         wake_at_ms: i64,
         sleep_id: u64,
-        clock: Arc<ArtificialClock>,
+        clock: Arc<ManualClock>,
         registered: bool,
-        /// Fallback timer used when clock transitions to realtime mode.
-        #[pin]
-        realtime_fallback: Option<Sleep>,
     },
 }
 
@@ -52,25 +43,14 @@ impl ClockSleep {
             ClockInner::Realtime(rt) => ClockSleepInner::Realtime {
                 sleep: rt.sleep(duration),
             },
-            ClockInner::Artificial(artificial) => {
-                let wake_at_ms = artificial.now_ms() + duration.as_millis() as i64;
+            ClockInner::Manual(manual) => {
+                let wake_at_ms = manual.now_ms() + duration.as_millis() as i64;
 
-                if artificial.is_manual() {
-                    ClockSleepInner::ArtificialManual {
-                        wake_at_ms,
-                        sleep_id: next_sleep_id(),
-                        clock: Arc::clone(artificial),
-                        registered: false,
-                        realtime_fallback: None,
-                    }
-                } else {
-                    // Auto-advance mode uses real tokio sleep with scaled duration
-                    let real_duration = artificial.real_duration(duration);
-                    ClockSleepInner::ArtificialAuto {
-                        sleep: tokio::time::sleep(real_duration),
-                        wake_at_ms,
-                        clock: Arc::clone(artificial),
-                    }
+                ClockSleepInner::Manual {
+                    wake_at_ms,
+                    sleep_id: next_sleep_id(),
+                    clock: Arc::clone(manual),
+                    registered: false,
                 }
             }
         };
@@ -88,45 +68,15 @@ impl Future for ClockSleep {
         match this.inner.project() {
             ClockSleepInnerProj::Realtime { sleep } => sleep.poll(cx),
 
-            ClockSleepInnerProj::ArtificialAuto {
-                sleep,
-                wake_at_ms,
-                clock,
-            } => {
-                // Check if artificial time has reached wake time
-                if clock.now_ms() >= *wake_at_ms {
-                    return Poll::Ready(());
-                }
-                // Otherwise wait for real timer
-                sleep.poll(cx)
-            }
-
-            ClockSleepInnerProj::ArtificialManual {
+            ClockSleepInnerProj::Manual {
                 wake_at_ms,
                 sleep_id,
                 clock,
                 registered,
-                mut realtime_fallback,
             } => {
                 // Check if we've reached wake time
                 if clock.now_ms() >= *wake_at_ms {
                     return Poll::Ready(());
-                }
-
-                // If clock has transitioned to realtime, use a real timer for remaining time
-                if clock.is_realtime() {
-                    // Create fallback timer if not already created
-                    if realtime_fallback.is_none() {
-                        let remaining_ms = (*wake_at_ms - clock.now_ms()).max(0) as u64;
-                        realtime_fallback.set(Some(tokio::time::sleep(Duration::from_millis(
-                            remaining_ms,
-                        ))));
-                    }
-
-                    // Poll the fallback timer
-                    if let Some(sleep) = realtime_fallback.as_pin_mut() {
-                        return sleep.poll(cx);
-                    }
                 }
 
                 // Register for wake notification if not already done
@@ -145,7 +95,7 @@ impl Future for ClockSleep {
 impl PinnedDrop for ClockSleep {
     fn drop(self: Pin<&mut Self>) {
         // Clean up pending wake registration if cancelled
-        if let ClockSleepInner::ArtificialManual {
+        if let ClockSleepInner::Manual {
             sleep_id,
             clock,
             registered: true,
