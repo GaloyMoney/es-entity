@@ -7,7 +7,7 @@ use super::manual::ManualClock;
 /// Controller for manual time operations.
 ///
 /// This is only available for manual clocks and provides methods to
-/// advance time, set time, and inspect pending wake events.
+/// advance time and inspect pending wake events.
 ///
 /// Created alongside a [`ClockHandle`](crate::ClockHandle) via
 /// [`ClockHandle::manual()`](crate::ClockHandle::manual).
@@ -94,19 +94,6 @@ impl ClockController {
     /// ```
     pub async fn advance_to_next_wake(&self) -> Option<DateTime<Utc>> {
         self.clock.advance_to_next_wake().await
-    }
-
-    /// Set the time to a specific value.
-    ///
-    /// **Warning**: Unlike `advance()`, this does NOT process wake events in order.
-    /// All tasks whose wake time has passed will see the new time when they wake.
-    /// Use this for "jump ahead, don't care about intermediate events" scenarios.
-    ///
-    /// For deterministic testing, prefer `advance()` or `advance_to_next_wake()`.
-    pub fn set_time(&self, time: DateTime<Utc>) {
-        self.clock.set_time(time);
-        // Wake all tasks that are now past their wake time
-        self.clock.wake_tasks_at(time.timestamp_millis());
     }
 
     /// Get the number of pending wake events.
