@@ -108,11 +108,6 @@ impl ManualClock {
         pending.extend(entries);
     }
 
-    /// Clear all pending wake events.
-    pub fn clear_pending_wakes(&self) {
-        self.pending_wakes.lock().clear();
-    }
-
     /// Peek at the next wake time, if any.
     pub fn next_wake_time(&self) -> Option<i64> {
         let pending = self.pending_wakes.lock();
@@ -240,18 +235,4 @@ mod tests {
         assert_eq!(clock.next_wake_time(), Some(3000));
     }
 
-    #[test]
-    fn test_clear_pending_wakes() {
-        let clock = ManualClock::new();
-        let waker = futures::task::noop_waker();
-
-        clock.register_wake(1000, 1, waker.clone());
-        clock.register_wake(2000, 2, waker);
-
-        assert_eq!(clock.pending_wake_count(), 2);
-
-        clock.clear_pending_wakes();
-
-        assert_eq!(clock.pending_wake_count(), 0);
-    }
 }
