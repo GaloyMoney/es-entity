@@ -1,3 +1,12 @@
+# [cala release v0.10.29](https://github.com/GaloyMoney/cala/releases/tag/0.10.29)
+
+
+
+### Refactor
+
+- Remove set_time, reset_to, and clear_pending_wakes (#112)
+- Address PR #108 review feedback (#111)
+
 # [cala release v0.10.28](https://github.com/GaloyMoney/cala/releases/tag/0.10.28)
 
 
