@@ -142,12 +142,6 @@ impl ManualClock {
         count
     }
 
-    /// Set the current time directly.
-    pub fn set_time(&self, time: DateTime<Utc>) {
-        self.current_ms
-            .store(time.timestamp_millis(), Ordering::SeqCst);
-    }
-
     /// Advance time by the given duration, processing wake events in order.
     /// Returns the number of wake events processed.
     pub async fn advance(&self, duration: Duration) -> usize {

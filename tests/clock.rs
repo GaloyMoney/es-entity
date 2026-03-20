@@ -208,17 +208,6 @@ async fn test_cloned_handles_share_time() {
 }
 
 #[tokio::test]
-async fn test_set_time_jumps_directly() {
-    let (clock, ctrl) = ClockHandle::manual();
-    let t0 = clock.now();
-
-    let target = t0 + chrono::Duration::days(30);
-    ctrl.set_time(target);
-
-    assert_eq!(clock.now(), target);
-}
-
-#[tokio::test]
 async fn test_cancelled_sleep_cleanup() {
     let (clock, ctrl) = ClockHandle::manual();
 
