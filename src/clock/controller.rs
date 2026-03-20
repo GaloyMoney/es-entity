@@ -110,7 +110,6 @@ impl ClockController {
     pub fn now(&self) -> DateTime<Utc> {
         self.clock.now()
     }
-
 }
 
 impl std::fmt::Debug for ClockController {

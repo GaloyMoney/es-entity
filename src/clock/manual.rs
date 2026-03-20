@@ -228,5 +228,4 @@ mod tests {
 
         assert_eq!(clock.next_wake_time(), Some(3000));
     }
-
 }
