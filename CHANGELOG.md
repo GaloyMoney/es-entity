@@ -1,3 +1,11 @@
+# [cala release v0.10.30](https://github.com/GaloyMoney/cala/releases/tag/0.10.30)
+
+
+
+### Features
+
+- Make entity IDs their own GraphQL scalars (#113)
+
 # [cala release v0.10.29](https://github.com/GaloyMoney/cala/releases/tag/0.10.29)
 
 
