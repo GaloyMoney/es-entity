@@ -3,7 +3,7 @@ name = "es-entity"
 description = "Event Sourcing Entity Framework"
 repository = "https://github.com/GaloyMoney/es-entity"
 documentation = "https://docs.rs/es-entity"
-version = "0.10.30"
+version = "0.10.30-dev"
 edition = "2024"
 license = "Apache-2.0"
 categories = ["data-structures", "database"]
@@ -16,7 +16,6 @@ inherits = "dev"
 fail-on-warnings = ["es-entity-macros/fail-on-warnings"]
 tracing-context = ["dep:tracing", "dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk"]
 graphql = ["es-entity-macros/graphql", "dep:async-graphql", "dep:base64"]
-graphql-scalar = ["graphql"]
 event-context = ["es-entity-macros/event-context", "event-context-enabled"]
 event-context-enabled = ["es-entity-macros/event-context-enabled"]
 json-schema = ["dep:schemars"]
@@ -63,7 +62,7 @@ members = [
 
 [workspace.dependencies]
 
-es-entity-macros = { path = "es-entity-macros", version = "0.10.30" }
+es-entity-macros = { path = "es-entity-macros", version = "0.10.30-dev" }
 
 anyhow = "1.0"
 async-graphql = { version = "8.0.0-rc.3", default-features = false }

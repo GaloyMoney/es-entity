@@ -285,6 +285,8 @@ macro_rules! __entity_id_common_impls {
 }
 
 // Helper macro for GraphQL-specific entity_id implementations (internal use only)
+// When `graphql` feature is enabled, entity IDs become their own GraphQL scalars
+// (e.g. `CustomerId` instead of the generic `UUID`), providing type safety at the API layer.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __entity_id_graphql_impls {
@@ -300,26 +302,9 @@ macro_rules! __entity_id_graphql_impls {
                 $name($crate::prelude::uuid::Uuid::from(id))
             }
         }
-    };
-}
 
-// Helper macro for GraphQL scalar registration (internal use only)
-// When `graphql-scalar` feature is enabled, entity IDs become their own GraphQL scalars
-// (e.g. `CustomerId` instead of the generic `UUID`), providing type safety at the API layer.
-#[doc(hidden)]
-#[cfg(feature = "graphql-scalar")]
-#[macro_export]
-macro_rules! __entity_id_graphql_scalar_impls {
-    ($name:ident) => {
         $crate::graphql::async_graphql::scalar!($name);
     };
-}
-
-#[doc(hidden)]
-#[cfg(not(feature = "graphql-scalar"))]
-#[macro_export]
-macro_rules! __entity_id_graphql_scalar_impls {
-    ($name:ident) => {};
 }
 
 // Helper macro for additional conversions (internal use only)
@@ -373,7 +358,7 @@ macro_rules! entity_id {
             pub struct $name($crate::prelude::uuid::Uuid);
             $crate::__entity_id_common_impls!($name);
             $crate::__entity_id_graphql_impls!($name);
-            $crate::__entity_id_graphql_scalar_impls!($name);
+
         )+
         $crate::__entity_id_conversions!($($from => $to),*);
     };
@@ -408,7 +393,7 @@ macro_rules! entity_id {
             pub struct $name($crate::prelude::uuid::Uuid);
             $crate::__entity_id_common_impls!($name);
             $crate::__entity_id_graphql_impls!($name);
-            $crate::__entity_id_graphql_scalar_impls!($name);
+
         )+
         $crate::__entity_id_conversions!($($from => $to),*);
     };
@@ -444,7 +429,7 @@ macro_rules! entity_id {
             #[sqlx(transparent)]
             pub struct $name($crate::prelude::uuid::Uuid);
             $crate::__entity_id_common_impls!($name);
-            $crate::__entity_id_graphql_scalar_impls!($name);
+
         )+
         $crate::__entity_id_conversions!($($from => $to),*);
     };
@@ -458,9 +443,9 @@ macro_rules! entity_id {
 /// # Features
 ///
 /// The macro automatically includes different trait implementations based on enabled features:
-/// - `graphql`: Adds GraphQL UUID conversion traits
-/// - `graphql-scalar`: Makes each entity ID its own GraphQL scalar type (e.g. `CustomerId`
-///   instead of the generic `UUID`), providing type safety at the API layer
+/// - `graphql`: Adds GraphQL UUID conversion traits and registers each entity ID as its own
+///   GraphQL scalar type (e.g. `CustomerId` instead of the generic `UUID`), providing type
+///   safety at the API layer
 /// - `json-schema`: Adds JSON schema generation support
 ///
 /// # Generated Traits
@@ -527,7 +512,7 @@ macro_rules! entity_id {
             #[sqlx(transparent)]
             pub struct $name($crate::prelude::uuid::Uuid);
             $crate::__entity_id_common_impls!($name);
-            $crate::__entity_id_graphql_scalar_impls!($name);
+
         )+
         $crate::__entity_id_conversions!($($from => $to),*);
     };
