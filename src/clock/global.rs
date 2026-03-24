@@ -35,6 +35,13 @@ impl Clock {
         Self::handle().sleep(duration)
     }
 
+    /// Sleep using the global clock with coalesceable wake-up behavior.
+    ///
+    /// See [`ClockHandle::sleep_coalesce`] for details.
+    pub fn sleep_coalesce(duration: Duration) -> ClockSleep {
+        Self::handle().sleep_coalesce(duration)
+    }
+
     /// Timeout using the global clock.
     pub fn timeout<F: std::future::Future>(duration: Duration, future: F) -> ClockTimeout<F> {
         Self::handle().timeout(duration, future)
