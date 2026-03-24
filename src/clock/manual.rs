@@ -21,6 +21,8 @@ pub(crate) struct ManualClock {
     current_ms: AtomicI64,
     /// Priority queue of pending wake events (earliest first).
     pending_wakes: Mutex<BinaryHeap<PendingWake>>,
+    /// Coalesceable wakes — processed once at end of advance(), not at intermediate boundaries.
+    coalesce_wakes: Mutex<Vec<PendingWake>>,
 }
 
 /// A pending wake event in the priority queue.
@@ -69,6 +71,7 @@ impl ManualClock {
         Self {
             current_ms: AtomicI64::new(truncate_to_millis(start_at).timestamp_millis()),
             pending_wakes: Mutex::new(BinaryHeap::new()),
+            coalesce_wakes: Mutex::new(Vec::new()),
         }
     }
 
@@ -92,12 +95,31 @@ impl ManualClock {
         });
     }
 
-    /// Cancel a pending wake event.
+    /// Register a coalesceable wake event.
+    ///
+    /// Unlike regular wakes, coalesceable wakes are processed once at the end
+    /// of `advance()` rather than at every intermediate boundary.
+    pub fn register_coalesce_wake(&self, wake_at_ms: i64, sleep_id: u64, waker: Waker) {
+        let mut coalesce = self.coalesce_wakes.lock();
+        coalesce.push(PendingWake {
+            wake_at_ms,
+            sleep_id,
+            waker,
+        });
+    }
+
+    /// Cancel a pending wake event (searches both regular and coalesceable lists).
     pub fn cancel_wake(&self, sleep_id: u64) {
-        let mut pending = self.pending_wakes.lock();
-        // Rebuild heap without the cancelled entry
-        let entries: Vec<_> = pending.drain().filter(|w| w.sleep_id != sleep_id).collect();
-        pending.extend(entries);
+        {
+            let mut pending = self.pending_wakes.lock();
+            // Rebuild heap without the cancelled entry
+            let entries: Vec<_> = pending.drain().filter(|w| w.sleep_id != sleep_id).collect();
+            pending.extend(entries);
+        }
+        {
+            let mut coalesce = self.coalesce_wakes.lock();
+            coalesce.retain(|w| w.sleep_id != sleep_id);
+        }
     }
 
     /// Peek at the next wake time, if any.
@@ -135,12 +157,17 @@ impl ManualClock {
     }
 
     /// Advance time by the given duration, processing wake events in order.
+    ///
+    /// Regular wakes are processed at each intermediate boundary (existing behavior).
+    /// Coalesceable wakes are deferred and processed once at the end of the advance.
+    ///
     /// Returns the number of wake events processed.
     pub async fn advance(&self, duration: Duration) -> usize {
         let start_ms = self.current_ms.load(Ordering::SeqCst);
         let target_ms = start_ms + duration.as_millis() as i64;
         let mut total_woken = 0;
 
+        // Process regular wakes at intermediate boundaries
         loop {
             let next_wake_ms = self.next_wake_time();
 
@@ -164,24 +191,75 @@ impl ManualClock {
             }
         }
 
+        // Process coalesceable wakes once at target time
+        let coalesce_woken = self.wake_coalesce_tasks_at(target_ms);
+        if coalesce_woken > 0 {
+            total_woken += coalesce_woken;
+            tokio::task::yield_now().await;
+        }
+
         total_woken
     }
 
-    /// Advance to the next pending wake event.
+    /// Advance to the next pending wake event (considers both regular and coalesceable).
     /// Returns the time advanced to, or None if no pending wakes.
     pub async fn advance_to_next_wake(&self) -> Option<DateTime<Utc>> {
-        let next_wake_ms = self.next_wake_time()?;
+        let next_regular = self.next_wake_time();
+        let next_coalesce = self.next_coalesce_wake_time();
+
+        let next_wake_ms = match (next_regular, next_coalesce) {
+            (Some(r), Some(c)) => Some(r.min(c)),
+            (Some(r), None) => Some(r),
+            (None, Some(c)) => Some(c),
+            (None, None) => None,
+        }?;
 
         self.current_ms.store(next_wake_ms, Ordering::SeqCst);
         self.wake_tasks_at(next_wake_ms);
+        self.wake_coalesce_tasks_at(next_wake_ms);
         tokio::task::yield_now().await;
 
         Some(DateTime::from_timestamp_millis(next_wake_ms).expect("valid timestamp"))
     }
 
-    /// Get the number of pending wake events.
+    /// Wake all coalesceable tasks scheduled at or before the given time.
+    /// Returns the number of tasks woken.
+    pub fn wake_coalesce_tasks_at(&self, up_to_ms: i64) -> usize {
+        // Collect wakers while holding the lock, then wake after releasing.
+        let wakers: Vec<Waker> = {
+            let mut coalesce = self.coalesce_wakes.lock();
+            let mut wakers = Vec::new();
+            let mut remaining = Vec::new();
+
+            for wake in coalesce.drain(..) {
+                if wake.wake_at_ms <= up_to_ms {
+                    wakers.push(wake.waker);
+                } else {
+                    remaining.push(wake);
+                }
+            }
+
+            *coalesce = remaining;
+            wakers
+        };
+
+        let count = wakers.len();
+        for waker in wakers {
+            waker.wake();
+        }
+
+        count
+    }
+
+    /// Peek at the earliest coalesceable wake time, if any.
+    fn next_coalesce_wake_time(&self) -> Option<i64> {
+        let coalesce = self.coalesce_wakes.lock();
+        coalesce.iter().map(|w| w.wake_at_ms).min()
+    }
+
+    /// Get the number of pending wake events (both regular and coalesceable).
     pub fn pending_wake_count(&self) -> usize {
-        self.pending_wakes.lock().len()
+        self.pending_wakes.lock().len() + self.coalesce_wakes.lock().len()
     }
 }
 

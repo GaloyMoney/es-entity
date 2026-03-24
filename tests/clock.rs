@@ -375,3 +375,148 @@ async fn test_global_clock_api() {
     // Verify time advanced
     assert_eq!(Clock::now(), t0 + chrono::Duration::seconds(100));
 }
+
+#[tokio::test]
+async fn test_sleep_coalesce_fires_once_at_end_of_advance() {
+    let (clock, ctrl) = ClockHandle::manual();
+
+    let wake_count = Arc::new(AtomicUsize::new(0));
+
+    // Simulate a housekeeping loop that re-sleeps after each wake
+    let wc = wake_count.clone();
+    let c = clock.clone();
+    let _housekeeping = tokio::spawn(async move {
+        loop {
+            c.sleep_coalesce(Duration::from_secs(75)).await;
+            wc.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+
+    tokio::task::yield_now().await;
+    assert_eq!(ctrl.pending_wake_count(), 1);
+
+    // Advance 1 day — with regular sleep this would wake 1152 times (86400/75).
+    // With sleep_coalesce, the housekeeping loop should only wake ONCE at the end.
+    ctrl.advance(Duration::from_secs(86400)).await;
+
+    assert_eq!(wake_count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn test_sleep_coalesce_regular_wakes_still_fire_at_intermediate_points() {
+    let (clock, ctrl) = ClockHandle::manual();
+    let t0 = clock.now();
+
+    let regular_times = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let coalesce_times = Arc::new(parking_lot::Mutex::new(Vec::new()));
+
+    // Regular sleep at 30s — should fire at intermediate boundary
+    let rt = regular_times.clone();
+    let c = clock.clone();
+    tokio::spawn(async move {
+        c.sleep(Duration::from_secs(30)).await;
+        rt.lock().push(c.now());
+    });
+
+    // Regular sleep at 60s
+    let rt = regular_times.clone();
+    let c = clock.clone();
+    tokio::spawn(async move {
+        c.sleep(Duration::from_secs(60)).await;
+        rt.lock().push(c.now());
+    });
+
+    // Coalesceable sleep at 10s — deferred to end of advance
+    let ct = coalesce_times.clone();
+    let c = clock.clone();
+    tokio::spawn(async move {
+        c.sleep_coalesce(Duration::from_secs(10)).await;
+        ct.lock().push(c.now());
+    });
+
+    tokio::task::yield_now().await;
+
+    // Advance 2 minutes
+    ctrl.advance(Duration::from_secs(120)).await;
+
+    let regular = regular_times.lock();
+    assert_eq!(regular.len(), 2);
+    // Regular wakes fired at their intermediate times
+    assert_eq!(regular[0], t0 + chrono::Duration::seconds(30));
+    assert_eq!(regular[1], t0 + chrono::Duration::seconds(60));
+
+    let coalesce = coalesce_times.lock();
+    assert_eq!(coalesce.len(), 1);
+    // Coalesceable wake fired at the target time (end of advance)
+    assert_eq!(coalesce[0], t0 + chrono::Duration::seconds(120));
+}
+
+#[tokio::test]
+async fn test_advance_to_next_wake_considers_coalesce_wakes() {
+    let (clock, ctrl) = ClockHandle::manual();
+    let t0 = clock.now();
+
+    // Only a coalesceable sleep — no regular sleeps
+    let c = clock.clone();
+    let handle = tokio::spawn(async move {
+        c.sleep_coalesce(Duration::from_secs(50)).await;
+    });
+
+    tokio::task::yield_now().await;
+    assert_eq!(ctrl.pending_wake_count(), 1);
+
+    // advance_to_next_wake should still find the coalesceable wake
+    let wake_time = ctrl.advance_to_next_wake().await;
+    assert_eq!(wake_time, Some(t0 + chrono::Duration::seconds(50)));
+
+    let _ = handle.await;
+}
+
+#[tokio::test]
+async fn test_advance_to_next_wake_picks_earliest_across_both_lists() {
+    let (clock, ctrl) = ClockHandle::manual();
+    let t0 = clock.now();
+
+    // Regular sleep at 100s
+    let c = clock.clone();
+    tokio::spawn(async move {
+        c.sleep(Duration::from_secs(100)).await;
+    });
+
+    // Coalesceable sleep at 50s (earlier)
+    let c = clock.clone();
+    tokio::spawn(async move {
+        c.sleep_coalesce(Duration::from_secs(50)).await;
+    });
+
+    tokio::task::yield_now().await;
+    assert_eq!(ctrl.pending_wake_count(), 2);
+
+    // Should advance to 50s (the earlier coalesceable wake)
+    let wake_time = ctrl.advance_to_next_wake().await;
+    assert_eq!(wake_time, Some(t0 + chrono::Duration::seconds(50)));
+
+    // Next should be 100s (the regular wake)
+    let wake_time = ctrl.advance_to_next_wake().await;
+    assert_eq!(wake_time, Some(t0 + chrono::Duration::seconds(100)));
+}
+
+#[tokio::test]
+async fn test_cancelled_coalesce_sleep_cleanup() {
+    let (clock, ctrl) = ClockHandle::manual();
+
+    let c = clock.clone();
+    let handle = tokio::spawn(async move {
+        c.sleep_coalesce(Duration::from_secs(100)).await;
+    });
+
+    tokio::task::yield_now().await;
+    assert_eq!(ctrl.pending_wake_count(), 1);
+
+    // Cancel the task
+    handle.abort();
+    let _ = handle.await;
+
+    tokio::task::yield_now().await;
+    assert_eq!(ctrl.pending_wake_count(), 0);
+}

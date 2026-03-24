@@ -42,11 +42,21 @@ enum ClockSleepInner {
         sleep_id: u64,
         clock: Arc<ManualClock>,
         registered: bool,
+        /// If true, this wake is registered in coalesce_wakes instead of pending_wakes.
+        coalesceable: bool,
     },
 }
 
 impl ClockSleep {
     pub(crate) fn new(clock_inner: &ClockInner, duration: Duration) -> Self {
+        Self::new_inner(clock_inner, duration, false)
+    }
+
+    pub(crate) fn new_coalesceable(clock_inner: &ClockInner, duration: Duration) -> Self {
+        Self::new_inner(clock_inner, duration, true)
+    }
+
+    fn new_inner(clock_inner: &ClockInner, duration: Duration, coalesceable: bool) -> Self {
         let inner = match clock_inner {
             ClockInner::Realtime(rt) => ClockSleepInner::Realtime {
                 sleep: rt.sleep(duration),
@@ -59,6 +69,7 @@ impl ClockSleep {
                     sleep_id: next_sleep_id(),
                     clock: Arc::clone(manual),
                     registered: false,
+                    coalesceable,
                 }
             }
         };
@@ -81,6 +92,7 @@ impl Future for ClockSleep {
                 sleep_id,
                 clock,
                 registered,
+                coalesceable,
             } => {
                 // Check if we've reached wake time
                 if clock.now_ms() >= *wake_at_ms {
@@ -89,7 +101,11 @@ impl Future for ClockSleep {
 
                 // Register for wake notification if not already done
                 if !*registered {
-                    clock.register_wake(*wake_at_ms, *sleep_id, cx.waker().clone());
+                    if *coalesceable {
+                        clock.register_coalesce_wake(*wake_at_ms, *sleep_id, cx.waker().clone());
+                    } else {
+                        clock.register_wake(*wake_at_ms, *sleep_id, cx.waker().clone());
+                    }
                     *registered = true;
                 }
 

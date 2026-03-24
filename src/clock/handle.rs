@@ -133,6 +133,18 @@ impl ClockHandle {
         ClockSleep::new(&self.inner, duration)
     }
 
+    /// Sleep for the given duration with coalesceable wake-up behavior.
+    ///
+    /// Unlike [`sleep`](Self::sleep), coalesceable sleeps are processed **once**
+    /// at the end of [`advance()`](crate::ClockController::advance) rather than
+    /// at every intermediate boundary. This prevents housekeeping loops from
+    /// waking repeatedly during large time advances.
+    ///
+    /// For real-time and auto-advance clocks, this behaves identically to `sleep()`.
+    pub fn sleep_coalesce(&self, duration: Duration) -> ClockSleep {
+        ClockSleep::new_coalesceable(&self.inner, duration)
+    }
+
     /// Apply a timeout to a future.
     ///
     /// Returns `Ok(output)` if the future completes before the timeout,
