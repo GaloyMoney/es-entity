@@ -1,3 +1,11 @@
+# [cala release v0.10.31](https://github.com/GaloyMoney/cala/releases/tag/0.10.31)
+
+
+
+### Features
+
+- Add sleep_coalesce for collapsing housekeeping wake-ups (#114)
+
 # [cala release v0.10.30](https://github.com/GaloyMoney/cala/releases/tag/0.10.30)
 
 
