@@ -24,7 +24,7 @@ impl<'a> FiltersStruct<'a> {
     }
 
     pub fn ident(&self) -> syn::Ident {
-        let entity_name = pluralizer::pluralize(&format!("{}", self.entity), 2, false);
+        let entity_name = format!("{}", self.entity);
         syn::Ident::new(
             &format!("{entity_name}_filters").to_case(Case::UpperCamel),
             Span::call_site(),
@@ -647,7 +647,7 @@ mod tests {
 
         let expected = quote! {
             #[derive(Debug, Default)]
-            pub struct OrdersFilters {
+            pub struct OrderFilters {
                 pub customer_id: Option<CustomerId>,
                 pub status: Option<OrderStatus>,
             }
@@ -712,7 +712,7 @@ mod tests {
         let expected = quote! {
             pub async fn list_for_filters_by_id(
                 &self,
-                filters: OrdersFilters,
+                filters: OrderFilters,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrdersByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersByIdCursor>, OrderQueryError> {
@@ -722,7 +722,7 @@ mod tests {
             pub async fn list_for_filters_by_id_in_op<'a, OP>(
                 &self,
                 op: OP,
-                filters: OrdersFilters,
+                filters: OrderFilters,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrdersByIdCursor>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersByIdCursor>, OrderQueryError>
@@ -780,8 +780,8 @@ mod tests {
 
             pub async fn list_for_filters(
                 &self,
-                filters: OrdersFilters,
-                sort: es_entity::Sort<OrdersSortBy>,
+                filters: OrderFilters,
+                sort: es_entity::Sort<OrderSortBy>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrdersCursor>,
             ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersCursor>, OrderQueryError>
             {
@@ -791,7 +791,7 @@ mod tests {
 
                     use cursor_mod::OrdersCursor;
                     let res = match by {
-                        OrdersSortBy::Id => {
+                        OrderSortBy::Id => {
                             let after = after.map(cursor_mod::OrdersByIdCursor::try_from).transpose()?;
                             let query = es_entity::PaginatedQueryArgs { first, after };
 

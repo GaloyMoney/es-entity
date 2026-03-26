@@ -5,7 +5,7 @@ It uses a struct-based API where each filter field is optional, allowing filteri
 
 The function accepts:
 
-1. A filters struct with `Option<T>` fields (e.g., `UsersFilters { name: Some("Alice".into()), ..Default::default() }`)
+1. A filters struct with `Option<T>` fields (e.g., `UserFilters { name: Some("Alice".into()), ..Default::default() }`)
 2. A sort specification with direction
 3. Pagination arguments
 
@@ -21,7 +21,7 @@ A `#[derive(Debug, Default)]` struct with one `Option<T>` field per `list_for` c
 
 ```rust,ignore
 #[derive(Debug, Default)]
-pub struct UserDocumentsFilters {
+pub struct UserDocumentFilters {
     pub user_id: Option<UserId>,
     pub status: Option<DocumentStatus>,
 }
@@ -31,16 +31,16 @@ Use `Default::default()` for no filtering, or set specific fields:
 
 ```rust,ignore
 // No filters - returns all entities
-let filters = UserDocumentsFilters::default();
+let filters = UserDocumentFilters::default();
 
 // Filter by user_id only
-let filters = UserDocumentsFilters {
+let filters = UserDocumentFilters {
     user_id: Some(owner_id),
     ..Default::default()
 };
 
 // Filter by both user_id and status
-let filters = UserDocumentsFilters {
+let filters = UserDocumentFilters {
     user_id: Some(owner_id),
     status: Some(DocumentStatus::Active),
 };
@@ -142,9 +142,9 @@ async fn main() -> anyhow::Result<()> {
 
     // No filters - returns all users, sorted by ID
     let all_users = users.list_for_filters(
-        UsersFilters::default(),
+        UserFilters::default(),
         Sort {
-            by: UsersSortBy::Id,
+            by: UserSortBy::Id,
             direction: ListDirection::Ascending,
         },
         PaginatedQueryArgs {
@@ -155,11 +155,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Filter by name
     let filtered = users.list_for_filters(
-        UsersFilters {
+        UserFilters {
             name: Some("Alice".to_string()),
         },
         Sort {
-            by: UsersSortBy::CreatedAt,
+            by: UserSortBy::CreatedAt,
             direction: ListDirection::Descending,
         },
         PaginatedQueryArgs {
@@ -171,11 +171,11 @@ async fn main() -> anyhow::Result<()> {
     // Paginate through results
     if let Some(next_query) = filtered.into_next_query() {
         let next_page = users.list_for_filters(
-            UsersFilters {
+            UserFilters {
                 name: Some("Alice".to_string()),
             },
             Sort {
-                by: UsersSortBy::CreatedAt,
+                by: UserSortBy::CreatedAt,
                 direction: ListDirection::Descending,
             },
             next_query,

@@ -38,13 +38,13 @@ pub enum ListDirection {
 ///
 /// ```ignore
 /// let result = users.list_for_filters(
-///     UsersFilters {
+///     UserFilters {
 ///         name: Some("Murphy".to_string()),
 ///     },
 ///     Sort {
-///         // `UsersSortBy::Id` and `UsersSortBy::CreatedAt` are created by default,
+///         // `UserSortBy::Id` and `UserSortBy::CreatedAt` are created by default,
 ///         // other columns need `list_by` to sort by
-///         by: UsersSortBy::Id,
+///         by: UserSortBy::Id,
 ///         direction: ListDirection::Descending,
 ///     },
 ///     PaginatedQueryArgs {
