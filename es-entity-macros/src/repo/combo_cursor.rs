@@ -90,7 +90,7 @@ impl<'a> ComboCursor<'a> {
     }
 
     pub fn sort_by_name(&self) -> syn::Ident {
-        let entity_name = pluralizer::pluralize(&format!("{}", self.entity), 2, false);
+        let entity_name = format!("{}", self.entity);
         syn::Ident::new(
             &format!("{entity_name}_sort_by").to_case(Case::UpperCamel),
             Span::call_site(),
@@ -324,7 +324,7 @@ mod tests {
 
         let expected = quote! {
             #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-            pub enum OrdersSortBy {
+            pub enum OrderSortBy {
                 #[default]
                 Id,
                 Status,

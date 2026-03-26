@@ -111,9 +111,9 @@ async fn list_for_filters() -> anyhow::Result<()> {
         end_cursor: _,
     } = users
         .list_for_filters(
-            UsersFilters::default(),
+            UserFilters::default(),
             Sort {
-                by: UsersSortBy::Id,
+                by: UserSortBy::Id,
                 direction: ListDirection::Ascending,
             },
             PaginatedQueryArgs {
@@ -138,11 +138,11 @@ async fn list_for_filters() -> anyhow::Result<()> {
     // Test with specific name filter
     let filtered_result = users
         .list_for_filters(
-            UsersFilters {
+            UserFilters {
                 name: Some(unique_name.clone()),
             },
             Sort {
-                by: UsersSortBy::Id,
+                by: UserSortBy::Id,
                 direction: ListDirection::Ascending,
             },
             PaginatedQueryArgs {
@@ -158,9 +158,9 @@ async fn list_for_filters() -> anyhow::Result<()> {
     // Test pagination with filters
     let paginated_result = users
         .list_for_filters(
-            UsersFilters::default(),
+            UserFilters::default(),
             Sort {
-                by: UsersSortBy::Id,
+                by: UserSortBy::Id,
                 direction: ListDirection::Ascending,
             },
             PaginatedQueryArgs {
@@ -176,9 +176,9 @@ async fn list_for_filters() -> anyhow::Result<()> {
     // Use cursor for next page
     let next_page = users
         .list_for_filters(
-            UsersFilters::default(),
+            UserFilters::default(),
             Sort {
-                by: UsersSortBy::Id,
+                by: UserSortBy::Id,
                 direction: ListDirection::Ascending,
             },
             PaginatedQueryArgs {
