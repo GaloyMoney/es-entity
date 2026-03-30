@@ -14,7 +14,7 @@ pub struct CursorStruct<'a> {
 
 impl CursorStruct<'_> {
     fn name(&self) -> String {
-        let entity_name = pluralizer::pluralize(&format!("{}", self.entity), 2, false);
+        let entity_name = format!("{}", self.entity);
         format!("{}_by_{}_cursor", entity_name, self.column.name()).to_case(Case::UpperCamel)
     }
 
@@ -482,11 +482,11 @@ mod tests {
 
         let expected = quote! {
             #[derive(Debug, serde::Serialize, serde::Deserialize)]
-            pub struct EntitiesByIdCursor {
+            pub struct EntityByIdCursor {
                 pub id: EntityId,
             }
 
-            impl From<&Entity> for EntitiesByIdCursor {
+            impl From<&Entity> for EntityByIdCursor {
                 fn from(entity: &Entity) -> Self {
                     Self {
                         id: entity.id.clone(),
@@ -517,12 +517,12 @@ mod tests {
 
         let expected = quote! {
             #[derive(Debug, serde::Serialize, serde::Deserialize)]
-            pub struct EntitiesByCreatedAtCursor {
+            pub struct EntityByCreatedAtCursor {
                 pub id: EntityId,
                 pub created_at: es_entity::prelude::chrono::DateTime<es_entity::prelude::chrono::Utc>,
             }
 
-            impl From<&Entity> for EntitiesByCreatedAtCursor {
+            impl From<&Entity> for EntityByCreatedAtCursor {
                 fn from(entity: &Entity) -> Self {
                     Self {
                         id: entity.id.clone(),
@@ -567,22 +567,22 @@ mod tests {
         let expected = quote! {
             pub async fn list_by_id(
                 &self,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, EntityQueryError> {
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, EntityQueryError> {
                 self.list_by_id_in_op(self.pool(), cursor, direction).await
             }
 
             pub async fn list_by_id_in_op<'a, OP>(
                 &self,
                 op: OP,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, EntityQueryError>
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, EntityQueryError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, EntityQueryError> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, EntityQueryError> = async {
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
                     let id = if let Some(after) = after {
                         Some(after.id)
@@ -613,7 +613,7 @@ mod tests {
                         },
                     };
 
-                    let end_cursor = entities.last().map(cursor_mod::EntitiesByIdCursor::from);
+                    let end_cursor = entities.last().map(cursor_mod::EntityByIdCursor::from);
                     Ok(es_entity::PaginatedQueryRet {
                         entities,
                         has_next_page,
@@ -690,22 +690,22 @@ mod tests {
         let expected = quote! {
             pub async fn list_by_name(
                 &self,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByNameCursor>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByNameCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, EntityQueryError> {
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByNameCursor>, EntityQueryError> {
                 self.list_by_name_in_op(self.pool(), cursor, direction).await
             }
 
             pub async fn list_by_name_in_op<'a, OP>(
                 &self,
                 op: OP,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByNameCursor>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByNameCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, EntityQueryError>
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByNameCursor>, EntityQueryError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByNameCursor>, EntityQueryError> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByNameCursor>, EntityQueryError> = async {
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
                     let (id, name) = if let Some(after) = after {
                         (Some(after.id), Some(after.name))
@@ -738,7 +738,7 @@ mod tests {
                         },
                     };
 
-                    let end_cursor = entities.last().map(cursor_mod::EntitiesByNameCursor::from);
+                    let end_cursor = entities.last().map(cursor_mod::EntityByNameCursor::from);
 
                     Ok(es_entity::PaginatedQueryRet {
                         entities,
@@ -786,22 +786,22 @@ mod tests {
         let expected = quote! {
             pub async fn list_by_value(
                 &self,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByValueCursor>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByValueCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, EntityQueryError> {
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByValueCursor>, EntityQueryError> {
                 self.list_by_value_in_op(self.pool(), cursor, direction).await
             }
 
             pub async fn list_by_value_in_op<'a, OP>(
                 &self,
                 op: OP,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByValueCursor>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByValueCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, EntityQueryError>
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByValueCursor>, EntityQueryError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByValueCursor>, EntityQueryError> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByValueCursor>, EntityQueryError> = async {
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
                     let (id, value) = if let Some(after) = after {
                         (Some(after.id), after.value)
@@ -834,7 +834,7 @@ mod tests {
                         },
                     };
 
-                    let end_cursor = entities.last().map(cursor_mod::EntitiesByValueCursor::from);
+                    let end_cursor = entities.last().map(cursor_mod::EntityByValueCursor::from);
 
                     Ok(es_entity::PaginatedQueryRet {
                         entities,

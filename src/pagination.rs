@@ -73,7 +73,7 @@ pub struct Sort<T> {
 /// // Initial query - fetch first 10 users after an existing user id
 /// let query_args = PaginatedQueryArgs {
 ///     first: 10,
-///     after: Some(user_cursor::UsersByIdCursor {
+///     after: Some(user_cursor::UserByIdCursor {
 ///         id: some_existing_user_id // assume this variable exists
 ///     }),
 /// };

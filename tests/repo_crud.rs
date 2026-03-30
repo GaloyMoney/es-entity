@@ -87,7 +87,7 @@ async fn list_by() -> anyhow::Result<()> {
         .list_by_id(
             PaginatedQueryArgs {
                 first: 5,
-                after: Some(user_cursor::UsersByIdCursor {
+                after: Some(user_cursor::UserByIdCursor {
                     id: uuid::Uuid::nil().into(),
                 }),
             },

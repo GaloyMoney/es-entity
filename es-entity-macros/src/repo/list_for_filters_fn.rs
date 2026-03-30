@@ -505,8 +505,7 @@ impl ToTokens for ListForFiltersFn<'_> {
                         Span::call_site(),
                     );
                     let inner_cursor_ident = {
-                        let entity_name =
-                            pluralizer::pluralize(&format!("{}", self.entity), 2, false);
+                        let entity_name = format!("{}", self.entity);
                         syn::Ident::new(
                             &format!("{}_by_{}_cursor", entity_name, by_col.name())
                                 .to_case(Case::UpperCamel),
@@ -713,9 +712,9 @@ mod tests {
             pub async fn list_for_filters_by_id(
                 &self,
                 filters: OrderFilters,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrdersByIdCursor>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrderByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersByIdCursor>, OrderQueryError> {
+            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderByIdCursor>, OrderQueryError> {
                 self.list_for_filters_by_id_in_op(self.pool(), filters, cursor, direction).await
             }
 
@@ -723,13 +722,13 @@ mod tests {
                 &self,
                 op: OP,
                 filters: OrderFilters,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrdersByIdCursor>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrderByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersByIdCursor>, OrderQueryError>
+            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderByIdCursor>, OrderQueryError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersByIdCursor>, OrderQueryError> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderByIdCursor>, OrderQueryError> = async {
                     let filter_customer_id = filters.customer_id;
                     let filter_status = filters.status;
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
@@ -766,7 +765,7 @@ mod tests {
                         }
                     };
 
-                    let end_cursor = entities.last().map(cursor_mod::OrdersByIdCursor::from);
+                    let end_cursor = entities.last().map(cursor_mod::OrderByIdCursor::from);
 
                     Ok(es_entity::PaginatedQueryRet {
                         entities,
@@ -782,17 +781,17 @@ mod tests {
                 &self,
                 filters: OrderFilters,
                 sort: es_entity::Sort<OrderSortBy>,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrdersCursor>,
-            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersCursor>, OrderQueryError>
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrderCursor>,
+            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderCursor>, OrderQueryError>
             {
-                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrdersCursor>, OrderQueryError> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderCursor>, OrderQueryError> = async {
                     let es_entity::Sort { by, direction } = sort;
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
 
-                    use cursor_mod::OrdersCursor;
+                    use cursor_mod::OrderCursor;
                     let res = match by {
                         OrderSortBy::Id => {
-                            let after = after.map(cursor_mod::OrdersByIdCursor::try_from).transpose()?;
+                            let after = after.map(cursor_mod::OrderByIdCursor::try_from).transpose()?;
                             let query = es_entity::PaginatedQueryArgs { first, after };
 
                             let es_entity::PaginatedQueryRet {
@@ -811,7 +810,7 @@ mod tests {
                             es_entity::PaginatedQueryRet {
                                 entities,
                                 has_next_page,
-                                end_cursor: end_cursor.map(cursor_mod::OrdersCursor::from)
+                                end_cursor: end_cursor.map(cursor_mod::OrderCursor::from)
                             }
                         }
                     };
