@@ -1,3 +1,11 @@
+# [cala release v0.10.33](https://github.com/GaloyMoney/cala/releases/tag/0.10.33)
+
+
+
+### Refactor
+
+- Use singular entity names for Cursor types (#117)
+
 # [cala release v0.10.32](https://github.com/GaloyMoney/cala/releases/tag/0.10.32)
 
 
