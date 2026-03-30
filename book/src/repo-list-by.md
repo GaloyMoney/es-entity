@@ -48,7 +48,7 @@ use es_entity::*;
 #[derive(EsRepo)]
 #[es_repo(
     entity = "User",
-    // list_by will generate the UsersByNameCursor
+    // list_by will generate the UserByNameCursor
     columns(name(ty = "String", list_by))
 )]
 pub struct Users {
@@ -57,7 +57,7 @@ pub struct Users {
 
 // // Generated code:
 // pub mod user_cursor {
-//    pub struct UsersByNameCursor {
+//    pub struct UserByNameCursor {
 //        name: String
 //        // id is always added to disambiguate
 //        // incase the `name` column is not unique
@@ -94,7 +94,7 @@ async fn main() -> anyhow::Result<()> {
             PaginatedQueryArgs {
                 first: 5,
                 // after: None represents beginning of the list
-                after: Some(user_cursor::UsersByIdCursor {
+                after: Some(user_cursor::UserByIdCursor {
                     id: uuid::Uuid::nil().into(),
                 }),
             },

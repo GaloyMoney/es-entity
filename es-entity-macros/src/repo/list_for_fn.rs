@@ -325,9 +325,9 @@ mod tests {
             pub async fn list_for_customer_id_by_id(
                 &self,
                 filter_customer_id: impl std::borrow::Borrow<Uuid>,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, EntityQueryError> {
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, EntityQueryError> {
                 self.list_for_customer_id_by_id_in_op(self.pool(), filter_customer_id, cursor, direction).await
             }
 
@@ -335,13 +335,13 @@ mod tests {
                 &self,
                 op: OP,
                 filter_customer_id: impl std::borrow::Borrow<Uuid>,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByIdCursor>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, EntityQueryError>
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, EntityQueryError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByIdCursor>, EntityQueryError> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, EntityQueryError> = async {
                     let filter_customer_id = filter_customer_id.borrow();
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
                     let id = if let Some(after) = after {
@@ -374,7 +374,7 @@ mod tests {
                         }
                     };
 
-                        let end_cursor = entities.last().map(cursor_mod::EntitiesByIdCursor::from);
+                        let end_cursor = entities.last().map(cursor_mod::EntityByIdCursor::from);
                         Ok(es_entity::PaginatedQueryRet {
                             entities,
                             has_next_page,
@@ -423,9 +423,9 @@ mod tests {
             pub async fn list_for_email_by_email(
                 &self,
                 filter_email: impl std::convert::AsRef<str>,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByEmailCursor>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByEmailCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, EntityQueryError> {
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, EntityQueryError> {
                 self.list_for_email_by_email_in_op(self.pool(), filter_email, cursor, direction).await
             }
 
@@ -433,13 +433,13 @@ mod tests {
                 &self,
                 op: OP,
                 filter_email: impl std::convert::AsRef<str>,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntitiesByEmailCursor>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByEmailCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, EntityQueryError>
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, EntityQueryError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntitiesByEmailCursor>, EntityQueryError> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, EntityQueryError> = async {
                     let filter_email = filter_email.as_ref();
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
                     let (id, email) = if let Some(after) = after {
@@ -474,7 +474,7 @@ mod tests {
                         }
                     };
 
-                    let end_cursor = entities.last().map(cursor_mod::EntitiesByEmailCursor::from);
+                    let end_cursor = entities.last().map(cursor_mod::EntityByEmailCursor::from);
                     Ok(es_entity::PaginatedQueryRet {
                         entities,
                         has_next_page,

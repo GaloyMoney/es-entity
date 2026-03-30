@@ -24,7 +24,7 @@ impl<'a> ComboCursor<'a> {
     }
 
     pub fn ident(&self) -> syn::Ident {
-        let entity_name = pluralizer::pluralize(&format!("{}", self.entity), 2, false);
+        let entity_name = format!("{}", self.entity);
         syn::Ident::new(
             &format!("{entity_name}_cursor").to_case(Case::UpperCamel),
             Span::call_site(),
@@ -234,40 +234,40 @@ mod tests {
             #[derive(Debug, serde::Serialize, serde::Deserialize)]
             #[allow(clippy::enum_variant_names)]
             #[serde(tag = "type")]
-            pub enum UsersCursor {
-                Byid(UsersByIdCursor),
-                Byname(UsersByNameCursor),
+            pub enum UserCursor {
+                Byid(UserByIdCursor),
+                Byname(UserByNameCursor),
             }
 
-            impl From<UsersByIdCursor> for UsersCursor {
-                fn from(cursor: UsersByIdCursor) -> Self {
+            impl From<UserByIdCursor> for UserCursor {
+                fn from(cursor: UserByIdCursor) -> Self {
                     Self::Byid(cursor)
                 }
             }
 
-            impl TryFrom<UsersCursor> for UsersByIdCursor {
+            impl TryFrom<UserCursor> for UserByIdCursor {
                 type Error = es_entity::CursorDestructureError;
 
-                fn try_from(cursor: UsersCursor) -> Result<Self, Self::Error> {
+                fn try_from(cursor: UserCursor) -> Result<Self, Self::Error> {
                     match cursor {
-                        UsersCursor::Byid(cursor) => Ok(cursor),
-                        _ => Err(es_entity::CursorDestructureError::from((stringify!(UsersCursor), stringify!(UsersByIdCursor)))),
+                        UserCursor::Byid(cursor) => Ok(cursor),
+                        _ => Err(es_entity::CursorDestructureError::from((stringify!(UserCursor), stringify!(UserByIdCursor)))),
                     }
                 }
             }
-            impl From<UsersByNameCursor> for UsersCursor {
-                fn from(cursor: UsersByNameCursor) -> Self {
+            impl From<UserByNameCursor> for UserCursor {
+                fn from(cursor: UserByNameCursor) -> Self {
                     Self::Byname(cursor)
                 }
             }
 
-            impl TryFrom<UsersCursor> for UsersByNameCursor {
+            impl TryFrom<UserCursor> for UserByNameCursor {
                 type Error = es_entity::CursorDestructureError;
 
-                fn try_from(cursor: UsersCursor) -> Result<Self, Self::Error> {
+                fn try_from(cursor: UserCursor) -> Result<Self, Self::Error> {
                     match cursor {
-                        UsersCursor::Byname(cursor) => Ok(cursor),
-                        _ => Err(es_entity::CursorDestructureError::from((stringify!(UsersCursor), stringify!(UsersByNameCursor)))),
+                        UserCursor::Byname(cursor) => Ok(cursor),
+                        _ => Err(es_entity::CursorDestructureError::from((stringify!(UserCursor), stringify!(UserByNameCursor)))),
                     }
                 }
             }
