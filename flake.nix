@@ -71,6 +71,7 @@
         podman
         podman-compose
         curl
+        fly
       ];
       devEnvVars = rec {
         PGDATABASE = "pg";
