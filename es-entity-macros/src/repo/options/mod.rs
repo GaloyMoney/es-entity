@@ -205,6 +205,8 @@ pub struct RepositoryOptions {
     pub post_hydrate_hook: Option<PostHydrateHookConfig>,
     #[darling(default)]
     pub delete: DeleteOption,
+    #[darling(default)]
+    pub count: bool,
 
     data: darling::ast::Data<(), RepoField>,
 
