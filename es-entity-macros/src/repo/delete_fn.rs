@@ -10,6 +10,7 @@ pub struct DeleteFn<'a> {
     table_name: &'a str,
     columns: &'a Columns,
     delete_option: &'a DeleteOption,
+    nested_delete_fn_names: Vec<syn::Ident>,
     post_persist_error: Option<&'a syn::Type>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
@@ -23,6 +24,10 @@ impl<'a> DeleteFn<'a> {
             columns: &opts.columns,
             table_name: opts.table_name(),
             delete_option: &opts.delete,
+            nested_delete_fn_names: opts
+                .all_nested()
+                .map(|f| f.delete_nested_fn_name())
+                .collect(),
             post_persist_error: opts.post_persist_hook.as_ref().map(|h| &h.error),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
@@ -38,6 +43,12 @@ impl ToTokens for DeleteFn<'_> {
 
         let entity = self.entity;
         let modify_error = &self.modify_error;
+
+        let nested_deletes = self.nested_delete_fn_names.iter().map(|f| {
+            quote! {
+                Self::#f::<_, _, #modify_error>(op, &entity).await?;
+            }
+        });
 
         let assignments = self
             .columns
@@ -103,6 +114,7 @@ impl ToTokens for DeleteFn<'_> {
                 OP: es_entity::AtomicOperation
             {
                 let __result: Result<(), #modify_error> = async {
+                    #(#nested_deletes)*
                     #assignments
                     #record_id
 
@@ -170,6 +182,7 @@ mod tests {
             table_name: "entities",
             columns: &columns,
             delete_option: &DeleteOption::Soft,
+            nested_delete_fn_names: Vec::new(),
             post_persist_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -262,6 +275,7 @@ mod tests {
             table_name: "entities",
             columns: &columns,
             delete_option: &DeleteOption::Soft,
+            nested_delete_fn_names: Vec::new(),
             post_persist_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),

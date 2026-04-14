@@ -69,6 +69,7 @@ CREATE TABLE custom_name_for_user_events (
 -- Tables for nested entities test
 CREATE TABLE orders (
   id UUID PRIMARY KEY,
+  deleted BOOL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL
 );
 
@@ -85,6 +86,7 @@ CREATE TABLE order_events (
 CREATE TABLE order_items (
   id UUID PRIMARY KEY,
   order_id UUID NOT NULL REFERENCES orders(id),
+  deleted BOOL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL
 );
 

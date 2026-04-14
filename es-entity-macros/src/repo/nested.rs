@@ -27,6 +27,7 @@ impl ToTokens for Nested<'_> {
         let create_fn_name = self.field.create_nested_fn_name();
         let update_fn_name = self.field.update_nested_fn_name();
         let find_fn_name = self.field.find_nested_fn_name();
+        let delete_fn_name = self.field.delete_nested_fn_name();
 
         tokens.append_all(quote! {
             async fn #create_fn_name<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), <#nested_repo_ty as es_entity::EsRepo>::CreateError>
@@ -66,6 +67,17 @@ impl ToTokens for Nested<'_> {
             {
                 let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
                 <#nested_repo_ty>::populate_in_op::<_, _, __EsErr>(op, lookup).await?;
+                Ok(())
+            }
+
+            async fn #delete_fn_name<OP, P, __EsErr>(op: &mut OP, entity: &P) -> Result<(), __EsErr>
+                where
+                    OP: es_entity::AtomicOperation,
+                    P: es_entity::EsEntity,
+                    #nested_repo_ty: es_entity::CascadeDeleteNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
+                    __EsErr: From<sqlx::Error> + Send,
+            {
+                <#nested_repo_ty>::cascade_delete_in_op::<_, __EsErr>(op, &entity.events().entity_id).await?;
                 Ok(())
             }
         });
@@ -138,6 +150,17 @@ mod tests {
             {
                 let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
                 <UserRepo>::populate_in_op::<_, _, __EsErr>(op, lookup).await?;
+                Ok(())
+            }
+
+            async fn delete_nested_users_in_op<OP, P, __EsErr>(op: &mut OP, entity: &P) -> Result<(), __EsErr>
+                where
+                    OP: es_entity::AtomicOperation,
+                    P: es_entity::EsEntity,
+                    UserRepo: es_entity::CascadeDeleteNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
+                    __EsErr: From<sqlx::Error> + Send,
+            {
+                <UserRepo>::cascade_delete_in_op::<_, __EsErr>(op, &entity.events().entity_id).await?;
                 Ok(())
             }
         };

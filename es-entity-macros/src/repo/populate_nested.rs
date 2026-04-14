@@ -12,6 +12,7 @@ pub struct PopulateNested<'a> {
     table_name: &'a str,
     events_table_name: &'a str,
     repo_types_mod: syn::Ident,
+    delete_option: &'a DeleteOption,
 }
 
 impl<'a> PopulateNested<'a> {
@@ -24,6 +25,7 @@ impl<'a> PopulateNested<'a> {
             table_name: opts.table_name(),
             events_table_name: opts.events_table_name(),
             repo_types_mod: opts.repo_types_mod(),
+            delete_option: &opts.delete,
         }
     }
 }
@@ -35,10 +37,12 @@ impl ToTokens for PopulateNested<'_> {
         let repo_types_mod = &self.repo_types_mod;
         let accessor = self.column.parent_accessor();
 
+        let not_deleted_condition = self.delete_option.not_deleted_condition();
         let query = format!(
-            "WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1))) SELECT i.id AS \"entity_id: {}\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY e.id, e.sequence",
+            "WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1)){}) SELECT i.id AS \"entity_id: {}\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY e.id, e.sequence",
             self.table_name,
             self.column.name(),
+            not_deleted_condition,
             self.id,
             self.events_table_name,
         );
@@ -76,5 +80,34 @@ impl ToTokens for PopulateNested<'_> {
                 }
             }
         });
+
+        if self.delete_option.is_soft() {
+            let column_name = self.column.name();
+            let cascade_query = format!(
+                "UPDATE {} SET deleted = TRUE WHERE {} = $1 AND deleted = FALSE",
+                self.table_name, column_name,
+            );
+
+            tokens.append_all(quote! {
+                impl #impl_generics es_entity::CascadeDeleteNested<#ty> for #ident #ty_generics #where_clause {
+                    async fn cascade_delete_in_op<OP, __EsErr>(
+                        op: &mut OP,
+                        parent_id: &#ty,
+                    ) -> Result<(), __EsErr>
+                    where
+                        OP: es_entity::AtomicOperation,
+                        __EsErr: From<sqlx::Error> + Send,
+                    {
+                        sqlx::query!(
+                            #cascade_query,
+                            parent_id as &#ty,
+                        )
+                        .execute(op.as_executor())
+                        .await?;
+                        Ok(())
+                    }
+                }
+            });
+        }
     }
 }

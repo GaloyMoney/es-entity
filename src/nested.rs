@@ -117,6 +117,20 @@ pub trait PopulateNested<ID>: EsRepo {
         E: From<sqlx::Error> + From<EntityHydrationError> + Send;
 }
 
+/// Trait for cascade soft-deleting child entities when a parent is deleted.
+///
+/// Generated automatically for nested repositories that have both a `parent` column
+/// and `delete = "soft"` configured.
+pub trait CascadeDeleteNested<ID>: EsRepo {
+    fn cascade_delete_in_op<OP, E>(
+        op: &mut OP,
+        parent_id: &ID,
+    ) -> impl Future<Output = Result<(), E>> + Send
+    where
+        OP: AtomicOperation,
+        E: From<sqlx::Error> + Send;
+}
+
 /// Trait that entities implement for every field marked `#[es_entity(nested)]`
 ///
 /// Will be auto-implemented when [`#[derive(EsEntity)]`](`EsEntity`) is used.
