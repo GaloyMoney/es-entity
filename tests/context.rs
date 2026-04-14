@@ -16,6 +16,12 @@ impl TestStruct {
         ctx.insert("method", &json!("no_args")).unwrap();
         serde_json::to_value(ctx.data()).unwrap()
     }
+
+    async fn test_no_macro(&self) -> serde_json::Value {
+        let mut ctx = EventContext::current();
+        ctx.insert("method", &json!("no_macro")).unwrap();
+        serde_json::to_value(ctx.data()).unwrap()
+    }
 }
 
 #[tokio::test]
@@ -55,5 +61,21 @@ async fn es_event_context_macro_integration() {
     assert_eq!(
         serde_json::to_value(EventContext::current().data()).unwrap(),
         json!({ "initial": "data" })
+    );
+
+    // Plain async fn (no macro) — mutations ARE visible to caller
+    let result = test_struct.test_no_macro().await;
+    assert_eq!(
+        result,
+        json!({
+            "initial": "data",
+            "method": "no_macro"
+        })
+    );
+
+    // "method" persists in parent context because there was no isolation boundary
+    assert_eq!(
+        serde_json::to_value(EventContext::current().data()).unwrap(),
+        json!({ "initial": "data", "method": "no_macro" })
     );
 }
