@@ -355,3 +355,64 @@ async fn find_parent_after_delete_excludes_deleted_children() -> anyhow::Result<
 
     Ok(())
 }
+
+#[tokio::test]
+async fn delete_parent_soft_deletes_children_via_child_repo() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let orders = Orders::new(pool.clone());
+    let items = OrderItems::new(pool);
+
+    // Create a parent order with two children
+    let order_id = OrderId::new();
+    let item_id_1 = OrderItemId::new();
+    let item_id_2 = OrderItemId::new();
+
+    let mut order = orders
+        .create(NewOrderBuilder::default().id(order_id).build().unwrap())
+        .await?;
+    order.add_item(
+        NewOrderItemBuilder::default()
+            .id(item_id_1)
+            .order_id(order_id)
+            .product_name("Laptop")
+            .quantity(1)
+            .price(999.99)
+            .build()
+            .unwrap(),
+    );
+    order.add_item(
+        NewOrderItemBuilder::default()
+            .id(item_id_2)
+            .order_id(order_id)
+            .product_name("Mouse")
+            .quantity(2)
+            .price(29.99)
+            .build()
+            .unwrap(),
+    );
+    orders.update(&mut order).await?;
+
+    // Verify children exist via the child repo
+    let child1 = items.find_by_id(item_id_1).await?;
+    assert_eq!(child1.product_name, "Laptop");
+    let child2 = items.find_by_id(item_id_2).await?;
+    assert_eq!(child2.product_name, "Mouse");
+
+    // Delete the parent
+    let loaded = orders.find_by_id(order_id).await?;
+    orders.delete(loaded).await?;
+
+    // Children should no longer be found via normal find (soft-deleted)
+    let result1 = items.maybe_find_by_id(item_id_1).await?;
+    assert!(result1.is_none(), "child 1 should be soft-deleted");
+    let result2 = items.maybe_find_by_id(item_id_2).await?;
+    assert!(result2.is_none(), "child 2 should be soft-deleted");
+
+    // But children still exist via include_deleted
+    let deleted_child1 = items.find_by_id_include_deleted(item_id_1).await?;
+    assert_eq!(deleted_child1.product_name, "Laptop");
+    let deleted_child2 = items.find_by_id_include_deleted(item_id_2).await?;
+    assert_eq!(deleted_child2.product_name, "Mouse");
+
+    Ok(())
+}
