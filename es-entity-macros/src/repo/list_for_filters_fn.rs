@@ -73,7 +73,7 @@ impl ToTokens for FiltersStruct<'_> {
         let fields = self.fields();
 
         tokens.append_all(quote! {
-            #[derive(Debug, Default)]
+            #[derive(Debug, Default, Clone)]
             pub struct #ident {
                 #fields
             }
@@ -95,6 +95,7 @@ pub struct ListForFiltersFn<'a> {
     id: &'a syn::Ident,
     any_nested: bool,
     post_hydrate_error: Option<&'a syn::Type>,
+    count: bool,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -120,6 +121,7 @@ impl<'a> ListForFiltersFn<'a> {
             id: opts.id(),
             any_nested: opts.any_nested(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
+            count: opts.count,
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -618,6 +620,131 @@ impl ToTokens for ListForFiltersFn<'_> {
                 break;
             }
         }
+
+        // Generate count_for_filters and count methods (opt-in via #[es_repo(count)])
+        if self.count {
+            self.generate_count_fns(tokens);
+        }
+    }
+}
+
+impl ListForFiltersFn<'_> {
+    fn generate_count_fns(&self, tokens: &mut TokenStream) {
+        let filters_name = self.filters_struct.ident();
+        let error = &self.query_error;
+
+        let where_fragments: Vec<String> = self
+            .for_columns
+            .iter()
+            .enumerate()
+            .map(|(i, col)| FiltersStruct::where_clause_fragment(col, (i + 1) as u32))
+            .collect();
+
+        let not_deleted = self.delete.not_deleted_condition();
+
+        let filter_where = if where_fragments.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", where_fragments.join(" AND "))
+        };
+
+        let full_where = if filter_where.is_empty() {
+            if not_deleted.is_empty() {
+                String::new()
+            } else {
+                "WHERE deleted = FALSE".to_string()
+            }
+        } else if not_deleted.is_empty() {
+            filter_where
+        } else {
+            format!("{filter_where}{not_deleted}")
+        };
+
+        let count_query = if full_where.is_empty() {
+            format!(
+                r#"SELECT COUNT(*) as "count!" FROM {}"#,
+                self.table_name,
+            )
+        } else {
+            format!(
+                r#"SELECT COUNT(*) as "count!" FROM {} {}"#,
+                self.table_name, full_where,
+            )
+        };
+
+        let destructure_filters: TokenStream = self
+            .for_columns
+            .iter()
+            .map(|c| {
+                let col_name = c.name();
+                let filter_name =
+                    syn::Ident::new(&format!("filter_{}", col_name), Span::call_site());
+                quote! {
+                    let #filter_name = filters.#col_name;
+                }
+            })
+            .collect();
+
+        let filter_arg_bindings: TokenStream = self
+            .for_columns
+            .iter()
+            .map(|col| FiltersStruct::filter_arg_tokens(col))
+            .collect();
+
+        #[cfg(feature = "instrument")]
+        let (count_instrument_attr, count_error_recording) = {
+            let entity_name = self.entity.to_string();
+            let repo_name = &self.repo_name_snake;
+            let span_name = format!("{}.count_for_filters", repo_name);
+            (
+                quote! {
+                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, filters = tracing::field::debug(&filters), count = tracing::field::Empty, error = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
+                },
+                quote! {
+                    if let Err(ref e) = __result {
+                        tracing::Span::current().record("error", true);
+                        tracing::Span::current().record("exception.message", tracing::field::display(e));
+                        tracing::Span::current().record("exception.type", std::any::type_name_of_val(e));
+                    }
+                },
+            )
+        };
+        #[cfg(not(feature = "instrument"))]
+        let (count_instrument_attr, count_error_recording) = (quote! {}, quote! {});
+
+        #[cfg(feature = "instrument")]
+        let count_record_result = quote! {
+            tracing::Span::current().record("count", count);
+        };
+        #[cfg(not(feature = "instrument"))]
+        let count_record_result = quote! {};
+
+        tokens.append_all(quote! {
+            #count_instrument_attr
+            pub async fn count_for_filters(
+                &self,
+                filters: #filters_name,
+            ) -> Result<i64, #error> {
+                let __result: Result<i64, #error> = async {
+                    #destructure_filters
+                    let count: i64 = sqlx::query_scalar!(
+                        #count_query,
+                        #filter_arg_bindings
+                    )
+                    .fetch_one(self.pool())
+                    .await?;
+                    #count_record_result
+                    Ok(count)
+                }.await;
+
+                #count_error_recording
+                __result
+            }
+
+            pub async fn count(&self) -> Result<i64, #error> {
+                self.count_for_filters(Default::default()).await
+            }
+        });
     }
 }
 
@@ -645,7 +772,7 @@ mod tests {
         filters.to_tokens(&mut tokens);
 
         let expected = quote! {
-            #[derive(Debug, Default)]
+            #[derive(Debug, Default, Clone)]
             pub struct OrderFilters {
                 pub customer_id: Option<CustomerId>,
                 pub status: Option<OrderStatus>,
@@ -701,6 +828,7 @@ mod tests {
             id: &id,
             any_nested: false,
             post_hydrate_error: None,
+            count: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -820,6 +948,32 @@ mod tests {
 
                 __result
             }
+
+
+
+            pub async fn count_for_filters(
+                &self,
+                filters: OrderFilters,
+            ) -> Result<i64, OrderQueryError> {
+                let __result: Result<i64, OrderQueryError> = async {
+                    let filter_customer_id = filters.customer_id;
+                    let filter_status = filters.status;
+                    let count: i64 = sqlx::query_scalar!(
+                        "SELECT COUNT(*) as \"count!\" FROM orders WHERE COALESCE(customer_id = $1, $1 IS NULL) AND COALESCE(status = $2, $2 IS NULL)",
+                        filter_customer_id as Option<CustomerId>,
+                        filter_status as Option<OrderStatus>,
+                    )
+                    .fetch_one(self.pool())
+                    .await?;
+                    Ok(count)
+                }.await;
+
+                __result
+            }
+
+            pub async fn count(&self) -> Result<i64, OrderQueryError> {
+                self.count_for_filters(Default::default()).await
+            }
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
@@ -872,6 +1026,7 @@ mod tests {
             id: &id,
             any_nested: false,
             post_hydrate_error: None,
+            count: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -939,6 +1094,7 @@ mod tests {
             id: &id,
             any_nested: false,
             post_hydrate_error: None,
+            count: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
