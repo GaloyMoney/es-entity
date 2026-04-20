@@ -1,3 +1,22 @@
+# [cala release v0.10.34](https://github.com/GaloyMoney/cala/releases/tag/0.10.34)
+
+
+
+### Bug Fixes
+
+- Replace cachix with magic-nix-cache-action (#120)
+
+### Miscellaneous Tasks
+
+- Make entity events iterator Clone
+- Bump async-graphql from 8.0.0-rc.3 to 8.0.0-rc.4 (#104)
+- Bump tokio from 1.50.0 to 1.51.1 (#121)
+- Bump uuid from 1.22.0 to 1.23.0 (#116)
+
+### Testing
+
+- Add test showing plain async fn mutations are visible to caller
+
 # [cala release v0.10.33](https://github.com/GaloyMoney/cala/releases/tag/0.10.33)
 
 
