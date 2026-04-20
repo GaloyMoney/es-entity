@@ -163,7 +163,7 @@ where
     }
 
     /// Returns an iterator over all persisted events
-    pub fn iter_persisted(&self) -> impl DoubleEndedIterator<Item = &PersistedEvent<T>> {
+    pub fn iter_persisted(&self) -> impl DoubleEndedIterator<Item = &PersistedEvent<T>> + Clone {
         self.persisted_events.iter()
     }
 
@@ -174,7 +174,7 @@ where
     }
 
     /// Returns an iterator over all events (both persisted and new) in chronological order
-    pub fn iter_all(&self) -> impl DoubleEndedIterator<Item = &T> {
+    pub fn iter_all(&self) -> impl DoubleEndedIterator<Item = &T> + Clone {
         self.persisted_events
             .iter()
             .map(|e| &e.event)
