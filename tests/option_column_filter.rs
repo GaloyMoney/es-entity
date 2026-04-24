@@ -182,3 +182,119 @@ async fn list_for_filters_fallback_some_excludes_null_rows() -> anyhow::Result<(
 
     Ok(())
 }
+
+/// Regression test: the individual list_for_workspace_id_by_id method uses
+/// `workspace_id IS NOT DISTINCT FROM $1` for Option columns. When called
+/// with None, it should match only NULL rows.
+#[tokio::test]
+async fn list_for_column_none_matches_only_null_rows() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let tasks = Tasks::new(pool);
+
+    let ws_id = WorkspaceId::new();
+
+    // Create task WITH workspace_id
+    let task_with_ws = tasks
+        .create(
+            NewTask::builder()
+                .id(TaskId::new())
+                .workspace_id(ws_id)
+                .status("any")
+                .build()
+                .unwrap(),
+        )
+        .await?;
+
+    // Create task WITHOUT workspace_id (NULL)
+    let task_null_ws = tasks
+        .create(
+            NewTask::builder()
+                .id(TaskId::new())
+                .status("any")
+                .build()
+                .unwrap(),
+        )
+        .await?;
+
+    // Call list_for_workspace_id_by_id directly with None
+    // Before fix: WHERE workspace_id = NULL → no matches (NULL = NULL is NULL/FALSE)
+    // After fix: WHERE workspace_id IS NOT DISTINCT FROM NULL → matches NULL rows
+    let result = tasks
+        .list_for_workspace_id_by_id(
+            None::<WorkspaceId>,
+            PaginatedQueryArgs {
+                first: 100,
+                after: None,
+            },
+            ListDirection::Ascending,
+        )
+        .await?;
+
+    // Should include task_null_ws
+    assert!(
+        result.entities.iter().any(|t| t.id == task_null_ws.id),
+        "Task with NULL workspace_id should match a None filter"
+    );
+
+    // Should NOT include task_with_ws
+    assert!(
+        result.entities.iter().all(|t| t.id != task_with_ws.id),
+        "Task with non-NULL workspace_id should NOT match a None filter"
+    );
+
+    Ok(())
+}
+
+/// Test that list_for_workspace_id_by_id with Some(value) matches only
+/// rows with that specific value (not NULL rows).
+#[tokio::test]
+async fn list_for_column_some_excludes_null_rows() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let tasks = Tasks::new(pool);
+
+    let ws_id = WorkspaceId::new();
+
+    // Create task WITH workspace_id
+    let task_with_ws = tasks
+        .create(
+            NewTask::builder()
+                .id(TaskId::new())
+                .workspace_id(ws_id)
+                .status("any")
+                .build()
+                .unwrap(),
+        )
+        .await?;
+
+    // Create task WITHOUT workspace_id (NULL)
+    let task_null_ws = tasks
+        .create(
+            NewTask::builder()
+                .id(TaskId::new())
+                .status("any")
+                .build()
+                .unwrap(),
+        )
+        .await?;
+
+    // Call list_for_workspace_id_by_id directly with Some(ws_id)
+    let result = tasks
+        .list_for_workspace_id_by_id(
+            Some(ws_id),
+            PaginatedQueryArgs {
+                first: 100,
+                after: None,
+            },
+            ListDirection::Ascending,
+        )
+        .await?;
+
+    // Should include task_with_ws
+    assert_eq!(result.entities.len(), 1);
+    assert_eq!(result.entities[0].id, task_with_ws.id);
+
+    // Should NOT include task_null_ws
+    assert!(result.entities.iter().all(|t| t.id != task_null_ws.id));
+
+    Ok(())
+}

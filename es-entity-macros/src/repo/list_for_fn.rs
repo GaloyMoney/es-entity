@@ -94,11 +94,17 @@ impl ToTokens for ListForFn<'_> {
                 Span::call_site(),
             );
 
+            let filter_op = if self.for_column.is_optional() {
+                "IS NOT DISTINCT FROM"
+            } else {
+                "="
+            };
             let asc_query = format!(
-                r#"SELECT {} FROM {} WHERE (({} = $1) AND ({})){} ORDER BY {} LIMIT $2"#,
+                r#"SELECT {} FROM {} WHERE (({} {} $1) AND ({})){} ORDER BY {} LIMIT $2"#,
                 select_columns,
                 self.table_name,
                 for_column_name,
+                filter_op,
                 cursor.condition(1, true),
                 if delete == DeleteOption::No {
                     self.delete.not_deleted_condition()
@@ -108,10 +114,11 @@ impl ToTokens for ListForFn<'_> {
                 cursor.order_by(true)
             );
             let desc_query = format!(
-                r#"SELECT {} FROM {} WHERE (({} = $1) AND ({})){} ORDER BY {} LIMIT $2"#,
+                r#"SELECT {} FROM {} WHERE (({} {} $1) AND ({})){} ORDER BY {} LIMIT $2"#,
                 select_columns,
                 self.table_name,
                 for_column_name,
+                filter_op,
                 cursor.condition(1, false),
                 if delete == DeleteOption::No {
                     self.delete.not_deleted_condition()
