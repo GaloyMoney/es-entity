@@ -1,3 +1,20 @@
+# [cala release v0.10.35](https://github.com/GaloyMoney/cala/releases/tag/0.10.35)
+
+
+
+### Bug Fixes
+
+- Use IS NOT DISTINCT FROM for Option column filters (#127)
+
+### Features
+
+- Add cascading soft-delete for nested entities (#122)
+
+### Miscellaneous Tasks
+
+- Bump uuid from 1.23.0 to 1.23.1 (#124)
+- Bump tokio from 1.51.1 to 1.52.1 (#125)
+
 # [cala release v0.10.34](https://github.com/GaloyMoney/cala/releases/tag/0.10.34)
 
 
