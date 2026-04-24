@@ -28,6 +28,7 @@ impl ToTokens for Nested<'_> {
         let update_fn_name = self.field.update_nested_fn_name();
         let find_fn_name = self.field.find_nested_fn_name();
         let delete_fn_name = self.field.delete_nested_fn_name();
+        let find_include_deleted_fn_name = self.field.find_nested_include_deleted_fn_name();
 
         tokens.append_all(quote! {
             async fn #create_fn_name<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), <#nested_repo_ty as es_entity::EsRepo>::CreateError>
@@ -67,6 +68,18 @@ impl ToTokens for Nested<'_> {
             {
                 let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
                 <#nested_repo_ty>::populate_in_op::<_, _, __EsErr>(op, lookup).await?;
+                Ok(())
+            }
+
+            async fn #find_include_deleted_fn_name<OP, P, __EsErr>(op: &mut OP, entities: &mut [P]) -> Result<(), __EsErr>
+                where
+                    OP: es_entity::AtomicOperation,
+                    P: es_entity::Parent<<#nested_repo_ty as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
+                    #nested_repo_ty: es_entity::PopulateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
+                    __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
+            {
+                let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
+                <#nested_repo_ty>::populate_in_op_include_deleted::<_, _, __EsErr>(op, lookup).await?;
                 Ok(())
             }
 
@@ -150,6 +163,18 @@ mod tests {
             {
                 let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
                 <UserRepo>::populate_in_op::<_, _, __EsErr>(op, lookup).await?;
+                Ok(())
+            }
+
+            async fn find_nested_users_include_deleted_in_op<OP, P, __EsErr>(op: &mut OP, entities: &mut [P]) -> Result<(), __EsErr>
+                where
+                    OP: es_entity::AtomicOperation,
+                    P: es_entity::Parent<<UserRepo as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
+                    UserRepo: es_entity::PopulateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
+                    __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
+            {
+                let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
+                <UserRepo>::populate_in_op_include_deleted::<_, _, __EsErr>(op, lookup).await?;
                 Ok(())
             }
 

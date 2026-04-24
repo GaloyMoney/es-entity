@@ -49,6 +49,7 @@ pub struct EsRepo<'a> {
     list_by_fns: Vec<list_by_fn::ListByFn<'a>>,
     list_for_fns: Vec<list_for_fn::ListForFn<'a>>,
     nested_fns: Vec<syn::Ident>,
+    nested_include_deleted_fns: Vec<syn::Ident>,
     nested: Vec<nested::Nested<'a>>,
     populate_nested: Option<populate_nested::PopulateNested<'a>>,
     error_types: error_types::ErrorTypes<'a>,
@@ -86,6 +87,10 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             .columns
             .parent()
             .map(|c| populate_nested::PopulateNested::new(c, opts));
+        let nested_include_deleted_fns: Vec<_> = opts
+            .all_nested()
+            .map(|n| n.find_nested_include_deleted_fn_name())
+            .collect();
         let (nested_fns, nested): (Vec<_>, Vec<_>) = opts
             .all_nested()
             .map(|n| (n.find_nested_fn_name(), nested::Nested::new(n, opts)))
@@ -109,6 +114,7 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             list_by_fns,
             list_for_fns,
             nested_fns,
+            nested_include_deleted_fns,
             nested,
             populate_nested,
             error_types: error_types::ErrorTypes::new(opts),
@@ -168,6 +174,7 @@ impl ToTokens for EsRepo<'_> {
         let types_mod = self.opts.repo_types_mod();
 
         let nested_fns = &self.nested_fns;
+        let nested_include_deleted_fns = &self.nested_include_deleted_fns;
         let nested = &self.nested;
         let populate_nested = &self.populate_nested;
 
@@ -263,6 +270,18 @@ impl ToTokens for EsRepo<'_> {
                        __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
                {
                    #(Self::#nested_fns::<_, _, __EsErr>(op, entities).await?;)*
+                   Ok(())
+               }
+
+               #[inline(always)]
+               async fn load_all_nested_in_op_include_deleted<OP, __EsErr>(
+                   op: &mut OP, entities: &mut [#entity]
+               ) -> Result<(), __EsErr>
+                   where
+                       OP: es_entity::AtomicOperation,
+                       __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
+               {
+                   #(Self::#nested_include_deleted_fns::<_, _, __EsErr>(op, entities).await?;)*
                    Ok(())
                }
             }

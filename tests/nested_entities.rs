@@ -349,9 +349,10 @@ async fn find_parent_after_delete_excludes_deleted_children() -> anyhow::Result<
     let result = orders.maybe_find_by_id(order_id_1).await?;
     assert!(result.is_none());
 
-    // But with include_deleted, parent is found and has no active children
+    // With include_deleted, parent is found and deleted children are transitively included
     let deleted_order = orders.find_by_id_include_deleted(order_id_1).await?;
-    assert_eq!(deleted_order.n_items(), 0);
+    assert_eq!(deleted_order.n_items(), 1);
+    assert!(deleted_order.find_item_with_name("Laptop").is_some());
 
     Ok(())
 }

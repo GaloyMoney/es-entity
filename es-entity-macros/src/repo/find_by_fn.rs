@@ -111,6 +111,12 @@ impl ToTokens for FindByFn<'_> {
                     }
                 };
 
+                let fetch_optional_call = if delete == DeleteOption::Soft && self.any_nested {
+                    quote! { #es_query_call.fetch_optional_include_deleted(op).await? }
+                } else {
+                    quote! { #es_query_call.fetch_optional(op).await? }
+                };
+
                 let fetch_and_validate = if maybe.is_empty() {
                     let entity_name_str = entity.to_string();
                     let column_enum = &self.column_enum;
@@ -126,7 +132,7 @@ impl ToTokens for FindByFn<'_> {
                         quote! {}
                     };
                     quote! {
-                        let __entity = #es_query_call.fetch_optional(op).await?.ok_or_else(|| #error::NotFound {
+                        let __entity = #fetch_optional_call.ok_or_else(|| #error::NotFound {
                             entity: #entity_name_str,
                             column: Some(#column_enum::#column_variant),
                             value: {
@@ -148,7 +154,7 @@ impl ToTokens for FindByFn<'_> {
                         quote! {}
                     };
                     quote! {
-                        let __result = #es_query_call.fetch_optional(op).await?;
+                        let __result = #fetch_optional_call;
                         #post_hydrate_check
                         Ok(__result)
                     }
@@ -531,6 +537,36 @@ mod tests {
         let token_str = tokens.to_string();
         assert!(token_str.contains("find_by_id_include_deleted"));
         assert!(token_str.contains("maybe_find_by_id_include_deleted"));
+    }
+
+    #[test]
+    fn find_by_fn_with_soft_delete_nested_include_deleted() {
+        let column = Column::for_id(syn::parse_str("EntityId").unwrap());
+        let entity = Ident::new("Entity", Span::call_site());
+
+        let persist_fn = FindByFn {
+            prefix: None,
+            column: &column,
+            entity: &entity,
+            table_name: "entities",
+            column_enum: syn::Ident::new("EntityColumn", Span::call_site()),
+            find_error: syn::Ident::new("EntityFindError", Span::call_site()),
+            query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
+            delete: DeleteOption::Soft,
+            any_nested: true,
+            post_hydrate_error: None,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        persist_fn.to_tokens(&mut tokens);
+
+        let token_str = tokens.to_string();
+        // _include_deleted variants with nested should use fetch_optional_include_deleted
+        assert!(token_str.contains("fetch_optional_include_deleted"));
+        // Normal variants should use regular fetch_optional
+        assert!(token_str.contains("fetch_optional (op)"));
     }
 
     #[test]

@@ -182,4 +182,50 @@ where
         .await?;
         Ok((entities, more))
     }
+
+    /// Like [`fetch_optional`](EsQuery::fetch_optional) but transitively includes
+    /// soft-deleted nested entities.
+    pub async fn fetch_optional_include_deleted<OP>(
+        self,
+        op: &mut OP,
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::QueryError>
+    where
+        OP: AtomicOperation,
+    {
+        let Some(entity) = self
+            .fetch_optional_inner::<<Repo as EsRepo>::QueryError>(&mut *op)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let mut entities = [entity];
+        <Repo as EsRepo>::load_all_nested_in_op_include_deleted::<_, <Repo as EsRepo>::QueryError>(
+            op,
+            &mut entities,
+        )
+        .await?;
+        let [entity] = entities;
+        Ok(Some(entity))
+    }
+
+    /// Like [`fetch_n`](EsQuery::fetch_n) but transitively includes soft-deleted
+    /// nested entities.
+    pub async fn fetch_n_include_deleted<OP>(
+        self,
+        op: &mut OP,
+        first: usize,
+    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::QueryError>
+    where
+        OP: AtomicOperation,
+    {
+        let (mut entities, more) = self
+            .fetch_n_inner::<<Repo as EsRepo>::QueryError>(&mut *op, first)
+            .await?;
+        <Repo as EsRepo>::load_all_nested_in_op_include_deleted::<_, <Repo as EsRepo>::QueryError>(
+            op,
+            &mut entities,
+        )
+        .await?;
+        Ok((entities, more))
+    }
 }
