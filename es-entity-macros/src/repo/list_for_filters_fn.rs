@@ -47,7 +47,7 @@ impl<'a> FiltersStruct<'a> {
     fn where_clause_fragment(column: &Column, idx: u32) -> String {
         let col_name = column.name();
         let param = format!("${idx}");
-        format!("COALESCE({col_name} = {param}, {param} IS NULL)")
+        format!("{col_name} IS NOT DISTINCT FROM {param}")
     }
 
     fn filter_arg_tokens(column: &Column) -> TokenStream {
@@ -193,7 +193,7 @@ impl<'a> ListForFiltersFn<'a> {
             .collect();
 
         // Need a fallback when:
-        // - there are unpaired for_columns (they need COALESCE)
+        // - there are unpaired for_columns (they need IS NOT DISTINCT FROM)
         // - there are 2+ paired columns (multi-filter case)
         // - there are 2+ for_columns total (multi-filter case)
         let has_unpaired = paired_for_columns.len() < self.for_columns.len();
@@ -742,7 +742,7 @@ mod tests {
                         es_entity::ListDirection::Ascending => {
                             es_entity::es_query!(
                                 entity = Order,
-                                "SELECT id FROM orders WHERE COALESCE(customer_id = $1, $1 IS NULL) AND COALESCE(status = $2, $2 IS NULL) AND (COALESCE(id > $4, true)) ORDER BY id ASC LIMIT $3",
+                                "SELECT id FROM orders WHERE customer_id IS NOT DISTINCT FROM $1 AND status IS NOT DISTINCT FROM $2 AND (COALESCE(id > $4, true)) ORDER BY id ASC LIMIT $3",
                                 filter_customer_id as Option<CustomerId>,
                                 filter_status as Option<OrderStatus>,
                                 (first + 1) as i64,
@@ -754,7 +754,7 @@ mod tests {
                         es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
                                 entity = Order,
-                                "SELECT id FROM orders WHERE COALESCE(customer_id = $1, $1 IS NULL) AND COALESCE(status = $2, $2 IS NULL) AND (COALESCE(id < $4, true)) ORDER BY id DESC LIMIT $3",
+                                "SELECT id FROM orders WHERE customer_id IS NOT DISTINCT FROM $1 AND status IS NOT DISTINCT FROM $2 AND (COALESCE(id < $4, true)) ORDER BY id DESC LIMIT $3",
                                 filter_customer_id as Option<CustomerId>,
                                 filter_status as Option<OrderStatus>,
                                 (first + 1) as i64,
