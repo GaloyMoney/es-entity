@@ -115,6 +115,35 @@ pub trait PopulateNested<ID>: EsRepo {
         OP: AtomicOperation,
         P: Parent<<Self as EsRepo>::Entity>,
         E: From<sqlx::Error> + From<EntityHydrationError> + Send;
+
+    /// Like [`populate_in_op`](PopulateNested::populate_in_op) but includes soft-deleted children.
+    ///
+    /// Default implementation delegates to `populate_in_op` (correct for repos without soft-delete).
+    fn populate_in_op_include_deleted<OP, P, E>(
+        op: &mut OP,
+        lookup: std::collections::HashMap<ID, &mut P>,
+    ) -> impl Future<Output = Result<(), E>> + Send
+    where
+        OP: AtomicOperation,
+        P: Parent<<Self as EsRepo>::Entity>,
+        E: From<sqlx::Error> + From<EntityHydrationError> + Send,
+    {
+        Self::populate_in_op(op, lookup)
+    }
+}
+
+/// Trait for cascade soft-deleting child entities when a parent is deleted.
+///
+/// Generated automatically for nested repositories that have both a `parent` column
+/// and `delete = "soft"` configured.
+pub trait CascadeDeleteNested<ID>: EsRepo {
+    fn cascade_delete_in_op<OP, E>(
+        op: &mut OP,
+        parent_id: &ID,
+    ) -> impl Future<Output = Result<(), E>> + Send
+    where
+        OP: AtomicOperation,
+        E: From<sqlx::Error> + Send;
 }
 
 /// Trait that entities implement for every field marked `#[es_entity(nested)]`

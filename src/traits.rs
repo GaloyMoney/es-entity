@@ -294,6 +294,21 @@ pub trait EsRepo: Send {
     where
         OP: AtomicOperation,
         E: From<sqlx::Error> + From<EntityHydrationError> + Send;
+
+    /// Like [`load_all_nested_in_op`](EsRepo::load_all_nested_in_op) but includes soft-deleted
+    /// children.
+    ///
+    /// Default implementation delegates to `load_all_nested_in_op`.
+    fn load_all_nested_in_op_include_deleted<OP, E>(
+        op: &mut OP,
+        entities: &mut [Self::Entity],
+    ) -> impl Future<Output = Result<(), E>> + Send
+    where
+        OP: AtomicOperation,
+        E: From<sqlx::Error> + From<EntityHydrationError> + Send,
+    {
+        Self::load_all_nested_in_op(op, entities)
+    }
 }
 
 pub trait RetryableInto<T>: Into<T> + Copy + std::fmt::Debug {}
