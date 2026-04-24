@@ -44,24 +44,40 @@ impl<'a> FiltersStruct<'a> {
             .collect()
     }
 
-    fn where_clause_fragment(column: &Column, idx: u32) -> String {
+    fn where_clause_fragment(column: &Column, param_idx: &mut u32) -> String {
         let col_name = column.name();
-        let param = format!("${idx}");
-        format!("COALESCE({col_name} = {param}, {param} IS NULL)")
+        if column.is_optional() {
+            let apply_param = format!("${}", *param_idx);
+            *param_idx += 1;
+            let val_param = format!("${}", *param_idx);
+            *param_idx += 1;
+            format!("(NOT {apply_param} OR {col_name} IS NOT DISTINCT FROM {val_param})")
+        } else {
+            let param = format!("${}", *param_idx);
+            *param_idx += 1;
+            format!("COALESCE({col_name} = {param}, {param} IS NULL)")
+        }
     }
 
     fn filter_arg_tokens(column: &Column) -> TokenStream {
-        let name = syn::Ident::new(&format!("filter_{}", column.name()), Span::call_site());
+        let col_name = column.name();
+        let filter_name = syn::Ident::new(&format!("filter_{}", col_name), Span::call_site());
         let ty = column.ty();
-        if let syn::Type::Path(type_path) = ty
+        if column.is_optional() {
+            let apply_name = syn::Ident::new(&format!("apply_{}", col_name), Span::call_site());
+            quote! {
+                #apply_name as bool,
+                #filter_name as #ty,
+            }
+        } else if let syn::Type::Path(type_path) = ty
             && type_path.path.is_ident("String")
         {
             quote! {
-                #name as Option<String>,
+                #filter_name as Option<String>,
             }
         } else {
             quote! {
-                #name as Option<#ty>,
+                #filter_name as Option<#ty>,
             }
         }
     }
@@ -239,7 +255,11 @@ impl<'a> ListForFiltersFn<'a> {
         };
         let cursor_ident = cursor_struct.ident();
 
-        let n_filters = self.for_columns.len() as u32;
+        let n_filters: u32 = self
+            .for_columns
+            .iter()
+            .map(|c| if c.is_optional() { 2u32 } else { 1u32 })
+            .sum();
 
         let destructure_tokens = cursor_struct.destructure_tokens();
         let select_columns = cursor_struct.select_columns(None);
@@ -265,32 +285,34 @@ impl<'a> ListForFiltersFn<'a> {
         let filters_ident = self.filters_struct.ident();
 
         // Generate filter destructuring
-        let filter_field_names: Vec<_> = self
+        let destructure_filters: TokenStream = self
             .for_columns
             .iter()
             .map(|c| {
                 let col_name = c.name();
                 let filter_name =
                     syn::Ident::new(&format!("filter_{}", col_name), Span::call_site());
-                (col_name.clone(), filter_name)
-            })
-            .collect();
-
-        let destructure_filters: TokenStream = filter_field_names
-            .iter()
-            .map(|(col_name, filter_name)| {
-                quote! {
-                    let #filter_name = filters.#col_name;
+                if c.is_optional() {
+                    let apply_name =
+                        syn::Ident::new(&format!("apply_{}", col_name), Span::call_site());
+                    quote! {
+                        let #apply_name = filters.#col_name.is_some();
+                        let #filter_name = filters.#col_name.flatten();
+                    }
+                } else {
+                    quote! {
+                        let #filter_name = filters.#col_name;
+                    }
                 }
             })
             .collect();
 
         // Generate WHERE clause fragments
+        let mut param_idx = 1u32;
         let where_fragments: Vec<String> = self
             .for_columns
             .iter()
-            .enumerate()
-            .map(|(i, col)| FiltersStruct::where_clause_fragment(col, (i + 1) as u32))
+            .map(|col| FiltersStruct::where_clause_fragment(col, &mut param_idx))
             .collect();
 
         let filter_where = if where_fragments.is_empty() {
@@ -954,5 +976,89 @@ mod tests {
         assert!(!token_str.contains("list_for_status_by_id"));
         // Should still have unified fallback
         assert!(token_str.contains("list_for_filters_by_id"));
+    }
+
+    #[test]
+    fn list_for_filters_optional_column_uses_two_params() {
+        let entity = Ident::new("Task", Span::call_site());
+        let query_error = syn::Ident::new("TaskQueryError", Span::call_site());
+        let id = syn::Ident::new("TaskId", proc_macro2::Span::call_site());
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        let id_column = Column::for_id(syn::parse_str("TaskId").unwrap());
+        let id_ident = syn::Ident::new("id", proc_macro2::Span::call_site());
+        // Optional column: workspace_id is Option<WorkspaceId>
+        let workspace_id_column = Column::new_list_for(
+            syn::Ident::new("workspace_id", proc_macro2::Span::call_site()),
+            syn::parse_str("Option<WorkspaceId>").unwrap(),
+            vec![id_ident.clone()],
+        );
+        // Non-optional column: status is String
+        let status_column = Column::new_list_for(
+            syn::Ident::new("status", proc_macro2::Span::call_site()),
+            syn::parse_str("String").unwrap(),
+            vec![id_ident],
+        );
+
+        let for_columns = vec![&workspace_id_column, &status_column];
+        let by_columns = vec![&id_column];
+
+        let id_cursor = CursorStruct {
+            column: &id_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
+
+        let list_for_filters_fn = ListForFiltersFn {
+            filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
+            entity: &entity,
+            query_error,
+            for_columns,
+            by_columns,
+            cursor: &combo_cursor,
+            delete: DeleteOption::No,
+            cursor_mod: cursor_mod.clone(),
+            table_name: "tasks",
+            ignore_prefix: None,
+            id: &id,
+            any_nested: false,
+            post_hydrate_error: None,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        list_for_filters_fn.to_tokens(&mut tokens);
+
+        let token_str = tokens.to_string();
+
+        // Optional column workspace_id uses 2 params: $1 (apply bool), $2 (value)
+        // Non-optional column status uses 1 param: $3
+        // So cursor params start at $4+
+        assert!(
+            token_str.contains("NOT $1 OR workspace_id IS NOT DISTINCT FROM $2"),
+            "Expected two-param pattern for optional column, got:\n{}",
+            token_str,
+        );
+        assert!(
+            token_str.contains("COALESCE(status = $3, $3 IS NULL)"),
+            "Expected COALESCE pattern for non-optional column, got:\n{}",
+            token_str,
+        );
+
+        // Verify destructuring: apply_workspace_id = is_some(), filter = flatten()
+        assert!(
+            token_str.contains("apply_workspace_id"),
+            "Expected apply_workspace_id destructuring"
+        );
+
+        // LIMIT should be at $4 (3 filter params + 1)
+        assert!(
+            token_str.contains("LIMIT $4"),
+            "Expected LIMIT at $4 (2 optional + 1 non-optional = 3 filter params)"
+        );
     }
 }

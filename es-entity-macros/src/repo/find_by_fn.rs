@@ -82,10 +82,16 @@ impl ToTokens for FindByFn<'_> {
                     Span::call_site(),
                 );
 
+                let filter_op = if self.column.is_optional() {
+                    "IS NOT DISTINCT FROM"
+                } else {
+                    "="
+                };
                 let query = format!(
-                    r#"SELECT id FROM {} WHERE {} = $1{}"#,
+                    r#"SELECT id FROM {} WHERE {} {} $1{}"#,
                     self.table_name,
                     column_name,
+                    filter_op,
                     if delete == DeleteOption::No {
                         self.delete.not_deleted_condition()
                     } else {
