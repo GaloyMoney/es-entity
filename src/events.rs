@@ -15,7 +15,6 @@ pub type LastPersisted<'a, E> = std::slice::Iter<'a, PersistedEvent<E>>;
 pub struct GenericEvent<Id> {
     pub entity_id: Id,
     pub sequence: i32,
-    pub event_type: String,
     pub event: serde_json::Value,
     pub context: Option<crate::ContextData>,
     pub recorded_at: DateTime<Utc>,
@@ -262,7 +261,7 @@ where
             let context = EventPayloadCodecContext {
                 entity_id: &entity_id,
                 sequence: e.sequence as usize,
-                event_type: &e.event_type,
+                event_type: "",
             };
             let event = C::decode(context, e.event)?;
             cur.persisted_events.push(PersistedEvent {
@@ -327,7 +326,7 @@ where
             let context = EventPayloadCodecContext {
                 entity_id: &entity_id,
                 sequence: e.sequence as usize,
-                event_type: &e.event_type,
+                event_type: "",
             };
             let event = C::decode(context, e.event)?;
             cur.persisted_events.push(PersistedEvent {
@@ -494,7 +493,6 @@ mod tests {
         let generic_events = vec![GenericEvent {
             entity_id: Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap(),
             sequence: 1,
-            event_type: "created".to_owned(),
             event: serde_json::to_value(DummyEntityEvent::Created("dummy-name".to_owned()))
                 .expect("Could not serialize"),
             context: None,
@@ -512,7 +510,6 @@ mod tests {
             GenericEvent {
                 entity_id: Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap(),
                 sequence: 1,
-                event_type: "created".to_owned(),
                 event: serde_json::to_value(DummyEntityEvent::Created("dummy-name".to_owned()))
                     .expect("Could not serialize"),
                 context: None,
@@ -521,7 +518,6 @@ mod tests {
             GenericEvent {
                 entity_id: Uuid::parse_str("00000000-0000-0000-0000-000000000003").unwrap(),
                 sequence: 1,
-                event_type: "created".to_owned(),
                 event: serde_json::to_value(DummyEntityEvent::Created("other-name".to_owned()))
                     .expect("Could not serialize"),
                 context: None,
