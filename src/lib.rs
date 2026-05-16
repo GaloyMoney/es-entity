@@ -25,6 +25,7 @@
 
 pub mod clock;
 pub mod context;
+pub mod crypto_shred;
 pub mod db;
 pub mod error;
 pub mod events;
@@ -52,6 +53,8 @@ pub mod prelude {
 
 #[doc(inline)]
 pub use context::*;
+#[doc(inline)]
+pub use crypto_shred::*;
 #[doc(inline)]
 pub use error::*;
 pub use es_entity_macros::EsEntity;
