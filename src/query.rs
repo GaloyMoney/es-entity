@@ -73,7 +73,10 @@ where
             return Ok(None);
         }
 
-        Ok(EntityEvents::load_first(rows.into_iter())?)
+        Ok(EntityEvents::load_first_with_codec::<
+            <Repo as EsRepo>::Entity,
+            <Repo as EsRepo>::EventPayloadCodec,
+        >(rows.into_iter())?)
     }
 
     async fn fetch_n_inner<E: From<sqlx::Error> + From<EntityHydrationError>>(
@@ -83,7 +86,10 @@ where
     ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), E> {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
-        Ok(EntityEvents::load_n(rows.into_iter(), first)?)
+        Ok(EntityEvents::load_n_with_codec::<
+            <Repo as EsRepo>::Entity,
+            <Repo as EsRepo>::EventPayloadCodec,
+        >(rows.into_iter(), first)?)
     }
 }
 

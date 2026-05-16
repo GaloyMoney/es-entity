@@ -2,7 +2,12 @@
 
 use serde::{Serialize, de::DeserializeOwned};
 
-use super::{db, error::EntityHydrationError, events::EntityEvents, operation::AtomicOperation};
+use super::{
+    db,
+    error::EntityHydrationError,
+    events::{EntityEvents, EventPayloadCodec as EventPayloadCodecTrait},
+    operation::AtomicOperation,
+};
 
 /// Required trait for all event enums to be compatible and recognised by es-entity.
 ///
@@ -280,6 +285,7 @@ pub trait EsEntity: TryFromEvents<Self::Event> + Send {
 /// ```
 pub trait EsRepo: Send {
     type Entity: EsEntity;
+    type EventPayloadCodec: EventPayloadCodecTrait<<Self::Entity as EsEntity>::Event>;
     type CreateError;
     type ModifyError;
     type FindError: From<sqlx::Error> + From<EntityHydrationError> + Send;

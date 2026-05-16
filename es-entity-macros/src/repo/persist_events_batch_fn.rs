@@ -91,7 +91,7 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
                     let types = events.new_event_types();
-                    let serialized = events.serialize_new_events();
+                    let serialized = events.serialize_new_events_with_codec::<<Self as es_entity::EsRepo>::EventPayloadCodec>();
                     #ctx_extend
 
                     let n_events = serialized.len();
@@ -168,7 +168,7 @@ mod tests {
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
                     let types = events.new_event_types();
-                    let serialized = events.serialize_new_events();
+                    let serialized = events.serialize_new_events_with_codec::<<Self as es_entity::EsRepo>::EventPayloadCodec>();
                     let contexts = events.serialize_new_event_contexts();
                     if let Some(contexts) = contexts {
                         all_contexts.extend(contexts);
@@ -248,7 +248,7 @@ mod tests {
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
                     let types = events.new_event_types();
-                    let serialized = events.serialize_new_events();
+                    let serialized = events.serialize_new_events_with_codec::<<Self as es_entity::EsRepo>::EventPayloadCodec>();
 
                     let n_events = serialized.len();
                     all_serialized.extend(serialized);

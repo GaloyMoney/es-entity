@@ -15,9 +15,52 @@ pub type LastPersisted<'a, E> = std::slice::Iter<'a, PersistedEvent<E>>;
 pub struct GenericEvent<Id> {
     pub entity_id: Id,
     pub sequence: i32,
+    pub event_type: String,
     pub event: serde_json::Value,
     pub context: Option<crate::ContextData>,
     pub recorded_at: DateTime<Utc>,
+}
+
+/// Metadata available to event payload codecs.
+pub struct EventPayloadCodecContext<'a, Id> {
+    pub entity_id: &'a Id,
+    pub sequence: usize,
+    pub event_type: &'a str,
+}
+
+/// Encodes and decodes event payloads before they are written to / read from JSONB.
+///
+/// Repositories use [`JsonEventPayloadCodec`] by default. A repository can opt into a
+/// custom codec with `#[es_repo(event_payload_codec = "...")]`.
+pub trait EventPayloadCodec<E: EsEvent> {
+    fn encode(
+        context: EventPayloadCodecContext<'_, E::EntityId>,
+        event: &E,
+    ) -> Result<serde_json::Value, serde_json::Error>;
+
+    fn decode(
+        context: EventPayloadCodecContext<'_, E::EntityId>,
+        payload: serde_json::Value,
+    ) -> Result<E, serde_json::Error>;
+}
+
+/// Default codec that preserves the existing plaintext JSONB event payload behavior.
+pub struct JsonEventPayloadCodec;
+
+impl<E: EsEvent> EventPayloadCodec<E> for JsonEventPayloadCodec {
+    fn encode(
+        _context: EventPayloadCodecContext<'_, E::EntityId>,
+        event: &E,
+    ) -> Result<serde_json::Value, serde_json::Error> {
+        serde_json::to_value(event)
+    }
+
+    fn decode(
+        _context: EventPayloadCodecContext<'_, E::EntityId>,
+        payload: serde_json::Value,
+    ) -> Result<E, serde_json::Error> {
+        serde_json::from_value(payload)
+    }
 }
 
 /// Strongly-typed event wrapper with metadata for successfully stored events.
@@ -187,6 +230,19 @@ where
     pub fn load_first<E: EsEntity<Event = T>>(
         events: impl IntoIterator<Item = GenericEvent<<T as EsEvent>::EntityId>>,
     ) -> Result<Option<E>, EntityHydrationError> {
+        Self::load_first_with_codec::<E, JsonEventPayloadCodec>(events)
+    }
+
+    /// Loads and reconstructs the first entity from a stream of GenericEvents using a custom payload codec.
+    ///
+    /// Returns `Ok(None)` if no events are present, `Ok(Some(entity))` on success.
+    pub fn load_first_with_codec<E, C>(
+        events: impl IntoIterator<Item = GenericEvent<<T as EsEvent>::EntityId>>,
+    ) -> Result<Option<E>, EntityHydrationError>
+    where
+        E: EsEntity<Event = T>,
+        C: EventPayloadCodec<T>,
+    {
         let mut current_id = None;
         let mut current = None;
         for e in events {
@@ -202,11 +258,18 @@ where
                 break;
             }
             let cur = current.as_mut().expect("Could not get current");
+            let entity_id = e.entity_id;
+            let context = EventPayloadCodecContext {
+                entity_id: &entity_id,
+                sequence: e.sequence as usize,
+                event_type: &e.event_type,
+            };
+            let event = C::decode(context, e.event)?;
             cur.persisted_events.push(PersistedEvent {
-                entity_id: e.entity_id,
+                entity_id,
                 recorded_at: e.recorded_at,
                 sequence: e.sequence as usize,
-                event: serde_json::from_value(e.event)?,
+                event,
                 context: e.context,
             });
         }
@@ -225,6 +288,21 @@ where
         events: impl IntoIterator<Item = GenericEvent<<T as EsEvent>::EntityId>>,
         n: usize,
     ) -> Result<(Vec<E>, bool), EntityHydrationError> {
+        Self::load_n_with_codec::<E, JsonEventPayloadCodec>(events, n)
+    }
+
+    /// Loads and reconstructs up to `n` entities from a stream of GenericEvents using a custom payload codec.
+    /// Assumes the events are grouped by `id` and ordered by `sequence` per `id`.
+    ///
+    /// Returns both the entities and a flag indicating whether more entities were available in the stream.
+    pub fn load_n_with_codec<E, C>(
+        events: impl IntoIterator<Item = GenericEvent<<T as EsEvent>::EntityId>>,
+        n: usize,
+    ) -> Result<(Vec<E>, bool), EntityHydrationError>
+    where
+        E: EsEntity<Event = T>,
+        C: EventPayloadCodec<T>,
+    {
         let mut ret: Vec<E> = Vec::new();
         let mut current_id = None;
         let mut current = None;
@@ -245,11 +323,18 @@ where
                 });
             }
             let cur = current.as_mut().expect("Could not get current");
+            let entity_id = e.entity_id;
+            let context = EventPayloadCodecContext {
+                entity_id: &entity_id,
+                sequence: e.sequence as usize,
+                event_type: &e.event_type,
+            };
+            let event = C::decode(context, e.event)?;
             cur.persisted_events.push(PersistedEvent {
-                entity_id: e.entity_id,
+                entity_id,
                 recorded_at: e.recorded_at,
                 sequence: e.sequence as usize,
-                event: serde_json::from_value(e.event)?,
+                event,
                 context: e.context,
             });
         }
@@ -292,9 +377,26 @@ where
 
     #[doc(hidden)]
     pub fn serialize_new_events(&self) -> Vec<serde_json::Value> {
+        self.serialize_new_events_with_codec::<JsonEventPayloadCodec>()
+    }
+
+    #[doc(hidden)]
+    pub fn serialize_new_events_with_codec<C>(&self) -> Vec<serde_json::Value>
+    where
+        C: EventPayloadCodec<T>,
+    {
+        let next_sequence = self.persisted_events.len() + 1;
         self.new_events
             .iter()
-            .map(|event| serde_json::to_value(&event.event).expect("Failed to serialize event"))
+            .enumerate()
+            .map(|(index, event)| {
+                let context = EventPayloadCodecContext {
+                    entity_id: &self.entity_id,
+                    sequence: next_sequence + index,
+                    event_type: event.event.event_type(),
+                };
+                C::encode(context, &event.event).expect("Failed to serialize event")
+            })
             .collect()
     }
 
@@ -392,6 +494,7 @@ mod tests {
         let generic_events = vec![GenericEvent {
             entity_id: Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap(),
             sequence: 1,
+            event_type: "created".to_owned(),
             event: serde_json::to_value(DummyEntityEvent::Created("dummy-name".to_owned()))
                 .expect("Could not serialize"),
             context: None,
@@ -409,6 +512,7 @@ mod tests {
             GenericEvent {
                 entity_id: Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap(),
                 sequence: 1,
+                event_type: "created".to_owned(),
                 event: serde_json::to_value(DummyEntityEvent::Created("dummy-name".to_owned()))
                     .expect("Could not serialize"),
                 context: None,
@@ -417,6 +521,7 @@ mod tests {
             GenericEvent {
                 entity_id: Uuid::parse_str("00000000-0000-0000-0000-000000000003").unwrap(),
                 sequence: 1,
+                event_type: "created".to_owned(),
                 event: serde_json::to_value(DummyEntityEvent::Created("other-name".to_owned()))
                     .expect("Could not serialize"),
                 context: None,

@@ -38,6 +38,29 @@ impl Users {
     }
 }
 
+mod encrypted_repo {
+    use es_entity::*;
+    use sqlx::PgPool;
+
+    use crate::entities::user::{User, UserEvent, UserId};
+
+    #[derive(EsRepo, Debug)]
+    #[es_repo(
+        entity = "User",
+        columns(name(ty = "String")),
+        event_payload_codec = "crate::entities::user::ToyEncryptedUserEventPayloadCodec"
+    )]
+    pub struct EncryptedUsers {
+        pool: PgPool,
+    }
+
+    impl EncryptedUsers {
+        pub fn new(pool: PgPool) -> Self {
+            Self { pool }
+        }
+    }
+}
+
 #[tokio::test]
 async fn create() -> anyhow::Result<()> {
     let mut ctx = es_entity::EventContext::current();
@@ -62,6 +85,49 @@ async fn create() -> anyhow::Result<()> {
     let loaded_user = users.find_by_id(user.id).await?;
 
     assert_eq!(user.name, loaded_user.name);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn event_payload_codec_can_encode_stored_events() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = encrypted_repo::EncryptedUsers::new(pool.clone());
+
+    let id = UserId::new();
+    let initial_name = format!("CodecInitial_{id}");
+    let updated_name = format!("CodecUpdated_{id}");
+    let new_user = NewUser::builder()
+        .id(id)
+        .name(&initial_name)
+        .build()
+        .unwrap();
+
+    let mut user = users.create(new_user).await?;
+    if user.update_name(&updated_name).did_execute() {
+        users.update(&mut user).await?;
+    }
+
+    let stored_events: Vec<serde_json::Value> =
+        sqlx::query_scalar("SELECT event FROM user_events WHERE id = $1 ORDER BY sequence")
+            .bind(id)
+            .fetch_all(&pool)
+            .await?;
+
+    assert_eq!(stored_events.len(), 2);
+    for stored_event in stored_events {
+        assert_eq!(stored_event["codec"], "toy-xor-hex-v1");
+        assert!(stored_event.get("ciphertext").is_some());
+        assert!(stored_event.get("type").is_none());
+        assert!(stored_event.get("name").is_none());
+
+        let raw_json = stored_event.to_string();
+        assert!(!raw_json.contains(&initial_name));
+        assert!(!raw_json.contains(&updated_name));
+    }
+
+    let loaded_user = users.find_by_id(id).await?;
+    assert_eq!(loaded_user.name, updated_name);
 
     Ok(())
 }

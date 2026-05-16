@@ -39,7 +39,7 @@ impl ToTokens for PopulateNested<'_> {
 
         let not_deleted_condition = self.delete_option.not_deleted_condition();
         let query = format!(
-            "WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1)){}) SELECT i.id AS \"entity_id: {}\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY e.id, e.sequence",
+            "WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1)){}) SELECT i.id AS \"entity_id: {}\", e.sequence, e.event_type, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY e.id, e.sequence",
             self.table_name,
             self.column.name(),
             not_deleted_condition,
@@ -51,7 +51,7 @@ impl ToTokens for PopulateNested<'_> {
 
         let include_deleted_override = if self.delete_option.is_soft() {
             let include_deleted_query = format!(
-                "WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1))) SELECT i.id AS \"entity_id: {}\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY e.id, e.sequence",
+                "WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1))) SELECT i.id AS \"entity_id: {}\", e.sequence, e.event_type, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at FROM entities i JOIN {} e ON i.id = e.id ORDER BY e.id, e.sequence",
                 self.table_name,
                 self.column.name(),
                 self.id,
@@ -77,7 +77,7 @@ impl ToTokens for PopulateNested<'_> {
                         ).fetch_all(op.as_executor()).await?
                     };
                     let n = rows.len();
-                    let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(rows.into_iter(), n)?;
+                    let (mut res, _) = es_entity::EntityEvents::load_n_with_codec::<<Self as es_entity::EsRepo>::Entity, <Self as es_entity::EsRepo>::EventPayloadCodec>(rows.into_iter(), n)?;
                     Self::load_all_nested_in_op_include_deleted::<_, __EsErr>(op, &mut res).await?;
                     for entity in res.into_iter() {
                         let parent = lookup.get_mut(&entity.#accessor).expect("parent not present");
@@ -111,7 +111,7 @@ impl ToTokens for PopulateNested<'_> {
                         ).fetch_all(op.as_executor()).await?
                     };
                     let n = rows.len();
-                    let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(rows.into_iter(), n)?;
+                    let (mut res, _) = es_entity::EntityEvents::load_n_with_codec::<<Self as es_entity::EsRepo>::Entity, <Self as es_entity::EsRepo>::EventPayloadCodec>(rows.into_iter(), n)?;
                     Self::load_all_nested_in_op::<_, __EsErr>(op, &mut res).await?;
                     for entity in res.into_iter() {
                         let parent = lookup.get_mut(&entity.#accessor).expect("parent not present");

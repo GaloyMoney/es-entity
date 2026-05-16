@@ -78,7 +78,7 @@ impl ToTokens for PersistEventsFn<'_> {
                 let id = events.id();
                 let offset = events.len_persisted();
                 let events_types = events.new_event_types();
-                let serialized_events = events.serialize_new_events();
+                let serialized_events = events.serialize_new_events_with_codec::<<Self as es_entity::EsRepo>::EventPayloadCodec>();
                 #ctx_var
                 let now = op.maybe_now();
 
@@ -144,7 +144,7 @@ mod tests {
                 let id = events.id();
                 let offset = events.len_persisted();
                 let events_types = events.new_event_types();
-                let serialized_events = events.serialize_new_events();
+                let serialized_events = events.serialize_new_events_with_codec::<<Self as es_entity::EsRepo>::EventPayloadCodec>();
                 let contexts = events.serialize_new_event_contexts();
                 let now = op.maybe_now();
 
@@ -207,7 +207,7 @@ mod tests {
                 let id = events.id();
                 let offset = events.len_persisted();
                 let events_types = events.new_event_types();
-                let serialized_events = events.serialize_new_events();
+                let serialized_events = events.serialize_new_events_with_codec::<<Self as es_entity::EsRepo>::EventPayloadCodec>();
                 let now = op.maybe_now();
 
                 let rows = sqlx::query!(

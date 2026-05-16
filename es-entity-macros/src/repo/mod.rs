@@ -191,6 +191,7 @@ impl ToTokens for EsRepo<'_> {
         let modify_error = self.opts.modify_error();
         let find_error = self.opts.find_error();
         let query_error = self.opts.query_error();
+        let event_payload_codec = self.opts.event_payload_codec();
         let error_types = self.error_types.generate();
         let map_constraint_fn = self.error_types.generate_map_constraint_fn();
 
@@ -255,6 +256,7 @@ impl ToTokens for EsRepo<'_> {
 
             impl #impl_generics es_entity::EsRepo for #repo #ty_generics #where_clause {
                 type Entity = #entity;
+                type EventPayloadCodec = #event_payload_codec;
                 type CreateError = #create_error;
                 type ModifyError = #modify_error;
                 type FindError = #find_error;

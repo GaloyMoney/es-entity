@@ -10,6 +10,20 @@ pub use columns::*;
 pub use delete::*;
 
 #[derive(Debug, Clone)]
+pub struct EventPayloadCodecConfig {
+    pub path: syn::Path,
+}
+
+impl FromMeta for EventPayloadCodecConfig {
+    fn from_string(value: &str) -> darling::Result<Self> {
+        Ok(Self {
+            path: syn::parse_str(value)
+                .map_err(|e| darling::Error::custom(format!("invalid codec path: {e}")))?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct PostPersistHookConfig {
     pub method: syn::Ident,
     pub error: syn::Type,
@@ -237,6 +251,8 @@ pub struct RepositoryOptions {
 
     #[darling(default)]
     persist_event_context: Option<bool>,
+    #[darling(default)]
+    event_payload_codec: Option<EventPayloadCodecConfig>,
 }
 
 impl RepositoryOptions {
@@ -306,6 +322,15 @@ impl RepositoryOptions {
         #[cfg(not(feature = "event-context-enabled"))]
         {
             self.persist_event_context.unwrap_or(false)
+        }
+    }
+
+    pub fn event_payload_codec(&self) -> proc_macro2::TokenStream {
+        if let Some(codec) = &self.event_payload_codec {
+            let path = &codec.path;
+            quote! { #path }
+        } else {
+            quote! { es_entity::JsonEventPayloadCodec }
         }
     }
 
