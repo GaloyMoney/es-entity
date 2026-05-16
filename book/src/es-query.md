@@ -65,7 +65,7 @@ impl Users {
               FROM users
               WHERE name = $1
             )
-            SELECT e.id as entity_id, e.sequence, e.event, e.context as "context: ContextData", e.recorded_at
+            SELECT e.id as entity_id, e.sequence, e.event_type, e.event, e.context as "context: ContextData", e.recorded_at
             FROM user_events e
             JOIN target_entity te ON e.id = te.id
             ORDER BY e.sequence;
