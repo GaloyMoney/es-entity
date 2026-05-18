@@ -1,3 +1,12 @@
+# [cala release v0.10.36](https://github.com/GaloyMoney/cala/releases/tag/0.10.36)
+
+
+
+### Miscellaneous Tasks
+
+- Bump the all-dependencies group with 5 updates (#136)
+- Update dependabot policy (#135)
+
 # [cala release v0.10.35](https://github.com/GaloyMoney/cala/releases/tag/0.10.35)
 
 
