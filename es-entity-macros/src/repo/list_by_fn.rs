@@ -45,7 +45,7 @@ impl CursorStruct<'_> {
         let nulls = if ascending { "FIRST" } else { "LAST" };
         if self.column.is_id() {
             format!("id {dir}")
-        } else if self.column.is_optional() {
+        } else if self.column.is_nullable_column() {
             format!("{0} {dir} NULLS {nulls}, id {dir}", self.column.name())
         } else {
             format!("{} {dir}, id {dir}", self.column.name())
@@ -59,7 +59,7 @@ impl CursorStruct<'_> {
 
         if self.column.is_id() {
             format!("COALESCE(id {comp} ${id_offset}, true)")
-        } else if self.column.is_optional() {
+        } else if self.column.is_nullable_column() {
             // The OR-clause's COALESCE fires when `col {comp} ${cursor}` is NULL,
             // which happens whenever either side of the comparison is NULL. The
             // fallback decides whether the row is "after" the cursor in
@@ -865,6 +865,114 @@ mod tests {
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                                 value as Option<rust_decimal::Decimal>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                    };
+
+                    let end_cursor = entities.last().map(cursor_mod::EntityByValueCursor::from);
+
+                    Ok(es_entity::PaginatedQueryRet {
+                        entities,
+                        has_next_page,
+                        end_cursor,
+                    })
+                }.await;
+
+                __result
+            }
+        };
+
+        assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn list_by_fn_nullable_attribute_emits_nullable_aware_sql_for_non_option_type() {
+        // The `nullable` attribute lets non-Option<T> Rust types (e.g. domain
+        // enums whose custom sqlx::Encode writes NULL for one variant) opt
+        // into the nullable-aware cursor SQL form. The Rust type is NOT
+        // syntactically Option<T>, but the emitted SQL should match what an
+        // Option<T> column would get: `NULLS FIRST/LAST` ordering, the
+        // `IS NOT DISTINCT FROM` cursor form, and the direction-aware NULL
+        // fallback.
+        //
+        // The query parameter cast (else branch of query_arg_tokens) still
+        // wraps the Rust type in Option<...> because is_optional() remains
+        // false — the type itself drives binding, while the new
+        // is_nullable_column() drives SQL shape.
+        let id_type = Ident::new("EntityId", Span::call_site());
+        let entity = Ident::new("Entity", Span::call_site());
+        let query_error = syn::Ident::new("EntityQueryError", Span::call_site());
+        let column = Column::new_nullable(
+            syn::Ident::new("value", proc_macro2::Span::call_site()),
+            syn::parse_str("DomainEnum").unwrap(),
+        );
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        let persist_fn = ListByFn {
+            ignore_prefix: None,
+            column: &column,
+            id: &id_type,
+            entity: &entity,
+            table_name: "entities",
+            query_error,
+            delete: DeleteOption::No,
+            cursor_mod,
+            any_nested: false,
+            post_hydrate_error: None,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        persist_fn.to_tokens(&mut tokens);
+
+        let expected = quote! {
+            pub async fn list_by_value(
+                &self,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByValueCursor>,
+                direction: es_entity::ListDirection,
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByValueCursor>, EntityQueryError> {
+                self.list_by_value_in_op(self.pool(), cursor, direction).await
+            }
+
+            pub async fn list_by_value_in_op<'a, OP>(
+                &self,
+                op: OP,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByValueCursor>,
+                direction: es_entity::ListDirection,
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByValueCursor>, EntityQueryError>
+                where
+                    OP: es_entity::IntoOneTimeExecutor<'a>
+            {
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByValueCursor>, EntityQueryError> = async {
+                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
+                    let (id, value) = if let Some(after) = after {
+                        (Some(after.id), Some(after.value))
+                    } else {
+                        (None, None)
+                    };
+
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id > $2, true) OR COALESCE(value > $3, value IS NOT NULL)) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                                value as Option<DomainEnum>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        es_entity::ListDirection::Descending => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id < $2, true) OR COALESCE(value < $3, $2 IS NULL OR (value IS NULL AND $3 IS NOT NULL))) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                                value as Option<DomainEnum>,
                             )
                                 .fetch_n(op, first)
                                 .await?

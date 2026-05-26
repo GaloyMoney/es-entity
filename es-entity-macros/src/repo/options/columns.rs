@@ -379,6 +379,17 @@ impl Column {
         }
     }
 
+    #[cfg(test)]
+    pub fn new_nullable(name: syn::Ident, ty: syn::Type) -> Self {
+        Column {
+            name,
+            opts: ColumnOpts {
+                nullable: Some(true),
+                ..ColumnOpts::new(ty)
+            },
+        }
+    }
+
     pub fn for_id(ty: syn::Type) -> Self {
         Column {
             name: syn::Ident::new("id", proc_macro2::Span::call_site()),
@@ -387,6 +398,7 @@ impl Column {
                 is_id: true,
                 list_by: Some(true),
                 find_by: Some(true),
+                nullable: None,
                 list_for_opts: None,
                 parent_opts: None,
                 create_opts: Some(CreateOpts {
@@ -412,6 +424,7 @@ impl Column {
                 is_id: false,
                 list_by: Some(true),
                 find_by: Some(false),
+                nullable: None,
                 list_for_opts: None,
                 parent_opts: None,
                 create_opts: Some(CreateOpts {
@@ -443,6 +456,12 @@ impl Column {
         self.opts.is_id
     }
 
+    /// True iff the Rust type is syntactically `Option<T>`.
+    ///
+    /// Drives how the macro casts query parameters and destructures the
+    /// cursor — both of which depend on the Rust type's shape (Option vs.
+    /// bare). For the SQL question "is this column nullable?" use
+    /// [`Self::is_nullable_column`] instead.
     pub fn is_optional(&self) -> bool {
         if let syn::Type::Path(type_path) = self.ty()
             && type_path.path.segments.len() == 1
@@ -453,6 +472,20 @@ impl Column {
             }
         }
         false
+    }
+
+    /// True iff the underlying SQL column can hold NULL.
+    ///
+    /// Returns true when the Rust type is `Option<T>` *or* the column was
+    /// explicitly annotated `nullable` in the repo declaration. The latter
+    /// covers types like a domain enum whose custom `sqlx::Encode`
+    /// implementation maps one variant to SQL NULL — the macro otherwise
+    /// can't see that nullability via syntactic inspection.
+    ///
+    /// Drives `ORDER BY ... NULLS FIRST/LAST` emission and the nullable-aware
+    /// cursor `WHERE` clause in [`Self::condition`].
+    pub fn is_nullable_column(&self) -> bool {
+        self.is_optional() || self.opts.nullable()
     }
 
     pub fn name(&self) -> &syn::Ident {
@@ -551,6 +584,16 @@ struct ColumnOpts {
     find_by: Option<bool>,
     #[darling(default)]
     list_by: Option<bool>,
+    /// Opt-in flag for columns whose Rust type is not syntactically `Option<T>`
+    /// but whose underlying SQL column is nullable. When set, the macro emits
+    /// the same nullable-aware cursor SQL (`IS NOT DISTINCT FROM`, `NULLS
+    /// FIRST/LAST` ordering, direction-aware NULL fallback) as it would for an
+    /// `Option<T>` column. The Rust type itself must implement `sqlx::Encode`
+    /// in a way that maps to a nullable database column — typically by
+    /// encoding one variant as `IsNull::Yes` or by exposing a `Type::type_info`
+    /// matching `Option<Inner>`.
+    #[darling(default)]
+    nullable: Option<bool>,
     #[darling(default, rename = "list_for")]
     list_for_opts: Option<ListForOpts>,
     #[darling(default, rename = "parent")]
@@ -570,6 +613,7 @@ impl ColumnOpts {
             is_id: false,
             find_by: None,
             list_by: None,
+            nullable: None,
             list_for_opts: None,
             parent_opts: None,
             create_opts: None,
@@ -584,6 +628,10 @@ impl ColumnOpts {
 
     fn list_by(&self) -> bool {
         self.list_by.unwrap_or(false)
+    }
+
+    fn nullable(&self) -> bool {
+        self.nullable.unwrap_or(false)
     }
 
     fn list_for(&self) -> bool {
