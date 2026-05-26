@@ -60,8 +60,45 @@ impl CursorStruct<'_> {
         if self.column.is_id() {
             format!("COALESCE(id {comp} ${id_offset}, true)")
         } else if self.column.is_optional() {
+            // The OR-clause's COALESCE fires when `col {comp} ${cursor}` is NULL,
+            // which happens whenever either side of the comparison is NULL. The
+            // fallback decides whether the row is "after" the cursor in
+            // (col, id) ordering — and the correct answer depends on direction
+            // (NULLS FIRST for ASC, NULLS LAST for DESC) and on whether we are
+            // on page 1 vs. paginating from a cursor sitting on a NULL row.
+            //
+            // - ASC NULLS FIRST: a non-NULL row with a NULL cursor is "after"
+            //   (non-NULL sorts after NULL), whether the NULL cursor represents
+            //   page 1 (no cursor) or a cursor sitting on a NULL row. Fallback
+            //   `col IS NOT NULL` covers both: TRUE for non-NULL rows, FALSE
+            //   for NULL rows (NULL rows with a non-NULL cursor were on page 1
+            //   already).
+            //
+            // - DESC NULLS LAST: asymmetric. NULL rows sort *last*, so:
+            //     • Page 1 (`$id_offset` IS NULL, no cursor): include all rows
+            //       — equivalent to "the sentinel before everything".
+            //     • Cursor on NULL row (`$id_offset` set, `${column_offset}`
+            //       NULL): non-NULL rows already shown → exclude.
+            //     • Cursor on non-NULL row, row NULL: NULL sorts after → include.
+            //   The DESC fallback `${id_offset} IS NULL OR
+            //   (col IS NULL AND ${column_offset} IS NOT NULL)` captures all
+            //   three: `${id_offset} IS NULL` short-circuits to TRUE on page 1,
+            //   while the second disjunct catches the "include NULL rows after
+            //   non-NULL cursor" case without re-including already-shown rows.
+            //
+            // The cursor=NULL + row=NULL case is handled by the AND-clause's
+            // `IS NOT DISTINCT FROM` + the id comparison, so the OR-clause's
+            // fallback must NOT fire then. Verified by truth-table on PR.
+            let null_handling = if ascending {
+                format!("{0} IS NOT NULL", self.column.name())
+            } else {
+                format!(
+                    "${id_offset} IS NULL OR ({0} IS NULL AND ${column_offset} IS NOT NULL)",
+                    self.column.name(),
+                )
+            };
             format!(
-                "({0} IS NOT DISTINCT FROM ${column_offset}) AND COALESCE(id {comp} ${id_offset}, true) OR COALESCE({0} {comp} ${column_offset}, {0} IS NOT NULL)",
+                "({0} IS NOT DISTINCT FROM ${column_offset}) AND COALESCE(id {comp} ${id_offset}, true) OR COALESCE({0} {comp} ${column_offset}, {null_handling})",
                 self.column.name(),
             )
         } else {
@@ -824,7 +861,7 @@ mod tests {
                         es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id < $2, true) OR COALESCE(value < $3, value IS NOT NULL)) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
+                                "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id < $2, true) OR COALESCE(value < $3, $2 IS NULL OR (value IS NULL AND $3 IS NOT NULL))) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                                 value as Option<rust_decimal::Decimal>,
