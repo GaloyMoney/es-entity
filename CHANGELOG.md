@@ -1,3 +1,15 @@
+# [cala release v0.10.37](https://github.com/GaloyMoney/cala/releases/tag/0.10.37)
+
+
+
+### Bug Fixes
+
+- Direction-aware NULL fallback in cursor condition for nullable sort columns (#137)
+
+### Features
+
+- Nullable column attribute for non-Option<T> Rust types (#138)
+
 # [cala release v0.10.36](https://github.com/GaloyMoney/cala/releases/tag/0.10.36)
 
 
