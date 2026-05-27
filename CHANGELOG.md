@@ -1,3 +1,11 @@
+# [cala release v0.10.38](https://github.com/GaloyMoney/cala/releases/tag/0.10.38)
+
+
+
+### Miscellaneous Tasks
+
+- Bump the all-dependencies group with 2 updates (#139)
+
 # [cala release v0.10.37](https://github.com/GaloyMoney/cala/releases/tag/0.10.37)
 
 
