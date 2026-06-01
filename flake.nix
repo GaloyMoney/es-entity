@@ -267,6 +267,11 @@
 
         mkdir -p .nix-deps
 
+        # process-compose reads/writes config under XDG_CONFIG_HOME; the
+        # stripped CI image has no /root/.config. Point it at a writable dir.
+        export XDG_CONFIG_HOME="''${XDG_CONFIG_HOME:-$PWD/.nix-deps/config}"
+        mkdir -p "$XDG_CONFIG_HOME"
+
         # Create _pgdev user (UID 70) for pg-start's setpriv drop when running as root.
         # Done once here to avoid /etc/passwd races if multiple PGs ever start in parallel.
         if [ "$(id -u)" = "0" ]; then
@@ -278,7 +283,20 @@
 
         echo "Starting PostgreSQL via process-compose..."
         ${nix-deps-base}/bin/nix-deps-base up -D
-        ${nix-deps-base}/bin/nix-deps-base project is-ready --wait
+
+        # Bounded readiness wait. `is-ready --wait` has no timeout and hangs on failure
+        for i in $(seq 1 60); do
+          if ${nix-deps-base}/bin/nix-deps-base project is-ready 2>/dev/null; then
+            echo "Services ready after ''${i}x5s"
+            break
+          fi
+          if [ "$i" = "60" ]; then
+            echo "ERROR: services not ready after 5 minutes" >&2
+            ${nix-deps-base}/bin/nix-deps-base process list || true
+            exit 1
+          fi
+          sleep 5
+        done
 
         echo "Running mdbook tests..."
         rm -rf ''${CARGO_TARGET_DIR:-./target}/mdbook-test
