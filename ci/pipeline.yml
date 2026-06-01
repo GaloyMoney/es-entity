@@ -53,7 +53,6 @@ jobs:
       - { get: pipeline-tasks }
     - task: tests
       attempts: 2
-      privileged: true
       config:
         platform: linux
         image_resource: #@ nix_task_image_config()

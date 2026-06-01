@@ -70,6 +70,7 @@
         postgresql
         process-compose
         curl
+        ytt
       ];
 
       pgPort = 5432;
@@ -90,29 +91,51 @@
       # ── Postgres start helper ──────────────────────────────────────────
       pg-start = pkgs.writeShellApplication {
         name = "pg-start";
-        runtimeInputs = [pkgs.postgresql pkgs.coreutils];
+        runtimeInputs =
+          [pkgs.postgresql pkgs.coreutils]
+          ++ pkgs.lib.optionals pkgs.stdenv.isLinux [pkgs.util-linux];
         text = ''
           NAME="$1" PORT="$2" PGUSER="$3" DB="$4"
           PGDATA="$PWD/.nix-deps/$NAME"
+
+          # PostgreSQL refuses to run as root. When running as root (e.g. CI),
+          # drop privileges to _pgdev (UID 70) via setpriv.
+          PG_UID=70
+          PG_GID=70
+          IS_ROOT=false
+          if [ "$(id -u)" = "0" ]; then
+            IS_ROOT=true
+          fi
+
+          run_pg() {
+            if [ "$IS_ROOT" = "true" ]; then
+              setpriv --reuid=$PG_UID --regid=$PG_GID --clear-groups -- "$@"
+            else
+              "$@"
+            fi
+          }
 
           mkdir -p "$PWD/.nix-deps"
 
           if [ ! -f "$PGDATA/PG_VERSION" ]; then
             echo "[$NAME] Initializing data directory at $PGDATA..."
             mkdir -p "$PGDATA"
-            initdb -D "$PGDATA" --username="$PGUSER" --auth=trust --no-locale -E UTF8
+            if [ "$IS_ROOT" = "true" ]; then chown -R $PG_UID:$PG_GID "$PGDATA"; fi
+            run_pg initdb -D "$PGDATA" --username="$PGUSER" --auth=trust --no-locale -E UTF8
             {
               echo "port = $PORT"
               echo "unix_socket_directories = '/tmp'"
               echo "listen_addresses = '127.0.0.1'"
             } >> "$PGDATA/postgresql.conf"
+          else
+            if [ "$IS_ROOT" = "true" ]; then chown -R $PG_UID:$PG_GID "$PGDATA"; fi
           fi
 
           if [ -f "$PGDATA/postmaster.pid" ]; then
-            pg_ctl -D "$PGDATA" stop -m immediate 2>/dev/null || rm -f "$PGDATA/postmaster.pid"
+            run_pg pg_ctl -D "$PGDATA" stop -m immediate 2>/dev/null || rm -f "$PGDATA/postmaster.pid"
           fi
 
-          postgres -D "$PGDATA" -p "$PORT" -k /tmp &
+          run_pg postgres -D "$PGDATA" -p "$PORT" -k /tmp &
           PG_PID=$!
           trap 'kill $PG_PID 2>/dev/null; wait $PG_PID 2>/dev/null' EXIT
 
@@ -243,6 +266,15 @@
         trap cleanup EXIT
 
         mkdir -p .nix-deps
+
+        # Create _pgdev user (UID 70) for pg-start's setpriv drop when running as root.
+        # Done once here to avoid /etc/passwd races if multiple PGs ever start in parallel.
+        if [ "$(id -u)" = "0" ]; then
+          if ! getent passwd 70 >/dev/null 2>&1; then
+            echo "_pgdev:x:70:70::/tmp:/bin/false" >> /etc/passwd
+            echo "_pgdev:x:70:" >> /etc/group
+          fi
+        fi
 
         echo "Starting PostgreSQL via process-compose..."
         ${nix-deps-base}/bin/nix-deps-base up -D
