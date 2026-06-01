@@ -6,6 +6,7 @@ start-deps:
 	@mkdir -p $(NIX_DEPS_DIR)
 	nix run .#nix-deps-base -- up -D
 	nix run .#nix-deps-base -- project is-ready --wait
+	nix run .#setup-db-dev
 
 clean-deps:
 	-nix run .#nix-deps-base -- down

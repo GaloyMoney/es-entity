@@ -168,7 +168,7 @@
         '';
       };
 
-      # ── process-compose: core-pg + setup-db ────────────────────────────
+      # ── process-compose: core-pg ───────────────────────────────────────
       pcLib = import process-compose-flake.lib {inherit pkgs;};
 
       mkPg = {
@@ -206,21 +206,15 @@
         };
       };
 
+      # Only long-running services live in process-compose. Migrations are run
+      # synchronously by callers (Makefile start-deps / nextest-runner) after
+      # core-pg is healthy, so tests never start mid-migration.
       baseProcesses = {
         core-pg = mkPg {
           name = "core-pg";
           port = pgPort;
           user = pgUser;
           db = pgDatabase;
-        };
-        setup-db = {
-          command = "${setupDbDev}/bin/setup-db-dev";
-          depends_on.core-pg.condition = "process_healthy";
-          availability.exit_on_end = false;
-          shutdown = {
-            signal = 2;
-            timeout_seconds = 10;
-          };
         };
       };
 
@@ -297,6 +291,9 @@
           fi
           sleep 5
         done
+
+        echo "Running database migrations..."
+        ${setupDbDev}/bin/setup-db-dev
 
         echo "Running mdbook tests..."
         rm -rf ''${CARGO_TARGET_DIR:-./target}/mdbook-test
