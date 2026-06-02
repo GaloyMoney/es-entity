@@ -1,3 +1,11 @@
+# [cala release v0.10.39](https://github.com/GaloyMoney/cala/releases/tag/0.10.39)
+
+
+
+### Miscellaneous Tasks
+
+- Replace docker-compose with nix process-compose for dev deps (#140)
+
 # [cala release v0.10.38](https://github.com/GaloyMoney/cala/releases/tag/0.10.38)
 
 
