@@ -191,7 +191,7 @@ pub struct Users {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Connect to postgres
-    let pg_con = format!("postgres://user:password@localhost:5432/pg");
+    let pg_con = std::env::var("PG_CON").unwrap_or_else(|_| "postgres://user:password@localhost:5432/pg".to_string());
     let pool = sqlx::PgPool::connect(&pg_con).await?;
 
     let users = Users { pool };

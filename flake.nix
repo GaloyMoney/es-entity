@@ -78,14 +78,30 @@
       pgPassword = "password";
       pgDatabase = "pg";
 
-      devEnvVars = rec {
-        PGDATABASE = pgDatabase;
-        PGUSER = pgUser;
-        PGPASSWORD = pgPassword;
-        PGHOST = "127.0.0.1";
-        PGPORT = toString pgPort;
-        DATABASE_URL = "postgres://${pgUser}:${pgPassword}@127.0.0.1:${toString pgPort}/${pgDatabase}?sslmode=disable";
-        PG_CON = "${DATABASE_URL}";
+      # ── Per-worktree dev env ───────────────────────────────────────────
+      # Derives a base port from a CRC32 of the checkout path so multiple
+      # es-entity checkouts can run their dev Postgres in parallel
+      devEnv = pkgs.writeShellApplication {
+        name = "es-entity-dev-env";
+        runtimeInputs = [pkgs.coreutils];
+        text = ''
+          cwd_hash=$(printf '%s' "$PWD" | cksum | cut -d' ' -f1)
+          base_port=$((20000 + (cwd_hash % 120) * 100))
+
+          PGPORT="''${PGPORT:-$base_port}"
+          PC_PORT_NUM="''${PC_PORT_NUM:-$((base_port + 1))}"
+          DATABASE_URL="''${DATABASE_URL:-postgres://${pgUser}:${pgPassword}@127.0.0.1:$PGPORT/${pgDatabase}?sslmode=disable}"
+
+          emit() { printf 'export %s=%q\n' "$1" "$2"; }
+          emit PGPORT "$PGPORT"
+          emit PC_PORT_NUM "$PC_PORT_NUM"
+          emit PGHOST 127.0.0.1
+          emit PGUSER ${pgUser}
+          emit PGPASSWORD ${pgPassword}
+          emit PGDATABASE ${pgDatabase}
+          emit DATABASE_URL "$DATABASE_URL"
+          emit PG_CON "$DATABASE_URL"
+        '';
       };
 
       # ── Postgres start helper ──────────────────────────────────────────
@@ -161,9 +177,9 @@
 
       setupDbDev = pkgs.writeShellApplication {
         name = "setup-db-dev";
-        runtimeInputs = [pkgs.sqlx-cli];
+        runtimeInputs = [pkgs.sqlx-cli pkgs.coreutils];
         text = ''
-          export DATABASE_URL="${devEnvVars.DATABASE_URL}"
+          eval "$(${devEnv}/bin/es-entity-dev-env)"
           exec sqlx migrate run
         '';
       };
@@ -182,7 +198,7 @@
             name = "start-${name}";
             runtimeInputs = [pg-start];
             text = ''
-              exec pg-start ${name} ${toString port} ${user} ${db}
+              exec pg-start ${name} "''${PGPORT:-${toString port}}" ${user} ${db}
             '';
           }
         }/bin/start-${name}";
@@ -192,7 +208,7 @@
               name = "ready-${name}";
               runtimeInputs = [pkgs.postgresql];
               text = ''
-                exec psql -p ${toString port} -U ${user} -h 127.0.0.1 -d ${db} -c 'SELECT 1' -t -q
+                exec psql -p "''${PGPORT:-${toString port}}" -U ${user} -h 127.0.0.1 -d ${db} -c 'SELECT 1' -t -q
               '';
             }
           }/bin/ready-${name}";
@@ -245,13 +261,10 @@
           pkgs.stdenv.cc
         ]}:$PATH"
 
-        export DATABASE_URL="${devEnvVars.DATABASE_URL}"
-        export PG_CON="${devEnvVars.PG_CON}"
-        export PGDATABASE="${devEnvVars.PGDATABASE}"
-        export PGUSER="${devEnvVars.PGUSER}"
-        export PGPASSWORD="${devEnvVars.PGPASSWORD}"
-        export PGHOST="${devEnvVars.PGHOST}"
-        export PGPORT="${devEnvVars.PGPORT}"
+        # Derive per-worktree ports (PGPORT, PC_PORT_NUM) and connection vars
+        # from the checkout path. process-compose and its children inherit
+        # this environment, so PG comes up on the derived port.
+        eval "$(${devEnv}/bin/es-entity-dev-env)"
 
         cleanup() {
           echo "Stopping deps..."
@@ -316,12 +329,18 @@
         packages = {
           nextest = nextest-runner;
           setup-db-dev = setupDbDev;
+          dev-env = devEnv;
           inherit nix-deps-base;
         };
 
         apps.setup-db-dev = flake-utils.lib.mkApp {
           drv = setupDbDev;
           name = "setup-db-dev";
+        };
+
+        apps.dev-env = flake-utils.lib.mkApp {
+          drv = devEnv;
+          name = "es-entity-dev-env";
         };
 
         checks = {
@@ -353,10 +372,12 @@
           };
         };
 
-        devShells.default = mkShell (devEnvVars
-          // {
-            inherit nativeBuildInputs;
-          });
+        devShells.default = mkShell {
+          inherit nativeBuildInputs;
+          shellHook = ''
+            eval "$(${devEnv}/bin/es-entity-dev-env)"
+          '';
+        };
 
         formatter = alejandra;
       });

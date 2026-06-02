@@ -56,7 +56,7 @@ pub struct Users {
 }
 
 # async fn init_pool() -> anyhow::Result<sqlx::PgPool> {
-#     let pg_con = format!("postgres://user:password@localhost:5432/pg");
+#     let pg_con = std::env::var("PG_CON").unwrap_or_else(|_| "postgres://user:password@localhost:5432/pg".to_string());
 #     Ok(sqlx::PgPool::connect(&pg_con).await?)
 # }
 #[tokio::main]
