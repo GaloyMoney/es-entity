@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build and Development Commands
 
 ### Database Setup
-- `make start-deps` - Start PostgreSQL in Docker
+- `make start-deps` - Start PostgreSQL via nix process-compose (no Docker required)
 - `make setup-db` - Run database migrations
 - `make reset-deps` - Clean, start, and setup database
 
