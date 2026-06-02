@@ -156,6 +156,10 @@
           trap 'kill $PG_PID 2>/dev/null; wait $PG_PID 2>/dev/null' EXIT
 
           while ! pg_isready -p "$PORT" -U "$PGUSER" -h 127.0.0.1 -q 2>/dev/null; do
+            kill -0 "$PG_PID" 2>/dev/null || {
+              echo "[$NAME] ERROR: postgres exited during startup (port $PORT)" >&2
+              exit 1
+            }
             sleep 0.1
           done
 

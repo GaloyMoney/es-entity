@@ -6,7 +6,15 @@ start-deps:
 	@mkdir -p $(NIX_DEPS_DIR)
 	@eval "$$(nix run .#dev-env)"; \
 	  nix run .#nix-deps-base -- up -D; \
-	  nix run .#nix-deps-base -- project is-ready --wait; \
+	  for i in $$(seq 1 60); do \
+	    if nix run .#nix-deps-base -- project is-ready 2>/dev/null; then break; fi; \
+	    if [ "$$i" = "60" ]; then \
+	      echo "ERROR: deps not ready after 5 minutes" >&2; \
+	      nix run .#nix-deps-base -- process list || true; \
+	      exit 1; \
+	    fi; \
+	    sleep 5; \
+	  done; \
 	  nix run .#setup-db-dev
 
 clean-deps:
