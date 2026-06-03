@@ -13,6 +13,8 @@ directories:
     - shared/actions/*
     excludePaths:
     - shared/actions/nodejs-*
+    - shared/actions/rust-*
+    - shared/actions/docker-*
     - shared/actions/chart-*
     newRootPath: shared/actions
 
@@ -26,5 +28,7 @@ directories:
     - shared/ci/**/*
     excludePaths:
     - shared/ci/**/nodejs-*
+    - shared/ci/**/rust-*
+    - shared/ci/**/docker-*
     - shared/ci/**/chart-*
     newRootPath: shared/ci
