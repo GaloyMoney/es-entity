@@ -4,7 +4,8 @@ NIX_DEPS_DIR := .nix-deps
 
 start-deps:
 	@mkdir -p $(NIX_DEPS_DIR)
-	@eval "$$(nix run .#dev-env)"; \
+	@set -e; \
+	  eval "$$(nix run .#dev-env)"; \
 	  nix run .#nix-deps-base -- up -D; \
 	  for i in $$(seq 1 60); do \
 	    if nix run .#nix-deps-base -- project is-ready 2>/dev/null; then break; fi; \
