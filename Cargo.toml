@@ -83,6 +83,6 @@ pin-project = "1.1"
 tracing = { version = "0.1.41", default-features = false }
 tracing-opentelemetry = { version = "0.33.0", default-features = false }
 opentelemetry = { version = "0.32.0", default-features = false }
-opentelemetry_sdk = { version = "0.32.0", features = ["rt-tokio"] }
+opentelemetry_sdk = { version = "0.32.1", features = ["rt-tokio"] }
 futures = "0.3"
 parking_lot = "0.12"
