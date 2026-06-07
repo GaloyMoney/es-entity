@@ -67,7 +67,7 @@ This is an Event Sourcing Entity Framework for Rust that provides:
 
 ## Environment Variables
 
-- `SQLX_OFFLINE=true` - Use offline mode for SQLx (required for CI)
+- `SQLX_OFFLINE=true` - Use offline mode for SQLx (validates `query!` macros against the committed `.sqlx/` cache instead of a live DB). Used by the `nix flake check` derivations, which run without a database; `nix run .#nextest` leaves it unset and validates against the live process-compose Postgres.
 - `DATABASE_URL` - PostgreSQL connection string
 
 ## Code Style Guide
