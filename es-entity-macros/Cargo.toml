@@ -2,7 +2,7 @@
 name = "es-entity-macros"
 description = "Proc macros for es-entity"
 repository = "https://github.com/GaloyMoney/cala"
-version = "0.10.40-dev"
+version = "0.10.40"
 edition = "2024"
 license = "Apache-2.0"
 categories = ["data-structures", "database"]

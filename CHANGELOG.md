@@ -1,3 +1,12 @@
+# [cala release v0.10.40](https://github.com/GaloyMoney/cala/releases/tag/0.10.40)
+
+
+
+### Miscellaneous Tasks
+
+- Bump the all-dependencies group across 1 directory with 3 updates (#145)
+- Backport process-compose follow-up fixes from cala (#143)
+
 # [cala release v0.10.39](https://github.com/GaloyMoney/cala/releases/tag/0.10.39)
 
 
