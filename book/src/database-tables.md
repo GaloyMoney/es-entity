@@ -30,6 +30,18 @@ CREATE TABLE user_events (
 
 In fact we could persist all events to a global table with that schema but partitioning the events per `Entity` gives us some benefits when querying (like read performance and referential integrity).
 
+### The Event Context
+
+The `context` column stores out-of-band metadata (like request ids or audit information) that was present in the ambient `EventContext` when the event was appended.
+Entries are added via `EventContext::insert` and serialized as a plain JSON map alongside every persisted event.
+
+Not everything that is useful in-process should end up in an immutable event stream though.
+Request-scoped personal data (client IP, user agent, ...) may need to be readable by in-process consumers during the request but must not be persisted forever.
+For this use case `EventContext::insert_transient` adds a *transient* entry: it propagates exactly like a persisted entry (across `fork()`, threads, and async boundaries via `WithEventContext`) and is visible through `ContextData::lookup`, but it is excluded whenever `ContextData` is serialized - so it never reaches the `context` column.
+The exclusion is enforced by the `Serialize` implementation of `ContextData` itself, not by call-site discipline.
+
+Note that the `context` column is never used for rehydrating an `Entity` - state is rebuilt exclusively from the `event` column.
+
 Intuitively you might think this is all we need as we can very easily query all the events for a specific `Entity`:
 ```sql
 SELECT * FROM user_events WHERE id = $1 ORDER BY sequence

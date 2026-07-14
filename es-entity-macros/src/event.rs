@@ -87,12 +87,15 @@ mod tests {
         let mut tokens = TokenStream::new();
         event.to_tokens(&mut tokens);
 
+        // With no `event_context` attribute the default depends on the
+        // `event-context` feature
+        let event_context = cfg!(feature = "event-context");
         let expected = quote! {
             impl es_entity::EsEvent for UserEvent {
                 type EntityId = UserId;
 
                 fn event_context() -> bool {
-                    false
+                    #event_context
                 }
 
                 fn event_type(&self) -> &'static str {
