@@ -75,7 +75,10 @@
 //! `ContextData` is serialized — in particular they are never written to the
 //! `context` column. Use transient entries for request-scoped metadata that
 //! in-process consumers need but that must not be persisted into immutable event
-//! streams, such as client IPs, user agents, or other personal data:
+//! streams, such as client IPs, user agents, or other personal data. Consumers
+//! may still store such data explicitly in mutable tables that can honor
+//! erasure requests; transient entries just guarantee the event-context
+//! machinery never writes it anywhere on its own:
 //!
 //! ```rust
 //! use es_entity::context::EventContext;
@@ -414,8 +417,11 @@ impl EventContext {
     /// of [`ContextData`]).
     ///
     /// Use this for request-scoped metadata that must not be written into
-    /// immutable event streams, such as client IP addresses, user agents, or
-    /// other personal data kept for in-process consumers only.
+    /// immutable event streams, such as client IP addresses or user agents.
+    /// In-process consumers can still read the entry via
+    /// [`ContextData::lookup`] and persist it deliberately in a mutable store
+    /// that can honor erasure requests (e.g. an audit table) — transient only
+    /// means the event-context machinery itself never serializes it.
     ///
     /// On key collision a transient entry shadows a persisted entry in
     /// [`ContextData::lookup`].
