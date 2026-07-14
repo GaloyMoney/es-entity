@@ -229,6 +229,69 @@ impl Columns {
             .collect()
     }
 
+    /// Names of the forgettable index columns (excludes the id column).
+    pub fn forgettable_column_names(&self) -> Vec<&syn::Ident> {
+        self.all
+            .iter()
+            .filter(|c| c.opts.forgettable && !c.opts.is_id)
+            .map(|c| &c.name)
+            .collect()
+    }
+
+    /// `SET` clause for the soft-delete `UPDATE`, but with forgettable columns
+    /// forced to `NULL` (delete auto-forgets) instead of re-persisting the live
+    /// value. Placeholder numbering only advances for the non-forgettable,
+    /// bound columns; it must stay in step with [`Self::update_query_args_for_delete`].
+    pub fn sql_updates_for_delete(&self) -> String {
+        let mut placeholder = 2;
+        let mut parts = Vec::new();
+        for column in self
+            .all
+            .iter()
+            .skip(1)
+            .filter(|c| c.opts.persist_on_update())
+        {
+            if column.opts.forgettable {
+                parts.push(format!("{} = NULL", column.name));
+            } else {
+                parts.push(format!("{} = ${}", column.name, placeholder));
+                placeholder += 1;
+            }
+        }
+        parts.join(", ")
+    }
+
+    /// Bind args for the soft-delete `UPDATE`, excluding forgettable columns
+    /// (which are literal `NULL` in [`Self::sql_updates_for_delete`]).
+    pub fn update_query_args_for_delete(&self) -> Vec<proc_macro2::TokenStream> {
+        self.all
+            .iter()
+            .filter(|c| (c.opts.persist_on_update() && !c.opts.forgettable) || c.opts.is_id)
+            .map(|column| {
+                let ident = &column.name;
+                let ty = &column.opts.ty;
+                quote! {
+                    #ident as &#ty
+                }
+            })
+            .collect()
+    }
+
+    /// Per-column `let` bindings for the soft-delete `UPDATE`, excluding
+    /// forgettable columns (they are never materialised, only NULLed).
+    pub fn variable_assignments_for_delete(&self, ident: syn::Ident) -> proc_macro2::TokenStream {
+        let assignments = self.all.iter().filter_map(|c| {
+            if (c.opts.persist_on_update() && !c.opts.forgettable) || c.opts.is_id {
+                Some(c.variable_assignment_for_update(&ident))
+            } else {
+                None
+            }
+        });
+        quote! {
+            #(#assignments)*
+        }
+    }
+
     pub fn update_all_arg_parts(
         &self,
         ident: syn::Ident,
@@ -346,10 +409,9 @@ impl FromMeta for Column {
                 let name = meta.path().get_ident().cloned().ok_or_else(|| {
                     darling::Error::custom("Expected identifier").with_span(meta.path())
                 })?;
-                let column = Column {
-                    name,
-                    opts: ColumnOpts::from_meta(meta)?,
-                };
+                let mut opts = ColumnOpts::from_meta(meta)?;
+                opts.normalize_forgettable();
+                let column = Column { name, opts };
                 Ok(column)
             }
             _ => Err(
@@ -396,6 +458,7 @@ impl Column {
             opts: ColumnOpts {
                 ty,
                 is_id: true,
+                forgettable: false,
                 list_by: Some(true),
                 find_by: Some(true),
                 nullable: None,
@@ -422,6 +485,7 @@ impl Column {
                     es_entity::prelude::chrono::DateTime<es_entity::prelude::chrono::Utc>
                 ),
                 is_id: false,
+                forgettable: false,
                 list_by: Some(true),
                 find_by: Some(false),
                 nullable: None,
@@ -503,7 +567,15 @@ impl Column {
         proc_macro2::TokenStream,
         proc_macro2::TokenStream,
     ) {
-        if let syn::Type::Path(type_path) = self.ty()
+        // A `Forgettable<Inner>` column stores `Option<Inner>` but is queried by
+        // `Inner` (identical ergonomics to a naked `Inner` column). Unwrap the
+        // synthesised `Option<..>` back to the inner type for the lookup param.
+        let query_ty = if self.opts.forgettable {
+            option_inner(self.ty()).unwrap_or_else(|| self.ty().clone())
+        } else {
+            self.ty().clone()
+        };
+        if let syn::Type::Path(type_path) = &query_ty
             && type_path.path.is_ident("String")
         {
             (
@@ -512,10 +584,9 @@ impl Column {
                 quote! { as_ref() },
             )
         } else {
-            let ty = &self.ty();
             (
-                self.ty().clone(),
-                quote! { impl std::borrow::Borrow<#ty> },
+                query_ty.clone(),
+                quote! { impl std::borrow::Borrow<#query_ty> },
                 quote! { borrow() },
             )
         }
@@ -531,6 +602,15 @@ impl Column {
 
     fn variable_assignment_for_create(&self, ident: &syn::Ident) -> proc_macro2::TokenStream {
         let name = &self.name;
+        if self.opts.forgettable {
+            // The `New` entity holds the plain inner value; a freshly-created
+            // entity always has the value set, so wrap it in `Some` for the
+            // nullable index column. (`update`/`list_by` read the `Forgettable`
+            // field of the hydrated entity via the accessor instead.)
+            return quote! {
+                let #name = &Some(#ident.#name.clone());
+            };
+        }
         let accessor = self.opts.create_accessor(name);
         quote! {
             let #name = &#ident.#accessor;
@@ -539,8 +619,13 @@ impl Column {
 
     fn variable_assignment_for_create_all(&self, ident: &syn::Ident) -> proc_macro2::TokenStream {
         let name = &self.name;
-        let accessor = self.opts.create_accessor(name);
         let ty = &self.opts.ty;
+        if self.opts.forgettable {
+            return quote! {
+                let #name: #ty = Some(#ident.#name.clone());
+            };
+        }
+        let accessor = self.opts.create_accessor(name);
         if self.opts.create_accessor_returns_owned() {
             quote! {
                 let #name: #ty = #ident.#accessor;
@@ -575,11 +660,54 @@ impl Column {
     }
 }
 
+/// If `ty` is `Forgettable<Inner>`, returns `Inner`; otherwise `None`.
+///
+/// Used to recognise `columns(name = "Forgettable<String>")`: such a column is
+/// materialised into a nullable index column (`Option<Inner>`) that is queried
+/// by `Inner` and set to `NULL` by `forget()`/`delete()`.
+fn forgettable_inner(ty: &syn::Type) -> Option<syn::Type> {
+    if let syn::Type::Path(type_path) = ty
+        && type_path.path.segments.len() == 1
+    {
+        let segment = &type_path.path.segments[0];
+        if segment.ident == "Forgettable"
+            && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+            && args.args.len() == 1
+            && let syn::GenericArgument::Type(inner) = &args.args[0]
+        {
+            return Some(inner.clone());
+        }
+    }
+    None
+}
+
+/// If `ty` is `Option<Inner>`, returns `Inner`; otherwise `None`.
+fn option_inner(ty: &syn::Type) -> Option<syn::Type> {
+    if let syn::Type::Path(type_path) = ty
+        && type_path.path.segments.len() == 1
+    {
+        let segment = &type_path.path.segments[0];
+        if segment.ident == "Option"
+            && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+            && args.args.len() == 1
+            && let syn::GenericArgument::Type(inner) = &args.args[0]
+        {
+            return Some(inner.clone());
+        }
+    }
+    None
+}
+
 #[derive(PartialEq, FromMeta)]
 struct ColumnOpts {
     ty: syn::Type,
     #[darling(default, skip)]
     is_id: bool,
+    /// Set when the declared column type was `Forgettable<Inner>`. Such columns
+    /// store the value in a nullable index column while live and are set to
+    /// `NULL` by `forget()`/`delete()`. `ty` is rewritten to `Option<Inner>`.
+    #[darling(default, skip)]
+    forgettable: bool,
     #[darling(default)]
     find_by: Option<bool>,
     #[darling(default)]
@@ -608,9 +736,10 @@ struct ColumnOpts {
 
 impl ColumnOpts {
     fn new(ty: syn::Type) -> Self {
-        ColumnOpts {
+        let mut opts = ColumnOpts {
             ty,
             is_id: false,
+            forgettable: false,
             find_by: None,
             list_by: None,
             nullable: None,
@@ -619,6 +748,17 @@ impl ColumnOpts {
             create_opts: None,
             update_opts: None,
             constraint: None,
+        };
+        opts.normalize_forgettable();
+        opts
+    }
+
+    /// Rewrite a `Forgettable<Inner>` column type into a nullable `Option<Inner>`
+    /// index column and flag it as forgettable. Idempotent.
+    fn normalize_forgettable(&mut self) {
+        if let Some(inner) = forgettable_inner(&self.ty) {
+            self.forgettable = true;
+            self.ty = syn::parse_quote! { Option<#inner> };
         }
     }
 
@@ -670,7 +810,12 @@ impl ColumnOpts {
     }
 
     fn update_accessor(&self, name: &syn::Ident) -> proc_macro2::TokenStream {
-        if let Some(accessor) = &self.update_opts.as_ref().and_then(|o| o.accessor.as_ref()) {
+        if self.forgettable {
+            quote! {
+                #name.value().map(|v| v.clone())
+            }
+        } else if let Some(accessor) = &self.update_opts.as_ref().and_then(|o| o.accessor.as_ref())
+        {
             quote! {
                 #accessor
             }
@@ -689,10 +834,12 @@ impl ColumnOpts {
     }
 
     fn update_accessor_returns_owned(&self) -> bool {
-        self.update_opts
-            .as_ref()
-            .and_then(|o| o.accessor.as_ref())
-            .is_some_and(|expr| matches!(expr, syn::Expr::Call(_) | syn::Expr::MethodCall(_)))
+        self.forgettable
+            || self
+                .update_opts
+                .as_ref()
+                .and_then(|o| o.accessor.as_ref())
+                .is_some_and(|expr| matches!(expr, syn::Expr::Call(_) | syn::Expr::MethodCall(_)))
     }
 
     fn parent_accessor(&self, name: &syn::Ident) -> proc_macro2::TokenStream {

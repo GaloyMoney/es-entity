@@ -54,17 +54,19 @@ impl ToTokens for DeleteFn<'_> {
             }
         });
 
+        // Soft-delete auto-forgets: forgettable index columns are set to NULL
+        // (not re-persisted from the live entity), matching `forget()`.
         let assignments = self
             .columns
-            .variable_assignments_for_update(syn::parse_quote! { entity });
-        let column_updates = self.columns.sql_updates();
+            .variable_assignments_for_delete(syn::parse_quote! { entity });
+        let column_updates = self.columns.sql_updates_for_delete();
         let query = format!(
             "UPDATE {} SET {}{}deleted = TRUE WHERE id = $1",
             self.table_name,
             column_updates,
             if column_updates.is_empty() { "" } else { ", " }
         );
-        let args = self.columns.update_query_args();
+        let args = self.columns.update_query_args_for_delete();
 
         #[cfg(feature = "instrument")]
         let (instrument_attr, record_id, error_recording) = {
