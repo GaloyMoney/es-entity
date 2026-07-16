@@ -53,6 +53,7 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
+proptest = "1.5"
 
 [workspace]
 resolver = "2"
