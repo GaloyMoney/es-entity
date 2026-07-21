@@ -71,4 +71,8 @@ impl<'a, Op: AtomicOperation + ?Sized> AtomicOperation for OpWithTime<'a, Op> {
     fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
         self.inner.add_commit_hook(hook)
     }
+
+    fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H> {
+        self.inner.commit_hook::<H>()
+    }
 }

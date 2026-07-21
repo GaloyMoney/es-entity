@@ -138,6 +138,10 @@ impl<'o> AtomicOperation for DbOp<'o> {
         self.commit_hooks.as_mut().expect("no hooks").add(hook);
         Ok(())
     }
+
+    fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H> {
+        self.commit_hooks.as_ref()?.get_last::<H>()
+    }
 }
 
 /// Equivileant of [`DbOp`] just that the time is guaranteed to be cached.
@@ -191,6 +195,10 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
     fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
         self.inner.add_commit_hook(hook)
     }
+
+    fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H> {
+        self.inner.commit_hook::<H>()
+    }
 }
 
 impl<'o> AtomicOperationWithTime for DbOpWithTime<'o> {
@@ -241,6 +249,13 @@ pub trait AtomicOperation: Send {
     /// Returns Ok(()) if the hook was registered, Err(hook) if hooks are not supported.
     fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
         Err(hook)
+    }
+
+    /// Typed shared access to the currently-accumulating commit hook of type `H`,
+    /// if this operation supports commit hooks and one is registered.
+    /// Returns the hook a subsequent `add_commit_hook::<H>` call would merge into.
+    fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H> {
+        None
     }
 }
 

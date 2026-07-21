@@ -252,6 +252,8 @@ trait DynHook: Send {
 
     fn try_merge(&mut self, other: &mut dyn DynHook) -> bool;
 
+    fn as_any(&self) -> &dyn Any;
+
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
@@ -276,6 +278,10 @@ impl<H: CommitHook> DynHook for H {
             .downcast_mut::<H>()
             .expect("hook type mismatch");
         self.merge(other_h)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
@@ -307,6 +313,14 @@ impl CommitHooks {
         }
 
         hooks_vec.push(new_hook);
+    }
+
+    pub(super) fn get_last<H: CommitHook>(&self) -> Option<&H> {
+        self.hooks
+            .get(&TypeId::of::<H>())?
+            .last()?
+            .as_any()
+            .downcast_ref::<H>()
     }
 
     pub(super) async fn execute_pre(
