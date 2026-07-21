@@ -22,6 +22,10 @@ pub enum CustomerEvent {
     EmailUpdated {
         email: String,
     },
+    /// Client-declared erasure event (convention): staged before `forget()`
+    /// so the erasure consumes a sequence number (fencing stale writers) and
+    /// is recorded in the event stream.
+    Forgot {},
 }
 
 #[derive(EsEntity, Builder)]
@@ -51,6 +55,12 @@ impl Customer {
             .push(CustomerEvent::EmailUpdated { email: new_email });
         Idempotent::Executed(())
     }
+
+    /// Stages the domain erasure event. Call before `forget()` so the
+    /// erasure consumes a sequence number and lands in the event stream.
+    pub fn record_erasure(&mut self) {
+        self.events.push(CustomerEvent::Forgot {});
+    }
 }
 
 impl TryFromEvents<CustomerEvent> for Customer {
@@ -76,6 +86,9 @@ impl TryFromEvents<CustomerEvent> for Customer {
                 CustomerEvent::EmailUpdated { email } => {
                     builder = builder.email(email.clone());
                 }
+                // Erasure event (client convention): payloads were deleted
+                // at this point in the stream. No state to apply.
+                CustomerEvent::Forgot { .. } => {}
             }
         }
         builder.events(events).build()
