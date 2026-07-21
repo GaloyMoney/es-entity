@@ -24,6 +24,35 @@ use std::{fmt, hash, ops::Deref};
 /// - Real values are extracted via [`__extract_payload_value`] **before** serde runs,
 ///   and stored in the forgettable payloads table.
 ///
+/// # Repository Guard
+///
+/// An event type with `Forgettable<T>` fields must be backed by a repository
+/// that enables `forgettable` in `#[es_repo(...)]`; otherwise the payloads are
+/// never scrubbed. The repository derive cannot see the event's
+/// forgettable-ness at macro time, so for a repository that omits the flag it
+/// emits a const assertion on the event's inherent `HAS_FORGETTABLE_FIELDS`.
+/// This is that assertion verbatim, and it fails to compile because the event
+/// is forgettable:
+///
+/// ```compile_fail
+/// use es_entity::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// es_entity::entity_id! { UserId }
+///
+/// #[derive(EsEvent, Serialize, Deserialize)]
+/// #[serde(tag = "type", rename_all = "snake_case")]
+/// #[es_event(id = "UserId")]
+/// pub enum UserEvent {
+///     Initialized { id: UserId, name: Forgettable<String> },
+/// }
+///
+/// const _: () = assert!(
+///     !UserEvent::HAS_FORGETTABLE_FIELDS,
+///     "event type has Forgettable fields but this repo does not enable `forgettable`; add `forgettable` to #[es_repo(...)]"
+/// );
+/// ```
+///
 /// # Example
 ///
 /// ```rust
