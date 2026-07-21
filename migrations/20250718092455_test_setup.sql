@@ -181,3 +181,51 @@ CREATE TABLE customers_forgettable_payloads (
   payload JSONB NOT NULL,
   UNIQUE(entity_id, sequence)
 );
+
+-- Parent + forgettable nested child, for cascade-delete PII scrub coverage.
+--
+-- `account_holders` is a nested child of `accounts` (soft-delete parent). It has
+-- both a `Forgettable<String>` event field (`name`, stored in the payloads
+-- table) and a `Forgettable<String>` index column (`email`, nullable). Soft-
+-- deleting the parent must scrub both: delete the child payload rows and NULL
+-- the child index column.
+CREATE TABLE accounts (
+  id UUID PRIMARY KEY,
+  deleted BOOL NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE account_events (
+  id UUID NOT NULL REFERENCES accounts(id),
+  sequence INT NOT NULL,
+  event_type VARCHAR NOT NULL,
+  event JSONB NOT NULL,
+  context JSONB DEFAULT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL,
+  UNIQUE(id, sequence)
+);
+
+CREATE TABLE account_holders (
+  id UUID PRIMARY KEY,
+  account_id UUID NOT NULL REFERENCES accounts(id),
+  email VARCHAR,
+  deleted BOOL NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE account_holder_events (
+  id UUID NOT NULL REFERENCES account_holders(id),
+  sequence INT NOT NULL,
+  event_type VARCHAR NOT NULL,
+  event JSONB NOT NULL,
+  context JSONB DEFAULT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL,
+  UNIQUE(id, sequence)
+);
+
+CREATE TABLE account_holders_forgettable_payloads (
+  entity_id UUID NOT NULL REFERENCES account_holders(id),
+  sequence INT NOT NULL,
+  payload JSONB NOT NULL,
+  UNIQUE(entity_id, sequence)
+);
