@@ -1,3 +1,16 @@
+# [cala release v0.10.41](https://github.com/GaloyMoney/cala/releases/tag/0.10.41)
+
+
+
+### Features
+
+- Add AtomicOperation::commit_hook typed read access to registered commit hooks (#151)
+
+### Miscellaneous Tasks
+
+- Bump the all-dependencies group across 1 directory with 3 updates (#149)
+- Bump the all-dependencies group across 1 directory with 3 updates (#147)
+
 # [cala release v0.10.40](https://github.com/GaloyMoney/cala/releases/tag/0.10.40)
 
 
