@@ -31,7 +31,7 @@ impl<'a, Op: AtomicOperation + ?Sized> OpWithTime<'a, Op> {
         } else if let Some(manual_time) = op.clock().manual_now() {
             manual_time
         } else {
-            db::database_now(op.as_executor()).await?
+            db::database_now(op.connection()).await?
         };
         Ok(Self { inner: op, now })
     }
@@ -64,8 +64,8 @@ impl<'a, Op: AtomicOperation + ?Sized> AtomicOperation for OpWithTime<'a, Op> {
         self.inner.clock()
     }
 
-    fn as_executor(&mut self) -> &mut db::Connection {
-        self.inner.as_executor()
+    fn connection(&mut self) -> &mut db::Connection {
+        self.inner.connection()
     }
 
     fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {

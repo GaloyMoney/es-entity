@@ -1,6 +1,7 @@
 #![cfg(feature = "tracing-context")]
-//! End-to-end proof that statements executed through [`annotate_executor`]
-//! carry the active span's `traceparent` comment all the way to Postgres.
+//! End-to-end proof that statements executed through
+//! [`AtomicOperation::as_executor`] carry the active span's `traceparent`
+//! comment all the way to Postgres.
 
 mod helpers;
 
@@ -32,9 +33,13 @@ async fn trace_context_reaches_postgres() -> anyhow::Result<()> {
         let traceparent = sql_commenter::current_traceparent().expect("valid span context");
         let trace_id = traceparent.split('-').nth(1).unwrap().to_string();
 
+        // The executor every generated write path uses: the one provided by
+        // `AtomicOperation::as_executor()`.
+        let mut op = DbOp::init(&pool).await?;
+
         // Both futures are polled on this task (where the span is the current
         // context), so the slow query is executed with the span active.
-        let slow = sqlx::query("SELECT pg_sleep(2)").execute(annotate_executor(&pool));
+        let slow = sqlx::query("SELECT pg_sleep(2)").execute(op.as_executor());
         let poll = async {
             for _ in 0..100 {
                 let row: Option<(String,)> = sqlx::query_as(

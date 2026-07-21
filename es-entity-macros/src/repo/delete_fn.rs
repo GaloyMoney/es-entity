@@ -108,7 +108,7 @@ impl ToTokens for DeleteFn<'_> {
                     #forget_query,
                     id as &#id_type
                 )
-                .execute(es_entity::annotate_executor(op.as_executor()))
+                .execute(op.as_executor())
                 .await?;
             }
         } else {
@@ -143,7 +143,7 @@ impl ToTokens for DeleteFn<'_> {
                         #query,
                         #(#args),*
                     )
-                        .execute(es_entity::annotate_executor(op.as_executor()))
+                        .execute(op.as_executor())
                         .await
                         .map_err(|e| match &e {
                             sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
@@ -241,7 +241,7 @@ mod tests {
                         "UPDATE entities SET deleted = TRUE WHERE id = $1",
                         id as &EntityId
                     )
-                        .execute(es_entity::annotate_executor(op.as_executor()))
+                        .execute(op.as_executor())
                         .await
                         .map_err(|e| match &e {
                             sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
@@ -337,7 +337,7 @@ mod tests {
                         id as &EntityId,
                         name as &String
                     )
-                        .execute(es_entity::annotate_executor(op.as_executor()))
+                        .execute(op.as_executor())
                         .await
                         .map_err(|e| match &e {
                             sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
@@ -425,7 +425,7 @@ mod tests {
                         "UPDATE entities SET deleted = TRUE WHERE id = $1",
                         id as &EntityId
                     )
-                        .execute(es_entity::annotate_executor(op.as_executor()))
+                        .execute(op.as_executor())
                         .await
                         .map_err(|e| match &e {
                             sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
@@ -442,7 +442,7 @@ mod tests {
                         "DELETE FROM entities_forgettable_payloads WHERE entity_id = $1",
                         id as &EntityId
                     )
-                    .execute(es_entity::annotate_executor(op.as_executor()))
+                    .execute(op.as_executor())
                     .await?;
 
                     let new_events = {

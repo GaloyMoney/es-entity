@@ -81,7 +81,7 @@ impl ToTokens for UpdateAllFn<'_> {
                 Some(quote! {
                     sqlx::query(#query)
                         #(#bind_tokens)*
-                        .execute(es_entity::annotate_executor(op.as_executor()))
+                        .execute(op.as_executor())
                         .await
                         .map_err(|e| match &e {
                             sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
@@ -285,7 +285,7 @@ mod tests {
                     sqlx::query("UPDATE entities SET name = unnested.name FROM UNNEST($1, $2) AS unnested(id, name) WHERE entities.id = unnested.id")
                         .bind(id_collection)
                         .bind(name_collection)
-                        .execute(es_entity::annotate_executor(op.as_executor()))
+                        .execute(op.as_executor())
                         .await
                         .map_err(|e| match &e {
                             sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {

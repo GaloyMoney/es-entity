@@ -210,7 +210,7 @@ impl<'c> HookOperation<'c> {
     fn new(op: &'c mut impl AtomicOperation) -> Self {
         Self {
             now: op.maybe_now(),
-            conn: op.as_executor(),
+            conn: op.connection(),
         }
     }
 }
@@ -220,7 +220,7 @@ impl<'c> AtomicOperation for HookOperation<'c> {
         self.now
     }
 
-    fn as_executor(&mut self) -> &mut db::Connection {
+    fn connection(&mut self) -> &mut db::Connection {
         self.conn
     }
 }

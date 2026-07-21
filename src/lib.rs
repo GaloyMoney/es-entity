@@ -23,7 +23,6 @@
 #![cfg_attr(feature = "fail-on-warnings", deny(clippy::all))]
 #![forbid(unsafe_code)]
 
-mod annotating_executor;
 pub mod clock;
 pub mod context;
 pub mod db;
@@ -53,8 +52,6 @@ pub mod prelude {
     pub use schemars;
 }
 
-#[doc(inline)]
-pub use annotating_executor::{TraceAnnotatingExecutor, annotate_executor};
 #[doc(inline)]
 pub use context::*;
 #[doc(inline)]

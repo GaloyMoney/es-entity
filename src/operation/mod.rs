@@ -5,7 +5,7 @@ mod with_time;
 
 use sqlx::{Acquire, Transaction};
 
-use crate::{clock::ClockHandle, db};
+use crate::{clock::ClockHandle, db, one_time_executor::OneTimeExecutor};
 
 pub use with_time::*;
 
@@ -130,8 +130,8 @@ impl<'o> AtomicOperation for DbOp<'o> {
         &self.clock
     }
 
-    fn as_executor(&mut self) -> &mut db::Connection {
-        self.tx.as_executor()
+    fn connection(&mut self) -> &mut db::Connection {
+        self.tx.connection()
     }
 
     fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
@@ -188,8 +188,8 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
         self.inner.clock()
     }
 
-    fn as_executor(&mut self) -> &mut db::Connection {
-        self.inner.as_executor()
+    fn connection(&mut self) -> &mut db::Connection {
+        self.inner.connection()
     }
 
     fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
@@ -227,14 +227,14 @@ pub trait AtomicOperation: Send {
         crate::clock::Clock::handle()
     }
 
-    /// Returns the [`sqlx::Executor`] implementation.
+    /// Returns the raw underlying connection.
     /// The desired way to represent this would actually be as a GAT:
     /// ```rust
     /// trait AtomicOperation {
     ///     type Executor<'c>: sqlx::PgExecutor<'c>
     ///         where Self: 'c;
     ///
-    ///     fn as_executor<'c>(&'c mut self) -> Self::Executor<'c>;
+    ///     fn connection<'c>(&'c mut self) -> Self::Executor<'c>;
     /// }
     /// ```
     ///
@@ -243,7 +243,28 @@ pub trait AtomicOperation: Send {
     ///
     /// Since this trait is generally applied to types that wrap a [`sqlx::Transaction`]
     /// there is no variance in the return type - so its fine.
-    fn as_executor(&mut self) -> &mut sqlx::PgConnection;
+    ///
+    /// Statements executed directly on the returned connection are **not**
+    /// annotated with trace context — use [`as_executor`](Self::as_executor)
+    /// unless raw connection access is required.
+    fn connection(&mut self) -> &mut db::Connection;
+
+    /// Returns the [`sqlx::Executor`] implementation that statements should be
+    /// executed through.
+    ///
+    /// The returned [`OneTimeExecutor`] annotates every statement with the
+    /// current span's `traceparent` SQL comment when the `tracing-context`
+    /// feature is enabled and a *sampled* span is active (see
+    /// [`crate::sql_commenter`]). Otherwise statements pass through untouched.
+    ///
+    /// Trade-off: the trace context makes annotated statement text unique, so
+    /// annotated statements bypass sqlx's per-connection prepared statement
+    /// cache (`persistent(false)`) — costing a server-side parse + plan per
+    /// execution. Un-annotated traffic keeps full prepared-statement reuse.
+    fn as_executor(&mut self) -> OneTimeExecutor<'_, &mut db::Connection> {
+        let now = self.maybe_now();
+        OneTimeExecutor::new(self.connection(), now)
+    }
 
     /// Registers a commit hook that will run pre_commit before and post_commit after the transaction commits.
     /// Returns Ok(()) if the hook was registered, Err(hook) if hooks are not supported.
@@ -260,7 +281,7 @@ pub trait AtomicOperation: Send {
 }
 
 impl<'c> AtomicOperation for sqlx::Transaction<'c, db::Db> {
-    fn as_executor(&mut self) -> &mut db::Connection {
+    fn connection(&mut self) -> &mut db::Connection {
         &mut *self
     }
 }
