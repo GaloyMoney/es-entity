@@ -1,7 +1,7 @@
 mod helpers;
 
 use es_entity::operation::{
-    AtomicOperation, DbOp,
+    AtomicOperation, DbOp, OpWithTime,
     hooks::{CommitHook, HookOperation, PreCommitRet},
 };
 use std::sync::{Arc, Mutex};
@@ -162,6 +162,186 @@ async fn hooks_execute_separately_when_not_merged() -> anyhow::Result<()> {
 
     assert_eq!(*pre_count.lock().unwrap(), 3);
     assert_eq!(*post_count.lock().unwrap(), 3);
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct MergingGetterHook {
+    payloads: Vec<String>,
+}
+
+impl CommitHook for MergingGetterHook {
+    fn merge(&mut self, other: &mut Self) -> bool {
+        self.payloads.append(&mut other.payloads);
+        true
+    }
+}
+
+#[derive(Debug)]
+struct NonMergingGetterHook {
+    label: &'static str,
+}
+
+impl CommitHook for NonMergingGetterHook {}
+
+#[tokio::test]
+async fn commit_hook_returns_registered_hook() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    assert!(op.commit_hook::<MergingGetterHook>().is_none());
+
+    op.add_commit_hook(MergingGetterHook {
+        payloads: vec!["e1".into()],
+    })
+    .unwrap();
+
+    let hook = op
+        .commit_hook::<MergingGetterHook>()
+        .expect("hook should be registered");
+    assert_eq!(hook.payloads, vec!["e1"]);
+
+    op.commit().await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn commit_hook_returns_none_for_different_type() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    op.add_commit_hook(MergingGetterHook {
+        payloads: vec!["e1".into()],
+    })
+    .unwrap();
+
+    assert!(op.commit_hook::<NonMergingGetterHook>().is_none());
+
+    op.commit().await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn commit_hook_sees_merged_contents() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    op.add_commit_hook(MergingGetterHook {
+        payloads: vec!["e1".into()],
+    })
+    .unwrap();
+    op.add_commit_hook(MergingGetterHook {
+        payloads: vec!["e2".into(), "e3".into()],
+    })
+    .unwrap();
+
+    let hook = op
+        .commit_hook::<MergingGetterHook>()
+        .expect("hook should be registered");
+    assert_eq!(hook.payloads, vec!["e1", "e2", "e3"]);
+
+    op.commit().await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn commit_hook_returns_last_non_merging_hook() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    op.add_commit_hook(NonMergingGetterHook { label: "first" })
+        .unwrap();
+    op.add_commit_hook(NonMergingGetterHook { label: "second" })
+        .unwrap();
+
+    let hook = op
+        .commit_hook::<NonMergingGetterHook>()
+        .expect("hook should be registered");
+    assert_eq!(hook.label, "second");
+
+    op.commit().await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn commit_hook_default_returns_none_for_bare_transaction() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let tx = pool.begin().await?;
+
+    assert!(tx.commit_hook::<MergingGetterHook>().is_none());
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn commit_hook_delegates_through_time_wrappers() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let op = DbOp::init(&pool).await?;
+    let mut op = op.with_db_time().await?;
+
+    op.add_commit_hook(MergingGetterHook {
+        payloads: vec!["e1".into()],
+    })
+    .unwrap();
+
+    let hook = op
+        .commit_hook::<MergingGetterHook>()
+        .expect("DbOpWithTime should delegate to inner op");
+    assert_eq!(hook.payloads, vec!["e1"]);
+
+    let wrapped = OpWithTime::cached_or_clock_time(&mut op);
+    let hook = wrapped
+        .commit_hook::<MergingGetterHook>()
+        .expect("OpWithTime should delegate to wrapped op");
+    assert_eq!(hook.payloads, vec!["e1"]);
+    drop(wrapped);
+
+    op.commit().await?;
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct SiblingProbeHook {
+    saw_sibling: Arc<Mutex<Option<bool>>>,
+}
+
+impl CommitHook for SiblingProbeHook {
+    async fn pre_commit(
+        self,
+        op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        *self.saw_sibling.lock().unwrap() = Some(op.commit_hook::<MergingGetterHook>().is_some());
+        PreCommitRet::ok(self, op)
+    }
+}
+
+#[tokio::test]
+async fn commit_hook_not_visible_inside_pre_commit() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let saw_sibling = Arc::new(Mutex::new(None));
+
+    op.add_commit_hook(MergingGetterHook {
+        payloads: vec!["e1".into()],
+    })
+    .unwrap();
+    op.add_commit_hook(SiblingProbeHook {
+        saw_sibling: saw_sibling.clone(),
+    })
+    .unwrap();
+
+    op.commit().await?;
+
+    assert_eq!(*saw_sibling.lock().unwrap(), Some(false));
 
     Ok(())
 }
