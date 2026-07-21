@@ -14,6 +14,7 @@ pub struct PopulateNested<'a> {
     repo_types_mod: syn::Ident,
     delete_option: &'a DeleteOption,
     forgettable_table_name: Option<&'a str>,
+    forgettable_columns: Vec<&'a syn::Ident>,
 }
 
 impl<'a> PopulateNested<'a> {
@@ -28,6 +29,7 @@ impl<'a> PopulateNested<'a> {
             repo_types_mod: opts.repo_types_mod(),
             delete_option: &opts.delete,
             forgettable_table_name: opts.forgettable_table_name(),
+            forgettable_columns: opts.columns.forgettable_column_names(),
         }
     }
 }
@@ -148,10 +150,54 @@ impl ToTokens for PopulateNested<'_> {
 
         if self.delete_option.is_soft() {
             let column_name = self.column.name();
-            let cascade_query = format!(
-                "UPDATE {} SET deleted = TRUE WHERE {} = $1 AND deleted = FALSE",
-                self.table_name, column_name,
-            );
+
+            let cascade = if let Some(forgettable_tbl) = self.forgettable_table_name {
+                // Scrub the direct nested children's forgettable data before the
+                // soft-delete flips them, mirroring the parent's own delete
+                // scrub (scoped to direct children by the parent FK): delete the
+                // child payload rows first, then NULL any child forgettable index
+                // columns in the same UPDATE that sets `deleted = TRUE`.
+                let payload_delete_query = format!(
+                    "DELETE FROM {} WHERE entity_id IN (SELECT id FROM {} WHERE {} = $1)",
+                    forgettable_tbl, self.table_name, column_name,
+                );
+                let null_cols = self
+                    .forgettable_columns
+                    .iter()
+                    .map(|c| format!(", {} = NULL", c))
+                    .collect::<String>();
+                let cascade_query = format!(
+                    "UPDATE {} SET deleted = TRUE{} WHERE {} = $1 AND deleted = FALSE",
+                    self.table_name, null_cols, column_name,
+                );
+                quote! {
+                    sqlx::query!(
+                        #payload_delete_query,
+                        parent_id as &#ty,
+                    )
+                    .execute(op.as_executor())
+                    .await?;
+                    sqlx::query!(
+                        #cascade_query,
+                        parent_id as &#ty,
+                    )
+                    .execute(op.as_executor())
+                    .await?;
+                }
+            } else {
+                let cascade_query = format!(
+                    "UPDATE {} SET deleted = TRUE WHERE {} = $1 AND deleted = FALSE",
+                    self.table_name, column_name,
+                );
+                quote! {
+                    sqlx::query!(
+                        #cascade_query,
+                        parent_id as &#ty,
+                    )
+                    .execute(op.as_executor())
+                    .await?;
+                }
+            };
 
             tokens.append_all(quote! {
                 impl #impl_generics es_entity::CascadeDeleteNested<#ty> for #ident #ty_generics #where_clause {
@@ -163,16 +209,82 @@ impl ToTokens for PopulateNested<'_> {
                         OP: es_entity::AtomicOperation,
                         __EsErr: From<sqlx::Error> + Send,
                     {
-                        sqlx::query!(
-                            #cascade_query,
-                            parent_id as &#ty,
-                        )
-                        .execute(op.as_executor())
-                        .await?;
+                        #cascade
                         Ok(())
                     }
                 }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use darling::FromDeriveInput;
+    use syn::parse_quote;
+
+    use super::*;
+    use crate::repo::options::RepositoryOptions;
+
+    fn cascade_output(input: syn::DeriveInput) -> String {
+        let opts = RepositoryOptions::from_derive_input(&input).unwrap();
+        let parent = opts
+            .columns
+            .parent()
+            .expect("repo must declare a parent column");
+        let mut tokens = TokenStream::new();
+        PopulateNested::new(parent, &opts).to_tokens(&mut tokens);
+        tokens.to_string()
+    }
+
+    #[test]
+    fn cascade_scrubs_forgettable_nested_children() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "AccountHolder",
+                forgettable,
+                delete = "soft",
+                columns(
+                    account_id(ty = "AccountId", update(persist = false), parent),
+                    email(ty = "Forgettable<String>")
+                )
+            )]
+            struct AccountHolders {
+                pool: sqlx::PgPool,
+            }
+        };
+        let output = cascade_output(input);
+        // Child payload rows are deleted first, scoped to direct children by
+        // the parent FK.
+        assert!(output.contains(
+            "DELETE FROM account_holders_forgettable_payloads WHERE entity_id IN (SELECT id FROM account_holders WHERE account_id = $1)"
+        ));
+        // The soft-delete UPDATE also NULLs the child forgettable index column.
+        assert!(output.contains(
+            "UPDATE account_holders SET deleted = TRUE, email = NULL WHERE account_id = $1 AND deleted = FALSE"
+        ));
+    }
+
+    #[test]
+    fn cascade_leaves_non_forgettable_children_unchanged() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "AccountHolder",
+                delete = "soft",
+                columns(
+                    account_id(ty = "AccountId", update(persist = false), parent),
+                    label(ty = "String")
+                )
+            )]
+            struct AccountHolders {
+                pool: sqlx::PgPool,
+            }
+        };
+        let output = cascade_output(input);
+        assert!(output.contains(
+            "UPDATE account_holders SET deleted = TRUE WHERE account_id = $1 AND deleted = FALSE"
+        ));
+        assert!(!output.contains("DELETE FROM"));
+        assert!(!output.contains("= NULL"));
     }
 }
