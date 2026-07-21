@@ -103,7 +103,7 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                         .bind(&payload_ids)
                         .bind(&payload_sequences)
                         .bind(&payload_values)
-                        .execute(op.as_executor())
+                        .execute(es_entity::annotate_executor(op.as_executor()))
                         .await?;
                 }
             }
@@ -156,7 +156,7 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                         .bind(&all_types)
                         .bind(&all_serialized)
                         #ctx_bind
-                        .fetch_all(op.as_executor())
+                        .fetch_all(es_entity::annotate_executor(op.as_executor()))
                         .await?;
 
                 #forgettable_insert
@@ -243,7 +243,7 @@ mod tests {
                         } else {
                              Some(all_contexts)
                         })
-                        .fetch_all(op.as_executor())
+                        .fetch_all(es_entity::annotate_executor(op.as_executor()))
                         .await?;
 
                 let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
@@ -315,7 +315,7 @@ mod tests {
                         .bind(&all_sequences)
                         .bind(&all_types)
                         .bind(&all_serialized)
-                        .fetch_all(op.as_executor())
+                        .fetch_all(es_entity::annotate_executor(op.as_executor()))
                         .await?;
 
                 let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");

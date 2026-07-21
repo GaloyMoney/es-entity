@@ -60,7 +60,7 @@ impl ToTokens for UpdateFn<'_> {
                 #query,
                 #(#args),*
             )
-                .execute(op.as_executor())
+                .execute(es_entity::annotate_executor(op.as_executor()))
                 .await
                 .map_err(|e| match &e {
                     sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
@@ -245,7 +245,7 @@ mod tests {
                         id as &EntityId,
                         name as &String
                     )
-                        .execute(op.as_executor())
+                        .execute(es_entity::annotate_executor(op.as_executor()))
                         .await
                         .map_err(|e| match &e {
                             sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {

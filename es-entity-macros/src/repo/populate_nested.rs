@@ -98,7 +98,7 @@ impl ToTokens for PopulateNested<'_> {
                             #include_deleted_query,
                             parent_ids.as_slice() as &[&#ty],
                             <#repo_types_mod::Repo__Event as EsEvent>::event_context(),
-                        ).fetch_all(op.as_executor()).await?
+                        ).fetch_all(es_entity::annotate_executor(op.as_executor())).await?
                     };
                     let n = rows.len();
                     let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(rows.into_iter(), n)?;
@@ -132,7 +132,7 @@ impl ToTokens for PopulateNested<'_> {
                             #query,
                             parent_ids.as_slice() as &[&#ty],
                             <#repo_types_mod::Repo__Event as EsEvent>::event_context(),
-                        ).fetch_all(op.as_executor()).await?
+                        ).fetch_all(es_entity::annotate_executor(op.as_executor())).await?
                     };
                     let n = rows.len();
                     let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(rows.into_iter(), n)?;
@@ -175,13 +175,13 @@ impl ToTokens for PopulateNested<'_> {
                         #payload_delete_query,
                         parent_id as &#ty,
                     )
-                    .execute(op.as_executor())
+                    .execute(es_entity::annotate_executor(op.as_executor()))
                     .await?;
                     sqlx::query!(
                         #cascade_query,
                         parent_id as &#ty,
                     )
-                    .execute(op.as_executor())
+                    .execute(es_entity::annotate_executor(op.as_executor()))
                     .await?;
                 }
             } else {
@@ -194,7 +194,7 @@ impl ToTokens for PopulateNested<'_> {
                         #cascade_query,
                         parent_id as &#ty,
                     )
-                    .execute(op.as_executor())
+                    .execute(es_entity::annotate_executor(op.as_executor()))
                     .await?;
                 }
             };

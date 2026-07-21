@@ -23,7 +23,7 @@ use crate::{db, operation::AtomicOperation};
 /// ```
 pub struct OneTimeExecutor<'c, E>
 where
-    E: sqlx::Executor<'c, Database = db::Db>,
+    E: sqlx::Executor<'c, Database = db::Db> + 'c,
 {
     now: Option<chrono::DateTime<chrono::Utc>>,
     executor: E,
@@ -32,7 +32,7 @@ where
 
 impl<'c, E> OneTimeExecutor<'c, E>
 where
-    E: sqlx::Executor<'c, Database = db::Db>,
+    E: sqlx::Executor<'c, Database = db::Db> + 'c,
 {
     fn new(executor: E, now: Option<chrono::DateTime<chrono::Utc>>) -> Self {
         OneTimeExecutor {
@@ -56,7 +56,9 @@ where
         O: Send + Unpin,
         A: 'q + Send + sqlx::IntoArguments<'q, db::Db>,
     {
-        query.fetch_one(self.executor).await
+        query
+            .fetch_one(crate::annotate_executor(self.executor))
+            .await
     }
 
     /// Proxy call to `query.fetch_all` but guarantees the inner executor will only be used once.
@@ -69,7 +71,9 @@ where
         O: Send + Unpin,
         A: 'q + Send + sqlx::IntoArguments<'q, sqlx::Postgres>,
     {
-        query.fetch_all(self.executor).await
+        query
+            .fetch_all(crate::annotate_executor(self.executor))
+            .await
     }
 
     /// Proxy call to `query.fetch_optional` but guarantees the inner executor will only be used once.
@@ -82,7 +86,9 @@ where
         O: Send + Unpin,
         A: 'q + Send + sqlx::IntoArguments<'q, sqlx::Postgres>,
     {
-        query.fetch_optional(self.executor).await
+        query
+            .fetch_optional(crate::annotate_executor(self.executor))
+            .await
     }
 }
 

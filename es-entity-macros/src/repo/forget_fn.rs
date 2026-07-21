@@ -62,7 +62,7 @@ impl ToTokens for ForgetFn<'_> {
                     #columns_query,
                     id as &#id_type
                 )
-                .execute(op.as_executor())
+                .execute(es_entity::annotate_executor(op.as_executor()))
                 .await?;
             }
         };
@@ -125,7 +125,7 @@ impl ToTokens for ForgetFn<'_> {
                         #query,
                         id as &#id_type
                     )
-                    .execute(op.as_executor())
+                    .execute(es_entity::annotate_executor(op.as_executor()))
                     .await?;
                     #forget_columns
                 }

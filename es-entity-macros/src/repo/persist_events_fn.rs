@@ -76,7 +76,7 @@ impl ToTokens for PersistEventsFn<'_> {
                         &payload_sequences,
                         &payload_values,
                     )
-                    .execute(op.as_executor())
+                    .execute(es_entity::annotate_executor(op.as_executor()))
                     .await?;
                 }
             }
@@ -122,7 +122,7 @@ impl ToTokens for PersistEventsFn<'_> {
                         &events_types,
                         &serialized_events,
                         #ctx_arg
-                    ).fetch_all(op.as_executor()).await?;
+                    ).fetch_all(es_entity::annotate_executor(op.as_executor())).await?;
 
                 let recorded_at = rows[0].recorded_at;
                 let n_events = events.mark_new_events_persisted_at(recorded_at);
@@ -189,7 +189,7 @@ mod tests {
                         &events_types,
                         &serialized_events,
                         contexts.as_deref() as Option<&[es_entity::ContextData]>,
-                    ).fetch_all(op.as_executor()).await?;
+                    ).fetch_all(es_entity::annotate_executor(op.as_executor())).await?;
 
                 let recorded_at = rows[0].recorded_at;
                 let n_events = events.mark_new_events_persisted_at(recorded_at);
@@ -251,7 +251,7 @@ mod tests {
                         offset as i32,
                         &events_types,
                         &serialized_events,
-                    ).fetch_all(op.as_executor()).await?;
+                    ).fetch_all(es_entity::annotate_executor(op.as_executor())).await?;
 
                 let recorded_at = rows[0].recorded_at;
                 let n_events = events.mark_new_events_persisted_at(recorded_at);

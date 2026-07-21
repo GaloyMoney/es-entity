@@ -23,6 +23,7 @@
 #![cfg_attr(feature = "fail-on-warnings", deny(clippy::all))]
 #![forbid(unsafe_code)]
 
+mod annotating_executor;
 pub mod clock;
 pub mod context;
 pub mod db;
@@ -36,6 +37,7 @@ pub mod one_time_executor;
 pub mod operation;
 pub mod pagination;
 pub mod query;
+pub mod sql_commenter;
 pub mod traits;
 
 pub mod prelude {
@@ -51,6 +53,8 @@ pub mod prelude {
     pub use schemars;
 }
 
+#[doc(inline)]
+pub use annotating_executor::{TraceAnnotatingExecutor, annotate_executor};
 #[doc(inline)]
 pub use context::*;
 #[doc(inline)]

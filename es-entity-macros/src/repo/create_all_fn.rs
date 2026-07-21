@@ -140,7 +140,7 @@ impl ToTokens for CreateAllFn<'_> {
                     sqlx::query(#query)
                        .bind(now)
                        #(#bindings)*
-                       .fetch_all(op.as_executor())
+                       .fetch_all(es_entity::annotate_executor(op.as_executor()))
                        .await
                        .map_err(|e| match &e {
                            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
@@ -256,7 +256,7 @@ mod tests {
                         .bind(now)
                         .bind(id_collection)
                         .bind(name_collection)
-                        .fetch_all(op.as_executor())
+                        .fetch_all(es_entity::annotate_executor(op.as_executor()))
                         .await
                         .map_err(|e| match &e {
                             sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
