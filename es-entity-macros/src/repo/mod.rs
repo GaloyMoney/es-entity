@@ -29,6 +29,7 @@ use options::RepositoryOptions;
 pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream> {
     let opts = RepositoryOptions::from_derive_input(&ast)?;
     opts.columns.validate_list_for_by_columns()?;
+    opts.validate_forgettable()?;
     let repo = EsRepo::from(&opts);
     Ok(quote!(#repo))
 }
@@ -207,6 +208,24 @@ impl ToTokens for EsRepo<'_> {
 
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
 
+        // If the event type has Forgettable fields, the repo must enable
+        // `forgettable` — otherwise the payload machinery is never generated
+        // and forgettable values would be lost. The repo cannot see the
+        // event's forgettable-ness at macro time, so this rides the event's
+        // inherent `HAS_FORGETTABLE_FIELDS` const as a const assert (mirroring
+        // the `es_query!` guard). Forgettable *index columns* are checked
+        // eagerly in `validate_forgettable`.
+        let forgettable_event_guard = if self.opts.forgettable_enabled() {
+            quote! {}
+        } else {
+            quote! {
+                const _: () = assert!(
+                    !Repo__Event::HAS_FORGETTABLE_FIELDS,
+                    "event type has Forgettable fields but this repo does not enable `forgettable`; add `forgettable` to #[es_repo(...)]"
+                );
+            }
+        };
+
         tokens.append_all(quote! {
             pub mod #cursor_mod {
                 use super::*;
@@ -232,6 +251,8 @@ impl ToTokens for EsRepo<'_> {
                 pub(super) type Repo__DbEvent = es_entity::GenericEvent<#id>;
                 #[allow(dead_code)]
                 pub(super) const REPO__HAS_TBL_PREFIX: bool = #has_tbl_prefix;
+
+                #forgettable_event_guard
             }
 
             #error_types
@@ -300,5 +321,61 @@ impl ToTokens for EsRepo<'_> {
                }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::parse_quote;
+
+    use super::*;
+
+    // Guard 2 (known at macro time): Forgettable<T> index columns require the
+    // repo to enable `forgettable`.
+    #[test]
+    fn forgettable_index_column_without_flag_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Subscriber", columns(email(ty = "Forgettable<String>")))]
+            struct Subscribers {
+                pool: sqlx::PgPool,
+            }
+        };
+        let err = derive(input).unwrap_err();
+        assert!(
+            err.to_string().contains("does not enable `forgettable`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn forgettable_index_column_with_flag_is_ok() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Subscriber",
+                forgettable,
+                columns(email(ty = "Forgettable<String>"))
+            )]
+            struct Subscribers {
+                pool: sqlx::PgPool,
+            }
+        };
+        assert!(derive(input).is_ok());
+    }
+
+    // Guard 1 (event has Forgettable fields but the repo omits `forgettable`)
+    // fires only once the event type resolves, so it is a const assert on the
+    // event's inherent `HAS_FORGETTABLE_FIELDS`; its end-to-end behavior is
+    // covered by a compile_fail doctest on `Forgettable` rather than a brittle
+    // token-string assertion here.
+
+    #[test]
+    fn plain_repo_is_ok() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", columns(name(ty = "String")))]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        assert!(derive(input).is_ok());
     }
 }

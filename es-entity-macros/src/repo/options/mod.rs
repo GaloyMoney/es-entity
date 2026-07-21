@@ -481,6 +481,20 @@ impl RepositoryOptions {
         self.forgettable
     }
 
+    /// Errors if the repo declares `Forgettable<T>` index columns but does not
+    /// enable `forgettable`. Both facts are known at macro time (unlike event
+    /// forgettable-ness, which the repo cannot see — that is guarded by a
+    /// const assert in the generated code instead).
+    pub fn validate_forgettable(&self) -> darling::Result<()> {
+        if !self.forgettable && !self.columns.forgettable_column_names().is_empty() {
+            return Err(darling::Error::custom(
+                "repo has Forgettable<T> index columns but does not enable `forgettable`; \
+                 add `forgettable` to #[es_repo(...)]",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn forgettable_table_name(&self) -> Option<&str> {
         if self.forgettable {
             Some(self.forgettable_table_name.as_deref().unwrap_or_else(|| {
