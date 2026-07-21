@@ -36,6 +36,7 @@ pub mod one_time_executor;
 pub mod operation;
 pub mod pagination;
 pub mod query;
+pub mod sql_commenter;
 pub mod traits;
 
 pub mod prelude {
