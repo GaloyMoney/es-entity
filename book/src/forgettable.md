@@ -80,6 +80,10 @@ pub enum CustomerEvent {
 
 The `EsEvent` derive macro detects `Forgettable` fields and generates the extraction/injection code automatically.
 
+## Current Limitations
+
+A `Forgettable<T>` is only handled as a direct, top-level field of an event variant, spelled `Forgettable<...>`. Anywhere else — nested inside another struct, inside a `Vec` or `Option`, or behind a type alias — its value is silently written as `null` and never stored: permanent data loss. Likewise, renaming a forgettable field's serialized key (e.g. via `#[serde(rename = "...")]`) breaks payload recovery and the value reads back as forgotten. Keep forgettable fields top-level and un-renamed. (Compile-time enforcement of these two rules is deferred.)
+
 ## Accessing Forgettable Values
 
 `Forgettable<T>` is an opaque type. You cannot pattern-match the inner value directly. Instead, use `.value()` which returns an `Option<ForgettableRef<T>>`:
