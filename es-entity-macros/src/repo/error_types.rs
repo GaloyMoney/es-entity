@@ -157,6 +157,7 @@ impl<'a> ErrorTypes<'a> {
             pub enum #forget_error {
                 Sqlx(sqlx::Error),
                 HydrationError(es_entity::EntityHydrationError),
+                ConcurrentModification,
             }
 
             impl std::fmt::Display for #forget_error {
@@ -164,6 +165,7 @@ impl<'a> ErrorTypes<'a> {
                     match self {
                         Self::Sqlx(e) => write!(f, "{}ForgetError - Sqlx: {}", #entity_name, e),
                         Self::HydrationError(e) => write!(f, "{}ForgetError - HydrationError: {}", #entity_name, e),
+                        Self::ConcurrentModification => write!(f, "{}ForgetError - ConcurrentModification: another writer persisted events concurrently; reload the entity and re-forget", #entity_name),
                     }
                 }
             }
@@ -173,6 +175,7 @@ impl<'a> ErrorTypes<'a> {
                     match self {
                         Self::Sqlx(e) => Some(e),
                         Self::HydrationError(e) => Some(e),
+                        Self::ConcurrentModification => None,
                     }
                 }
             }
@@ -186,6 +189,12 @@ impl<'a> ErrorTypes<'a> {
             impl From<es_entity::EntityHydrationError> for #forget_error {
                 fn from(e: es_entity::EntityHydrationError) -> Self {
                     Self::HydrationError(e)
+                }
+            }
+
+            impl #forget_error {
+                pub fn was_concurrent_modification(&self) -> bool {
+                    matches!(self, Self::ConcurrentModification)
                 }
             }
         }

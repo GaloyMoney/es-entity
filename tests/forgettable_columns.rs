@@ -27,6 +27,12 @@ pub enum SubscriberEvent {
     PlanChanged {
         plan: String,
     },
+    EmailUpdated {
+        email: Forgettable<String>,
+    },
+    /// Client-declared erasure event (convention): stage before `forget()`
+    /// or `delete()` so the erasure consumes a sequence number.
+    Forgot {},
 }
 
 #[derive(EsEntity, Builder)]
@@ -46,6 +52,20 @@ impl Subscriber {
         self.events.push(SubscriberEvent::PlanChanged { plan });
         Idempotent::Executed(())
     }
+
+    pub fn update_email(&mut self, email: impl Into<String>) -> Idempotent<()> {
+        let email = email.into();
+        self.email = Forgettable::new(email.clone());
+        self.events.push(SubscriberEvent::EmailUpdated {
+            email: Forgettable::new(email),
+        });
+        Idempotent::Executed(())
+    }
+
+    /// Stages the domain erasure event (convention — see the book chapter).
+    pub fn record_erasure(&mut self) {
+        self.events.push(SubscriberEvent::Forgot {});
+    }
 }
 
 impl TryFromEvents<SubscriberEvent> for Subscriber {
@@ -61,6 +81,12 @@ impl TryFromEvents<SubscriberEvent> for Subscriber {
                 SubscriberEvent::PlanChanged { plan } => {
                     builder = builder.plan(plan.clone());
                 }
+                SubscriberEvent::EmailUpdated { email } => {
+                    builder = builder.email(email.clone());
+                }
+                // Erasure event (client convention): payloads were deleted
+                // at this point in the stream. No state to apply.
+                SubscriberEvent::Forgot { .. } => {}
             }
         }
         builder.events(events).build()
@@ -149,10 +175,10 @@ async fn forget_nulls_the_index_column() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let subscribers = Subscribers::new(pool.clone());
 
-    let (mut subscriber, email) = new_subscriber(&subscribers).await?;
+    let (subscriber, email) = new_subscriber(&subscribers).await?;
     let id = subscriber.id;
 
-    subscribers.forget(&mut subscriber).await?;
+    let subscriber = subscribers.forget(subscriber).await?;
 
     // The rebuilt entity has forgotten the value...
     assert!(subscriber.email.is_forgotten());
@@ -179,6 +205,93 @@ async fn forget_nulls_the_index_column() -> anyhow::Result<()> {
     // ...and it is no longer findable by the forgotten value.
     let refound = subscribers.maybe_find_by_email(&email).await?;
     assert!(refound.is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn delete_with_pending_forgettable_events_leaves_the_pending_payload() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let subscribers = Subscribers::new(pool.clone());
+
+    let (mut subscriber, _email) = new_subscriber(&subscribers).await?;
+    let id = subscriber.id;
+
+    // Base soft-delete ordering: it deletes the payload rows first, then
+    // persists any pending events. A pending forgettable-carrying event
+    // therefore inserts its payload row *after* the delete, so that row
+    // survives the soft delete — the accepted base behavior. (Staging the
+    // erasure event, not smuggling forgettable data through an unpersisted
+    // event, is the convention for actually forgetting.)
+    let _ = subscriber.update_email(format!("pending-{id}@example.com"));
+    subscribers.delete(subscriber).await?;
+
+    let payloads = sqlx::query!(
+        r#"SELECT COUNT(*) AS "count!" FROM subscribers_forgettable_payloads
+           WHERE entity_id = $1"#,
+        id as SubscriberId
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        payloads.count, 1,
+        "the pending event's payload survives base soft-delete ordering"
+    );
+
+    // The pending event was persisted, and its durable JSON holds null (the
+    // value lives in the surviving payload row).
+    let row = sqlx::query!(
+        r#"SELECT event->>'email' IS NULL AS "email_is_null!" FROM subscriber_events
+           WHERE id = $1 AND event_type = 'email_updated'"#,
+        id as SubscriberId
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert!(row.email_is_null);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn staged_erasure_event_fences_stale_writers_on_delete() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let subscribers = Subscribers::new(pool.clone());
+
+    let (mut subscriber, email) = new_subscriber(&subscribers).await?;
+    let id = subscriber.id;
+
+    // A stale copy loaded before the delete.
+    let mut stale = subscribers.find_by_id(id).await?;
+
+    // Convention: stage the erasure event before deleting. delete() persists
+    // it as part of the soft delete, consuming a sequence number — the
+    // concurrency fence (independent of the payload-delete ordering). Without
+    // a staged event the delete consumes no sequence and a stale writer stays
+    // unfenced (accepted tradeoff, see the book chapter).
+    subscriber.record_erasure();
+    subscribers.delete(subscriber).await?;
+
+    let _ = stale.change_plan("basic");
+    let err = subscribers
+        .update(&mut stale)
+        .await
+        .expect_err("stale update after fenced delete must fail");
+    assert!(
+        err.was_concurrent_modification(),
+        "expected ConcurrentModification, got: {err}"
+    );
+
+    // The index column stays NULL.
+    let row = sqlx::query!(
+        "SELECT email, deleted FROM subscribers WHERE id = $1",
+        id as SubscriberId
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert!(row.deleted);
+    assert_eq!(row.email, None);
+    // Silence unused warning; the forgotten value must not be findable anyway.
+    let _ = email;
 
     Ok(())
 }
