@@ -28,6 +28,7 @@ pub mod context;
 pub mod db;
 pub mod error;
 pub mod events;
+pub mod forgettable;
 pub mod idempotent;
 mod macros;
 pub mod nested;
@@ -62,6 +63,8 @@ pub use es_entity_macros::expand_es_query;
 pub use es_entity_macros::retry_on_concurrent_modification;
 #[doc(inline)]
 pub use events::*;
+#[doc(inline)]
+pub use forgettable::{Forgettable, ForgettableRef};
 #[doc(inline)]
 pub use idempotent::*;
 #[doc(inline)]

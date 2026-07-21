@@ -18,6 +18,7 @@ pub struct GenericEvent<Id> {
     pub event: serde_json::Value,
     pub context: Option<crate::ContextData>,
     pub recorded_at: DateTime<Utc>,
+    pub forgettable_payload: Option<serde_json::Value>,
 }
 
 /// Strongly-typed event wrapper with metadata for successfully stored events.
@@ -202,11 +203,15 @@ where
                 break;
             }
             let cur = current.as_mut().expect("Could not get current");
+            let mut event_json = e.event;
+            if let Some(payload) = e.forgettable_payload {
+                crate::forgettable::inject_forgettable_payload(&mut event_json, payload);
+            }
             cur.persisted_events.push(PersistedEvent {
                 entity_id: e.entity_id,
                 recorded_at: e.recorded_at,
                 sequence: e.sequence as usize,
-                event: serde_json::from_value(e.event)?,
+                event: serde_json::from_value(event_json)?,
                 context: e.context,
             });
         }
@@ -245,11 +250,15 @@ where
                 });
             }
             let cur = current.as_mut().expect("Could not get current");
+            let mut event_json = e.event;
+            if let Some(payload) = e.forgettable_payload {
+                crate::forgettable::inject_forgettable_payload(&mut event_json, payload);
+            }
             cur.persisted_events.push(PersistedEvent {
                 entity_id: e.entity_id,
                 recorded_at: e.recorded_at,
                 sequence: e.sequence as usize,
-                event: serde_json::from_value(e.event)?,
+                event: serde_json::from_value(event_json)?,
                 context: e.context,
             });
         }
@@ -257,6 +266,11 @@ where
             ret.push(E::try_from_events(current)?);
         }
         Ok((ret, false))
+    }
+
+    #[doc(hidden)]
+    pub fn iter_new_events(&self) -> impl Iterator<Item = &EventWithContext<T>> {
+        self.new_events.iter()
     }
 
     #[doc(hidden)]
@@ -296,6 +310,27 @@ where
             .iter()
             .map(|event| serde_json::to_value(&event.event).expect("Failed to serialize event"))
             .collect()
+    }
+
+    /// Forgets all forgettable payloads in persisted events and returns the taken events.
+    ///
+    /// Applies `forget_fn` to each persisted event, then takes ownership of the event
+    /// stream, leaving `self` as an empty shell. The returned `EntityEvents` can be passed
+    /// to `TryFromEvents::try_from_events` to rebuild the entity with forgotten fields.
+    #[doc(hidden)]
+    pub fn forget_and_take(&mut self, mut forget_fn: impl FnMut(&mut T)) -> Self {
+        for persisted in &mut self.persisted_events {
+            forget_fn(&mut persisted.event);
+        }
+        let entity_id = self.entity_id.clone();
+        std::mem::replace(
+            self,
+            Self {
+                entity_id,
+                persisted_events: Vec::new(),
+                new_events: Vec::new(),
+            },
+        )
     }
 
     #[doc(hidden)]
@@ -396,6 +431,7 @@ mod tests {
                 .expect("Could not serialize"),
             context: None,
             recorded_at: chrono::Utc::now(),
+            forgettable_payload: None,
         }];
         let entity: DummyEntity = EntityEvents::load_first(generic_events)
             .expect("Could not load")
@@ -413,6 +449,7 @@ mod tests {
                     .expect("Could not serialize"),
                 context: None,
                 recorded_at: chrono::Utc::now(),
+                forgettable_payload: None,
             },
             GenericEvent {
                 entity_id: Uuid::parse_str("00000000-0000-0000-0000-000000000003").unwrap(),
@@ -421,6 +458,7 @@ mod tests {
                     .expect("Could not serialize"),
                 context: None,
                 recorded_at: chrono::Utc::now(),
+                forgettable_payload: None,
             },
         ];
         let (entity, more): (Vec<DummyEntity>, _) =
