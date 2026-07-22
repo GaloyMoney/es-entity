@@ -345,3 +345,28 @@ async fn commit_hook_not_visible_inside_pre_commit() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn supports_hooks_reflects_op_capability() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+
+    // A DbOp is backed by a commit-hook buffer.
+    let op = DbOp::init(&pool).await?;
+    assert!(op.supports_hooks());
+
+    // Time wrappers delegate to the inner op. (The `OpWithTime` temporary
+    // borrows `with_time` only for the duration of the statement.)
+    let mut with_time = op.with_db_time().await?;
+    assert!(with_time.supports_hooks());
+    assert!(OpWithTime::cached_or_clock_time(&mut with_time).supports_hooks());
+    with_time.commit().await?;
+
+    // A bare sqlx::Transaction has no hook buffer, so it reports no support —
+    // distinct from a hook-capable op that merely has nothing registered yet
+    // (both of which `commit_hook` would report as `None`).
+    let tx = pool.begin().await?;
+    assert!(!tx.supports_hooks());
+    tx.rollback().await?;
+
+    Ok(())
+}

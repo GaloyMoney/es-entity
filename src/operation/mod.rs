@@ -142,6 +142,10 @@ impl<'o> AtomicOperation for DbOp<'o> {
     fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H> {
         self.commit_hooks.as_ref()?.get_last::<H>()
     }
+
+    fn supports_hooks(&self) -> bool {
+        true
+    }
 }
 
 /// Equivileant of [`DbOp`] just that the time is guaranteed to be cached.
@@ -198,6 +202,10 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
 
     fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H> {
         self.inner.commit_hook::<H>()
+    }
+
+    fn supports_hooks(&self) -> bool {
+        self.inner.supports_hooks()
     }
 }
 
@@ -277,6 +285,18 @@ pub trait AtomicOperation: Send {
     /// Returns the hook a subsequent `add_commit_hook::<H>` call would merge into.
     fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H> {
         None
+    }
+
+    /// Whether this operation supports commit hooks.
+    ///
+    /// `true` iff [`add_commit_hook`](Self::add_commit_hook) can register a hook
+    /// (i.e. the operation is backed by a [`DbOp`]-style commit-hook buffer, not
+    /// a bare [`sqlx::Transaction`]). Unlike [`commit_hook`](Self::commit_hook) —
+    /// whose `None` is ambiguous between "hooks unsupported" and "supported but
+    /// none registered yet" — this reports support directly, with no registration
+    /// attempt and no `&mut` access.
+    fn supports_hooks(&self) -> bool {
+        false
     }
 }
 
