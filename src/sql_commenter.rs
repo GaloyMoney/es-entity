@@ -26,11 +26,31 @@
 //! sampled flag keeps full prepared-statement reuse for all un-sampled
 //! traffic.
 //!
-//! Annotation requires the `tracing-context` feature and an initialized
-//! OpenTelemetry tracing layer. Otherwise [`annotate_sql`] is a zero-cost
-//! pass-through.
+//! Annotation requires the `tracing-context` feature, an initialized
+//! OpenTelemetry tracing layer, and must be switched on via
+//! [`set_annotation_enabled`] (it is disabled by default). Otherwise
+//! [`annotate_sql`] is a zero-cost pass-through.
 
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static ANNOTATION_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Globally enables or disables SQL trace-context annotation (disabled by
+/// default).
+///
+/// While disabled, [`annotate_sql`] is a pass-through and executors delegate
+/// statements untouched — prepared-statement reuse for all traffic at the
+/// cost of losing statement-level trace correlation. Intended to be set once
+/// at process startup from application configuration.
+pub fn set_annotation_enabled(enabled: bool) {
+    ANNOTATION_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Whether SQL trace-context annotation is currently enabled.
+pub fn annotation_enabled() -> bool {
+    ANNOTATION_ENABLED.load(Ordering::Relaxed)
+}
 
 /// The W3C `trace-flags` sampled bit.
 #[cfg(feature = "tracing-context")]
@@ -62,6 +82,9 @@ pub fn current_traceparent() -> Option<String> {
 /// Returns [`Cow::Borrowed`] (no allocation) when there is no sampled span
 /// context; callers can use this to skip any annotation-dependent work.
 pub fn annotate_sql(sql: &str) -> Cow<'_, str> {
+    if !annotation_enabled() {
+        return Cow::Borrowed(sql);
+    }
     match current_traceparent() {
         Some(traceparent) => Cow::Owned(format!("{sql} /*traceparent='{traceparent}'*/")),
         None => Cow::Borrowed(sql),
@@ -74,6 +97,32 @@ mod tests {
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     use super::*;
+
+    /// Serializes tests that are sensitive to the global annotation toggle.
+    static ANNOTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Locks the toggle, tolerating poisoning from a previously panicked test.
+    fn annotation_lock() -> std::sync::MutexGuard<'static, ()> {
+        ANNOTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Enables annotation for the duration of a test, restoring the default
+    /// (disabled) on drop — including when the test panics.
+    struct AnnotationEnabled(std::sync::MutexGuard<'static, ()>);
+
+    impl AnnotationEnabled {
+        fn for_test() -> Self {
+            let guard = annotation_lock();
+            set_annotation_enabled(true);
+            Self(guard)
+        }
+    }
+
+    impl Drop for AnnotationEnabled {
+        fn drop(&mut self) {
+            set_annotation_enabled(false);
+        }
+    }
 
     fn subscriber_with_sampler(
         sampler: opentelemetry_sdk::trace::Sampler,
@@ -95,6 +144,7 @@ mod tests {
 
     #[test]
     fn annotates_within_sampled_span() {
+        let _enabled = AnnotationEnabled::for_test();
         let _subscriber = subscriber_with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOn);
 
         let span = tracing::info_span!("test_span");
@@ -116,6 +166,10 @@ mod tests {
 
     #[test]
     fn unsampled_span_is_not_annotated() {
+        // Even with annotation enabled, an un-sampled span must not be
+        // annotated: its trace is never exported, so the comment could not
+        // be correlated with anything.
+        let _enabled = AnnotationEnabled::for_test();
         let _subscriber = subscriber_with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOff);
 
         let span = tracing::info_span!("test_span");
@@ -123,5 +177,21 @@ mod tests {
 
         assert!(current_traceparent().is_none());
         assert_eq!(annotate_sql("SELECT 1"), "SELECT 1");
+    }
+
+    #[test]
+    fn annotation_disabled_by_default_and_toggleable() {
+        let _lock = annotation_lock();
+        let _subscriber = subscriber_with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOn);
+
+        let span = tracing::info_span!("test_span");
+        let _guard = span.enter();
+
+        // Disabled by default: pass-through even within a sampled span.
+        assert_eq!(annotate_sql("SELECT 1"), "SELECT 1");
+
+        set_annotation_enabled(true);
+        assert!(annotate_sql("SELECT 1").contains("/*traceparent='"));
+        set_annotation_enabled(false);
     }
 }
