@@ -1,3 +1,11 @@
+# [cala release v0.11.3](https://github.com/GaloyMoney/cala/releases/tag/0.11.3)
+
+
+
+### Features
+
+- Add AtomicOperation::supports_hooks() probe (#155)
+
 # [cala release v0.11.2](https://github.com/GaloyMoney/cala/releases/tag/0.11.2)
 
 
