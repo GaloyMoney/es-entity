@@ -1,3 +1,11 @@
+# [cala release v0.11.4](https://github.com/GaloyMoney/cala/releases/tag/0.11.4)
+
+
+
+### Features
+
+- [**breaking**] Add global toggle for SQL trace-context annotation (default off) (#156)
+
 # [cala release v0.11.3](https://github.com/GaloyMoney/cala/releases/tag/0.11.3)
 
 
