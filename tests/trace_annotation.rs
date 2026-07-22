@@ -21,6 +21,9 @@ async fn trace_context_reaches_postgres() -> anyhow::Result<()> {
         .with(tracing_opentelemetry::layer().with_tracer(tracer))
         .try_init();
 
+    // Annotation is disabled by default; this test exercises the opt-in path.
+    sql_commenter::set_annotation_enabled(true);
+
     let pool = init_pool().await?;
 
     let span = tracing::info_span!("trace_annotation_test");
