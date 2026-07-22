@@ -101,6 +101,29 @@ mod tests {
     /// Serializes tests that are sensitive to the global annotation toggle.
     static ANNOTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// Locks the toggle, tolerating poisoning from a previously panicked test.
+    fn annotation_lock() -> std::sync::MutexGuard<'static, ()> {
+        ANNOTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Enables annotation for the duration of a test, restoring the default
+    /// (disabled) on drop — including when the test panics.
+    struct AnnotationEnabled(std::sync::MutexGuard<'static, ()>);
+
+    impl AnnotationEnabled {
+        fn for_test() -> Self {
+            let guard = annotation_lock();
+            set_annotation_enabled(true);
+            Self(guard)
+        }
+    }
+
+    impl Drop for AnnotationEnabled {
+        fn drop(&mut self) {
+            set_annotation_enabled(false);
+        }
+    }
+
     fn subscriber_with_sampler(
         sampler: opentelemetry_sdk::trace::Sampler,
     ) -> tracing::subscriber::DefaultGuard {
@@ -121,8 +144,7 @@ mod tests {
 
     #[test]
     fn annotates_within_sampled_span() {
-        let _lock = ANNOTATION_LOCK.lock().unwrap();
-        set_annotation_enabled(true);
+        let _enabled = AnnotationEnabled::for_test();
         let _subscriber = subscriber_with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOn);
 
         let span = tracing::info_span!("test_span");
@@ -140,17 +162,14 @@ mod tests {
             annotate_sql("SELECT 1"),
             format!("SELECT 1 /*traceparent='{tp}'*/")
         );
-
-        set_annotation_enabled(false);
     }
 
     #[test]
     fn unsampled_span_is_not_annotated() {
-        let _lock = ANNOTATION_LOCK.lock().unwrap();
         // Even with annotation enabled, an un-sampled span must not be
         // annotated: its trace is never exported, so the comment could not
         // be correlated with anything.
-        set_annotation_enabled(true);
+        let _enabled = AnnotationEnabled::for_test();
         let _subscriber = subscriber_with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOff);
 
         let span = tracing::info_span!("test_span");
@@ -158,13 +177,11 @@ mod tests {
 
         assert!(current_traceparent().is_none());
         assert_eq!(annotate_sql("SELECT 1"), "SELECT 1");
-
-        set_annotation_enabled(false);
     }
 
     #[test]
     fn annotation_disabled_by_default_and_toggleable() {
-        let _lock = ANNOTATION_LOCK.lock().unwrap();
+        let _lock = annotation_lock();
         let _subscriber = subscriber_with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOn);
 
         let span = tracing::info_span!("test_span");
