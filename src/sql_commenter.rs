@@ -146,6 +146,11 @@ mod tests {
 
     #[test]
     fn unsampled_span_is_not_annotated() {
+        let _lock = ANNOTATION_LOCK.lock().unwrap();
+        // Even with annotation enabled, an un-sampled span must not be
+        // annotated: its trace is never exported, so the comment could not
+        // be correlated with anything.
+        set_annotation_enabled(true);
         let _subscriber = subscriber_with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOff);
 
         let span = tracing::info_span!("test_span");
@@ -153,6 +158,8 @@ mod tests {
 
         assert!(current_traceparent().is_none());
         assert_eq!(annotate_sql("SELECT 1"), "SELECT 1");
+
+        set_annotation_enabled(false);
     }
 
     #[test]
