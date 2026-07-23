@@ -1,3 +1,11 @@
+# [cala release v0.11.5](https://github.com/GaloyMoney/cala/releases/tag/0.11.5)
+
+
+
+### Features
+
+- Add JsonSchema support for Forgettable<T> (#157)
+
 # [cala release v0.11.4](https://github.com/GaloyMoney/cala/releases/tag/0.11.4)
 
 
