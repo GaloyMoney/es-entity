@@ -1,3 +1,15 @@
+# [cala release v0.11.6](https://github.com/GaloyMoney/cala/releases/tag/0.11.6)
+
+
+
+### Documentation
+
+- Update dependency versions and add forgettable payloads section
+
+### Miscellaneous Tasks
+
+- Bump the all-dependencies group with 4 updates (#159)
+
 # [cala release v0.11.5](https://github.com/GaloyMoney/cala/releases/tag/0.11.5)
 
 
