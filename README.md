@@ -179,10 +179,10 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-es-entity = "0.9"
-sqlx = "0.8.3" # Needs to be in scope for entity_id! macro
-serde = { version = "1.0.219", features = ["derive"] } # To serialize the `EntityEvent`
-derive_builder = "0.20.1" # For hydrating and building the entity state (optional)
+es-entity = "0.11"
+sqlx = "0.8" # Needs to be in scope for entity_id! macro
+serde = { version = "1.0", features = ["derive"] } # To serialize the `EntityEvent`
+derive_builder = "0.20" # For hydrating and building the entity state (optional)
 ```
 
 ## Advanced features
@@ -236,6 +236,30 @@ pub struct Orders {
     items: OrderItems,
 }
 ```
+### Forgettable Payloads
+
+Events are immutable — but regulations like GDPR require deleting personal data.
+Wrap fields in `Forgettable<T>` to store their values outside the event stream,
+so `forget()` can permanently delete them without rewriting event history:
+
+```rust
+#[derive(EsEvent, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[es_event(id = "CustomerId")]
+pub enum CustomerEvent {
+    Initialized {
+        id: CustomerId,
+        // Personal data - stored separately, deletable
+        name: Forgettable<String>,
+    },
+}
+
+// Repos marked `forgettable` generate a `forget` fn
+customers.forget(&mut customer).await?;
+assert!(customer.name.is_forgotten());
+```
+
+See the [Forgettable Data](https://galoymoney.github.io/es-entity/forgettable.html) chapter in the book for details.
 
 ## Testing
 
