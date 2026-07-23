@@ -24,6 +24,13 @@ use std::{fmt, hash, ops::Deref};
 /// - Real values are extracted via [`__extract_payload_value`] **before** serde runs,
 ///   and stored in the forgettable payloads table.
 ///
+/// # JSON Schema
+///
+/// With the `json-schema` feature enabled, `Forgettable<T>` implements
+/// `schemars::JsonSchema` by delegating to `Option<T>`, matching the
+/// value-or-null serialized shape — no field-level `#[schemars(with = ...)]`
+/// is needed on containing types.
+///
 /// # Repository Guard
 ///
 /// An event type with `Forgettable<T>` fields must be backed by a repository
@@ -134,6 +141,25 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Forgettable<T> {
             Some(v) => Ok(Forgettable(Some(v))),
             None => Ok(Forgettable(None)),
         }
+    }
+}
+
+#[cfg(feature = "json-schema")]
+impl<T: schemars::JsonSchema> schemars::JsonSchema for Forgettable<T> {
+    fn inline_schema() -> bool {
+        Option::<T>::inline_schema()
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        Option::<T>::schema_name()
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        Option::<T>::schema_id()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        Option::<T>::json_schema(generator)
     }
 }
 
