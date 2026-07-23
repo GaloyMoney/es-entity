@@ -237,6 +237,26 @@ pub struct Orders {
 }
 ```
 
+### Forgettable payloads
+
+Events are immutable, but regulations like GDPR require deleting personal data.
+Wrap fields in `Forgettable<T>` to store their values outside the event stream,
+so they can be permanently deleted via `forget()` without rewriting event history:
+
+```rust
+#[derive(EsEvent, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[es_event(id = "CustomerId")]
+pub enum CustomerEvent {
+    Initialized {
+        id: CustomerId,
+        name: Forgettable<String>,
+    },
+}
+```
+
+See the [Forgettable Data](https://galoymoney.github.io/es-entity/forgettable.html) chapter of the book for details.
+
 ## Testing
 
 The entity style is easily testable. Hydrate from events, mutate, assert.
