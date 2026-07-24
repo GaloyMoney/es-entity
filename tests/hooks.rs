@@ -346,6 +346,210 @@ async fn commit_hook_not_visible_inside_pre_commit() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+struct OrderProbe<const N: usize> {
+    label: &'static str,
+    pre_order: Arc<Mutex<Vec<&'static str>>>,
+    post_order: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl<const N: usize> CommitHook for OrderProbe<N> {
+    async fn pre_commit(
+        self,
+        op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        self.pre_order.lock().unwrap().push(self.label);
+        PreCommitRet::ok(self, op)
+    }
+
+    fn post_commit(self) {
+        self.post_order.lock().unwrap().push(self.label);
+    }
+}
+
+#[derive(Debug)]
+struct MergingOrderProbe {
+    labels: Vec<&'static str>,
+    pre_order: Arc<Mutex<Vec<&'static str>>>,
+    post_order: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl CommitHook for MergingOrderProbe {
+    async fn pre_commit(
+        self,
+        op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        self.pre_order.lock().unwrap().extend(&self.labels);
+        PreCommitRet::ok(self, op)
+    }
+
+    fn post_commit(self) {
+        self.post_order.lock().unwrap().extend(&self.labels);
+    }
+
+    fn merge(&mut self, other: &mut Self) -> bool {
+        self.labels.append(&mut other.labels);
+        true
+    }
+}
+
+#[tokio::test]
+async fn hooks_execute_in_registration_order_across_types() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+
+    // Repeat to catch nondeterministic ordering: with the previous
+    // HashMap-backed storage, cross-type execution order differed between
+    // iterations; the registration-order contract must hold on every run.
+    for _ in 0..100 {
+        let pre_order = Arc::new(Mutex::new(Vec::new()));
+        let post_order = Arc::new(Mutex::new(Vec::new()));
+        let mut op = DbOp::init(&pool).await?;
+
+        macro_rules! probe {
+            ($n:literal, $label:literal) => {
+                op.add_commit_hook(OrderProbe::<$n> {
+                    label: $label,
+                    pre_order: pre_order.clone(),
+                    post_order: post_order.clone(),
+                })
+                .unwrap();
+            };
+        }
+        probe!(1, "one");
+        probe!(2, "two");
+        probe!(3, "three");
+        probe!(4, "four");
+        probe!(5, "five");
+
+        op.commit().await?;
+
+        let expected = vec!["one", "two", "three", "four", "five"];
+        assert_eq!(*pre_order.lock().unwrap(), expected);
+        assert_eq!(*post_order.lock().unwrap(), expected);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn merged_hook_executes_at_position_of_first_registration() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let pre_order = Arc::new(Mutex::new(Vec::new()));
+    let post_order = Arc::new(Mutex::new(Vec::new()));
+
+    // A, B, A′ where A′ merges into A: the merged hook keeps A's position.
+    op.add_commit_hook(MergingOrderProbe {
+        labels: vec!["a1"],
+        pre_order: pre_order.clone(),
+        post_order: post_order.clone(),
+    })
+    .unwrap();
+    op.add_commit_hook(OrderProbe::<10> {
+        label: "b",
+        pre_order: pre_order.clone(),
+        post_order: post_order.clone(),
+    })
+    .unwrap();
+    op.add_commit_hook(MergingOrderProbe {
+        labels: vec!["a2"],
+        pre_order: pre_order.clone(),
+        post_order: post_order.clone(),
+    })
+    .unwrap();
+
+    op.commit().await?;
+
+    let expected = vec!["a1", "a2", "b"];
+    assert_eq!(*pre_order.lock().unwrap(), expected);
+    assert_eq!(*post_order.lock().unwrap(), expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn non_merging_hook_executes_at_own_registration_position() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let pre_order = Arc::new(Mutex::new(Vec::new()));
+    let post_order = Arc::new(Mutex::new(Vec::new()));
+
+    // A, B, A″ where A″ refuses to merge (default merge() == false): A″ runs at
+    // its own later position instead of being grouped with A.
+    op.add_commit_hook(OrderProbe::<20> {
+        label: "a1",
+        pre_order: pre_order.clone(),
+        post_order: post_order.clone(),
+    })
+    .unwrap();
+    op.add_commit_hook(OrderProbe::<21> {
+        label: "b",
+        pre_order: pre_order.clone(),
+        post_order: post_order.clone(),
+    })
+    .unwrap();
+    op.add_commit_hook(OrderProbe::<20> {
+        label: "a2",
+        pre_order: pre_order.clone(),
+        post_order: post_order.clone(),
+    })
+    .unwrap();
+
+    op.commit().await?;
+
+    let expected = vec!["a1", "b", "a2"];
+    assert_eq!(*pre_order.lock().unwrap(), expected);
+    assert_eq!(*post_order.lock().unwrap(), expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn post_commit_order_mirrors_pre_commit_order() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let pre_order = Arc::new(Mutex::new(Vec::new()));
+    let post_order = Arc::new(Mutex::new(Vec::new()));
+
+    // Mixed merging and non-merging registrations.
+    op.add_commit_hook(OrderProbe::<30> {
+        label: "x",
+        pre_order: pre_order.clone(),
+        post_order: post_order.clone(),
+    })
+    .unwrap();
+    op.add_commit_hook(MergingOrderProbe {
+        labels: vec!["m1"],
+        pre_order: pre_order.clone(),
+        post_order: post_order.clone(),
+    })
+    .unwrap();
+    op.add_commit_hook(OrderProbe::<31> {
+        label: "y",
+        pre_order: pre_order.clone(),
+        post_order: post_order.clone(),
+    })
+    .unwrap();
+    op.add_commit_hook(MergingOrderProbe {
+        labels: vec!["m2"],
+        pre_order: pre_order.clone(),
+        post_order: post_order.clone(),
+    })
+    .unwrap();
+
+    op.commit().await?;
+
+    let pre = pre_order.lock().unwrap().clone();
+    let post = post_order.lock().unwrap().clone();
+    assert_eq!(pre, vec!["x", "m1", "m2", "y"]);
+    assert_eq!(post, pre);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn supports_hooks_reflects_op_capability() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;

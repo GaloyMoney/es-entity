@@ -16,6 +16,26 @@
 //! 4. **Commit**: The underlying database transaction is committed
 //! 5. **Post-commit**: [`CommitHook::post_commit()`] executes after successful commit
 //!
+//! # Hook Ordering
+//!
+//! Hooks execute in **registration order** — per hook, not per type:
+//!
+//! 1. Hooks run in the order they were added to the operation, regardless of their
+//!    type. A hook that refuses to merge ([`CommitHook::merge()`] returns `false`)
+//!    executes at its own (later) registration position, even when an earlier hook
+//!    of the same type exists.
+//! 2. A hook that merges executes at the position of the hook it merged into (the
+//!    earlier one). For always-merging hook types this means the type's position is
+//!    anchored by its **first** registration in the operation; all later
+//!    registrations fold into that position.
+//! 3. [`CommitHook::post_commit()`] hooks run in the same order as their
+//!    [`CommitHook::pre_commit()`] counterparts (registration order).
+//! 4. The hook set is frozen when `commit()` starts (hooks cannot register further
+//!    hooks), so ordering is fully determined before the first `pre_commit` runs.
+//!
+//! Registration order is a determinism guarantee, not a priority mechanism — there
+//! is no way to reorder hooks independently of the order in which they were added.
+//!
 //! # Examples
 //!
 //! ## Hook with Database Operations and Channel-Based Publishing
@@ -143,7 +163,6 @@
 
 use std::{
     any::{Any, TypeId},
-    collections::HashMap,
     future::Future,
     pin::Pin,
 };
@@ -160,7 +179,9 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Hooks execute in order: [`pre_commit()`](Self::pre_commit) → database commit → [`post_commit()`](Self::post_commit).
 /// Multiple hooks of the same type can be merged via [`merge()`](Self::merge).
 ///
-/// See module-level documentation for a complete example.
+/// Hooks registered on the same operation execute in registration order — see the
+/// [module-level documentation](self#hook-ordering) for the full ordering contract
+/// and a complete example.
 pub trait CommitHook: Send + 'static + Sized {
     /// Called before the transaction commits. Can perform database operations.
     ///
@@ -289,53 +310,54 @@ impl<H: CommitHook> DynHook for H {
     }
 }
 
+/// Hooks are stored in a single flat insertion-ordered vec so that
+/// [`execute_pre`](Self::execute_pre) runs them in registration order — per hook,
+/// not per type. See the [module-level documentation](self#hook-ordering) for the
+/// ordering contract.
 pub(crate) struct CommitHooks {
-    hooks: HashMap<TypeId, Vec<Box<dyn DynHook>>>,
+    hooks: Vec<(TypeId, Box<dyn DynHook>)>,
 }
 
 impl CommitHooks {
     pub fn new() -> Self {
-        Self {
-            hooks: HashMap::new(),
-        }
+        Self { hooks: Vec::new() }
     }
 
     pub(super) fn add<H: CommitHook>(&mut self, hook: H) {
         let type_id = TypeId::of::<H>();
-        let hooks_vec = self.hooks.entry(type_id).or_default();
 
         let mut new_hook: Box<dyn DynHook> = Box::new(hook);
 
-        if let Some(last) = hooks_vec.last_mut()
-            && last.try_merge(new_hook.as_mut())
+        // Merge with the most recently added hook of the same type, keeping the
+        // existing hook's original (earlier) position in the execution order.
+        if let Some((_, existing)) = self.hooks.iter_mut().rev().find(|(t, _)| *t == type_id)
+            && existing.try_merge(new_hook.as_mut())
         {
             return;
         }
 
-        hooks_vec.push(new_hook);
+        self.hooks.push((type_id, new_hook));
     }
 
     pub(super) fn get_last<H: CommitHook>(&self) -> Option<&H> {
         self.hooks
-            .get(&TypeId::of::<H>())?
-            .last()?
-            .as_any()
-            .downcast_ref::<H>()
+            .iter()
+            .rev()
+            .find(|(t, _)| *t == TypeId::of::<H>())
+            .and_then(|(_, hook)| hook.as_any().downcast_ref::<H>())
     }
 
     pub(super) async fn execute_pre(
-        mut self,
+        self,
         op: &mut impl AtomicOperation,
     ) -> Result<PostCommitHooks, sqlx::Error> {
         let mut op = HookOperation::new(op);
-        let mut post_hooks = Vec::new();
+        let mut post_hooks = Vec::with_capacity(self.hooks.len());
 
-        for (_, hooks_vec) in self.hooks.drain() {
-            for hook in hooks_vec {
-                let (new_op, hook) = hook.pre_commit_boxed(op).await?;
-                op = new_op;
-                post_hooks.push(hook);
-            }
+        for (_, hook) in self.hooks {
+            let (new_op, hook) = hook.pre_commit_boxed(op).await?;
+            op = new_op;
+            post_hooks.push(hook);
         }
 
         Ok(PostCommitHooks { hooks: post_hooks })
