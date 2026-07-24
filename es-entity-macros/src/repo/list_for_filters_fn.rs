@@ -3,7 +3,57 @@ use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
 use quote::{TokenStreamExt, quote};
 
-use super::{combo_cursor::ComboCursor, list_by_fn::CursorStruct, options::*};
+use super::{
+    combo_cursor::ComboCursor,
+    list_by_fn::{CursorStruct, assemble_select, not_deleted_predicate},
+    options::*,
+};
+
+/// Runtime `Some`-ness state of one filter column. Each state that reaches
+/// SQL gets its own static `es_query!` literal so that present filters
+/// compile to sargable `col = $k` predicates instead of the non-sargable
+/// `COALESCE(col = $k, $k IS NULL)` catch-all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FilterState {
+    /// Filter not applied: no predicate, no parameter.
+    Absent,
+    /// Non-optional column, filter applied: `col = $k`.
+    Present,
+    /// Optional column filtering for NULL rows: `col IS NULL`, no parameter.
+    PresentNull,
+    /// Optional column filtering for a value: `col = $k`.
+    PresentValue,
+}
+
+impl FilterState {
+    fn is_present(&self) -> bool {
+        !matches!(self, FilterState::Absent)
+    }
+}
+
+/// Cartesian product of the per-column filter states.
+fn filter_state_combos(columns: &[&Column]) -> Vec<Vec<FilterState>> {
+    columns.iter().fold(vec![vec![]], |combos, col| {
+        let options: &[FilterState] = if col.is_optional() {
+            &[
+                FilterState::Absent,
+                FilterState::PresentValue,
+                FilterState::PresentNull,
+            ]
+        } else {
+            &[FilterState::Absent, FilterState::Present]
+        };
+        let mut next = Vec::with_capacity(combos.len() * options.len());
+        for combo in &combos {
+            for opt in options {
+                let mut combo = combo.clone();
+                combo.push(*opt);
+                next.push(combo);
+            }
+        }
+        next
+    })
+}
 
 pub struct FiltersStruct<'a> {
     columns: Vec<&'a Column>,
@@ -81,6 +131,18 @@ impl<'a> FiltersStruct<'a> {
             }
         }
     }
+
+    /// Value-only binding for an optional column in a specialized
+    /// `col = $k` variant (the `apply` flag is encoded in the variant
+    /// itself, so only the value parameter remains).
+    fn filter_value_arg_tokens(column: &Column) -> TokenStream {
+        let col_name = column.name();
+        let filter_name = syn::Ident::new(&format!("filter_{}", col_name), Span::call_site());
+        let ty = column.ty();
+        quote! {
+            #filter_name as #ty,
+        }
+    }
 }
 
 impl ToTokens for FiltersStruct<'_> {
@@ -141,6 +203,64 @@ impl<'a> ListForFiltersFn<'a> {
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
+    }
+
+    /// Scrutinee elements (bools over the destructured filter locals)
+    /// identifying each filter's [`FilterState`] at runtime: one bool per
+    /// non-optional column (`is_some`), two per optional column (`apply`,
+    /// value `is_some`).
+    fn filter_scrutinee_elems(&self) -> Vec<TokenStream> {
+        self.for_columns
+            .iter()
+            .flat_map(|c| {
+                let col_name = c.name();
+                let filter_name =
+                    syn::Ident::new(&format!("filter_{}", col_name), Span::call_site());
+                if c.is_optional() {
+                    let apply_name =
+                        syn::Ident::new(&format!("apply_{}", col_name), Span::call_site());
+                    vec![quote! { #apply_name }, quote! { #filter_name.is_some() }]
+                } else {
+                    vec![quote! { #filter_name.is_some() }]
+                }
+            })
+            .collect()
+    }
+
+    /// Pattern elements matching [`Self::filter_scrutinee_elems`] for one
+    /// column in one state.
+    fn filter_pattern_elems(column: &Column, state: FilterState) -> Vec<TokenStream> {
+        if column.is_optional() {
+            match state {
+                FilterState::Absent => vec![quote! { false }, quote! { _ }],
+                FilterState::PresentValue => vec![quote! { true }, quote! { true }],
+                FilterState::PresentNull => vec![quote! { true }, quote! { false }],
+                FilterState::Present => unreachable!("optional columns split Present"),
+            }
+        } else {
+            match state {
+                FilterState::Absent => vec![quote! { false }],
+                FilterState::Present => vec![quote! { true }],
+                _ => unreachable!("non-optional columns have no NULL sub-state"),
+            }
+        }
+    }
+
+    /// Whether a filter combination gets a specialized sargable query.
+    ///
+    /// Full specialization is 2^N combinations (3 per optional column) x 2
+    /// cursor states x 2 directions x per sort column, so for entities with
+    /// many filter columns the matrix is capped: only the no-filter,
+    /// all-filters, and single-filter combinations are specialized and
+    /// everything else falls back to the legacy COALESCE query (correctness
+    /// preserved, just not sargable).
+    fn is_specialized_combo(&self, combo: &[FilterState]) -> bool {
+        let n = self.for_columns.len();
+        if n <= 4 {
+            return true;
+        }
+        let present_count = combo.iter().filter(|s| s.is_present()).count();
+        present_count <= 1 || present_count == n
     }
 
     fn generate_proxy_body(&self, by_col: &Column, delete: DeleteOption) -> TokenStream {
@@ -330,6 +450,11 @@ impl<'a> ListForFiltersFn<'a> {
             .map(|col| FiltersStruct::filter_arg_tokens(col))
             .collect();
 
+        let legacy_arg_tokens = quote! {
+            #filter_arg_bindings
+            #cursor_arg_tokens
+        };
+
         let asc_query = format!(
             r#"SELECT {} FROM {} WHERE {}({}){} ORDER BY {} LIMIT ${}"#,
             select_columns,
@@ -365,49 +490,123 @@ impl<'a> ListForFiltersFn<'a> {
             quote! {}
         };
 
-        let es_query_asc_call = if let Some(prefix) = self.ignore_prefix {
-            quote! {
-                es_entity::es_query!(
-                    tbl_prefix = #prefix,
-                    #forgettable_tbl_arg
-                    #asc_query,
-                    #filter_arg_bindings
-                    #cursor_arg_tokens
-                )
-            }
-        } else {
-            quote! {
-                es_entity::es_query!(
-                    entity = #entity,
-                    #forgettable_tbl_arg
-                    #asc_query,
-                    #filter_arg_bindings
-                    #cursor_arg_tokens
-                )
+        let make_es_query = |query: &str, args: &TokenStream| -> TokenStream {
+            if let Some(prefix) = self.ignore_prefix {
+                quote! {
+                    es_entity::es_query!(
+                        tbl_prefix = #prefix,
+                        #forgettable_tbl_arg
+                        #query,
+                        #args
+                    )
+                }
+            } else {
+                quote! {
+                    es_entity::es_query!(
+                        entity = #entity,
+                        #forgettable_tbl_arg
+                        #query,
+                        #args
+                    )
+                }
             }
         };
 
-        let es_query_desc_call = if let Some(prefix) = self.ignore_prefix {
-            quote! {
-                es_entity::es_query!(
-                    tbl_prefix = #prefix,
-                    #forgettable_tbl_arg
-                    #desc_query,
-                    #filter_arg_bindings
-                    #cursor_arg_tokens
-                )
+        // Specialized variant matrix: one static query per (filter
+        // combination x cursor state x direction). Every present filter
+        // compiles to a sargable `col = $k` (or `col IS NULL`) predicate and
+        // the cursor predicate is either omitted (page 1) or a bare row
+        // comparison.
+        let mut asc_arms = TokenStream::new();
+        let mut desc_arms = TokenStream::new();
+        for combo in filter_state_combos(&self.for_columns) {
+            if !self.is_specialized_combo(&combo) {
+                continue;
             }
-        } else {
-            quote! {
-                es_entity::es_query!(
-                    entity = #entity,
-                    #forgettable_tbl_arg
-                    #desc_query,
-                    #filter_arg_bindings
-                    #cursor_arg_tokens
-                )
+            let filter_patterns: Vec<TokenStream> = self
+                .for_columns
+                .iter()
+                .zip(combo.iter())
+                .flat_map(|(col, state)| Self::filter_pattern_elems(col, *state))
+                .collect();
+
+            let mut filter_conditions: Vec<String> = Vec::new();
+            let mut filter_args = TokenStream::new();
+            let mut param_idx = 1u32;
+            for (col, state) in self.for_columns.iter().zip(combo.iter()) {
+                match state {
+                    FilterState::Absent => {}
+                    FilterState::Present => {
+                        filter_conditions.push(format!("{} = ${}", col.name(), param_idx));
+                        param_idx += 1;
+                        filter_args.append_all(FiltersStruct::filter_arg_tokens(col));
+                    }
+                    FilterState::PresentNull => {
+                        filter_conditions.push(format!("{} IS NULL", col.name()));
+                    }
+                    FilterState::PresentValue => {
+                        filter_conditions.push(format!("{} = ${}", col.name(), param_idx));
+                        param_idx += 1;
+                        filter_args.append_all(FiltersStruct::filter_value_arg_tokens(col));
+                    }
+                }
             }
-        };
+
+            for cursor_state in cursor_struct.cursor_states() {
+                let cursor_patterns = cursor_struct.state_pattern_elems(*cursor_state);
+                let pattern = quote! { (#(#filter_patterns,)* #(#cursor_patterns,)*) };
+                let cursor_args = cursor_struct.cursor_arg_tokens_for_state(*cursor_state);
+                let args = quote! {
+                    #filter_args
+                    (first + 1) as i64,
+                    #cursor_args
+                };
+
+                for ascending in [true, false] {
+                    let mut conditions = filter_conditions.clone();
+                    if let Some(condition) =
+                        cursor_struct.condition_for_state(*cursor_state, param_idx - 1, ascending)
+                    {
+                        conditions.push(format!("({condition})"));
+                    }
+                    if delete == DeleteOption::No
+                        && let Some(not_deleted) = not_deleted_predicate(self.delete)
+                    {
+                        conditions.push(not_deleted);
+                    }
+                    let query = assemble_select(
+                        &select_columns,
+                        self.table_name,
+                        &conditions,
+                        &cursor_struct.order_by(ascending),
+                        param_idx,
+                    );
+                    let es_query_call = make_es_query(&query, &args);
+                    if ascending {
+                        asc_arms.append_all(quote! {
+                            #pattern => {
+                                #es_query_call.fetch_n(op, first).await?
+                            },
+                        });
+                    } else {
+                        desc_arms.append_all(quote! {
+                            #pattern => {
+                                #es_query_call.fetch_n(op, first).await?
+                            },
+                        });
+                    }
+                }
+            }
+        }
+
+        let scrutinee_elems: Vec<TokenStream> = self
+            .filter_scrutinee_elems()
+            .into_iter()
+            .chain(cursor_struct.state_scrutinee_elems())
+            .collect();
+
+        let es_query_legacy_asc_call = make_es_query(&asc_query, &legacy_arg_tokens);
+        let es_query_legacy_desc_call = make_es_query(&desc_query, &legacy_arg_tokens);
 
         #[cfg(feature = "instrument")]
         let (instrument_attr, extract_has_cursor, record_fields, record_results, error_recording) = {
@@ -482,11 +681,13 @@ impl<'a> ListForFiltersFn<'a> {
                     #record_fields
 
                     let (entities, has_next_page) = match direction {
-                        es_entity::ListDirection::Ascending => {
-                            #es_query_asc_call.fetch_n(op, first).await?
+                        es_entity::ListDirection::Ascending => match (#(#scrutinee_elems,)*) {
+                            #asc_arms
+                            _ => #es_query_legacy_asc_call.fetch_n(op, first).await?,
                         },
-                        es_entity::ListDirection::Descending => {
-                            #es_query_desc_call.fetch_n(op, first).await?
+                        es_entity::ListDirection::Descending => match (#(#scrutinee_elems,)*) {
+                            #desc_arms
+                            _ => #es_query_legacy_desc_call.fetch_n(op, first).await?,
                         }
                     };
 
@@ -744,118 +945,8 @@ mod tests {
         list_for_filters_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            pub async fn list_for_filters_by_id(
-                &self,
-                filters: OrderFilters,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrderByIdCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderByIdCursor>, OrderQueryError> {
-                self.list_for_filters_by_id_in_op(self.pool(), filters, cursor, direction).await
-            }
-
-            pub async fn list_for_filters_by_id_in_op<'a, OP>(
-                &self,
-                op: OP,
-                filters: OrderFilters,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrderByIdCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderByIdCursor>, OrderQueryError>
-                where
-                    OP: es_entity::IntoOneTimeExecutor<'a>
-            {
-                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderByIdCursor>, OrderQueryError> = async {
-                    let filter_customer_id = filters.customer_id;
-                    let filter_status = filters.status;
-                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
-                    let id = if let Some(after) = after {
-                        Some(after.id)
-                    } else {
-                        None
-                    };
-
-                    let (entities, has_next_page) = match direction {
-                        es_entity::ListDirection::Ascending => {
-                            es_entity::es_query!(
-                                entity = Order,
-                                "SELECT id FROM orders WHERE COALESCE(customer_id = $1, $1 IS NULL) AND COALESCE(status = $2, $2 IS NULL) AND (COALESCE(id > $4, true)) ORDER BY id ASC LIMIT $3",
-                                filter_customer_id as Option<CustomerId>,
-                                filter_status as Option<OrderStatus>,
-                                (first + 1) as i64,
-                                id as Option<OrderId>,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        es_entity::ListDirection::Descending => {
-                            es_entity::es_query!(
-                                entity = Order,
-                                "SELECT id FROM orders WHERE COALESCE(customer_id = $1, $1 IS NULL) AND COALESCE(status = $2, $2 IS NULL) AND (COALESCE(id < $4, true)) ORDER BY id DESC LIMIT $3",
-                                filter_customer_id as Option<CustomerId>,
-                                filter_status as Option<OrderStatus>,
-                                (first + 1) as i64,
-                                id as Option<OrderId>,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        }
-                    };
-
-                    let end_cursor = entities.last().map(cursor_mod::OrderByIdCursor::from);
-
-                    Ok(es_entity::PaginatedQueryRet {
-                        entities,
-                        has_next_page,
-                        end_cursor,
-                    })
-                }.await;
-
-                __result
-            }
-
-            pub async fn list_for_filters(
-                &self,
-                filters: OrderFilters,
-                sort: es_entity::Sort<OrderSortBy>,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrderCursor>,
-            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderCursor>, OrderQueryError>
-            {
-                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderCursor>, OrderQueryError> = async {
-                    let es_entity::Sort { by, direction } = sort;
-                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
-
-                    use cursor_mod::OrderCursor;
-                    let res = match by {
-                        OrderSortBy::Id => {
-                            let after = after.map(cursor_mod::OrderByIdCursor::try_from).transpose()?;
-                            let query = es_entity::PaginatedQueryArgs { first, after };
-
-                            let es_entity::PaginatedQueryRet {
-                                entities,
-                                has_next_page,
-                                end_cursor,
-                            } = if filters.customer_id.is_none() && filters.status.is_none() {
-                                self.list_by_id(query, direction).await?
-                            } else if filters.status.is_none() {
-                                self.list_for_customer_id_by_id(filters.customer_id.unwrap(), query, direction).await?
-                            } else if filters.customer_id.is_none() {
-                                self.list_for_status_by_id(filters.status.unwrap(), query, direction).await?
-                            } else {
-                                self.list_for_filters_by_id(filters, query, direction).await?
-                            };
-                            es_entity::PaginatedQueryRet {
-                                entities,
-                                has_next_page,
-                                end_cursor: end_cursor.map(cursor_mod::OrderCursor::from)
-                            }
-                        }
-                    };
-
-                    Ok(res)
-                }.await;
-
-                __result
-            }
-        };
+        pub async fn list_for_filters_by_id (& self , filters : OrderFilters , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: OrderByIdCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Order , cursor_mod :: OrderByIdCursor > , OrderQueryError > { self . list_for_filters_by_id_in_op (self . pool () , filters , cursor , direction) . await } pub async fn list_for_filters_by_id_in_op < 'a , OP > (& self , op : OP , filters : OrderFilters , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: OrderByIdCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Order , cursor_mod :: OrderByIdCursor > , OrderQueryError > where OP : es_entity :: IntoOneTimeExecutor < 'a > { let __result : Result < es_entity :: PaginatedQueryRet < Order , cursor_mod :: OrderByIdCursor > , OrderQueryError > = async { let filter_customer_id = filters . customer_id ; let filter_status = filters . status ; let es_entity :: PaginatedQueryArgs { first , after } = cursor ; let id = if let Some (after) = after { Some (after . id) } else { None } ; let (entities , has_next_page) = match direction { es_entity :: ListDirection :: Ascending => match (filter_customer_id . is_some () , filter_status . is_some () , id . is_none () ,) { (false , false , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders ORDER BY id ASC LIMIT $1" , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (false , false , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE (id > $2) ORDER BY id ASC LIMIT $1" , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , (false , true , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE status = $1 ORDER BY id ASC LIMIT $2" , filter_status as Option < OrderStatus > , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (false , true , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE status = $1 AND (id > $3) ORDER BY id ASC LIMIT $2" , filter_status as Option < OrderStatus > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , (true , false , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 ORDER BY id ASC LIMIT $2" , filter_customer_id as Option < CustomerId > , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (true , false , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 AND (id > $3) ORDER BY id ASC LIMIT $2" , filter_customer_id as Option < CustomerId > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , (true , true , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 ORDER BY id ASC LIMIT $3" , filter_customer_id as Option < CustomerId > , filter_status as Option < OrderStatus > , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (true , true , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND (id > $4) ORDER BY id ASC LIMIT $3" , filter_customer_id as Option < CustomerId > , filter_status as Option < OrderStatus > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , _ => es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE COALESCE(customer_id = $1, $1 IS NULL) AND COALESCE(status = $2, $2 IS NULL) AND (COALESCE(id > $4, true)) ORDER BY id ASC LIMIT $3" , filter_customer_id as Option < CustomerId > , filter_status as Option < OrderStatus > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? , } , es_entity :: ListDirection :: Descending => match (filter_customer_id . is_some () , filter_status . is_some () , id . is_none () ,) { (false , false , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders ORDER BY id DESC LIMIT $1" , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (false , false , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE (id < $2) ORDER BY id DESC LIMIT $1" , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , (false , true , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE status = $1 ORDER BY id DESC LIMIT $2" , filter_status as Option < OrderStatus > , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (false , true , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE status = $1 AND (id < $3) ORDER BY id DESC LIMIT $2" , filter_status as Option < OrderStatus > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , (true , false , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 ORDER BY id DESC LIMIT $2" , filter_customer_id as Option < CustomerId > , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (true , false , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 AND (id < $3) ORDER BY id DESC LIMIT $2" , filter_customer_id as Option < CustomerId > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , (true , true , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 ORDER BY id DESC LIMIT $3" , filter_customer_id as Option < CustomerId > , filter_status as Option < OrderStatus > , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (true , true , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND (id < $4) ORDER BY id DESC LIMIT $3" , filter_customer_id as Option < CustomerId > , filter_status as Option < OrderStatus > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , _ => es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE COALESCE(customer_id = $1, $1 IS NULL) AND COALESCE(status = $2, $2 IS NULL) AND (COALESCE(id < $4, true)) ORDER BY id DESC LIMIT $3" , filter_customer_id as Option < CustomerId > , filter_status as Option < OrderStatus > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? , } } ; let end_cursor = entities . last () . map (cursor_mod :: OrderByIdCursor :: from) ; Ok (es_entity :: PaginatedQueryRet { entities , has_next_page , end_cursor , }) } . await ; __result } pub async fn list_for_filters (& self , filters : OrderFilters , sort : es_entity :: Sort < OrderSortBy > , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: OrderCursor > ,) -> Result < es_entity :: PaginatedQueryRet < Order , cursor_mod :: OrderCursor > , OrderQueryError > { let __result : Result < es_entity :: PaginatedQueryRet < Order , cursor_mod :: OrderCursor > , OrderQueryError > = async { let es_entity :: Sort { by , direction } = sort ; let es_entity :: PaginatedQueryArgs { first , after } = cursor ; use cursor_mod :: OrderCursor ; let res = match by { OrderSortBy :: Id => { let after = after . map (cursor_mod :: OrderByIdCursor :: try_from) . transpose () ? ; let query = es_entity :: PaginatedQueryArgs { first , after } ; let es_entity :: PaginatedQueryRet { entities , has_next_page , end_cursor , } = if filters . customer_id . is_none () && filters . status . is_none () { self . list_by_id (query , direction) . await ? } else if filters . status . is_none () { self . list_for_customer_id_by_id (filters . customer_id . unwrap () , query , direction) . await ? } else if filters . customer_id . is_none () { self . list_for_status_by_id (filters . status . unwrap () , query , direction) . await ? } else { self . list_for_filters_by_id (filters , query , direction) . await ? } ; es_entity :: PaginatedQueryRet { entities , has_next_page , end_cursor : end_cursor . map (cursor_mod :: OrderCursor :: from) } } } ; Ok (res) } . await ; __result }
+                };
 
         assert_eq!(tokens.to_string(), expected.to_string());
     }
@@ -1075,6 +1166,163 @@ mod tests {
         assert!(
             token_str.contains("LIMIT $4"),
             "Expected LIMIT at $4 (2 optional + 1 non-optional = 3 filter params)"
+        );
+    }
+
+    #[test]
+    fn list_for_filters_specializes_sargable_variants() {
+        let entity = Ident::new("Task", Span::call_site());
+        let query_error = syn::Ident::new("TaskQueryError", Span::call_site());
+        let id = syn::Ident::new("TaskId", proc_macro2::Span::call_site());
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        let id_column = Column::for_id(syn::parse_str("TaskId").unwrap());
+        let id_ident = syn::Ident::new("id", proc_macro2::Span::call_site());
+        let workspace_id_column = Column::new_list_for(
+            syn::Ident::new("workspace_id", proc_macro2::Span::call_site()),
+            syn::parse_str("Option<WorkspaceId>").unwrap(),
+            vec![id_ident.clone()],
+        );
+        let status_column = Column::new_list_for(
+            syn::Ident::new("status", proc_macro2::Span::call_site()),
+            syn::parse_str("String").unwrap(),
+            vec![id_ident],
+        );
+
+        let for_columns = vec![&workspace_id_column, &status_column];
+        let by_columns = vec![&id_column];
+
+        let id_cursor = CursorStruct {
+            column: &id_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
+
+        let list_for_filters_fn = ListForFiltersFn {
+            filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
+            entity: &entity,
+            query_error,
+            for_columns,
+            by_columns,
+            cursor: &combo_cursor,
+            delete: DeleteOption::No,
+            cursor_mod: cursor_mod.clone(),
+            table_name: "tasks",
+            ignore_prefix: None,
+            id: &id,
+            any_nested: false,
+            post_hydrate_error: None,
+            forgettable_table_name: None,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        list_for_filters_fn.to_tokens(&mut tokens);
+        let token_str = tokens.to_string();
+
+        let expected_queries = [
+            // No filters, page 1: no WHERE at all — rides index ordering.
+            "SELECT id FROM tasks ORDER BY id ASC LIMIT $1",
+            // No filters, cursor page: bare comparison, no COALESCE.
+            "SELECT id FROM tasks WHERE (id > $2) ORDER BY id ASC LIMIT $1",
+            // Single non-optional filter.
+            "SELECT id FROM tasks WHERE status = $1 ORDER BY id ASC LIMIT $2",
+            "SELECT id FROM tasks WHERE status = $1 AND (id > $3) ORDER BY id ASC LIMIT $2",
+            // Optional filter on a value: sargable `col = $k`.
+            "SELECT id FROM tasks WHERE workspace_id = $1 ORDER BY id ASC LIMIT $2",
+            // Optional filter on NULL: `col IS NULL`, no parameter.
+            "SELECT id FROM tasks WHERE workspace_id IS NULL ORDER BY id ASC LIMIT $1",
+            // All filters present.
+            "SELECT id FROM tasks WHERE workspace_id = $1 AND status = $2 ORDER BY id ASC LIMIT $3",
+            "SELECT id FROM tasks WHERE workspace_id = $1 AND status = $2 AND (id > $4) ORDER BY id ASC LIMIT $3",
+            "SELECT id FROM tasks WHERE workspace_id IS NULL AND status = $1 ORDER BY id ASC LIMIT $2",
+        ];
+        for query in expected_queries {
+            assert!(
+                token_str.contains(query),
+                "Expected specialized query `{query}` in generated code"
+            );
+        }
+    }
+
+    #[test]
+    fn list_for_filters_caps_specialization_above_four_columns() {
+        let entity = Ident::new("Wide", Span::call_site());
+        let query_error = syn::Ident::new("WideQueryError", Span::call_site());
+        let id = syn::Ident::new("WideId", proc_macro2::Span::call_site());
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        let id_column = Column::for_id(syn::parse_str("WideId").unwrap());
+        let id_ident = syn::Ident::new("id", proc_macro2::Span::call_site());
+        let mk_col = |name: &str| {
+            Column::new_list_for(
+                syn::Ident::new(name, proc_macro2::Span::call_site()),
+                syn::parse_str("String").unwrap(),
+                vec![id_ident.clone()],
+            )
+        };
+        let col_a = mk_col("a");
+        let col_b = mk_col("b");
+        let col_c = mk_col("c");
+        let col_d = mk_col("d");
+        let col_e = mk_col("e");
+
+        let for_columns = vec![&col_a, &col_b, &col_c, &col_d, &col_e];
+        let by_columns = vec![&id_column];
+
+        let id_cursor = CursorStruct {
+            column: &id_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
+
+        let list_for_filters_fn = ListForFiltersFn {
+            filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
+            entity: &entity,
+            query_error,
+            for_columns,
+            by_columns,
+            cursor: &combo_cursor,
+            delete: DeleteOption::No,
+            cursor_mod: cursor_mod.clone(),
+            table_name: "wides",
+            ignore_prefix: None,
+            id: &id,
+            any_nested: false,
+            post_hydrate_error: None,
+            forgettable_table_name: None,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        list_for_filters_fn.to_tokens(&mut tokens);
+        let token_str = tokens.to_string();
+
+        // No-filter, single-filter and all-filter combinations stay
+        // specialized...
+        assert!(token_str.contains("SELECT id FROM wides ORDER BY id ASC LIMIT $1"));
+        assert!(token_str.contains("SELECT id FROM wides WHERE a = $1 ORDER BY id ASC LIMIT $2"));
+        assert!(token_str.contains(
+            "SELECT id FROM wides WHERE a = $1 AND b = $2 AND c = $3 AND d = $4 AND e = $5 ORDER BY id ASC LIMIT $6"
+        ));
+        // ...but intermediate combinations (e.g. exactly two filters) fall
+        // back to the legacy COALESCE query, so no specialized SQL exists
+        // for them.
+        assert!(
+            !token_str.contains("SELECT id FROM wides WHERE a = $1 AND b = $2 ORDER"),
+            "two-filter combination should not be specialized above the cap"
+        );
+        assert!(
+            token_str.contains("COALESCE(a = $1, $1 IS NULL)"),
+            "legacy COALESCE fallback must remain for uncapped combinations"
         );
     }
 }

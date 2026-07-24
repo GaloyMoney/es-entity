@@ -48,7 +48,23 @@ let filters = UserDocumentFilters {
 
 ### Per-Sort-Column Functions
 
-For each `list_by` column, a `list_for_filters_by_{sort_col}` function is generated with SQL that uses nullable WHERE patterns:
+For each `list_by` column, a `list_for_filters_by_{sort_col}` function is generated. Instead of one catch-all query, it contains one static SQL query per **filter combination × cursor state** and dispatches at runtime on which filters are `Some`. Present filters compile to plain, index-friendly (sargable) predicates; absent filters are omitted entirely:
+
+```sql
+-- user_id = Some(..), status = None, first page
+SELECT id FROM user_documents
+  WHERE user_id = $1
+  ORDER BY id ASC LIMIT $2
+
+-- both filters set, paginating from a cursor
+SELECT id FROM user_documents
+  WHERE user_id = $1 AND status = $2 AND (id > $4)
+  ORDER BY id ASC LIMIT $3
+```
+
+This matters for performance: the planner can turn `col = $k` into an index condition, which is impossible through the legacy `COALESCE(col = $k, $k IS NULL)` catch-all (a single generic plan must serve both `NULL` and non-`NULL` parameters, so the predicate never becomes an index qual and every call full-scans the table).
+
+For entities with more than 4 `list_for` columns the combination matrix is capped: only the no-filter, single-filter, and all-filters combinations get specialized queries, and remaining combinations fall back to the legacy COALESCE-based SQL (correct, just not sargable):
 
 ```sql
 SELECT id FROM user_documents
@@ -58,15 +74,13 @@ SELECT id FROM user_documents
   ORDER BY id ASC LIMIT $3
 ```
 
-When a parameter is `NULL` (i.e., `None`), the `COALESCE` evaluates to `true`, effectively skipping that filter.
-
 ### A Dispatch Function
 
 The `list_for_filters` function matches on the sort column and intelligently delegates to the most efficient underlying function:
 
 - **No filters set** (`Filters::default()`): proxies to `list_by_{sort}` (simple query, full index usage)
 - **Exactly one filter set**: proxies to `list_for_{col}_by_{sort}` (single-column WHERE, full index usage)
-- **Two or more filters set**: uses the per-sort COALESCE-based SQL (multi-column nullable WHERE)
+- **Two or more filters set**: uses the per-sort specialized query matching the exact filter combination (sargable), falling back to the COALESCE-based SQL only for combinations beyond the specialization cap
 
 ## Important Notes
 

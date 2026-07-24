@@ -5,6 +5,57 @@ use quote::{TokenStreamExt, quote};
 
 use super::options::*;
 
+/// Cursor pagination states that each get their own SQL text, so that no
+/// variant needs the non-sargable `COALESCE(..., $ IS NULL)` catch-all.
+///
+/// The generated list fns dispatch on these states at runtime (on the
+/// `Some`-ness of the destructured cursor values) and every emitted query is
+/// a static `es_query!` literal — compile-time checked and index-friendly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CursorState {
+    /// Page 1 (no cursor): no cursor predicate at all — the query rides the
+    /// index ordering with an early-exit `LIMIT`.
+    First,
+    /// Cursor present on a non-NULL sort value: bare `(col, id)` row
+    /// comparison — sargable against a composite index.
+    After,
+    /// Cursor present on a NULL sort value (only possible for `Option<T>`
+    /// sort columns): explicit NULL-aware predicate.
+    AfterNull,
+    /// Cursor present but NULL-ness is undetectable from Rust (non-`Option`
+    /// type annotated `nullable`, where a custom `sqlx::Encode` writes NULL):
+    /// keep the legacy COALESCE predicate which handles all cases.
+    AfterLegacy,
+}
+
+/// Assemble a `SELECT ... [WHERE ...] ORDER BY ... LIMIT $n` query string
+/// from individual predicates.
+pub fn assemble_select(
+    select_columns: &str,
+    table_name: &str,
+    conditions: &[String],
+    order_by: &str,
+    limit_param_idx: u32,
+) -> String {
+    let mut query = format!("SELECT {select_columns} FROM {table_name}");
+    if !conditions.is_empty() {
+        query.push_str(" WHERE ");
+        query.push_str(&conditions.join(" AND "));
+    }
+    query.push_str(&format!(" ORDER BY {order_by} LIMIT ${limit_param_idx}"));
+    query
+}
+
+/// The `deleted = FALSE` predicate for repos with soft delete, on the
+/// non-`include_deleted` fn variants.
+pub fn not_deleted_predicate(delete: DeleteOption) -> Option<String> {
+    if delete.is_soft() {
+        Some("deleted = FALSE".to_string())
+    } else {
+        None
+    }
+}
+
 pub struct CursorStruct<'a> {
     pub id: &'a syn::Ident,
     pub entity: &'a syn::Ident,
@@ -109,19 +160,148 @@ impl CursorStruct<'_> {
         }
     }
 
-    pub fn query_arg_tokens(&self) -> TokenStream {
+    /// The cursor states this sort column needs distinct SQL for.
+    pub fn cursor_states(&self) -> &'static [CursorState] {
+        if self.column.is_id() || !self.column.is_nullable_column() {
+            &[CursorState::First, CursorState::After]
+        } else if self.column.is_optional() {
+            &[
+                CursorState::First,
+                CursorState::After,
+                CursorState::AfterNull,
+            ]
+        } else {
+            // `nullable`-annotated non-Option type: NULL-ness of the cursor
+            // value is invisible to Rust, so the cursor-present variant must
+            // keep the legacy all-cases predicate.
+            &[CursorState::First, CursorState::AfterLegacy]
+        }
+    }
+
+    /// The cursor predicate for a specialized state, or `None` for
+    /// [`CursorState::First`] (page 1 needs no predicate).
+    ///
+    /// `offset` is the number of query parameters preceding the `LIMIT`
+    /// parameter (i.e. LIMIT lands on `$(offset + 1)`).
+    ///
+    /// The non-legacy forms are sargable: a bare `(col, id)` row comparison
+    /// is an index qual against a composite index, unlike the legacy
+    /// `COALESCE((col, id) < ($c, $i), $i IS NULL)` catch-all which defeats
+    /// index extraction. The NULL-cursor forms replicate the exact edge
+    /// semantics documented on [`Self::condition`]:
+    ///
+    /// - ASC (NULLS FIRST), cursor on a NULL row: all non-NULL rows plus
+    ///   NULL rows with a greater id come "after" → `col IS NOT NULL OR id >
+    ///   $i`.
+    /// - DESC (NULLS LAST), cursor on a NULL row: only NULL rows with a
+    ///   smaller id come after → `col IS NULL AND id < $i`.
+    /// - DESC (NULLS LAST), cursor on a non-NULL row: NULL rows sort last,
+    ///   so they are all still "after" → `col IS NULL OR (col, id) < ($c,
+    ///   $i)`.
+    pub fn condition_for_state(
+        &self,
+        state: CursorState,
+        offset: u32,
+        ascending: bool,
+    ) -> Option<String> {
+        let comp = if ascending { ">" } else { "<" };
+        let id_offset = offset + 2;
+        let column_offset = offset + 3;
+
+        match state {
+            CursorState::First => None,
+            CursorState::AfterLegacy => Some(self.condition(offset, ascending)),
+            CursorState::After => {
+                if self.column.is_id() {
+                    Some(format!("id {comp} ${id_offset}"))
+                } else if !self.column.is_nullable_column() {
+                    Some(format!(
+                        "({0}, id) {comp} (${column_offset}, ${id_offset})",
+                        self.column.name()
+                    ))
+                } else if ascending {
+                    Some(format!(
+                        "({0}, id) > (${column_offset}, ${id_offset})",
+                        self.column.name()
+                    ))
+                } else {
+                    Some(format!(
+                        "({0} IS NULL OR ({0}, id) < (${column_offset}, ${id_offset}))",
+                        self.column.name()
+                    ))
+                }
+            }
+            CursorState::AfterNull => {
+                if ascending {
+                    Some(format!(
+                        "({0} IS NOT NULL OR id > ${id_offset})",
+                        self.column.name()
+                    ))
+                } else {
+                    Some(format!(
+                        "({0} IS NULL AND id < ${id_offset})",
+                        self.column.name()
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Scrutinee elements (one or two bool expressions over the destructured
+    /// cursor locals) identifying the cursor state at runtime.
+    pub fn state_scrutinee_elems(&self) -> Vec<TokenStream> {
+        if self.column.is_nullable_column() && self.column.is_optional() {
+            let column_name = self.column.name();
+            vec![quote! { id.is_some() }, quote! { #column_name.is_some() }]
+        } else {
+            vec![quote! { id.is_none() }]
+        }
+    }
+
+    /// Pattern elements matching [`Self::state_scrutinee_elems`] for one
+    /// state.
+    pub fn state_pattern_elems(&self, state: CursorState) -> Vec<TokenStream> {
+        if self.column.is_nullable_column() && self.column.is_optional() {
+            match state {
+                CursorState::First => vec![quote! { false }, quote! { _ }],
+                CursorState::After => vec![quote! { true }, quote! { true }],
+                CursorState::AfterNull => vec![quote! { true }, quote! { false }],
+                CursorState::AfterLegacy => {
+                    unreachable!("Option columns never use AfterLegacy")
+                }
+            }
+        } else {
+            match state {
+                CursorState::First => vec![quote! { true }],
+                _ => vec![quote! { false }],
+            }
+        }
+    }
+
+    /// Cursor value bindings (without the `LIMIT` binding) for a state.
+    pub fn cursor_arg_tokens_for_state(&self, state: CursorState) -> TokenStream {
+        let id = self.id;
+
+        match state {
+            CursorState::First => quote! {},
+            CursorState::AfterNull => quote! {
+                id as Option<#id>,
+            },
+            _ => self.cursor_arg_tokens(),
+        }
+    }
+
+    fn cursor_arg_tokens(&self) -> TokenStream {
         let id = self.id;
 
         if self.column.is_id() {
             quote! {
-                (first + 1) as i64,
                 id as Option<#id>,
             }
         } else if self.column.is_optional() {
             let column_name = self.column.name();
             let column_type = self.column.ty();
             quote! {
-                (first + 1) as i64,
                 id as Option<#id>,
                 #column_name as #column_type,
             }
@@ -129,10 +309,17 @@ impl CursorStruct<'_> {
             let column_name = self.column.name();
             let column_type = self.column.ty();
             quote! {
-                (first + 1) as i64,
                 id as Option<#id>,
                 #column_name as Option<#column_type>,
             }
+        }
+    }
+
+    pub fn query_arg_tokens(&self) -> TokenStream {
+        let cursor_args = self.cursor_arg_tokens();
+        quote! {
+            (first + 1) as i64,
+            #cursor_args
         }
     }
 
@@ -302,7 +489,6 @@ impl ToTokens for ListByFn<'_> {
 
         let destructure_tokens = self.cursor().destructure_tokens();
         let select_columns = cursor.select_columns(None);
-        let arg_tokens = cursor.query_arg_tokens();
 
         for delete in [DeleteOption::No, DeleteOption::Soft] {
             let fn_name = syn::Ident::new(
@@ -322,76 +508,73 @@ impl ToTokens for ListByFn<'_> {
                 Span::call_site(),
             );
 
-            let asc_query = format!(
-                r#"SELECT {} FROM {} WHERE ({}){} ORDER BY {} LIMIT $1"#,
-                select_columns,
-                self.table_name,
-                cursor.condition(0, true),
-                if delete == DeleteOption::No {
-                    self.delete.not_deleted_condition()
-                } else {
-                    ""
-                },
-                cursor.order_by(true),
-            );
-            let desc_query = format!(
-                r#"SELECT {} FROM {} WHERE ({}){} ORDER BY {} LIMIT $1"#,
-                select_columns,
-                self.table_name,
-                cursor.condition(0, false),
-                if delete == DeleteOption::No {
-                    self.delete.not_deleted_condition()
-                } else {
-                    ""
-                },
-                cursor.order_by(false),
-            );
-
             let forgettable_tbl_arg = if let Some(tbl) = self.forgettable_table_name {
                 quote! { forgettable_tbl = #tbl, }
             } else {
                 quote! {}
             };
 
-            let es_query_asc_call = if let Some(prefix) = self.ignore_prefix {
-                quote! {
-                    es_entity::es_query!(
-                        tbl_prefix = #prefix,
-                        #forgettable_tbl_arg
-                        #asc_query,
-                        #arg_tokens
-                    )
-                }
-            } else {
-                quote! {
-                    es_entity::es_query!(
-                        entity = #entity,
-                        #forgettable_tbl_arg
-                        #asc_query,
-                        #arg_tokens
-                    )
+            let make_es_query = |query: &str, args: &TokenStream| -> TokenStream {
+                if let Some(prefix) = self.ignore_prefix {
+                    quote! {
+                        es_entity::es_query!(
+                            tbl_prefix = #prefix,
+                            #forgettable_tbl_arg
+                            #query,
+                            #args
+                        )
+                    }
+                } else {
+                    quote! {
+                        es_entity::es_query!(
+                            entity = #entity,
+                            #forgettable_tbl_arg
+                            #query,
+                            #args
+                        )
+                    }
                 }
             };
 
-            let es_query_desc_call = if let Some(prefix) = self.ignore_prefix {
-                quote! {
-                    es_entity::es_query!(
-                        tbl_prefix = #prefix,
-                        #forgettable_tbl_arg
-                        #desc_query,
-                        #arg_tokens
-                    )
+            let mut query_arms = TokenStream::new();
+            for state in cursor.cursor_states() {
+                for ascending in [true, false] {
+                    let mut conditions: Vec<String> = Vec::new();
+                    if let Some(condition) = cursor.condition_for_state(*state, 0, ascending) {
+                        conditions.push(format!("({condition})"));
+                    }
+                    if delete == DeleteOption::No
+                        && let Some(not_deleted) = not_deleted_predicate(self.delete)
+                    {
+                        conditions.push(not_deleted);
+                    }
+                    let query = assemble_select(
+                        &select_columns,
+                        self.table_name,
+                        &conditions,
+                        &cursor.order_by(ascending),
+                        1,
+                    );
+                    let cursor_args = cursor.cursor_arg_tokens_for_state(*state);
+                    let args = quote! {
+                        (first + 1) as i64,
+                        #cursor_args
+                    };
+                    let es_query_call = make_es_query(&query, &args);
+                    let direction_pattern = if ascending {
+                        quote! { es_entity::ListDirection::Ascending }
+                    } else {
+                        quote! { es_entity::ListDirection::Descending }
+                    };
+                    let state_pattern = cursor.state_pattern_elems(*state);
+                    query_arms.append_all(quote! {
+                        (#direction_pattern, #(#state_pattern),*) => {
+                            #es_query_call.fetch_n(op, first).await?
+                        },
+                    });
                 }
-            } else {
-                quote! {
-                    es_entity::es_query!(
-                        entity = #entity,
-                        #forgettable_tbl_arg
-                        #desc_query,
-                        #arg_tokens
-                    )
-                }
-            };
+            }
+            let cursor_state_scrutinee = cursor.state_scrutinee_elems();
 
             #[cfg(feature = "instrument")]
             let (
@@ -473,13 +656,8 @@ impl ToTokens for ListByFn<'_> {
                         #destructure_tokens
                         #record_fields
 
-                        let (entities, has_next_page) = match direction {
-                            es_entity::ListDirection::Ascending => {
-                                #es_query_asc_call.fetch_n(op, first).await?
-                            },
-                            es_entity::ListDirection::Descending => {
-                                #es_query_desc_call.fetch_n(op, first).await?
-                            },
+                        let (entities, has_next_page) = match (direction, #(#cursor_state_scrutinee),*) {
+                            #query_arms
                         };
 
                         #post_hydrate_check
@@ -615,65 +793,8 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            pub async fn list_by_id(
-                &self,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByIdCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, EntityQueryError> {
-                self.list_by_id_in_op(self.pool(), cursor, direction).await
-            }
-
-            pub async fn list_by_id_in_op<'a, OP>(
-                &self,
-                op: OP,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByIdCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, EntityQueryError>
-                where
-                    OP: es_entity::IntoOneTimeExecutor<'a>
-            {
-                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, EntityQueryError> = async {
-                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
-                    let id = if let Some(after) = after {
-                        Some(after.id)
-                    } else {
-                        None
-                    };
-
-                    let (entities, has_next_page) = match direction {
-                        es_entity::ListDirection::Ascending => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT id FROM entities WHERE (COALESCE(id > $2, true)) AND deleted = FALSE ORDER BY id ASC LIMIT $1",
-                                (first + 1) as i64,
-                                id as Option<EntityId>,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        es_entity::ListDirection::Descending => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT id FROM entities WHERE (COALESCE(id < $2, true)) AND deleted = FALSE ORDER BY id DESC LIMIT $1",
-                                (first + 1) as i64,
-                                id as Option<EntityId>,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                    };
-
-                    let end_cursor = entities.last().map(cursor_mod::EntityByIdCursor::from);
-                    Ok(es_entity::PaginatedQueryRet {
-                        entities,
-                        has_next_page,
-                        end_cursor,
-                    })
-                }.await;
-
-                __result
-            }
-        };
+        pub async fn list_by_id (& self , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: EntityByIdCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByIdCursor > , EntityQueryError > { self . list_by_id_in_op (self . pool () , cursor , direction) . await } pub async fn list_by_id_in_op < 'a , OP > (& self , op : OP , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: EntityByIdCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByIdCursor > , EntityQueryError > where OP : es_entity :: IntoOneTimeExecutor < 'a > { let __result : Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByIdCursor > , EntityQueryError > = async { let es_entity :: PaginatedQueryArgs { first , after } = cursor ; let id = if let Some (after) = after { Some (after . id) } else { None } ; let (entities , has_next_page) = match (direction , id . is_none ()) { (es_entity :: ListDirection :: Ascending , true) => { es_entity :: es_query ! (entity = Entity , "SELECT id FROM entities WHERE deleted = FALSE ORDER BY id ASC LIMIT $1" , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Descending , true) => { es_entity :: es_query ! (entity = Entity , "SELECT id FROM entities WHERE deleted = FALSE ORDER BY id DESC LIMIT $1" , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Ascending , false) => { es_entity :: es_query ! (entity = Entity , "SELECT id FROM entities WHERE (id > $2) AND deleted = FALSE ORDER BY id ASC LIMIT $1" , (first + 1) as i64 , id as Option < EntityId > ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Descending , false) => { es_entity :: es_query ! (entity = Entity , "SELECT id FROM entities WHERE (id < $2) AND deleted = FALSE ORDER BY id DESC LIMIT $1" , (first + 1) as i64 , id as Option < EntityId > ,) . fetch_n (op , first) . await ? } , } ; let end_cursor = entities . last () . map (cursor_mod :: EntityByIdCursor :: from) ; Ok (es_entity :: PaginatedQueryRet { entities , has_next_page , end_cursor , }) } . await ; __result }
+                };
 
         assert_eq!(tokens.to_string(), expected.to_string());
     }
@@ -740,68 +861,8 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            pub async fn list_by_name(
-                &self,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByNameCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByNameCursor>, EntityQueryError> {
-                self.list_by_name_in_op(self.pool(), cursor, direction).await
-            }
-
-            pub async fn list_by_name_in_op<'a, OP>(
-                &self,
-                op: OP,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByNameCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByNameCursor>, EntityQueryError>
-                where
-                    OP: es_entity::IntoOneTimeExecutor<'a>
-            {
-                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByNameCursor>, EntityQueryError> = async {
-                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
-                    let (id, name) = if let Some(after) = after {
-                        (Some(after.id), Some(after.name))
-                    } else {
-                        (None, None)
-                    };
-
-                    let (entities, has_next_page) = match direction {
-                        es_entity::ListDirection::Ascending => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT name, id FROM entities WHERE (COALESCE((name, id) > ($3, $2), $2 IS NULL)) ORDER BY name ASC, id ASC LIMIT $1",
-                                (first + 1) as i64,
-                                id as Option<EntityId>,
-                                name as Option<String>,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        es_entity::ListDirection::Descending => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT name, id FROM entities WHERE (COALESCE((name, id) < ($3, $2), $2 IS NULL)) ORDER BY name DESC, id DESC LIMIT $1",
-                                (first + 1) as i64,
-                                id as Option<EntityId>,
-                                name as Option<String>,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                    };
-
-                    let end_cursor = entities.last().map(cursor_mod::EntityByNameCursor::from);
-
-                    Ok(es_entity::PaginatedQueryRet {
-                        entities,
-                        has_next_page,
-                        end_cursor,
-                    })
-                }.await;
-
-                __result
-            }
-        };
+        pub async fn list_by_name (& self , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: EntityByNameCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByNameCursor > , EntityQueryError > { self . list_by_name_in_op (self . pool () , cursor , direction) . await } pub async fn list_by_name_in_op < 'a , OP > (& self , op : OP , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: EntityByNameCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByNameCursor > , EntityQueryError > where OP : es_entity :: IntoOneTimeExecutor < 'a > { let __result : Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByNameCursor > , EntityQueryError > = async { let es_entity :: PaginatedQueryArgs { first , after } = cursor ; let (id , name) = if let Some (after) = after { (Some (after . id) , Some (after . name)) } else { (None , None) } ; let (entities , has_next_page) = match (direction , id . is_none ()) { (es_entity :: ListDirection :: Ascending , true) => { es_entity :: es_query ! (entity = Entity , "SELECT name, id FROM entities ORDER BY name ASC, id ASC LIMIT $1" , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Descending , true) => { es_entity :: es_query ! (entity = Entity , "SELECT name, id FROM entities ORDER BY name DESC, id DESC LIMIT $1" , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Ascending , false) => { es_entity :: es_query ! (entity = Entity , "SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) ORDER BY name ASC, id ASC LIMIT $1" , (first + 1) as i64 , id as Option < EntityId > , name as Option < String > ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Descending , false) => { es_entity :: es_query ! (entity = Entity , "SELECT name, id FROM entities WHERE ((name, id) < ($3, $2)) ORDER BY name DESC, id DESC LIMIT $1" , (first + 1) as i64 , id as Option < EntityId > , name as Option < String > ,) . fetch_n (op , first) . await ? } , } ; let end_cursor = entities . last () . map (cursor_mod :: EntityByNameCursor :: from) ; Ok (es_entity :: PaginatedQueryRet { entities , has_next_page , end_cursor , }) } . await ; __result }
+                };
 
         assert_eq!(tokens.to_string(), expected.to_string());
     }
@@ -837,68 +898,8 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            pub async fn list_by_value(
-                &self,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByValueCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByValueCursor>, EntityQueryError> {
-                self.list_by_value_in_op(self.pool(), cursor, direction).await
-            }
-
-            pub async fn list_by_value_in_op<'a, OP>(
-                &self,
-                op: OP,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByValueCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByValueCursor>, EntityQueryError>
-                where
-                    OP: es_entity::IntoOneTimeExecutor<'a>
-            {
-                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByValueCursor>, EntityQueryError> = async {
-                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
-                    let (id, value) = if let Some(after) = after {
-                        (Some(after.id), after.value)
-                    } else {
-                        (None, None)
-                    };
-
-                    let (entities, has_next_page) = match direction {
-                        es_entity::ListDirection::Ascending => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id > $2, true) OR COALESCE(value > $3, value IS NOT NULL)) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
-                                (first + 1) as i64,
-                                id as Option<EntityId>,
-                                value as Option<rust_decimal::Decimal>,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        es_entity::ListDirection::Descending => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id < $2, true) OR COALESCE(value < $3, $2 IS NULL OR (value IS NULL AND $3 IS NOT NULL))) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
-                                (first + 1) as i64,
-                                id as Option<EntityId>,
-                                value as Option<rust_decimal::Decimal>,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                    };
-
-                    let end_cursor = entities.last().map(cursor_mod::EntityByValueCursor::from);
-
-                    Ok(es_entity::PaginatedQueryRet {
-                        entities,
-                        has_next_page,
-                        end_cursor,
-                    })
-                }.await;
-
-                __result
-            }
-        };
+        pub async fn list_by_value (& self , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: EntityByValueCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByValueCursor > , EntityQueryError > { self . list_by_value_in_op (self . pool () , cursor , direction) . await } pub async fn list_by_value_in_op < 'a , OP > (& self , op : OP , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: EntityByValueCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByValueCursor > , EntityQueryError > where OP : es_entity :: IntoOneTimeExecutor < 'a > { let __result : Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByValueCursor > , EntityQueryError > = async { let es_entity :: PaginatedQueryArgs { first , after } = cursor ; let (id , value) = if let Some (after) = after { (Some (after . id) , after . value) } else { (None , None) } ; let (entities , has_next_page) = match (direction , id . is_some () , value . is_some ()) { (es_entity :: ListDirection :: Ascending , false , _) => { es_entity :: es_query ! (entity = Entity , "SELECT value, id FROM entities ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1" , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Descending , false , _) => { es_entity :: es_query ! (entity = Entity , "SELECT value, id FROM entities ORDER BY value DESC NULLS LAST, id DESC LIMIT $1" , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Ascending , true , true) => { es_entity :: es_query ! (entity = Entity , "SELECT value, id FROM entities WHERE ((value, id) > ($3, $2)) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1" , (first + 1) as i64 , id as Option < EntityId > , value as Option < rust_decimal :: Decimal > ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Descending , true , true) => { es_entity :: es_query ! (entity = Entity , "SELECT value, id FROM entities WHERE ((value IS NULL OR (value, id) < ($3, $2))) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1" , (first + 1) as i64 , id as Option < EntityId > , value as Option < rust_decimal :: Decimal > ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Ascending , true , false) => { es_entity :: es_query ! (entity = Entity , "SELECT value, id FROM entities WHERE ((value IS NOT NULL OR id > $2)) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1" , (first + 1) as i64 , id as Option < EntityId > ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Descending , true , false) => { es_entity :: es_query ! (entity = Entity , "SELECT value, id FROM entities WHERE ((value IS NULL AND id < $2)) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1" , (first + 1) as i64 , id as Option < EntityId > ,) . fetch_n (op , first) . await ? } , } ; let end_cursor = entities . last () . map (cursor_mod :: EntityByValueCursor :: from) ; Ok (es_entity :: PaginatedQueryRet { entities , has_next_page , end_cursor , }) } . await ; __result }
+                };
 
         assert_eq!(tokens.to_string(), expected.to_string());
     }
@@ -946,68 +947,8 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            pub async fn list_by_value(
-                &self,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByValueCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByValueCursor>, EntityQueryError> {
-                self.list_by_value_in_op(self.pool(), cursor, direction).await
-            }
-
-            pub async fn list_by_value_in_op<'a, OP>(
-                &self,
-                op: OP,
-                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByValueCursor>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByValueCursor>, EntityQueryError>
-                where
-                    OP: es_entity::IntoOneTimeExecutor<'a>
-            {
-                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByValueCursor>, EntityQueryError> = async {
-                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
-                    let (id, value) = if let Some(after) = after {
-                        (Some(after.id), Some(after.value))
-                    } else {
-                        (None, None)
-                    };
-
-                    let (entities, has_next_page) = match direction {
-                        es_entity::ListDirection::Ascending => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id > $2, true) OR COALESCE(value > $3, value IS NOT NULL)) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
-                                (first + 1) as i64,
-                                id as Option<EntityId>,
-                                value as Option<DomainEnum>,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        es_entity::ListDirection::Descending => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id < $2, true) OR COALESCE(value < $3, $2 IS NULL OR (value IS NULL AND $3 IS NOT NULL))) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
-                                (first + 1) as i64,
-                                id as Option<EntityId>,
-                                value as Option<DomainEnum>,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                    };
-
-                    let end_cursor = entities.last().map(cursor_mod::EntityByValueCursor::from);
-
-                    Ok(es_entity::PaginatedQueryRet {
-                        entities,
-                        has_next_page,
-                        end_cursor,
-                    })
-                }.await;
-
-                __result
-            }
-        };
+        pub async fn list_by_value (& self , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: EntityByValueCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByValueCursor > , EntityQueryError > { self . list_by_value_in_op (self . pool () , cursor , direction) . await } pub async fn list_by_value_in_op < 'a , OP > (& self , op : OP , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: EntityByValueCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByValueCursor > , EntityQueryError > where OP : es_entity :: IntoOneTimeExecutor < 'a > { let __result : Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByValueCursor > , EntityQueryError > = async { let es_entity :: PaginatedQueryArgs { first , after } = cursor ; let (id , value) = if let Some (after) = after { (Some (after . id) , Some (after . value)) } else { (None , None) } ; let (entities , has_next_page) = match (direction , id . is_none ()) { (es_entity :: ListDirection :: Ascending , true) => { es_entity :: es_query ! (entity = Entity , "SELECT value, id FROM entities ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1" , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Descending , true) => { es_entity :: es_query ! (entity = Entity , "SELECT value, id FROM entities ORDER BY value DESC NULLS LAST, id DESC LIMIT $1" , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Ascending , false) => { es_entity :: es_query ! (entity = Entity , "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id > $2, true) OR COALESCE(value > $3, value IS NOT NULL)) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1" , (first + 1) as i64 , id as Option < EntityId > , value as Option < DomainEnum > ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Descending , false) => { es_entity :: es_query ! (entity = Entity , "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id < $2, true) OR COALESCE(value < $3, $2 IS NULL OR (value IS NULL AND $3 IS NOT NULL))) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1" , (first + 1) as i64 , id as Option < EntityId > , value as Option < DomainEnum > ,) . fetch_n (op , first) . await ? } , } ; let end_cursor = entities . last () . map (cursor_mod :: EntityByValueCursor :: from) ; Ok (es_entity :: PaginatedQueryRet { entities , has_next_page , end_cursor , }) } . await ; __result }
+                };
 
         assert_eq!(tokens.to_string(), expected.to_string());
     }
