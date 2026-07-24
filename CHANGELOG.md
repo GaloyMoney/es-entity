@@ -1,3 +1,11 @@
+# [cala release v0.11.7](https://github.com/GaloyMoney/cala/releases/tag/0.11.7)
+
+
+
+### Features
+
+- Preserve commit-hook registration order in execute_pre (#160)
+
 # [cala release v0.11.6](https://github.com/GaloyMoney/cala/releases/tag/0.11.6)
 
 
