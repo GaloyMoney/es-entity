@@ -11,6 +11,18 @@
 #@   "nix_task_image_config",
 #@ )
 
+#@ def retry_task():
+task: wait-and-retry
+config:
+  platform: linux
+  image_resource: #@ release_task_image_config()
+  run:
+    path: sh
+    args:
+    - "-c"
+    - "sleep 5"
+#@ end
+
 groups:
 - name: es-entity
   jobs:
@@ -122,18 +134,22 @@ jobs:
       run:
         path: pipeline-tasks/ci/tasks/publish-to-crates.sh
   - put: repo
+    attempts: 3
     params:
       tag: artifacts/gh-release-tag
       repository: repo
       merge: true
+    on_failure: #@ retry_task()
   - put: gh-release
     params:
       name: artifacts/gh-release-name
       tag: artifacts/gh-release-tag
       body: artifacts/gh-release-notes.md
   - put: version
+    attempts: 3
     params:
       file: version/version
+    on_failure: #@ retry_task()
 
 - name: set-dev-version
   plan:
