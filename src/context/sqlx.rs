@@ -15,7 +15,7 @@ impl<'q> sqlx::Encode<'q, db::Db> for ContextData {
         &self,
         buf: &mut db::ArgumentBuffer,
     ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync + 'static>> {
-        let json_value = serde_json::to_value(&self.0)?;
+        let json_value = serde_json::to_value(self)?;
         <serde_json::Value as sqlx::Encode<db::Db>>::encode_by_ref(&json_value, buf)
     }
 }
