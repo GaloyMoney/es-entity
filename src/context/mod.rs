@@ -74,7 +74,7 @@ mod with_event_context;
 
 use serde::{Deserialize, Serialize};
 
-use std::{borrow::Cow, cell::RefCell, rc::Rc};
+use std::{borrow::Cow, cell::RefCell, rc::Rc, sync::Arc};
 
 pub use tracing::*;
 pub use with_event_context::*;
@@ -82,23 +82,41 @@ pub use with_event_context::*;
 /// Immutable context data that can be safely shared across thread boundaries.
 ///
 /// This struct holds key-value pairs of context information that gets attached
-/// to events when they are persisted. It uses an immutable HashMap internally
-/// for efficient cloning and thread-safe sharing of data snapshots.
+/// to events when they are persisted. It uses a copy-on-write entry vector
+/// internally: cloning is a single atomic refcount bump, and mutation only
+/// clones the (tiny) entry vector when the data is currently shared. Context
+/// maps hold a handful of entries in practice, so a linear-scan vector is
+/// cheaper than a hashed or persistent map on every operation that matters
+/// (clone, insert, lookup).
 ///
 /// `ContextData` is `Send` and can be passed between threads, unlike [`EventContext`]
 /// which is thread-local. This makes it suitable for transferring context across
 /// async boundaries via the [`WithEventContext`] trait.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ContextData(im::HashMap<Cow<'static, str>, serde_json::Value>);
+#[derive(Debug, Clone)]
+pub struct ContextData(Arc<Vec<(Cow<'static, str>, serde_json::Value)>>);
 
 impl ContextData {
     fn new() -> Self {
-        Self(im::HashMap::new())
+        Self(Arc::new(Vec::new()))
     }
 
     fn insert(&mut self, key: &'static str, value: serde_json::Value) {
-        self.0 = self.0.update(Cow::Borrowed(key), value);
+        let entries = Arc::make_mut(&mut self.0);
+        if let Some((_, existing)) = entries.iter_mut().find(|(k, _)| *k == key) {
+            *existing = value;
+        } else {
+            entries.push((Cow::Borrowed(key), value));
+        }
+    }
+
+    /// Number of key-value pairs stored in this context.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns `true` if the context holds no entries.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     #[cfg(feature = "tracing-context")]
@@ -115,16 +133,63 @@ impl ContextData {
         &self,
         key: &'static str,
     ) -> Result<Option<T>, serde_json::Error> {
-        let Some(val) = self.0.get(key) else {
+        let Some((_, val)) = self.0.iter().find(|(k, _)| *k == key) else {
             return Ok(None);
         };
         serde_json::from_value(val.clone()).map(Some)
     }
 }
 
+impl Serialize for ContextData {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (key, value) in self.0.iter() {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ContextData {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ContextDataVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ContextDataVisitor {
+            type Value = ContextData;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a map of context keys to JSON values")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut access: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut entries = Vec::with_capacity(access.size_hint().unwrap_or(0));
+                while let Some((key, value)) =
+                    access.next_entry::<Cow<'static, str>, serde_json::Value>()?
+                {
+                    if let Some((_, existing)) = entries.iter_mut().find(|(k, _)| *k == key) {
+                        *existing = value;
+                    } else {
+                        entries.push((key, value));
+                    }
+                }
+                Ok(ContextData(Arc::new(entries)))
+            }
+        }
+
+        deserializer.deserialize_map(ContextDataVisitor)
+    }
+}
+
 struct StackEntry {
     id: Rc<()>,
     data: ContextData,
+    /// Set by [`EventContext::insert`]. Lets [`EventContext::data_if_dirty`]
+    /// skip the write-back clone when a poll left the context untouched.
+    dirty: bool,
 }
 
 thread_local! {
@@ -216,6 +281,7 @@ impl EventContext {
             stack.push(StackEntry {
                 id: id.clone(),
                 data,
+                dirty: false,
             });
 
             EventContext { id }
@@ -248,6 +314,7 @@ impl EventContext {
             stack.push(StackEntry {
                 id: id.clone(),
                 data,
+                dirty: false,
             });
 
             EventContext { id }
@@ -318,6 +385,7 @@ impl EventContext {
             for entry in stack.iter_mut().rev() {
                 if Rc::ptr_eq(&entry.id, &self.id) {
                     entry.data.insert(key, json_value);
+                    entry.dirty = true;
                     return;
                 }
             }
@@ -353,6 +421,28 @@ impl EventContext {
                 }
             }
             panic!("EventContext missing on CONTEXT_STACK")
+        })
+    }
+
+    /// Returns a snapshot of the context data only if it was mutated since
+    /// the context was created (or since the last `data_if_dirty` call),
+    /// clearing the dirty flag. Returns `None` when untouched, letting
+    /// callers skip the clone entirely on the (overwhelmingly common)
+    /// read-only path.
+    pub(crate) fn data_if_dirty(&self) -> Option<ContextData> {
+        CONTEXT_STACK.with(|c| {
+            let mut stack = c.borrow_mut();
+            for entry in stack.iter_mut().rev() {
+                if Rc::ptr_eq(&entry.id, &self.id) {
+                    return if entry.dirty {
+                        entry.dirty = false;
+                        Some(entry.data.clone())
+                    } else {
+                        None
+                    };
+                }
+            }
+            None
         })
     }
 
@@ -421,6 +511,69 @@ mod tests {
             current_json(),
             serde_json::json!({ "data": new_value, "new_data": value})
         );
+    }
+
+    #[test]
+    fn context_data_serializes_as_json_object_and_round_trips() {
+        let mut ctx = EventContext::current();
+        ctx.insert("request_id", &"req-123").unwrap();
+        ctx.insert("nested", &serde_json::json!({ "a": 1 }))
+            .unwrap();
+
+        let data = ctx.data();
+        assert_eq!(data.len(), 2);
+        assert!(!data.is_empty());
+
+        let json = serde_json::to_value(&data).unwrap();
+        assert!(json.is_object());
+        assert_eq!(
+            json,
+            serde_json::json!({ "request_id": "req-123", "nested": { "a": 1 } })
+        );
+
+        let round_tripped: ContextData = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            round_tripped.lookup::<String>("request_id").unwrap(),
+            Some("req-123".to_string())
+        );
+        assert_eq!(
+            round_tripped.lookup::<serde_json::Value>("nested").unwrap(),
+            Some(serde_json::json!({ "a": 1 }))
+        );
+        assert_eq!(round_tripped.lookup::<String>("missing").unwrap(), None);
+    }
+
+    #[test]
+    fn context_data_insert_replaces_existing_key() {
+        let mut ctx = EventContext::current();
+        ctx.insert("key", &"first").unwrap();
+        ctx.insert("key", &"second").unwrap();
+        let data = ctx.data();
+        assert_eq!(data.len(), 1);
+        assert_eq!(
+            data.lookup::<String>("key").unwrap(),
+            Some("second".to_string())
+        );
+    }
+
+    #[test]
+    fn data_if_dirty_only_returns_data_after_mutation() {
+        let mut ctx = EventContext::current();
+        ctx.insert("data", &"value").unwrap();
+
+        let seeded = EventContext::seed(ctx.data());
+        assert!(seeded.data_if_dirty().is_none());
+
+        let mut inner = EventContext::current();
+        inner.insert("inner", &"mutation").unwrap();
+
+        let dirty_data = seeded.data_if_dirty().expect("insert must mark dirty");
+        assert_eq!(
+            dirty_data.lookup::<String>("inner").unwrap(),
+            Some("mutation".to_string())
+        );
+        // Flag is cleared by the read
+        assert!(seeded.data_if_dirty().is_none());
     }
 
     #[test]

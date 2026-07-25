@@ -84,7 +84,12 @@ impl<F: Future> Future for EventContextFuture<F> {
         let this = self.project();
         let ctx = EventContext::seed(this.context_data.clone());
         let res = this.future.poll(cx);
-        *this.context_data = ctx.data();
+        // Only write the context back when the poll actually mutated it —
+        // almost all polls are read-only, and the write-back costs a clone
+        // plus a stack walk.
+        if let Some(data) = ctx.data_if_dirty() {
+            *this.context_data = data;
+        }
         res
     }
 }

@@ -36,7 +36,6 @@ serde =  { workspace = true }
 serde_json =  { workspace = true }
 derive_builder = { workspace = true }
 uuid = { workspace = true }
-im = { workspace = true }
 pin-project = { workspace = true }
 parking_lot = { workspace = true }
 tokio = { workspace = true }
@@ -83,7 +82,6 @@ sqlx = { version = "0.8", default-features = false, features = ["macros", "runti
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "time"] }
 thiserror = "2.0"
 uuid = { version = "1.23", features = ["serde", "v7"] }
-im = { version = "15.1", features = ["serde"] }
 pin-project = "1.1"
 tracing = { version = "0.1.41", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
