@@ -105,20 +105,28 @@ async fn specialized_queries_plan_with_index_cond() -> anyhow::Result<()> {
         .collect();
     seed_transfers(&transfers, &specs).await?;
 
-    sqlx::query("ANALYZE transfers").execute(&pool).await?;
+    // `SET` is session-scoped, so ANALYZE + SET + EXPLAIN must all run on a
+    // single dedicated connection — going through the pool could hand the
+    // EXPLAINs a connection where seq scans are still enabled.
+    let mut conn = pool.acquire().await?;
+    sqlx::query("ANALYZE transfers").execute(&mut *conn).await?;
     // Force the planner's hand: if a predicate cannot become an index qual,
     // the plan falls back to a (seq or full-index) scan + Filter even with
     // seq scans disabled.
     sqlx::query("SET enable_seqscan = off")
-        .execute(&pool)
+        .execute(&mut *conn)
         .await?;
 
-    async fn explain(pool: &PgPool, account_id: uuid::Uuid, query: &str) -> anyhow::Result<String> {
+    async fn explain(
+        conn: &mut sqlx::PgConnection,
+        account_id: uuid::Uuid,
+        query: &str,
+    ) -> anyhow::Result<String> {
         let rows: Vec<(String,)> = sqlx::query_as(query)
             .bind(account_id)
             .bind(uuid::Uuid::nil())
             .bind(Utc::now())
-            .fetch_all(pool)
+            .fetch_all(&mut *conn)
             .await?;
         Ok(rows.into_iter().map(|r| r.0).collect::<Vec<_>>().join("\n"))
     }
@@ -126,7 +134,7 @@ async fn specialized_queries_plan_with_index_cond() -> anyhow::Result<()> {
     // Specialized page-1 query (what the macro now emits when the cursor is
     // absent): bare `col = $1`, no cursor predicate.
     let plan = explain(
-        &pool,
+        &mut conn,
         account_ids[0],
         "EXPLAIN SELECT created_at, id FROM transfers WHERE account_id = $1 ORDER BY created_at DESC, id DESC LIMIT 50",
     )
@@ -138,7 +146,7 @@ async fn specialized_queries_plan_with_index_cond() -> anyhow::Result<()> {
 
     // Specialized cursor-page query: bare row comparison.
     let plan = explain(
-        &pool,
+        &mut conn,
         account_ids[0],
         "EXPLAIN SELECT created_at, id FROM transfers WHERE account_id = $1 AND ((created_at, id) < ($3, $2)) ORDER BY created_at DESC, id DESC LIMIT 50",
     )
@@ -152,7 +160,7 @@ async fn specialized_queries_plan_with_index_cond() -> anyhow::Result<()> {
     // the specialization cap) is demonstrably not sargable: no index
     // condition even with seq scans disabled.
     let plan = explain(
-        &pool,
+        &mut conn,
         account_ids[0],
         "EXPLAIN SELECT created_at, id FROM transfers WHERE COALESCE(account_id = $1, $1 IS NULL) AND (COALESCE((created_at, id) < ($3, $2), $2 IS NULL)) ORDER BY created_at DESC, id DESC LIMIT 50",
     )
@@ -161,6 +169,11 @@ async fn specialized_queries_plan_with_index_cond() -> anyhow::Result<()> {
         !plan.contains("Index Cond"),
         "legacy COALESCE catch-all should not yield an index condition, got plan:\n{plan}"
     );
+
+    // Don't leak the planner override into the shared pool.
+    sqlx::query("RESET enable_seqscan")
+        .execute(&mut *conn)
+        .await?;
 
     Ok(())
 }
