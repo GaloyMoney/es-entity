@@ -1,3 +1,11 @@
+# [cala release v0.11.8](https://github.com/GaloyMoney/cala/releases/tag/0.11.8)
+
+
+
+### Performance
+
+- Lazy event-context seeding — skip stack work on untouched polls (#164)
+
 # [cala release v0.11.7](https://github.com/GaloyMoney/cala/releases/tag/0.11.7)
 
 
