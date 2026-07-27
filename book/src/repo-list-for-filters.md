@@ -62,9 +62,9 @@ SELECT id FROM user_documents
   ORDER BY id ASC LIMIT $3
 ```
 
-This matters for performance: the planner can turn `col = $k` into an index condition, which is impossible through the legacy `COALESCE(col = $k, $k IS NULL)` catch-all (a single generic plan must serve both `NULL` and non-`NULL` parameters, so the predicate never becomes an index qual and every call full-scans the table).
+This matters for performance: the planner can turn `col = $k` into an index condition, which is impossible through a `COALESCE(col = $k, $k IS NULL)` catch-all (a single generic plan must serve both `NULL` and non-`NULL` parameters, so the predicate never becomes an index qual and every call full-scans the table).
 
-For entities with more than 4 `list_for` columns the combination matrix is capped: only the no-filter, single-filter, and all-filters combinations get specialized queries, and remaining combinations fall back to the legacy COALESCE-based SQL (correct, just not sargable):
+For entities with more than 4 `list_for` columns the combination matrix is capped: only the no-filter, single-filter, and all-filters combinations get specialized queries, and remaining combinations fall back to the catch-all COALESCE-based SQL (correct, just not sargable):
 
 ```sql
 SELECT id FROM user_documents

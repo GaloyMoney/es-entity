@@ -252,8 +252,8 @@ impl<'a> ListForFiltersFn<'a> {
     /// cursor states x 2 directions x per sort column, so for entities with
     /// many filter columns the matrix is capped: only the no-filter,
     /// all-filters, and single-filter combinations are specialized and
-    /// everything else falls back to the legacy COALESCE query (correctness
-    /// preserved, just not sargable).
+    /// everything else falls back to the catch-all COALESCE query
+    /// (correctness preserved, just not sargable).
     fn is_specialized_combo(&self, combo: &[FilterState]) -> bool {
         let n = self.for_columns.len();
         if n <= 4 {
@@ -450,7 +450,7 @@ impl<'a> ListForFiltersFn<'a> {
             .map(|col| FiltersStruct::filter_arg_tokens(col))
             .collect();
 
-        let legacy_arg_tokens = quote! {
+        let fallback_arg_tokens = quote! {
             #filter_arg_bindings
             #cursor_arg_tokens
         };
@@ -605,8 +605,8 @@ impl<'a> ListForFiltersFn<'a> {
             .chain(cursor_struct.state_scrutinee_elems())
             .collect();
 
-        let es_query_legacy_asc_call = make_es_query(&asc_query, &legacy_arg_tokens);
-        let es_query_legacy_desc_call = make_es_query(&desc_query, &legacy_arg_tokens);
+        let es_query_fallback_asc_call = make_es_query(&asc_query, &fallback_arg_tokens);
+        let es_query_fallback_desc_call = make_es_query(&desc_query, &fallback_arg_tokens);
 
         #[cfg(feature = "instrument")]
         let (instrument_attr, extract_has_cursor, record_fields, record_results, error_recording) = {
@@ -683,11 +683,11 @@ impl<'a> ListForFiltersFn<'a> {
                     let (entities, has_next_page) = match direction {
                         es_entity::ListDirection::Ascending => match (#(#scrutinee_elems,)*) {
                             #asc_arms
-                            _ => #es_query_legacy_asc_call.fetch_n(op, first).await?,
+                            _ => #es_query_fallback_asc_call.fetch_n(op, first).await?,
                         },
                         es_entity::ListDirection::Descending => match (#(#scrutinee_elems,)*) {
                             #desc_arms
-                            _ => #es_query_legacy_desc_call.fetch_n(op, first).await?,
+                            _ => #es_query_fallback_desc_call.fetch_n(op, first).await?,
                         }
                     };
 
@@ -945,8 +945,282 @@ mod tests {
         list_for_filters_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-        pub async fn list_for_filters_by_id (& self , filters : OrderFilters , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: OrderByIdCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Order , cursor_mod :: OrderByIdCursor > , OrderQueryError > { self . list_for_filters_by_id_in_op (self . pool () , filters , cursor , direction) . await } pub async fn list_for_filters_by_id_in_op < 'a , OP > (& self , op : OP , filters : OrderFilters , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: OrderByIdCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Order , cursor_mod :: OrderByIdCursor > , OrderQueryError > where OP : es_entity :: IntoOneTimeExecutor < 'a > { let __result : Result < es_entity :: PaginatedQueryRet < Order , cursor_mod :: OrderByIdCursor > , OrderQueryError > = async { let filter_customer_id = filters . customer_id ; let filter_status = filters . status ; let es_entity :: PaginatedQueryArgs { first , after } = cursor ; let id = if let Some (after) = after { Some (after . id) } else { None } ; let (entities , has_next_page) = match direction { es_entity :: ListDirection :: Ascending => match (filter_customer_id . is_some () , filter_status . is_some () , id . is_none () ,) { (false , false , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders ORDER BY id ASC LIMIT $1" , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (false , false , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE (id > $2) ORDER BY id ASC LIMIT $1" , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , (false , true , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE status = $1 ORDER BY id ASC LIMIT $2" , filter_status as Option < OrderStatus > , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (false , true , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE status = $1 AND (id > $3) ORDER BY id ASC LIMIT $2" , filter_status as Option < OrderStatus > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , (true , false , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 ORDER BY id ASC LIMIT $2" , filter_customer_id as Option < CustomerId > , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (true , false , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 AND (id > $3) ORDER BY id ASC LIMIT $2" , filter_customer_id as Option < CustomerId > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , (true , true , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 ORDER BY id ASC LIMIT $3" , filter_customer_id as Option < CustomerId > , filter_status as Option < OrderStatus > , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (true , true , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND (id > $4) ORDER BY id ASC LIMIT $3" , filter_customer_id as Option < CustomerId > , filter_status as Option < OrderStatus > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , _ => es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE COALESCE(customer_id = $1, $1 IS NULL) AND COALESCE(status = $2, $2 IS NULL) AND (COALESCE(id > $4, true)) ORDER BY id ASC LIMIT $3" , filter_customer_id as Option < CustomerId > , filter_status as Option < OrderStatus > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? , } , es_entity :: ListDirection :: Descending => match (filter_customer_id . is_some () , filter_status . is_some () , id . is_none () ,) { (false , false , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders ORDER BY id DESC LIMIT $1" , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (false , false , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE (id < $2) ORDER BY id DESC LIMIT $1" , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , (false , true , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE status = $1 ORDER BY id DESC LIMIT $2" , filter_status as Option < OrderStatus > , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (false , true , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE status = $1 AND (id < $3) ORDER BY id DESC LIMIT $2" , filter_status as Option < OrderStatus > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , (true , false , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 ORDER BY id DESC LIMIT $2" , filter_customer_id as Option < CustomerId > , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (true , false , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 AND (id < $3) ORDER BY id DESC LIMIT $2" , filter_customer_id as Option < CustomerId > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , (true , true , true ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 ORDER BY id DESC LIMIT $3" , filter_customer_id as Option < CustomerId > , filter_status as Option < OrderStatus > , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (true , true , false ,) => { es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND (id < $4) ORDER BY id DESC LIMIT $3" , filter_customer_id as Option < CustomerId > , filter_status as Option < OrderStatus > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? } , _ => es_entity :: es_query ! (entity = Order , "SELECT id FROM orders WHERE COALESCE(customer_id = $1, $1 IS NULL) AND COALESCE(status = $2, $2 IS NULL) AND (COALESCE(id < $4, true)) ORDER BY id DESC LIMIT $3" , filter_customer_id as Option < CustomerId > , filter_status as Option < OrderStatus > , (first + 1) as i64 , id as Option < OrderId > ,) . fetch_n (op , first) . await ? , } } ; let end_cursor = entities . last () . map (cursor_mod :: OrderByIdCursor :: from) ; Ok (es_entity :: PaginatedQueryRet { entities , has_next_page , end_cursor , }) } . await ; __result } pub async fn list_for_filters (& self , filters : OrderFilters , sort : es_entity :: Sort < OrderSortBy > , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: OrderCursor > ,) -> Result < es_entity :: PaginatedQueryRet < Order , cursor_mod :: OrderCursor > , OrderQueryError > { let __result : Result < es_entity :: PaginatedQueryRet < Order , cursor_mod :: OrderCursor > , OrderQueryError > = async { let es_entity :: Sort { by , direction } = sort ; let es_entity :: PaginatedQueryArgs { first , after } = cursor ; use cursor_mod :: OrderCursor ; let res = match by { OrderSortBy :: Id => { let after = after . map (cursor_mod :: OrderByIdCursor :: try_from) . transpose () ? ; let query = es_entity :: PaginatedQueryArgs { first , after } ; let es_entity :: PaginatedQueryRet { entities , has_next_page , end_cursor , } = if filters . customer_id . is_none () && filters . status . is_none () { self . list_by_id (query , direction) . await ? } else if filters . status . is_none () { self . list_for_customer_id_by_id (filters . customer_id . unwrap () , query , direction) . await ? } else if filters . customer_id . is_none () { self . list_for_status_by_id (filters . status . unwrap () , query , direction) . await ? } else { self . list_for_filters_by_id (filters , query , direction) . await ? } ; es_entity :: PaginatedQueryRet { entities , has_next_page , end_cursor : end_cursor . map (cursor_mod :: OrderCursor :: from) } } } ; Ok (res) } . await ; __result }
-                };
+            pub async fn list_for_filters_by_id(
+                &self,
+                filters: OrderFilters,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrderByIdCursor>,
+                direction: es_entity::ListDirection,
+            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderByIdCursor>, OrderQueryError> {
+                self.list_for_filters_by_id_in_op(self.pool(), filters, cursor, direction).await
+            }
+
+            pub async fn list_for_filters_by_id_in_op<'a, OP>(
+                &self,
+                op: OP,
+                filters: OrderFilters,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrderByIdCursor>,
+                direction: es_entity::ListDirection,
+            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderByIdCursor>, OrderQueryError>
+                where
+                    OP: es_entity::IntoOneTimeExecutor<'a>
+            {
+                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderByIdCursor>, OrderQueryError> = async {
+                    let filter_customer_id = filters.customer_id;
+                    let filter_status = filters.status;
+                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
+                    let id = if let Some(after) = after {
+                        Some(after.id)
+                    } else {
+                        None
+                    };
+
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => match (filter_customer_id.is_some(), filter_status.is_some(), id.is_none(),) {
+                            (false, false, true,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders ORDER BY id ASC LIMIT $1",
+                                    (first + 1) as i64,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            (false, false, false,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders WHERE (id > $2) ORDER BY id ASC LIMIT $1",
+                                    (first + 1) as i64,
+                                    id as Option<OrderId>,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            (false, true, true,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders WHERE status = $1 ORDER BY id ASC LIMIT $2",
+                                    filter_status as Option<OrderStatus>,
+                                    (first + 1) as i64,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            (false, true, false,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders WHERE status = $1 AND (id > $3) ORDER BY id ASC LIMIT $2",
+                                    filter_status as Option<OrderStatus>,
+                                    (first + 1) as i64,
+                                    id as Option<OrderId>,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            (true, false, true,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders WHERE customer_id = $1 ORDER BY id ASC LIMIT $2",
+                                    filter_customer_id as Option<CustomerId>,
+                                    (first + 1) as i64,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            (true, false, false,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders WHERE customer_id = $1 AND (id > $3) ORDER BY id ASC LIMIT $2",
+                                    filter_customer_id as Option<CustomerId>,
+                                    (first + 1) as i64,
+                                    id as Option<OrderId>,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            (true, true, true,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 ORDER BY id ASC LIMIT $3",
+                                    filter_customer_id as Option<CustomerId>,
+                                    filter_status as Option<OrderStatus>,
+                                    (first + 1) as i64,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            (true, true, false,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND (id > $4) ORDER BY id ASC LIMIT $3",
+                                    filter_customer_id as Option<CustomerId>,
+                                    filter_status as Option<OrderStatus>,
+                                    (first + 1) as i64,
+                                    id as Option<OrderId>,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            _ => es_entity::es_query!(
+                                entity = Order,
+                                "SELECT id FROM orders WHERE COALESCE(customer_id = $1, $1 IS NULL) AND COALESCE(status = $2, $2 IS NULL) AND (COALESCE(id > $4, true)) ORDER BY id ASC LIMIT $3",
+                                filter_customer_id as Option<CustomerId>,
+                                filter_status as Option<OrderStatus>,
+                                (first + 1) as i64,
+                                id as Option<OrderId>,
+                            ).fetch_n(op, first).await?,
+                        },
+                        es_entity::ListDirection::Descending => match (filter_customer_id.is_some(), filter_status.is_some(), id.is_none(),) {
+                            (false, false, true,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders ORDER BY id DESC LIMIT $1",
+                                    (first + 1) as i64,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            (false, false, false,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders WHERE (id < $2) ORDER BY id DESC LIMIT $1",
+                                    (first + 1) as i64,
+                                    id as Option<OrderId>,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            (false, true, true,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders WHERE status = $1 ORDER BY id DESC LIMIT $2",
+                                    filter_status as Option<OrderStatus>,
+                                    (first + 1) as i64,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            (false, true, false,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders WHERE status = $1 AND (id < $3) ORDER BY id DESC LIMIT $2",
+                                    filter_status as Option<OrderStatus>,
+                                    (first + 1) as i64,
+                                    id as Option<OrderId>,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            (true, false, true,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders WHERE customer_id = $1 ORDER BY id DESC LIMIT $2",
+                                    filter_customer_id as Option<CustomerId>,
+                                    (first + 1) as i64,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            (true, false, false,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders WHERE customer_id = $1 AND (id < $3) ORDER BY id DESC LIMIT $2",
+                                    filter_customer_id as Option<CustomerId>,
+                                    (first + 1) as i64,
+                                    id as Option<OrderId>,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            (true, true, true,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 ORDER BY id DESC LIMIT $3",
+                                    filter_customer_id as Option<CustomerId>,
+                                    filter_status as Option<OrderStatus>,
+                                    (first + 1) as i64,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            (true, true, false,) => {
+                                es_entity::es_query!(
+                                    entity = Order,
+                                    "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND (id < $4) ORDER BY id DESC LIMIT $3",
+                                    filter_customer_id as Option<CustomerId>,
+                                    filter_status as Option<OrderStatus>,
+                                    (first + 1) as i64,
+                                    id as Option<OrderId>,
+                                )
+                                    .fetch_n(op, first)
+                                    .await?
+                            },
+                            _ => es_entity::es_query!(
+                                entity = Order,
+                                "SELECT id FROM orders WHERE COALESCE(customer_id = $1, $1 IS NULL) AND COALESCE(status = $2, $2 IS NULL) AND (COALESCE(id < $4, true)) ORDER BY id DESC LIMIT $3",
+                                filter_customer_id as Option<CustomerId>,
+                                filter_status as Option<OrderStatus>,
+                                (first + 1) as i64,
+                                id as Option<OrderId>,
+                            ).fetch_n(op, first).await?,
+                        }
+                    };
+
+                    let end_cursor = entities.last().map(cursor_mod::OrderByIdCursor::from);
+
+                    Ok(es_entity::PaginatedQueryRet {
+                        entities,
+                        has_next_page,
+                        end_cursor,
+                    })
+                }.await;
+
+                __result
+            }
+
+            pub async fn list_for_filters(
+                &self,
+                filters: OrderFilters,
+                sort: es_entity::Sort<OrderSortBy>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrderCursor>,
+            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderCursor>, OrderQueryError>
+            {
+                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderCursor>, OrderQueryError> = async {
+                    let es_entity::Sort { by, direction } = sort;
+                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
+
+                    use cursor_mod::OrderCursor;
+                    let res = match by {
+                        OrderSortBy::Id => {
+                            let after = after.map(cursor_mod::OrderByIdCursor::try_from).transpose()?;
+                            let query = es_entity::PaginatedQueryArgs { first, after };
+
+                            let es_entity::PaginatedQueryRet {
+                                entities,
+                                has_next_page,
+                                end_cursor,
+                            } = if filters.customer_id.is_none() && filters.status.is_none() {
+                                self.list_by_id(query, direction).await?
+                            } else if filters.status.is_none() {
+                                self.list_for_customer_id_by_id(filters.customer_id.unwrap(), query, direction).await?
+                            } else if filters.customer_id.is_none() {
+                                self.list_for_status_by_id(filters.status.unwrap(), query, direction).await?
+                            } else {
+                                self.list_for_filters_by_id(filters, query, direction).await?
+                            };
+                            es_entity::PaginatedQueryRet {
+                                entities,
+                                has_next_page,
+                                end_cursor: end_cursor.map(cursor_mod::OrderCursor::from)
+                            }
+                        }
+                    };
+
+                    Ok(res)
+                }.await;
+
+                __result
+            }
+        };
 
         assert_eq!(tokens.to_string(), expected.to_string());
     }
@@ -1314,7 +1588,7 @@ mod tests {
             "SELECT id FROM wides WHERE a = $1 AND b = $2 AND c = $3 AND d = $4 AND e = $5 ORDER BY id ASC LIMIT $6"
         ));
         // ...but intermediate combinations (e.g. exactly two filters) fall
-        // back to the legacy COALESCE query, so no specialized SQL exists
+        // back to the catch-all COALESCE query, so no specialized SQL exists
         // for them.
         assert!(
             !token_str.contains("SELECT id FROM wides WHERE a = $1 AND b = $2 ORDER"),
@@ -1322,7 +1596,7 @@ mod tests {
         );
         assert!(
             token_str.contains("COALESCE(a = $1, $1 IS NULL)"),
-            "legacy COALESCE fallback must remain for uncapped combinations"
+            "COALESCE fallback must remain for uncapped combinations"
         );
     }
 }

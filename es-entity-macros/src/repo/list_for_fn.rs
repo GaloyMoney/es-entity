@@ -331,8 +331,89 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-        pub async fn list_for_customer_id_by_id (& self , filter_customer_id : impl std :: borrow :: Borrow < Uuid > , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: EntityByIdCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByIdCursor > , EntityQueryError > { self . list_for_customer_id_by_id_in_op (self . pool () , filter_customer_id , cursor , direction) . await } pub async fn list_for_customer_id_by_id_in_op < 'a , OP > (& self , op : OP , filter_customer_id : impl std :: borrow :: Borrow < Uuid > , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: EntityByIdCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByIdCursor > , EntityQueryError > where OP : es_entity :: IntoOneTimeExecutor < 'a > { let __result : Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByIdCursor > , EntityQueryError > = async { let filter_customer_id = filter_customer_id . borrow () ; let es_entity :: PaginatedQueryArgs { first , after } = cursor ; let id = if let Some (after) = after { Some (after . id) } else { None } ; let (entities , has_next_page) = match (direction , id . is_none ()) { (es_entity :: ListDirection :: Ascending , true) => { es_entity :: es_query ! (entity = Entity , "SELECT customer_id, id FROM entities WHERE (customer_id = $1) ORDER BY id ASC LIMIT $2" , filter_customer_id as & Uuid , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Descending , true) => { es_entity :: es_query ! (entity = Entity , "SELECT customer_id, id FROM entities WHERE (customer_id = $1) ORDER BY id DESC LIMIT $2" , filter_customer_id as & Uuid , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Ascending , false) => { es_entity :: es_query ! (entity = Entity , "SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND (id > $3) ORDER BY id ASC LIMIT $2" , filter_customer_id as & Uuid , (first + 1) as i64 , id as Option < EntityId > ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Descending , false) => { es_entity :: es_query ! (entity = Entity , "SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND (id < $3) ORDER BY id DESC LIMIT $2" , filter_customer_id as & Uuid , (first + 1) as i64 , id as Option < EntityId > ,) . fetch_n (op , first) . await ? } , } ; let end_cursor = entities . last () . map (cursor_mod :: EntityByIdCursor :: from) ; Ok (es_entity :: PaginatedQueryRet { entities , has_next_page , end_cursor , }) } . await ; __result }
-                };
+            pub async fn list_for_customer_id_by_id(
+                &self,
+                filter_customer_id: impl std::borrow::Borrow<Uuid>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByIdCursor>,
+                direction: es_entity::ListDirection,
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, EntityQueryError> {
+                self.list_for_customer_id_by_id_in_op(self.pool(), filter_customer_id, cursor, direction).await
+            }
+
+            pub async fn list_for_customer_id_by_id_in_op<'a, OP>(
+                &self,
+                op: OP,
+                filter_customer_id: impl std::borrow::Borrow<Uuid>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByIdCursor>,
+                direction: es_entity::ListDirection,
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, EntityQueryError>
+                where
+                    OP: es_entity::IntoOneTimeExecutor<'a>
+            {
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, EntityQueryError> = async {
+                    let filter_customer_id = filter_customer_id.borrow();
+                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
+                    let id = if let Some(after) = after {
+                        Some(after.id)
+                    } else {
+                        None
+                    };
+                    let (entities, has_next_page) = match (direction, id.is_none()) {
+                        (es_entity::ListDirection::Ascending, true) => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT customer_id, id FROM entities WHERE (customer_id = $1) ORDER BY id ASC LIMIT $2",
+                                filter_customer_id as &Uuid,
+                                (first + 1) as i64,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        (es_entity::ListDirection::Descending, true) => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT customer_id, id FROM entities WHERE (customer_id = $1) ORDER BY id DESC LIMIT $2",
+                                filter_customer_id as &Uuid,
+                                (first + 1) as i64,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        (es_entity::ListDirection::Ascending, false) => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND (id > $3) ORDER BY id ASC LIMIT $2",
+                                filter_customer_id as &Uuid,
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        (es_entity::ListDirection::Descending, false) => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND (id < $3) ORDER BY id DESC LIMIT $2",
+                                filter_customer_id as &Uuid,
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                    };
+
+                    let end_cursor = entities.last().map(cursor_mod::EntityByIdCursor::from);
+                    Ok(es_entity::PaginatedQueryRet {
+                        entities,
+                        has_next_page,
+                        end_cursor,
+                    })
+                }.await;
+
+                __result
+            }
+        };
 
         assert_eq!(tokens.to_string(), expected.to_string());
     }
@@ -369,8 +450,91 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-        pub async fn list_for_email_by_email (& self , filter_email : impl std :: convert :: AsRef < str > , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: EntityByEmailCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByEmailCursor > , EntityQueryError > { self . list_for_email_by_email_in_op (self . pool () , filter_email , cursor , direction) . await } pub async fn list_for_email_by_email_in_op < 'a , OP > (& self , op : OP , filter_email : impl std :: convert :: AsRef < str > , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: EntityByEmailCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByEmailCursor > , EntityQueryError > where OP : es_entity :: IntoOneTimeExecutor < 'a > { let __result : Result < es_entity :: PaginatedQueryRet < Entity , cursor_mod :: EntityByEmailCursor > , EntityQueryError > = async { let filter_email = filter_email . as_ref () ; let es_entity :: PaginatedQueryArgs { first , after } = cursor ; let (id , email) = if let Some (after) = after { (Some (after . id) , Some (after . email)) } else { (None , None) } ; let (entities , has_next_page) = match (direction , id . is_none ()) { (es_entity :: ListDirection :: Ascending , true) => { es_entity :: es_query ! (entity = Entity , "SELECT email, id FROM entities WHERE (email = $1) ORDER BY email ASC, id ASC LIMIT $2" , filter_email as & str , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Descending , true) => { es_entity :: es_query ! (entity = Entity , "SELECT email, id FROM entities WHERE (email = $1) ORDER BY email DESC, id DESC LIMIT $2" , filter_email as & str , (first + 1) as i64 ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Ascending , false) => { es_entity :: es_query ! (entity = Entity , "SELECT email, id FROM entities WHERE (email = $1) AND ((email, id) > ($4, $3)) ORDER BY email ASC, id ASC LIMIT $2" , filter_email as & str , (first + 1) as i64 , id as Option < EntityId > , email as Option < String > ,) . fetch_n (op , first) . await ? } , (es_entity :: ListDirection :: Descending , false) => { es_entity :: es_query ! (entity = Entity , "SELECT email, id FROM entities WHERE (email = $1) AND ((email, id) < ($4, $3)) ORDER BY email DESC, id DESC LIMIT $2" , filter_email as & str , (first + 1) as i64 , id as Option < EntityId > , email as Option < String > ,) . fetch_n (op , first) . await ? } , } ; let end_cursor = entities . last () . map (cursor_mod :: EntityByEmailCursor :: from) ; Ok (es_entity :: PaginatedQueryRet { entities , has_next_page , end_cursor , }) } . await ; __result }
-                };
+            pub async fn list_for_email_by_email(
+                &self,
+                filter_email: impl std::convert::AsRef<str>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByEmailCursor>,
+                direction: es_entity::ListDirection,
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, EntityQueryError> {
+                self.list_for_email_by_email_in_op(self.pool(), filter_email, cursor, direction).await
+            }
+
+            pub async fn list_for_email_by_email_in_op<'a, OP>(
+                &self,
+                op: OP,
+                filter_email: impl std::convert::AsRef<str>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByEmailCursor>,
+                direction: es_entity::ListDirection,
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, EntityQueryError>
+                where
+                    OP: es_entity::IntoOneTimeExecutor<'a>
+            {
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, EntityQueryError> = async {
+                    let filter_email = filter_email.as_ref();
+                    let es_entity::PaginatedQueryArgs { first, after } = cursor;
+                    let (id, email) = if let Some(after) = after {
+                        (Some(after.id), Some(after.email))
+                    } else {
+                        (None, None)
+                    };
+                    let (entities, has_next_page) = match (direction, id.is_none()) {
+                        (es_entity::ListDirection::Ascending, true) => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT email, id FROM entities WHERE (email = $1) ORDER BY email ASC, id ASC LIMIT $2",
+                                filter_email as &str,
+                                (first + 1) as i64,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        (es_entity::ListDirection::Descending, true) => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT email, id FROM entities WHERE (email = $1) ORDER BY email DESC, id DESC LIMIT $2",
+                                filter_email as &str,
+                                (first + 1) as i64,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        (es_entity::ListDirection::Ascending, false) => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT email, id FROM entities WHERE (email = $1) AND ((email, id) > ($4, $3)) ORDER BY email ASC, id ASC LIMIT $2",
+                                filter_email as &str,
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                                email as Option<String>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        (es_entity::ListDirection::Descending, false) => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT email, id FROM entities WHERE (email = $1) AND ((email, id) < ($4, $3)) ORDER BY email DESC, id DESC LIMIT $2",
+                                filter_email as &str,
+                                (first + 1) as i64,
+                                id as Option<EntityId>,
+                                email as Option<String>,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                    };
+
+                    let end_cursor = entities.last().map(cursor_mod::EntityByEmailCursor::from);
+                    Ok(es_entity::PaginatedQueryRet {
+                        entities,
+                        has_next_page,
+                        end_cursor,
+                    })
+                }.await;
+
+                __result
+            }
+        };
 
         assert_eq!(tokens.to_string(), expected.to_string());
     }
