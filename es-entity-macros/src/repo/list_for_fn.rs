@@ -2,7 +2,10 @@ use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
 use quote::{TokenStreamExt, quote};
 
-use super::{list_by_fn::CursorStruct, options::*};
+use super::{
+    list_by_fn::{CursorStruct, assemble_select, not_deleted_predicate},
+    options::*,
+};
 
 pub struct ListForFn<'a> {
     ignore_prefix: Option<&'a syn::LitStr>,
@@ -74,7 +77,6 @@ impl ToTokens for ListForFn<'_> {
 
         let destructure_tokens = self.cursor().destructure_tokens();
         let select_columns = cursor.select_columns(Some(for_column_name));
-        let arg_tokens = cursor.query_arg_tokens();
 
         for delete in [DeleteOption::No, DeleteOption::Soft] {
             let fn_name = syn::Ident::new(
@@ -101,34 +103,6 @@ impl ToTokens for ListForFn<'_> {
             } else {
                 "="
             };
-            let asc_query = format!(
-                r#"SELECT {} FROM {} WHERE (({} {} $1) AND ({})){} ORDER BY {} LIMIT $2"#,
-                select_columns,
-                self.table_name,
-                for_column_name,
-                filter_op,
-                cursor.condition(1, true),
-                if delete == DeleteOption::No {
-                    self.delete.not_deleted_condition()
-                } else {
-                    ""
-                },
-                cursor.order_by(true)
-            );
-            let desc_query = format!(
-                r#"SELECT {} FROM {} WHERE (({} {} $1) AND ({})){} ORDER BY {} LIMIT $2"#,
-                select_columns,
-                self.table_name,
-                for_column_name,
-                filter_op,
-                cursor.condition(1, false),
-                if delete == DeleteOption::No {
-                    self.delete.not_deleted_condition()
-                } else {
-                    ""
-                },
-                cursor.order_by(false)
-            );
 
             let forgettable_tbl_arg = if let Some(tbl) = self.forgettable_table_name {
                 quote! { forgettable_tbl = #tbl, }
@@ -136,49 +110,69 @@ impl ToTokens for ListForFn<'_> {
                 quote! {}
             };
 
-            let es_query_asc_call = if let Some(prefix) = self.ignore_prefix {
-                quote! {
-                    es_entity::es_query!(
-                        tbl_prefix = #prefix,
-                        #forgettable_tbl_arg
-                        #asc_query,
-                        #filter_arg_name as &#for_column_type,
-                        #arg_tokens
-                    )
-                }
-            } else {
-                quote! {
-                    es_entity::es_query!(
-                        entity = #entity,
-                        #forgettable_tbl_arg
-                        #asc_query,
-                        #filter_arg_name as &#for_column_type,
-                        #arg_tokens
-                    )
+            let make_es_query = |query: &str, args: &TokenStream| -> TokenStream {
+                if let Some(prefix) = self.ignore_prefix {
+                    quote! {
+                        es_entity::es_query!(
+                            tbl_prefix = #prefix,
+                            #forgettable_tbl_arg
+                            #query,
+                            #args
+                        )
+                    }
+                } else {
+                    quote! {
+                        es_entity::es_query!(
+                            entity = #entity,
+                            #forgettable_tbl_arg
+                            #query,
+                            #args
+                        )
+                    }
                 }
             };
 
-            let es_query_desc_call = if let Some(prefix) = self.ignore_prefix {
-                quote! {
-                    es_entity::es_query!(
-                        tbl_prefix = #prefix,
-                        #forgettable_tbl_arg
-                        #desc_query,
+            let mut query_arms = TokenStream::new();
+            for state in cursor.cursor_states() {
+                for ascending in [true, false] {
+                    let mut conditions: Vec<String> =
+                        vec![format!("({for_column_name} {filter_op} $1)")];
+                    if let Some(condition) = cursor.condition_for_state(*state, 1, ascending) {
+                        conditions.push(format!("({condition})"));
+                    }
+                    if delete == DeleteOption::No
+                        && let Some(not_deleted) = not_deleted_predicate(self.delete)
+                    {
+                        conditions.push(not_deleted);
+                    }
+                    let query = assemble_select(
+                        &select_columns,
+                        self.table_name,
+                        &conditions,
+                        &cursor.order_by(ascending),
+                        2,
+                    );
+                    let cursor_args = cursor.cursor_arg_tokens_for_state(*state);
+                    let args = quote! {
                         #filter_arg_name as &#for_column_type,
-                        #arg_tokens
-                    )
+                        (first + 1) as i64,
+                        #cursor_args
+                    };
+                    let es_query_call = make_es_query(&query, &args);
+                    let direction_pattern = if ascending {
+                        quote! { es_entity::ListDirection::Ascending }
+                    } else {
+                        quote! { es_entity::ListDirection::Descending }
+                    };
+                    let state_pattern = cursor.state_pattern_elems(*state);
+                    query_arms.append_all(quote! {
+                        (#direction_pattern, #(#state_pattern),*) => {
+                            #es_query_call.fetch_n(op, first).await?
+                        },
+                    });
                 }
-            } else {
-                quote! {
-                    es_entity::es_query!(
-                        entity = #entity,
-                        #forgettable_tbl_arg
-                        #desc_query,
-                        #filter_arg_name as &#for_column_type,
-                        #arg_tokens
-                    )
-                }
-            };
+            }
+            let cursor_state_scrutinee = cursor.state_scrutinee_elems();
 
             #[cfg(feature = "instrument")]
             let (
@@ -270,13 +264,8 @@ impl ToTokens for ListForFn<'_> {
                         #destructure_tokens
                         #record_fields
 
-                        let (entities, has_next_page) = match direction {
-                            es_entity::ListDirection::Ascending => {
-                                #es_query_asc_call.fetch_n(op, first).await?
-                            },
-                            es_entity::ListDirection::Descending => {
-                                #es_query_desc_call.fetch_n(op, first).await?
-                            }
+                        let (entities, has_next_page) = match (direction, #(#cursor_state_scrutinee),*) {
+                            #query_arms
                         };
 
                         #post_hydrate_check
@@ -369,11 +358,31 @@ mod tests {
                     } else {
                         None
                     };
-                    let (entities, has_next_page) = match direction {
-                        es_entity::ListDirection::Ascending => {
+                    let (entities, has_next_page) = match (direction, id.is_none()) {
+                        (es_entity::ListDirection::Ascending, true) => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT customer_id, id FROM entities WHERE ((customer_id = $1) AND (COALESCE(id > $3, true))) ORDER BY id ASC LIMIT $2",
+                                "SELECT customer_id, id FROM entities WHERE (customer_id = $1) ORDER BY id ASC LIMIT $2",
+                                filter_customer_id as &Uuid,
+                                (first + 1) as i64,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        (es_entity::ListDirection::Descending, true) => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT customer_id, id FROM entities WHERE (customer_id = $1) ORDER BY id DESC LIMIT $2",
+                                filter_customer_id as &Uuid,
+                                (first + 1) as i64,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        (es_entity::ListDirection::Ascending, false) => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND (id > $3) ORDER BY id ASC LIMIT $2",
                                 filter_customer_id as &Uuid,
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
@@ -381,25 +390,25 @@ mod tests {
                                 .fetch_n(op, first)
                                 .await?
                         },
-                        es_entity::ListDirection::Descending => {
+                        (es_entity::ListDirection::Descending, false) => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT customer_id, id FROM entities WHERE ((customer_id = $1) AND (COALESCE(id < $3, true))) ORDER BY id DESC LIMIT $2",
+                                "SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND (id < $3) ORDER BY id DESC LIMIT $2",
                                 filter_customer_id as &Uuid,
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                             )
                                 .fetch_n(op, first)
                                 .await?
-                        }
+                        },
                     };
 
-                        let end_cursor = entities.last().map(cursor_mod::EntityByIdCursor::from);
-                        Ok(es_entity::PaginatedQueryRet {
-                            entities,
-                            has_next_page,
-                            end_cursor,
-                        })
+                    let end_cursor = entities.last().map(cursor_mod::EntityByIdCursor::from);
+                    Ok(es_entity::PaginatedQueryRet {
+                        entities,
+                        has_next_page,
+                        end_cursor,
+                    })
                 }.await;
 
                 __result
@@ -468,11 +477,31 @@ mod tests {
                     } else {
                         (None, None)
                     };
-                    let (entities, has_next_page) = match direction {
-                        es_entity::ListDirection::Ascending => {
+                    let (entities, has_next_page) = match (direction, id.is_none()) {
+                        (es_entity::ListDirection::Ascending, true) => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT email, id FROM entities WHERE ((email = $1) AND (COALESCE((email, id) > ($4, $3), $3 IS NULL))) ORDER BY email ASC, id ASC LIMIT $2",
+                                "SELECT email, id FROM entities WHERE (email = $1) ORDER BY email ASC, id ASC LIMIT $2",
+                                filter_email as &str,
+                                (first + 1) as i64,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        (es_entity::ListDirection::Descending, true) => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT email, id FROM entities WHERE (email = $1) ORDER BY email DESC, id DESC LIMIT $2",
+                                filter_email as &str,
+                                (first + 1) as i64,
+                            )
+                                .fetch_n(op, first)
+                                .await?
+                        },
+                        (es_entity::ListDirection::Ascending, false) => {
+                            es_entity::es_query!(
+                                entity = Entity,
+                                "SELECT email, id FROM entities WHERE (email = $1) AND ((email, id) > ($4, $3)) ORDER BY email ASC, id ASC LIMIT $2",
                                 filter_email as &str,
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
@@ -481,10 +510,10 @@ mod tests {
                                 .fetch_n(op, first)
                                 .await?
                         },
-                        es_entity::ListDirection::Descending => {
+                        (es_entity::ListDirection::Descending, false) => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT email, id FROM entities WHERE ((email = $1) AND (COALESCE((email, id) < ($4, $3), $3 IS NULL))) ORDER BY email DESC, id DESC LIMIT $2",
+                                "SELECT email, id FROM entities WHERE (email = $1) AND ((email, id) < ($4, $3)) ORDER BY email DESC, id DESC LIMIT $2",
                                 filter_email as &str,
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
@@ -492,7 +521,7 @@ mod tests {
                             )
                                 .fetch_n(op, first)
                                 .await?
-                        }
+                        },
                     };
 
                     let end_cursor = entities.last().map(cursor_mod::EntityByEmailCursor::from);
