@@ -519,8 +519,10 @@ impl<'a> ListForFiltersFn<'a> {
         // comparison.
         let mut asc_arms = TokenStream::new();
         let mut desc_arms = TokenStream::new();
+        let mut all_combos_specialized = true;
         for combo in filter_state_combos(&self.for_columns) {
             if !self.is_specialized_combo(&combo) {
+                all_combos_specialized = false;
                 continue;
             }
             let filter_patterns: Vec<TokenStream> = self
@@ -605,8 +607,19 @@ impl<'a> ListForFiltersFn<'a> {
             .chain(cursor_struct.state_scrutinee_elems())
             .collect();
 
-        let es_query_fallback_asc_call = make_es_query(&asc_query, &fallback_arg_tokens);
-        let es_query_fallback_desc_call = make_es_query(&desc_query, &fallback_arg_tokens);
+        // When every filter combination is specialized the explicit arms
+        // already cover the entire pattern space, so no wildcard fallback arm
+        // (nor its catch-all COALESCE queries) is emitted.
+        let (asc_fallback_arm, desc_fallback_arm) = if all_combos_specialized {
+            (quote! {}, quote! {})
+        } else {
+            let asc_call = make_es_query(&asc_query, &fallback_arg_tokens);
+            let desc_call = make_es_query(&desc_query, &fallback_arg_tokens);
+            (
+                quote! { _ => #asc_call.fetch_n(op, first).await?, },
+                quote! { _ => #desc_call.fetch_n(op, first).await?, },
+            )
+        };
 
         #[cfg(feature = "instrument")]
         let (instrument_attr, extract_has_cursor, record_fields, record_results, error_recording) = {
@@ -683,11 +696,11 @@ impl<'a> ListForFiltersFn<'a> {
                     let (entities, has_next_page) = match direction {
                         es_entity::ListDirection::Ascending => match (#(#scrutinee_elems,)*) {
                             #asc_arms
-                            _ => #es_query_fallback_asc_call.fetch_n(op, first).await?,
+                            #asc_fallback_arm
                         },
                         es_entity::ListDirection::Descending => match (#(#scrutinee_elems,)*) {
                             #desc_arms
-                            _ => #es_query_fallback_desc_call.fetch_n(op, first).await?,
+                            #desc_fallback_arm
                         }
                     };
 
@@ -1060,14 +1073,6 @@ mod tests {
                                     .fetch_n(op, first)
                                     .await?
                             },
-                            _ => es_entity::es_query!(
-                                entity = Order,
-                                "SELECT id FROM orders WHERE COALESCE(customer_id = $1, $1 IS NULL) AND COALESCE(status = $2, $2 IS NULL) AND (COALESCE(id > $4, true)) ORDER BY id ASC LIMIT $3",
-                                filter_customer_id as Option<CustomerId>,
-                                filter_status as Option<OrderStatus>,
-                                (first + 1) as i64,
-                                id as Option<OrderId>,
-                            ).fetch_n(op, first).await?,
                         },
                         es_entity::ListDirection::Descending => match (filter_customer_id.is_some(), filter_status.is_some(), id.is_none(),) {
                             (false, false, true,) => {
@@ -1154,14 +1159,6 @@ mod tests {
                                     .fetch_n(op, first)
                                     .await?
                             },
-                            _ => es_entity::es_query!(
-                                entity = Order,
-                                "SELECT id FROM orders WHERE COALESCE(customer_id = $1, $1 IS NULL) AND COALESCE(status = $2, $2 IS NULL) AND (COALESCE(id < $4, true)) ORDER BY id DESC LIMIT $3",
-                                filter_customer_id as Option<CustomerId>,
-                                filter_status as Option<OrderStatus>,
-                                (first + 1) as i64,
-                                id as Option<OrderId>,
-                            ).fetch_n(op, first).await?,
                         }
                     };
 
@@ -1377,10 +1374,29 @@ mod tests {
         let status_column = Column::new_list_for(
             syn::Ident::new("status", proc_macro2::Span::call_site()),
             syn::parse_str("String").unwrap(),
-            vec![id_ident],
+            vec![id_ident.clone()],
         );
+        // Three more columns push the entity past the specialization cap so
+        // the catch-all COALESCE fallback (the subject of this test) is
+        // still emitted.
+        let mk_col = |name: &str| {
+            Column::new_list_for(
+                syn::Ident::new(name, proc_macro2::Span::call_site()),
+                syn::parse_str("String").unwrap(),
+                vec![id_ident.clone()],
+            )
+        };
+        let region_column = mk_col("region");
+        let tier_column = mk_col("tier");
+        let kind_column = mk_col("kind");
 
-        let for_columns = vec![&workspace_id_column, &status_column];
+        let for_columns = vec![
+            &workspace_id_column,
+            &status_column,
+            &region_column,
+            &tier_column,
+            &kind_column,
+        ];
         let by_columns = vec![&id_column];
 
         let id_cursor = CursorStruct {
@@ -1417,8 +1433,8 @@ mod tests {
         let token_str = tokens.to_string();
 
         // Optional column workspace_id uses 2 params: $1 (apply bool), $2 (value)
-        // Non-optional column status uses 1 param: $3
-        // So cursor params start at $4+
+        // Non-optional columns use 1 param each: status $3, region $4, tier
+        // $5, kind $6. So cursor params start at $7+.
         assert!(
             token_str.contains("NOT $1 OR workspace_id IS NOT DISTINCT FROM $2"),
             "Expected two-param pattern for optional column, got:\n{}",
@@ -1436,10 +1452,10 @@ mod tests {
             "Expected apply_workspace_id destructuring"
         );
 
-        // LIMIT should be at $4 (3 filter params + 1)
+        // LIMIT should be at $7 (6 filter params + 1)
         assert!(
-            token_str.contains("LIMIT $4"),
-            "Expected LIMIT at $4 (2 optional + 1 non-optional = 3 filter params)"
+            token_str.contains("LIMIT $7"),
+            "Expected LIMIT at $7 (2 optional + 4 non-optional = 6 filter params)"
         );
     }
 
@@ -1521,6 +1537,13 @@ mod tests {
                 "Expected specialized query `{query}` in generated code"
             );
         }
+
+        // Fully-specialized entities need no wildcard fallback arm at all —
+        // the explicit arms already cover the entire pattern space.
+        assert!(
+            !token_str.contains("COALESCE"),
+            "no COALESCE fallback should be emitted when every combination is specialized"
+        );
     }
 
     #[test]
