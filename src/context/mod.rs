@@ -203,6 +203,7 @@ impl EventContext {
     /// // Context is now available for the current thread
     /// ```
     pub fn current() -> Self {
+        with_event_context::materialize_pending_seeds();
         CONTEXT_STACK.with(|c| {
             let mut stack = c.borrow_mut();
             if let Some(last) = stack.last() {
@@ -242,6 +243,14 @@ impl EventContext {
     /// // new_ctx now has its own independent context stack
     /// ```
     pub fn seed(data: ContextData) -> Self {
+        with_event_context::materialize_pending_seeds();
+        Self::push_entry(data)
+    }
+
+    /// Pushes a new stack entry without materializing pending seeds first.
+    /// Only [`seed`](Self::seed) (after materializing) and
+    /// `with_event_context::materialize_pending_seeds` itself may call this.
+    fn push_entry(data: ContextData) -> Self {
         CONTEXT_STACK.with(|c| {
             let mut stack = c.borrow_mut();
             let id = Rc::new(());
@@ -503,11 +512,16 @@ mod tests {
 
         let handle = tokio::spawn(
             async {
-                assert_eq!(stack_depth(), 2);
+                // Seeding is lazy: only the outer test context exists until
+                // the wrapped future observes the context.
+                assert_eq!(stack_depth(), 1);
 
                 EventContext::current()
                     .insert("spawned", &serde_json::json!("value"))
                     .unwrap();
+
+                // Observing the context materialized the wrapper's entry.
+                assert_eq!(stack_depth(), 2);
 
                 assert_eq!(
                     current_json(),
@@ -535,11 +549,16 @@ mod tests {
 
         let handle = tokio::spawn(
             async {
-                assert_eq!(stack_depth(), 1);
+                // Seeding is lazy: the worker thread's stack stays empty
+                // until the wrapped future observes the context.
+                assert_eq!(stack_depth(), 0);
 
                 EventContext::current()
                     .insert("spawned", &serde_json::json!("value"))
                     .unwrap();
+
+                // Observing the context materialized the wrapper's entry.
+                assert_eq!(stack_depth(), 1);
 
                 assert_eq!(
                     current_json(),
@@ -559,5 +578,78 @@ mod tests {
         );
 
         assert_eq!(current_json(), serde_json::json!({ "parent": "context" }));
+    }
+
+    fn pending_depth() -> usize {
+        with_event_context::pending_seed_depth()
+    }
+
+    #[tokio::test]
+    async fn with_event_context_untouched_poll_leaves_stacks_alone() {
+        let mut ctx = EventContext::current();
+        ctx.insert("parent", &serde_json::json!("context")).unwrap();
+        let before = current_json();
+
+        async {
+            // The wrapper parked a pending seed but no stack entry exists.
+            assert_eq!(stack_depth(), 1);
+            assert_eq!(pending_depth(), 1);
+            tokio::task::yield_now().await;
+            assert_eq!(stack_depth(), 1);
+        }
+        .with_event_context(ctx.data())
+        .await;
+
+        assert_eq!(current_json(), before);
+        assert_eq!(stack_depth(), 1);
+        assert_eq!(pending_depth(), 0);
+    }
+
+    #[tokio::test]
+    async fn with_event_context_fork_materializes_wrapper_seed() {
+        let mut ctx = EventContext::current();
+        ctx.insert("parent", &serde_json::json!("context")).unwrap();
+
+        async {
+            // fork() = current() + seed(): materializes the wrapper's entry
+            // and pushes the fork above it.
+            let mut forked = EventContext::fork();
+            forked.insert("forked", &serde_json::json!("data")).unwrap();
+            assert_eq!(stack_depth(), 3);
+            assert_eq!(
+                current_json(),
+                serde_json::json!({ "parent": "context", "forked": "data" })
+            );
+            drop(forked);
+            assert_eq!(stack_depth(), 2);
+            // Fork isolation: the wrapper's entry never saw "forked".
+            assert_eq!(current_json(), serde_json::json!({ "parent": "context" }));
+        }
+        .with_event_context(ctx.data())
+        .await;
+
+        assert_eq!(current_json(), serde_json::json!({ "parent": "context" }));
+    }
+
+    #[tokio::test]
+    async fn with_event_context_panic_leaves_stacks_balanced() {
+        let ctx = EventContext::current();
+        let data = ctx.data();
+
+        let res = tokio::spawn(
+            async {
+                // Materialize the wrapper's entry, then panic mid-poll.
+                let _ = EventContext::current();
+                panic!("boom");
+            }
+            .with_event_context(data),
+        )
+        .await;
+
+        assert!(res.is_err());
+        // The guard's unwind path removed both the pending seed and the
+        // materialized entry (current-thread runtime: same thread).
+        assert_eq!(stack_depth(), 1);
+        assert_eq!(pending_depth(), 0);
     }
 }

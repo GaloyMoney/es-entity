@@ -57,6 +57,11 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
 tracing-subscriber = { workspace = true }
+criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
+
+[[bench]]
+name = "context"
+harness = false
 
 [workspace]
 resolver = "2"
