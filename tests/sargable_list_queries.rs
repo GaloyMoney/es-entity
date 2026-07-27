@@ -257,12 +257,18 @@ async fn list_by_score_paginates_through_nulls() -> anyhow::Result<()> {
                 .collect(),
         };
 
+        // A page size smaller than the 8 seeded rows forces pagination even
+        // on a pristine database: ASC crosses the NULL → value boundary and
+        // DESC the value → NULL boundary, so the specialized `After` and
+        // `AfterNull` cursor variants both execute in each direction.
         let mut actual = Vec::new();
         let mut after: Option<transfer_cursor::TransferByScoreCursor> = None;
+        let mut pages = 0;
         loop {
             let ret = transfers
-                .list_by_score(PaginatedQueryArgs { first: 13, after }, direction)
+                .list_by_score(PaginatedQueryArgs { first: 3, after }, direction)
                 .await?;
+            pages += 1;
             actual.extend(ret.entities.iter().map(|t| uuid::Uuid::from(t.id)));
             if !ret.has_next_page {
                 break;
@@ -272,6 +278,11 @@ async fn list_by_score_paginates_through_nulls() -> anyhow::Result<()> {
         }
         actual.retain(|id| truth_ids.contains(id));
 
+        assert!(
+            pages >= 3,
+            "pagination must span multiple pages to exercise the cursor \
+             variants, got {pages} page(s) for direction={direction:?}"
+        );
         assert_eq!(actual, expected, "mismatch for direction={direction:?}");
     }
 
