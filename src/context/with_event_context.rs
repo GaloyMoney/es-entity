@@ -6,7 +6,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use super::{ContextData, EventContext};
+use super::{ContextData, SeedGuard};
 
 /// Extension trait for propagating event context across async boundaries.
 ///
@@ -54,7 +54,7 @@ pub trait WithEventContext: Future {
     {
         EventContextFuture {
             future: self,
-            context_data,
+            context_data: Some(context_data),
         }
     }
 }
@@ -70,11 +70,24 @@ impl<F: Future> WithEventContext for F {}
 /// The future maintains context isolation - the context is only active
 /// during the polling of the wrapped future and does not leak to other
 /// concurrent operations.
+///
+/// Seeding is lazy: on each poll the context data is parked on a
+/// thread-local pending-seed stack, and a real [`EventContext`] entry is
+/// only materialized if the inner future actually observes the context
+/// (via [`EventContext::current`] or [`EventContext::seed`]) during that
+/// poll. Polls that never touch the context — the overwhelming majority —
+/// pay neither an allocation nor a clone.
+///
+/// [`EventContext`]: super::EventContext
+/// [`EventContext::current`]: super::EventContext::current
+/// [`EventContext::seed`]: super::EventContext::seed
 #[pin_project]
 pub struct EventContextFuture<F> {
     #[pin]
     future: F,
-    context_data: ContextData,
+    /// `Some` between polls; taken for the duration of each poll while the
+    /// data is parked on the pending-seed stack.
+    context_data: Option<ContextData>,
 }
 
 impl<F: Future> Future for EventContextFuture<F> {
@@ -82,9 +95,13 @@ impl<F: Future> Future for EventContextFuture<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
-        let ctx = EventContext::seed(this.context_data.clone());
+        let data = this
+            .context_data
+            .take()
+            .expect("EventContextFuture must not be polled after a panic");
+        let guard = SeedGuard::enter(data);
         let res = this.future.poll(cx);
-        *this.context_data = ctx.data();
+        *this.context_data = Some(guard.finish());
         res
     }
 }
