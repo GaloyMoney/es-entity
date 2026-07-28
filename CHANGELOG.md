@@ -1,3 +1,11 @@
+# [cala release v0.11.9](https://github.com/GaloyMoney/cala/releases/tag/0.11.9)
+
+
+
+### Performance
+
+- Emit sargable per-state SQL for list queries (#162)
+
 # [cala release v0.11.8](https://github.com/GaloyMoney/cala/releases/tag/0.11.8)
 
 
