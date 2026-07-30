@@ -1,3 +1,12 @@
+# [cala release v0.11.10](https://github.com/GaloyMoney/cala/releases/tag/0.11.10)
+
+
+
+### Features
+
+- Repo.scoped(scope) bound view for scoped repositories (#167)
+- Scoped repositories — compile-enforced scope argument on reads (#166)
+
 # [cala release v0.11.9](https://github.com/GaloyMoney/cala/releases/tag/0.11.9)
 
 

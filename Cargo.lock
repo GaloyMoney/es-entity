@@ -639,7 +639,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "es-entity"
-version = "0.11.10-dev"
+version = "0.11.10"
 dependencies = [
  "anyhow",
  "async-graphql",
@@ -672,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "es-entity-macros"
-version = "0.11.10-dev"
+version = "0.11.10"
 dependencies = [
  "convert_case",
  "darling 0.23.0",
