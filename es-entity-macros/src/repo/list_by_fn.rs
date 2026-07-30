@@ -3,7 +3,7 @@ use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
 use quote::{TokenStreamExt, quote};
 
-use super::options::*;
+use super::{options::*, scope::ScopeInfo};
 
 /// Cursor pagination states that each get their own SQL text, so that no
 /// variant needs the non-sargable `COALESCE(..., $ IS NULL)` catch-all.
@@ -443,6 +443,7 @@ pub struct ListByFn<'a> {
     any_nested: bool,
     post_hydrate_error: Option<&'a syn::Type>,
     forgettable_table_name: Option<&'a str>,
+    scope: Option<ScopeInfo<'a>>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -461,6 +462,7 @@ impl<'a> ListByFn<'a> {
             any_nested: opts.any_nested(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             forgettable_table_name: opts.forgettable_table_name(),
+            scope: ScopeInfo::from_opts(opts),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -538,45 +540,83 @@ impl ToTokens for ListByFn<'_> {
                 }
             };
 
-            let mut query_arms = TokenStream::new();
-            for state in cursor.cursor_states() {
-                for ascending in [true, false] {
-                    let mut conditions: Vec<String> = Vec::new();
-                    if let Some(condition) = cursor.condition_for_state(*state, 0, ascending) {
-                        conditions.push(format!("({condition})"));
+            let build_query_arms = |scope: Option<&ScopeInfo>| -> TokenStream {
+                let mut query_arms = TokenStream::new();
+                let offset = if scope.is_some() { 1 } else { 0 };
+                for state in cursor.cursor_states() {
+                    for ascending in [true, false] {
+                        let mut conditions: Vec<String> = Vec::new();
+                        if let Some(scope) = scope {
+                            conditions.push(scope.predicate(1));
+                        }
+                        if let Some(condition) =
+                            cursor.condition_for_state(*state, offset, ascending)
+                        {
+                            conditions.push(format!("({condition})"));
+                        }
+                        if delete == DeleteOption::No
+                            && let Some(not_deleted) = not_deleted_predicate(self.delete)
+                        {
+                            conditions.push(not_deleted);
+                        }
+                        let query = assemble_select(
+                            &select_columns,
+                            self.table_name,
+                            &conditions,
+                            &cursor.order_by(ascending),
+                            offset + 1,
+                        );
+                        let cursor_args = cursor.cursor_arg_tokens_for_state(*state);
+                        let scope_args = scope.map(|s| s.arg_tokens()).unwrap_or_default();
+                        let args = quote! {
+                            #scope_args
+                            (first + 1) as i64,
+                            #cursor_args
+                        };
+                        let es_query_call = make_es_query(&query, &args);
+                        let direction_pattern = if ascending {
+                            quote! { es_entity::ListDirection::Ascending }
+                        } else {
+                            quote! { es_entity::ListDirection::Descending }
+                        };
+                        let state_pattern = cursor.state_pattern_elems(*state);
+                        query_arms.append_all(quote! {
+                            (#direction_pattern, #(#state_pattern),*) => {
+                                #es_query_call.fetch_n(op, first).await?
+                            },
+                        });
                     }
-                    if delete == DeleteOption::No
-                        && let Some(not_deleted) = not_deleted_predicate(self.delete)
-                    {
-                        conditions.push(not_deleted);
-                    }
-                    let query = assemble_select(
-                        &select_columns,
-                        self.table_name,
-                        &conditions,
-                        &cursor.order_by(ascending),
-                        1,
-                    );
-                    let cursor_args = cursor.cursor_arg_tokens_for_state(*state);
-                    let args = quote! {
-                        (first + 1) as i64,
-                        #cursor_args
-                    };
-                    let es_query_call = make_es_query(&query, &args);
-                    let direction_pattern = if ascending {
-                        quote! { es_entity::ListDirection::Ascending }
-                    } else {
-                        quote! { es_entity::ListDirection::Descending }
-                    };
-                    let state_pattern = cursor.state_pattern_elems(*state);
-                    query_arms.append_all(quote! {
-                        (#direction_pattern, #(#state_pattern),*) => {
-                            #es_query_call.fetch_n(op, first).await?
-                        },
-                    });
                 }
-            }
+                query_arms
+            };
+            let query_arms = build_query_arms(None);
             let cursor_state_scrutinee = cursor.state_scrutinee_elems();
+
+            let (scope_fn_arg, scope_fn_pass, scope_convert) = match &self.scope {
+                Some(scope) => (scope.fn_arg(), scope.fn_pass(), scope.convert()),
+                None => (quote! {}, quote! {}, quote! {}),
+            };
+            let match_expr = if let Some(scope) = &self.scope {
+                let scoped_query_arms = build_query_arms(Some(scope));
+                scope.dispatch(
+                    quote! {
+                        match (direction, #(#cursor_state_scrutinee),*) {
+                            #query_arms
+                        }
+                    },
+                    quote! {
+                        match (direction, #(#cursor_state_scrutinee),*) {
+                            #scoped_query_arms
+                        }
+                    },
+                )
+            } else {
+                quote! {
+                    match (direction, #(#cursor_state_scrutinee),*) {
+                        #query_arms
+                    }
+                }
+            };
 
             #[cfg(feature = "instrument")]
             let (
@@ -637,16 +677,18 @@ impl ToTokens for ListByFn<'_> {
             tokens.append_all(quote! {
                 pub async fn #fn_name(
                     &self,
+                    #scope_fn_arg
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #query_error> {
-                    self.#fn_in_op(#query_fn_get_op, cursor, direction).await
+                    self.#fn_in_op(#query_fn_get_op, #scope_fn_pass cursor, direction).await
                 }
 
                 #instrument_attr
                 pub async fn #fn_in_op #query_fn_generics(
                     &self,
                     #query_fn_op_arg,
+                    #scope_fn_arg
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #query_error>
@@ -654,13 +696,12 @@ impl ToTokens for ListByFn<'_> {
                        OP: #query_fn_op_traits
                  {
                     let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #query_error> = async {
+                        #scope_convert
                         #extract_has_cursor
                         #destructure_tokens
                         #record_fields
 
-                        let (entities, has_next_page) = match (direction, #(#cursor_state_scrutinee),*) {
-                            #query_arms
-                        };
+                        let (entities, has_next_page) = #match_expr;
 
                         #post_hydrate_check
                         #record_results
@@ -787,6 +828,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -896,6 +938,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -930,6 +973,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1044,6 +1088,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1190,6 +1235,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

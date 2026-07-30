@@ -17,6 +17,7 @@ mod persist_events_fn;
 mod populate_nested;
 mod post_hydrate_hook;
 mod post_persist_hook;
+mod scope;
 mod update_all_fn;
 mod update_fn;
 
@@ -29,6 +30,7 @@ use options::RepositoryOptions;
 pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream> {
     let opts = RepositoryOptions::from_derive_input(&ast)?;
     opts.columns.validate_list_for_by_columns()?;
+    opts.columns.validate_scope()?;
     opts.validate_forgettable()?;
     let repo = EsRepo::from(&opts);
     Ok(quote!(#repo))
@@ -206,6 +208,9 @@ impl ToTokens for EsRepo<'_> {
         let error_types = self.error_types.generate();
         let map_constraint_fn = self.error_types.generate_map_constraint_fn();
 
+        let scope_type = scope::ScopeType::new(self.opts);
+        let scope_type = quote! { #scope_type };
+
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
 
         // If the event type has Forgettable fields, the repo must enable
@@ -256,6 +261,8 @@ impl ToTokens for EsRepo<'_> {
             }
 
             #error_types
+
+            #scope_type
 
             #list_for_filters_struct
             #sort_by
@@ -377,5 +384,158 @@ mod tests {
             }
         };
         assert!(derive(input).is_ok());
+    }
+
+    #[test]
+    fn scoped_repo_is_ok() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                columns(partner_id(ty = "PartnerId", scope), name(ty = "String"))
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("scoped repo should derive")
+            .to_string();
+        assert!(tokens.contains("pub enum UserScope"));
+        // every read fn takes the scope argument
+        assert!(tokens.contains("fn find_by_id (& self , scope : impl Into < UserScope >"));
+        assert!(tokens.contains("(& self , scope : impl Into < UserScope > , ids"));
+        assert!(tokens.contains("fn list_by_created_at (& self , scope : impl Into < UserScope >"));
+        // the Only arm filters by the scope column, the All arm does not
+        assert!(tokens.contains("WHERE id = $1 AND partner_id = $2"));
+        assert!(tokens.contains("WHERE id = $1\""));
+        // no find_by fns are generated for the scope column itself
+        assert!(!tokens.contains("find_by_partner_id"));
+        // writes stay unscoped (custody principle)
+        assert!(tokens.contains("fn create_in_op < OP > (& self , op : & mut OP , new_entity"));
+        assert!(tokens.contains("fn update_in_op < OP > (& self , op : & mut OP , entity"));
+    }
+
+    #[test]
+    fn two_scope_columns_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                columns(
+                    partner_id(ty = "PartnerId", scope),
+                    customer_id(ty = "CustomerId", scope)
+                )
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let err = derive(input).unwrap_err();
+        assert!(
+            err.to_string().contains("only one scope column"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn optional_scope_column_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                columns(partner_id(ty = "Option<PartnerId>", scope))
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let err = derive(input).unwrap_err();
+        assert!(
+            err.to_string().contains("non-nullable"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn nullable_annotated_scope_column_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                columns(partner_id(ty = "PartnerId", scope, nullable = true))
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let err = derive(input).unwrap_err();
+        assert!(
+            err.to_string().contains("non-nullable"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn scope_column_with_query_flags_is_error() {
+        for extra in ["find_by = true", "list_by = true", "list_for"] {
+            let src = format!(
+                r#"
+                #[es_repo(
+                    entity = "User",
+                    columns(partner_id(ty = "PartnerId", scope, {extra}))
+                )]
+                struct Users {{
+                    pool: sqlx::PgPool,
+                }}
+                "#
+            );
+            let input: syn::DeriveInput = syn::parse_str(&src).unwrap();
+            let err = derive(input).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("cannot also be find_by, list_by or list_for"),
+                "unexpected error for `{extra}`: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn scope_on_nested_child_repo_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "LineItem",
+                columns(
+                    order_id(ty = "OrderId", parent),
+                    partner_id(ty = "PartnerId", scope)
+                )
+            )]
+            struct LineItems {
+                pool: sqlx::PgPool,
+            }
+        };
+        let err = derive(input).unwrap_err();
+        assert!(
+            err.to_string().contains("not supported on nested repos"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn forgettable_scope_column_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                forgettable,
+                columns(partner_id(ty = "Forgettable<PartnerId>", scope))
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let err = derive(input).unwrap_err();
+        // Forgettable columns are rewritten to Option<T>, so either the
+        // forgettable or the nullable check may fire first — both reject.
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Forgettable") || msg.contains("non-nullable"),
+            "unexpected error: {msg}"
+        );
     }
 }

@@ -465,6 +465,13 @@ impl RepositoryOptions {
         syn::Ident::new(&format!("{}Column", self.entity_ident), Span::call_site())
     }
 
+    /// The generated scope enum ident (`{Entity}Scope`), entity-named like
+    /// the other generated companion types (`{Entity}FindError`,
+    /// `{Entity}ByIdCursor`, ...).
+    pub fn scope_type_ident(&self) -> syn::Ident {
+        syn::Ident::new(&format!("{}Scope", self.entity_ident), Span::call_site())
+    }
+
     pub fn query_fn_get_op(nested: bool) -> proc_macro2::TokenStream {
         if nested {
             quote! {

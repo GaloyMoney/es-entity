@@ -25,7 +25,9 @@ impl Columns {
     }
 
     pub fn all_find_by(&self) -> impl Iterator<Item = &Column> {
-        self.all.iter().filter(|c| c.opts.find_by())
+        self.all
+            .iter()
+            .filter(|c| c.opts.find_by() && !c.opts.scope)
     }
 
     pub fn all_list_by(&self) -> impl Iterator<Item = &Column> {
@@ -34,6 +36,69 @@ impl Columns {
 
     pub fn all_list_for(&self) -> impl Iterator<Item = &Column> {
         self.all.iter().filter(|c| c.opts.list_for())
+    }
+
+    /// The column marked `scope`, if any. Validated by
+    /// [`Self::validate_scope`] to be unique and non-nullable.
+    pub fn scope_column(&self) -> Option<&Column> {
+        self.all.iter().find(|c| c.opts.scope)
+    }
+
+    /// Validates the `scope` column marker:
+    ///
+    /// - at most one column may be marked `scope`
+    /// - the scope column must be non-nullable (`Option<T>` and
+    ///   `nullable`-annotated types are rejected — nullable scope columns are
+    ///   a future feature)
+    /// - the scope column must not be `Forgettable<T>`
+    /// - the scope column must not also be a query column (`find_by`,
+    ///   `list_by`, `list_for`) — every generated read is already filtered by
+    ///   it, so per-tenant queries are the ordinary scoped fns
+    /// - the scope column must not be the `parent` column (nested repos
+    ///   cannot be scoped — children are custody-guarded via their parent)
+    pub fn validate_scope(&self) -> darling::Result<()> {
+        let scope_columns: Vec<_> = self.all.iter().filter(|c| c.opts.scope).collect();
+        if scope_columns.len() > 1 {
+            return Err(darling::Error::custom(
+                "only one scope column per repo is supported",
+            ));
+        }
+        let Some(col) = scope_columns.first() else {
+            return Ok(());
+        };
+        if col.is_nullable_column() {
+            return Err(darling::Error::custom(format!(
+                "scope column '{}' must be non-nullable — nullable scope columns are not supported (yet)",
+                col.name(),
+            )));
+        }
+        if col.opts.forgettable {
+            return Err(darling::Error::custom(format!(
+                "scope column '{}' cannot be Forgettable",
+                col.name(),
+            )));
+        }
+        if col.opts.find_by == Some(true)
+            || col.opts.list_by == Some(true)
+            || col.opts.list_for_opts.is_some()
+        {
+            return Err(darling::Error::custom(format!(
+                "scope column '{}' cannot also be find_by, list_by or list_for — every read is already filtered by it",
+                col.name(),
+            )));
+        }
+        if col.opts.parent_opts.is_some() {
+            return Err(darling::Error::custom(format!(
+                "scope column '{}' cannot be the parent column — nested repos cannot be scoped",
+                col.name(),
+            )));
+        }
+        if self.parent().is_some() {
+            return Err(darling::Error::custom(
+                "scope is not supported on nested repos — children are custody-guarded via their (scoped) parent",
+            ));
+        }
+        Ok(())
     }
 
     pub fn find_list_by(&self, name: &syn::Ident) -> Option<&Column> {
@@ -459,6 +524,7 @@ impl Column {
                 ty,
                 is_id: true,
                 forgettable: false,
+                scope: false,
                 list_by: Some(true),
                 find_by: Some(true),
                 nullable: None,
@@ -486,6 +552,7 @@ impl Column {
                 ),
                 is_id: false,
                 forgettable: false,
+                scope: false,
                 list_by: Some(true),
                 find_by: Some(false),
                 nullable: None,
@@ -708,6 +775,11 @@ struct ColumnOpts {
     /// `NULL` by `forget()`/`delete()`. `ty` is rewritten to `Option<Inner>`.
     #[darling(default, skip)]
     forgettable: bool,
+    /// Marks the repo's scope column: every generated read fn gains a leading
+    /// `scope: impl Into<{Entity}Scope>` argument and filters by this column
+    /// under `Only(_)`. Validated by [`Columns::validate_scope`].
+    #[darling(default)]
+    scope: bool,
     #[darling(default)]
     find_by: Option<bool>,
     #[darling(default)]
@@ -740,6 +812,7 @@ impl ColumnOpts {
             ty,
             is_id: false,
             forgettable: false,
+            scope: false,
             find_by: None,
             list_by: None,
             nullable: None,

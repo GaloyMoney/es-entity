@@ -28,6 +28,7 @@
     - [delete](./repo-delete.md)
     - [Hooks](./repo-hooks.md)
     - [Error Types](./repo-errors.md)
+  - [Scoped Repositories](./scoped-repositories.md)
 
 - [Transactions](./transactions.md)
   - [Connection Traits](./connection-traits.md)

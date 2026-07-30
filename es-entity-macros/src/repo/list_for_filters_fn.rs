@@ -7,6 +7,7 @@ use super::{
     combo_cursor::ComboCursor,
     list_by_fn::{CursorStruct, assemble_select, not_deleted_predicate},
     options::*,
+    scope::ScopeInfo,
 };
 
 /// Runtime `Some`-ness state of one filter column. Each state that reaches
@@ -174,6 +175,7 @@ pub struct ListForFiltersFn<'a> {
     any_nested: bool,
     post_hydrate_error: Option<&'a syn::Type>,
     forgettable_table_name: Option<&'a str>,
+    scope: Option<ScopeInfo<'a>>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -200,6 +202,7 @@ impl<'a> ListForFiltersFn<'a> {
             any_nested: opts.any_nested(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             forgettable_table_name: opts.forgettable_table_name(),
+            scope: ScopeInfo::from_opts(opts),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -267,13 +270,19 @@ impl<'a> ListForFiltersFn<'a> {
         let by_col_name = by_col.name();
         let delete_postfix = delete.include_deletion_fn_postfix();
 
+        let scope_pass = if self.scope.is_some() {
+            quote! { __scope, }
+        } else {
+            quote! {}
+        };
+
         let list_by_fn = syn::Ident::new(
             &format!("list_by_{}{}", by_col_name, delete_postfix),
             Span::call_site(),
         );
 
         if self.for_columns.is_empty() {
-            return quote! { self.#list_by_fn(query, direction).await? };
+            return quote! { self.#list_by_fn(#scope_pass query, direction).await? };
         }
 
         let all_none_checks: Vec<_> = self
@@ -317,13 +326,13 @@ impl<'a> ListForFiltersFn<'a> {
                 if others_none.is_empty() {
                     quote! {
                         else {
-                            self.#fn_name(filters.#for_col_name.unwrap(), query, direction).await?
+                            self.#fn_name(#scope_pass filters.#for_col_name.unwrap(), query, direction).await?
                         }
                     }
                 } else {
                     quote! {
                         else if #(#others_none)&&* {
-                            self.#fn_name(filters.#for_col_name.unwrap(), query, direction).await?
+                            self.#fn_name(#scope_pass filters.#for_col_name.unwrap(), query, direction).await?
                         }
                     }
                 }
@@ -343,7 +352,7 @@ impl<'a> ListForFiltersFn<'a> {
             );
             quote! {
                 else {
-                    self.#list_for_filters_fn(filters, query, direction).await?
+                    self.#list_for_filters_fn(#scope_pass filters, query, direction).await?
                 }
             }
         } else {
@@ -352,7 +361,7 @@ impl<'a> ListForFiltersFn<'a> {
 
         quote! {
             if #(#all_none_checks)&&* {
-                self.#list_by_fn(query, direction).await?
+                self.#list_by_fn(#scope_pass query, direction).await?
             }
             #single_filter_branches
             #multi_filter_fallback
@@ -429,60 +438,71 @@ impl<'a> ListForFiltersFn<'a> {
             })
             .collect();
 
-        // Generate WHERE clause fragments
-        let mut param_idx = 1u32;
-        let where_fragments: Vec<String> = self
-            .for_columns
-            .iter()
-            .map(|col| FiltersStruct::where_clause_fragment(col, &mut param_idx))
-            .collect();
+        // Generate the catch-all fallback query (COALESCE-style, correctness
+        // fallback for filter combinations above the specialization cap).
+        // Parameterized over the scope: the scoped variant binds the scope
+        // column at `$1` and shifts every other parameter by one.
+        let build_fallback = |scope: Option<&ScopeInfo>| -> (String, String, TokenStream) {
+            let scope_offset: u32 = if scope.is_some() { 1 } else { 0 };
+            let mut param_idx = 1u32 + scope_offset;
+            let where_fragments: Vec<String> = self
+                .for_columns
+                .iter()
+                .map(|col| FiltersStruct::where_clause_fragment(col, &mut param_idx))
+                .collect();
 
-        let filter_where = if where_fragments.is_empty() {
-            String::new()
-        } else {
-            format!("{} AND ", where_fragments.join(" AND "))
-        };
-
-        // Generate filter arg bindings for es_query!
-        let filter_arg_bindings: TokenStream = self
-            .for_columns
-            .iter()
-            .map(|col| FiltersStruct::filter_arg_tokens(col))
-            .collect();
-
-        let fallback_arg_tokens = quote! {
-            #filter_arg_bindings
-            #cursor_arg_tokens
-        };
-
-        let asc_query = format!(
-            r#"SELECT {} FROM {} WHERE {}({}){} ORDER BY {} LIMIT ${}"#,
-            select_columns,
-            self.table_name,
-            filter_where,
-            cursor_struct.condition(n_filters, true),
-            if delete == DeleteOption::No {
-                self.delete.not_deleted_condition()
+            let mut filter_where = if where_fragments.is_empty() {
+                String::new()
             } else {
-                ""
-            },
-            cursor_struct.order_by(true),
-            n_filters + 1,
-        );
-        let desc_query = format!(
-            r#"SELECT {} FROM {} WHERE {}({}){} ORDER BY {} LIMIT ${}"#,
-            select_columns,
-            self.table_name,
-            filter_where,
-            cursor_struct.condition(n_filters, false),
-            if delete == DeleteOption::No {
-                self.delete.not_deleted_condition()
-            } else {
-                ""
-            },
-            cursor_struct.order_by(false),
-            n_filters + 1,
-        );
+                format!("{} AND ", where_fragments.join(" AND "))
+            };
+            if let Some(scope) = scope {
+                filter_where = format!("{} AND {}", scope.predicate(1), filter_where);
+            }
+
+            let filter_arg_bindings: TokenStream = self
+                .for_columns
+                .iter()
+                .map(|col| FiltersStruct::filter_arg_tokens(col))
+                .collect();
+            let scope_args = scope.map(|s| s.arg_tokens()).unwrap_or_default();
+            let fallback_arg_tokens = quote! {
+                #scope_args
+                #filter_arg_bindings
+                #cursor_arg_tokens
+            };
+
+            let asc_query = format!(
+                r#"SELECT {} FROM {} WHERE {}({}){} ORDER BY {} LIMIT ${}"#,
+                select_columns,
+                self.table_name,
+                filter_where,
+                cursor_struct.condition(n_filters + scope_offset, true),
+                if delete == DeleteOption::No {
+                    self.delete.not_deleted_condition()
+                } else {
+                    ""
+                },
+                cursor_struct.order_by(true),
+                n_filters + scope_offset + 1,
+            );
+            let desc_query = format!(
+                r#"SELECT {} FROM {} WHERE {}({}){} ORDER BY {} LIMIT ${}"#,
+                select_columns,
+                self.table_name,
+                filter_where,
+                cursor_struct.condition(n_filters + scope_offset, false),
+                if delete == DeleteOption::No {
+                    self.delete.not_deleted_condition()
+                } else {
+                    ""
+                },
+                cursor_struct.order_by(false),
+                n_filters + scope_offset + 1,
+            );
+            (asc_query, desc_query, fallback_arg_tokens)
+        };
+        let (asc_query, desc_query, fallback_arg_tokens) = build_fallback(None);
 
         let forgettable_tbl_arg = if let Some(tbl) = self.forgettable_table_name {
             quote! { forgettable_tbl = #tbl, }
@@ -516,90 +536,103 @@ impl<'a> ListForFiltersFn<'a> {
         // combination x cursor state x direction). Every present filter
         // compiles to a sargable `col = $k` (or `col IS NULL`) predicate and
         // the cursor predicate is either omitted (page 1) or a bare row
-        // comparison.
-        let mut asc_arms = TokenStream::new();
-        let mut desc_arms = TokenStream::new();
-        let mut all_combos_specialized = true;
-        for combo in filter_state_combos(&self.for_columns) {
-            if !self.is_specialized_combo(&combo) {
-                all_combos_specialized = false;
-                continue;
-            }
-            let filter_patterns: Vec<TokenStream> = self
-                .for_columns
-                .iter()
-                .zip(combo.iter())
-                .flat_map(|(col, state)| Self::filter_pattern_elems(col, *state))
-                .collect();
+        // comparison. Parameterized over the scope: the scoped variant binds
+        // the scope column at `$1` and shifts every other parameter by one.
+        let build_specialized_arms =
+            |scope: Option<&ScopeInfo>| -> (TokenStream, TokenStream, bool) {
+                let mut asc_arms = TokenStream::new();
+                let mut desc_arms = TokenStream::new();
+                let mut all_combos_specialized = true;
+                for combo in filter_state_combos(&self.for_columns) {
+                    if !self.is_specialized_combo(&combo) {
+                        all_combos_specialized = false;
+                        continue;
+                    }
+                    let filter_patterns: Vec<TokenStream> = self
+                        .for_columns
+                        .iter()
+                        .zip(combo.iter())
+                        .flat_map(|(col, state)| Self::filter_pattern_elems(col, *state))
+                        .collect();
 
-            let mut filter_conditions: Vec<String> = Vec::new();
-            let mut filter_args = TokenStream::new();
-            let mut param_idx = 1u32;
-            for (col, state) in self.for_columns.iter().zip(combo.iter()) {
-                match state {
-                    FilterState::Absent => {}
-                    FilterState::Present => {
-                        filter_conditions.push(format!("{} = ${}", col.name(), param_idx));
+                    let mut filter_conditions: Vec<String> = Vec::new();
+                    let mut filter_args = TokenStream::new();
+                    let mut param_idx = 1u32;
+                    if let Some(scope) = scope {
+                        filter_conditions.push(scope.predicate(1));
+                        filter_args.append_all(scope.arg_tokens());
                         param_idx += 1;
-                        filter_args.append_all(FiltersStruct::filter_arg_tokens(col));
                     }
-                    FilterState::PresentNull => {
-                        filter_conditions.push(format!("{} IS NULL", col.name()));
+                    for (col, state) in self.for_columns.iter().zip(combo.iter()) {
+                        match state {
+                            FilterState::Absent => {}
+                            FilterState::Present => {
+                                filter_conditions.push(format!("{} = ${}", col.name(), param_idx));
+                                param_idx += 1;
+                                filter_args.append_all(FiltersStruct::filter_arg_tokens(col));
+                            }
+                            FilterState::PresentNull => {
+                                filter_conditions.push(format!("{} IS NULL", col.name()));
+                            }
+                            FilterState::PresentValue => {
+                                filter_conditions.push(format!("{} = ${}", col.name(), param_idx));
+                                param_idx += 1;
+                                filter_args.append_all(FiltersStruct::filter_value_arg_tokens(col));
+                            }
+                        }
                     }
-                    FilterState::PresentValue => {
-                        filter_conditions.push(format!("{} = ${}", col.name(), param_idx));
-                        param_idx += 1;
-                        filter_args.append_all(FiltersStruct::filter_value_arg_tokens(col));
+
+                    for cursor_state in cursor_struct.cursor_states() {
+                        let cursor_patterns = cursor_struct.state_pattern_elems(*cursor_state);
+                        let pattern = quote! { (#(#filter_patterns,)* #(#cursor_patterns,)*) };
+                        let cursor_args = cursor_struct.cursor_arg_tokens_for_state(*cursor_state);
+                        let args = quote! {
+                            #filter_args
+                            (first + 1) as i64,
+                            #cursor_args
+                        };
+
+                        for ascending in [true, false] {
+                            let mut conditions = filter_conditions.clone();
+                            if let Some(condition) = cursor_struct.condition_for_state(
+                                *cursor_state,
+                                param_idx - 1,
+                                ascending,
+                            ) {
+                                conditions.push(format!("({condition})"));
+                            }
+                            if delete == DeleteOption::No
+                                && let Some(not_deleted) = not_deleted_predicate(self.delete)
+                            {
+                                conditions.push(not_deleted);
+                            }
+                            let query = assemble_select(
+                                &select_columns,
+                                self.table_name,
+                                &conditions,
+                                &cursor_struct.order_by(ascending),
+                                param_idx,
+                            );
+                            let es_query_call = make_es_query(&query, &args);
+                            if ascending {
+                                asc_arms.append_all(quote! {
+                                    #pattern => {
+                                        #es_query_call.fetch_n(op, first).await?
+                                    },
+                                });
+                            } else {
+                                desc_arms.append_all(quote! {
+                                    #pattern => {
+                                        #es_query_call.fetch_n(op, first).await?
+                                    },
+                                });
+                            }
+                        }
                     }
                 }
-            }
-
-            for cursor_state in cursor_struct.cursor_states() {
-                let cursor_patterns = cursor_struct.state_pattern_elems(*cursor_state);
-                let pattern = quote! { (#(#filter_patterns,)* #(#cursor_patterns,)*) };
-                let cursor_args = cursor_struct.cursor_arg_tokens_for_state(*cursor_state);
-                let args = quote! {
-                    #filter_args
-                    (first + 1) as i64,
-                    #cursor_args
-                };
-
-                for ascending in [true, false] {
-                    let mut conditions = filter_conditions.clone();
-                    if let Some(condition) =
-                        cursor_struct.condition_for_state(*cursor_state, param_idx - 1, ascending)
-                    {
-                        conditions.push(format!("({condition})"));
-                    }
-                    if delete == DeleteOption::No
-                        && let Some(not_deleted) = not_deleted_predicate(self.delete)
-                    {
-                        conditions.push(not_deleted);
-                    }
-                    let query = assemble_select(
-                        &select_columns,
-                        self.table_name,
-                        &conditions,
-                        &cursor_struct.order_by(ascending),
-                        param_idx,
-                    );
-                    let es_query_call = make_es_query(&query, &args);
-                    if ascending {
-                        asc_arms.append_all(quote! {
-                            #pattern => {
-                                #es_query_call.fetch_n(op, first).await?
-                            },
-                        });
-                    } else {
-                        desc_arms.append_all(quote! {
-                            #pattern => {
-                                #es_query_call.fetch_n(op, first).await?
-                            },
-                        });
-                    }
-                }
-            }
-        }
+                (asc_arms, desc_arms, all_combos_specialized)
+            };
+        let (asc_arms, desc_arms, all_combos_specialized) = build_specialized_arms(None);
 
         let scrutinee_elems: Vec<TokenStream> = self
             .filter_scrutinee_elems()
@@ -610,15 +643,73 @@ impl<'a> ListForFiltersFn<'a> {
         // When every filter combination is specialized the explicit arms
         // already cover the entire pattern space, so no wildcard fallback arm
         // (nor its catch-all COALESCE queries) is emitted.
-        let (asc_fallback_arm, desc_fallback_arm) = if all_combos_specialized {
-            (quote! {}, quote! {})
-        } else {
-            let asc_call = make_es_query(&asc_query, &fallback_arg_tokens);
-            let desc_call = make_es_query(&desc_query, &fallback_arg_tokens);
-            (
-                quote! { _ => #asc_call.fetch_n(op, first).await?, },
-                quote! { _ => #desc_call.fetch_n(op, first).await?, },
+        let build_fallback_arms = |asc_query: &str,
+                                   desc_query: &str,
+                                   args: &TokenStream,
+                                   all_specialized: bool|
+         -> (TokenStream, TokenStream) {
+            if all_specialized {
+                (quote! {}, quote! {})
+            } else {
+                let asc_call = make_es_query(asc_query, args);
+                let desc_call = make_es_query(desc_query, args);
+                (
+                    quote! { _ => #asc_call.fetch_n(op, first).await?, },
+                    quote! { _ => #desc_call.fetch_n(op, first).await?, },
+                )
+            }
+        };
+        let (asc_fallback_arm, desc_fallback_arm) = build_fallback_arms(
+            &asc_query,
+            &desc_query,
+            &fallback_arg_tokens,
+            all_combos_specialized,
+        );
+
+        let direction_match = |asc_arms: &TokenStream,
+                               asc_fallback: &TokenStream,
+                               desc_arms: &TokenStream,
+                               desc_fallback: &TokenStream|
+         -> TokenStream {
+            quote! {
+                match direction {
+                    es_entity::ListDirection::Ascending => match (#(#scrutinee_elems,)*) {
+                        #asc_arms
+                        #asc_fallback
+                    },
+                    es_entity::ListDirection::Descending => match (#(#scrutinee_elems,)*) {
+                        #desc_arms
+                        #desc_fallback
+                    }
+                }
+            }
+        };
+        let (scope_fn_arg, scope_fn_pass, scope_convert) = match &self.scope {
+            Some(scope) => (scope.fn_arg(), scope.fn_pass(), scope.convert()),
+            None => (quote! {}, quote! {}, quote! {}),
+        };
+        let match_expr = if let Some(scope) = &self.scope {
+            let (scoped_asc_arms, scoped_desc_arms, scoped_all_specialized) =
+                build_specialized_arms(Some(scope));
+            let (scoped_asc_query, scoped_desc_query, scoped_fallback_args) =
+                build_fallback(Some(scope));
+            let (scoped_asc_fallback, scoped_desc_fallback) = build_fallback_arms(
+                &scoped_asc_query,
+                &scoped_desc_query,
+                &scoped_fallback_args,
+                scoped_all_specialized,
+            );
+            scope.dispatch(
+                direction_match(&asc_arms, &asc_fallback_arm, &desc_arms, &desc_fallback_arm),
+                direction_match(
+                    &scoped_asc_arms,
+                    &scoped_asc_fallback,
+                    &scoped_desc_arms,
+                    &scoped_desc_fallback,
+                ),
             )
+        } else {
+            direction_match(&asc_arms, &asc_fallback_arm, &desc_arms, &desc_fallback_arm)
         };
 
         #[cfg(feature = "instrument")]
@@ -669,17 +760,19 @@ impl<'a> ListForFiltersFn<'a> {
         quote! {
             pub async fn #fn_name(
                 &self,
+                #scope_fn_arg
                 filters: #filters_ident,
                 cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                 direction: es_entity::ListDirection,
             ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
-                self.#fn_in_op(#query_fn_get_op, filters, cursor, direction).await
+                self.#fn_in_op(#query_fn_get_op, #scope_fn_pass filters, cursor, direction).await
             }
 
             #instrument_attr
             pub async fn #fn_in_op #query_fn_generics(
                 &self,
                 #query_fn_op_arg,
+                #scope_fn_arg
                 filters: #filters_ident,
                 cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                 direction: es_entity::ListDirection,
@@ -688,21 +781,13 @@ impl<'a> ListForFiltersFn<'a> {
                     OP: #query_fn_op_traits
             {
                 let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> = async {
+                    #scope_convert
                     #extract_has_cursor
                     #destructure_filters
                     #destructure_tokens
                     #record_fields
 
-                    let (entities, has_next_page) = match direction {
-                        es_entity::ListDirection::Ascending => match (#(#scrutinee_elems,)*) {
-                            #asc_arms
-                            #asc_fallback_arm
-                        },
-                        es_entity::ListDirection::Descending => match (#(#scrutinee_elems,)*) {
-                            #desc_arms
-                            #desc_fallback_arm
-                        }
-                    };
+                    let (entities, has_next_page) = #match_expr;
 
                     #post_hydrate_check
                     #record_results
@@ -732,6 +817,11 @@ impl ToTokens for ListForFiltersFn<'_> {
         let entity = self.entity;
         let error = &self.query_error;
         let cursor_mod = &self.cursor_mod;
+
+        let (scope_fn_arg, scope_convert) = match &self.scope {
+            Some(scope) => (scope.fn_arg(), scope.convert()),
+            None => (quote! {}, quote! {}),
+        };
 
         for delete in [DeleteOption::No, DeleteOption::Soft] {
             // Generate per-sort-column functions
@@ -836,12 +926,14 @@ impl ToTokens for ListForFiltersFn<'_> {
                 #instrument_attr
                 pub async fn #fn_name(
                     &self,
+                    #scope_fn_arg
                     filters: #filters_name,
                     sort: es_entity::Sort<#sort_by_name>,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
                 {
                     let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> = async {
+                        #scope_convert
                         #extract_has_cursor
                         let es_entity::Sort { by, direction } = sort;
                         let es_entity::PaginatedQueryArgs { first, after } = cursor;
@@ -950,6 +1042,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1270,6 +1363,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1338,6 +1432,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1423,6 +1518,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1506,6 +1602,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1595,6 +1692,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
