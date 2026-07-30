@@ -41,6 +41,80 @@ impl<'a> FindByFn<'a> {
             repo_name_snake: opts.repo_name_snake_case(),
         }
     }
+
+    /// Delegating methods for the generated `Scoped{Repo}` bound view: the
+    /// same fns without the `scope` argument, forwarding `self.scope`.
+    /// Empty for unscoped repos.
+    pub fn scoped_delegates(&self) -> TokenStream {
+        let mut tokens = TokenStream::new();
+        if self.scope.is_none() {
+            return tokens;
+        }
+        let entity = self.entity;
+        let column_name = &self.column.name();
+        let (_column_type, impl_expr, _access_expr) = &self.column.ty_for_find_by();
+        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
+
+        for maybe in ["", "maybe_"] {
+            let error = if maybe.is_empty() {
+                &self.find_error
+            } else {
+                &self.query_error
+            };
+            let result_type = if maybe.is_empty() {
+                quote! { #entity }
+            } else {
+                quote! { Option<#entity> }
+            };
+            for delete in [DeleteOption::No, DeleteOption::Soft] {
+                let fn_name = syn::Ident::new(
+                    &format!(
+                        "{}find_by_{}{}",
+                        maybe,
+                        column_name,
+                        delete.include_deletion_fn_postfix()
+                    ),
+                    Span::call_site(),
+                );
+                let fn_in_op = syn::Ident::new(
+                    &format!(
+                        "{}find_by_{}{}_in_op",
+                        maybe,
+                        column_name,
+                        delete.include_deletion_fn_postfix()
+                    ),
+                    Span::call_site(),
+                );
+
+                tokens.append_all(quote! {
+                    pub async fn #fn_name(
+                        &self,
+                        #column_name: #impl_expr
+                    ) -> Result<#result_type, #error> {
+                        self.repo.#fn_name(self.scope, #column_name).await
+                    }
+
+                    pub async fn #fn_in_op #query_fn_generics(
+                        &self,
+                        #query_fn_op_arg,
+                        #column_name: #impl_expr
+                    ) -> Result<#result_type, #error>
+                        where
+                            OP: #query_fn_op_traits
+                    {
+                        self.repo.#fn_in_op(op, self.scope, #column_name).await
+                    }
+                });
+
+                if delete == self.delete || self.delete == DeleteOption::SoftWithoutQueries {
+                    break;
+                }
+            }
+        }
+        tokens
+    }
 }
 
 impl ToTokens for FindByFn<'_> {

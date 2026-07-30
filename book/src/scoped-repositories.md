@@ -71,6 +71,29 @@ a missing row: `find_by_*` returns `NotFound`, `maybe_find_by_*` returns
 `None`, `find_all` silently omits the id, and lists never contain the row.
 **Missing and not-yours look identical.**
 
+## The bound view: `repo.scoped(scope)`
+
+When a request performs several reads under one subject, threading the scope
+into every call gets repetitive. Scoped repos additionally generate a
+**bound view** — `Scoped{Repo}` — that captures the scope once:
+
+```rust,ignore
+let customers = self.customers.scoped(sub.scope());   // ScopedCustomers<'_>
+
+customers.find_by_id(id).await?;                      // no per-call scope arg
+customers.maybe_find_by_email(email).await?;
+customers.list_by_created_at(args, direction).await?;
+customers.find_by_id_in_op(&mut op, id).await?;       // _in_op variants too
+customers.scope();                                    // the bound CustomerScope
+```
+
+Every view method simply delegates to the corresponding scope-argument fn
+with the bound scope — no new SQL, identical semantics. The view **borrows**
+the repository (`ScopedCustomers<'a>` holds `&'a Customers`), so it is
+naturally request-scoped: it cannot be stored beyond the repo borrow, which
+keeps a bound all-access or tenant view from quietly outliving the request
+that justified it.
+
 ## Writes are custody-guarded
 
 `create`, `create_all`, `update`, `update_all` and `delete` keep their

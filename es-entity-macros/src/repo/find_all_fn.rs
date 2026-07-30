@@ -36,6 +36,48 @@ impl<'a> From<&'a RepositoryOptions> for FindAllFn<'a> {
     }
 }
 
+impl FindAllFn<'_> {
+    /// Delegating methods for the generated `Scoped{Repo}` bound view.
+    /// Empty for unscoped repos.
+    pub fn scoped_delegates(&self) -> TokenStream {
+        if self.scope.is_none() {
+            return TokenStream::new();
+        }
+        let id = self.id;
+        let entity = self.entity;
+        let query_error = &self.query_error;
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
+
+        let generics = if self.any_nested {
+            quote! { <Out: From<#entity>> }
+        } else {
+            quote! { <'a, Out: From<#entity>> }
+        };
+        let op_param = if self.any_nested {
+            quote! { op: &mut impl #query_fn_op_traits }
+        } else {
+            quote! { op: impl #query_fn_op_traits }
+        };
+
+        quote! {
+            pub async fn find_all<Out: From<#entity>>(
+                &self,
+                ids: &[#id]
+            ) -> Result<std::collections::HashMap<#id, Out>, #query_error> {
+                self.repo.find_all(self.scope, ids).await
+            }
+
+            pub async fn find_all_in_op #generics(
+                &self,
+                #op_param,
+                ids: &[#id]
+            ) -> Result<std::collections::HashMap<#id, Out>, #query_error> {
+                self.repo.find_all_in_op(op, self.scope, ids).await
+            }
+        }
+    }
+}
+
 impl ToTokens for FindAllFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let id = self.id;

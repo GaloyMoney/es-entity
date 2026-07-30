@@ -370,3 +370,99 @@ async fn scoped_list_query_plan_uses_composite_index() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// The `repo.scoped(scope)` bound view captures the scope once and exposes
+/// every read fn without the per-call scope argument, delegating to the
+/// scope-argument fns.
+#[tokio::test]
+async fn scoped_view_delegates() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let contacts = Contacts::new(pool);
+
+    let partner_a = PartnerId::new();
+    let partner_b = PartnerId::new();
+    let ids_a = seed_contacts(
+        &contacts,
+        partner_a,
+        &[("v1", "active"), ("v2", "inactive")],
+    )
+    .await?;
+    let ids_b = seed_contacts(&contacts, partner_b, &[("v3", "active")]).await?;
+
+    let view = contacts.scoped(partner_a);
+    assert!(matches!(view.scope(), ContactScope::Only(p) if p == partner_a));
+
+    // point reads — no scope argument at the call sites
+    let contact = view.find_by_id(ids_a[0]).await?;
+    assert_eq!(contact.partner_id, partner_a);
+    view.find_by_email(&contact.email).await?;
+    assert!(view.maybe_find_by_id(ids_b[0]).await?.is_none());
+    assert!(matches!(
+        view.find_by_id(ids_b[0]).await,
+        Err(ContactFindError::NotFound { .. })
+    ));
+
+    // batch + lists
+    let all_ids: Vec<ContactId> = ids_a.iter().chain(ids_b.iter()).copied().collect();
+    let found = view.find_all::<Contact>(&all_ids).await?;
+    assert_eq!(found.len(), 2);
+
+    let page = view
+        .list_by_created_at(
+            PaginatedQueryArgs {
+                first: 100,
+                after: None,
+            },
+            ListDirection::Descending,
+        )
+        .await?;
+    assert_eq!(page.entities.len(), 2);
+    assert!(page.entities.iter().all(|c| c.partner_id == partner_a));
+
+    let ret = view
+        .list_for_status_by_created_at(
+            "active",
+            PaginatedQueryArgs {
+                first: 100,
+                after: None,
+            },
+            ListDirection::Descending,
+        )
+        .await?;
+    assert_eq!(ret.entities.len(), 1);
+
+    let ret = view
+        .list_for_filters(
+            ContactFilters {
+                status: Some("inactive".to_string()),
+            },
+            Sort {
+                by: ContactSortBy::CreatedAt,
+                direction: ListDirection::Descending,
+            },
+            PaginatedQueryArgs {
+                first: 100,
+                after: None,
+            },
+        )
+        .await?;
+    assert_eq!(ret.entities.len(), 1);
+    assert_eq!(ret.entities[0].partner_id, partner_a);
+
+    // `_in_op` variants through the view
+    let mut op = contacts.begin_op().await?;
+    view.find_by_id_in_op(&mut op, ids_a[0]).await?;
+    assert!(
+        view.maybe_find_by_id_in_op(&mut op, ids_b[0])
+            .await?
+            .is_none()
+    );
+    op.commit().await?;
+
+    // an All-bound view reads across scopes
+    let all_view = contacts.scoped(ContactScope::All);
+    all_view.find_by_id(ids_b[0]).await?;
+    assert_eq!(all_view.find_all::<Contact>(&all_ids).await?.len(), 3);
+
+    Ok(())
+}

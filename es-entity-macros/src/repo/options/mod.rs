@@ -472,6 +472,12 @@ impl RepositoryOptions {
         syn::Ident::new(&format!("{}Scope", self.entity_ident), Span::call_site())
     }
 
+    /// The generated bound-view ident (`Scoped{Repo}`), repo-named because it
+    /// is a view of the repository itself (returned by `repo.scoped(scope)`).
+    pub fn scoped_view_ident(&self) -> syn::Ident {
+        syn::Ident::new(&format!("Scoped{}", self.ident), Span::call_site())
+    }
+
     pub fn query_fn_get_op(nested: bool) -> proc_macro2::TokenStream {
         if nested {
             quote! {
