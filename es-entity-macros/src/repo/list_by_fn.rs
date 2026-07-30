@@ -476,6 +476,70 @@ impl<'a> ListByFn<'a> {
             cursor_mod: &self.cursor_mod,
         }
     }
+
+    /// Delegating methods for the generated `Scoped{Repo}` bound view.
+    /// Empty for unscoped repos.
+    pub fn scoped_delegates(&'a self) -> TokenStream {
+        let mut tokens = TokenStream::new();
+        if self.scope.is_none() {
+            return tokens;
+        }
+        let entity = self.entity;
+        let column_name = self.column.name();
+        let cursor = self.cursor();
+        let cursor_ident = cursor.ident();
+        let cursor_mod = cursor.cursor_mod();
+        let query_error = &self.query_error;
+        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
+
+        for delete in [DeleteOption::No, DeleteOption::Soft] {
+            let fn_name = syn::Ident::new(
+                &format!(
+                    "list_by_{}{}",
+                    column_name,
+                    delete.include_deletion_fn_postfix()
+                ),
+                Span::call_site(),
+            );
+            let fn_in_op = syn::Ident::new(
+                &format!(
+                    "list_by_{}{}_in_op",
+                    column_name,
+                    delete.include_deletion_fn_postfix()
+                ),
+                Span::call_site(),
+            );
+
+            tokens.append_all(quote! {
+                pub async fn #fn_name(
+                    &self,
+                    cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
+                    direction: es_entity::ListDirection,
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #query_error> {
+                    self.repo.#fn_name(self.scope, cursor, direction).await
+                }
+
+                pub async fn #fn_in_op #query_fn_generics(
+                    &self,
+                    #query_fn_op_arg,
+                    cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
+                    direction: es_entity::ListDirection,
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #query_error>
+                   where
+                       OP: #query_fn_op_traits
+                {
+                    self.repo.#fn_in_op(op, self.scope, cursor, direction).await
+                }
+            });
+
+            if delete == self.delete || self.delete == DeleteOption::SoftWithoutQueries {
+                break;
+            }
+        }
+        tokens
+    }
 }
 
 impl ToTokens for ListByFn<'_> {

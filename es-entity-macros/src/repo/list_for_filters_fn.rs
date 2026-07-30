@@ -208,6 +208,94 @@ impl<'a> ListForFiltersFn<'a> {
         }
     }
 
+    /// Delegating methods for the generated `Scoped{Repo}` bound view.
+    /// Empty for unscoped repos.
+    pub fn scoped_delegates(&self) -> TokenStream {
+        let mut tokens = TokenStream::new();
+        if self.scope.is_none() {
+            return tokens;
+        }
+        let entity = self.entity;
+        let error = &self.query_error;
+        let cursor_mod = &self.cursor_mod;
+        let filters_ident = self.filters_struct.ident();
+        let sort_by_name = self.cursor.sort_by_name();
+        let combo_cursor_ident = self.cursor.ident();
+        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
+
+        for delete in [DeleteOption::No, DeleteOption::Soft] {
+            let delete_postfix = delete.include_deletion_fn_postfix();
+
+            for by_column in &self.by_columns {
+                let cursor_struct = CursorStruct {
+                    column: by_column,
+                    id: self.id,
+                    entity: self.entity,
+                    cursor_mod: &self.cursor_mod,
+                };
+                let cursor_ident = cursor_struct.ident();
+                let fn_name = syn::Ident::new(
+                    &format!("list_for_filters_by_{}{}", by_column.name(), delete_postfix),
+                    Span::call_site(),
+                );
+                let fn_in_op = syn::Ident::new(
+                    &format!(
+                        "list_for_filters_by_{}{}_in_op",
+                        by_column.name(),
+                        delete_postfix
+                    ),
+                    Span::call_site(),
+                );
+
+                tokens.append_all(quote! {
+                    pub async fn #fn_name(
+                        &self,
+                        filters: #filters_ident,
+                        cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
+                        direction: es_entity::ListDirection,
+                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
+                        self.repo.#fn_name(self.scope, filters, cursor, direction).await
+                    }
+
+                    pub async fn #fn_in_op #query_fn_generics(
+                        &self,
+                        #query_fn_op_arg,
+                        filters: #filters_ident,
+                        cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
+                        direction: es_entity::ListDirection,
+                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
+                        where
+                            OP: #query_fn_op_traits
+                    {
+                        self.repo.#fn_in_op(op, self.scope, filters, cursor, direction).await
+                    }
+                });
+            }
+
+            let dispatch_fn = syn::Ident::new(
+                &format!("list_for_filters{}", delete_postfix),
+                Span::call_site(),
+            );
+            tokens.append_all(quote! {
+                pub async fn #dispatch_fn(
+                    &self,
+                    filters: #filters_ident,
+                    sort: es_entity::Sort<#sort_by_name>,
+                    cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#combo_cursor_ident>,
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#combo_cursor_ident>, #error> {
+                    self.repo.#dispatch_fn(self.scope, filters, sort, cursor).await
+                }
+            });
+
+            if delete == self.delete || self.delete == DeleteOption::SoftWithoutQueries {
+                break;
+            }
+        }
+        tokens
+    }
+
     /// Scrutinee elements (bools over the destructured filter locals)
     /// identifying each filter's [`FilterState`] at runtime: one bool per
     /// non-optional column (`is_some`), two per optional column (`apply`,

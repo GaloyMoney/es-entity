@@ -55,6 +55,81 @@ impl<'a> ListForFn<'a> {
             cursor_mod: &self.cursor_mod,
         }
     }
+
+    /// Delegating methods for the generated `Scoped{Repo}` bound view.
+    /// Empty for unscoped repos.
+    pub fn scoped_delegates(&'a self) -> TokenStream {
+        let mut tokens = TokenStream::new();
+        if self.scope.is_none() {
+            return tokens;
+        }
+        let entity = self.entity;
+        let cursor = self.cursor();
+        let cursor_ident = cursor.ident();
+        let cursor_mod = cursor.cursor_mod();
+        let error = &self.query_error;
+        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
+
+        let by_column_name = self.by_column.name();
+        let for_column_name = self.for_column.name();
+        let filter_arg_name = syn::Ident::new(
+            &format!("filter_{}", self.for_column.name()),
+            Span::call_site(),
+        );
+        let (_for_column_type, for_impl_expr, _for_access_expr) = self.for_column.ty_for_find_by();
+
+        for delete in [DeleteOption::No, DeleteOption::Soft] {
+            let fn_name = syn::Ident::new(
+                &format!(
+                    "list_for_{}_by_{}{}",
+                    for_column_name,
+                    by_column_name,
+                    delete.include_deletion_fn_postfix()
+                ),
+                Span::call_site(),
+            );
+            let fn_in_op = syn::Ident::new(
+                &format!(
+                    "list_for_{}_by_{}{}_in_op",
+                    for_column_name,
+                    by_column_name,
+                    delete.include_deletion_fn_postfix()
+                ),
+                Span::call_site(),
+            );
+
+            tokens.append_all(quote! {
+                pub async fn #fn_name(
+                    &self,
+                    #filter_arg_name: #for_impl_expr,
+                    cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
+                    direction: es_entity::ListDirection,
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
+                    self.repo.#fn_name(self.scope, #filter_arg_name, cursor, direction).await
+                }
+
+                pub async fn #fn_in_op #query_fn_generics(
+                    &self,
+                    #query_fn_op_arg,
+                    #filter_arg_name: #for_impl_expr,
+                    cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
+                    direction: es_entity::ListDirection,
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
+                    where
+                        OP: #query_fn_op_traits
+                {
+                    self.repo.#fn_in_op(op, self.scope, #filter_arg_name, cursor, direction).await
+                }
+            });
+
+            if delete == self.delete || self.delete == DeleteOption::SoftWithoutQueries {
+                break;
+            }
+        }
+        tokens
+    }
 }
 
 impl ToTokens for ListForFn<'_> {

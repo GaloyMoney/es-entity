@@ -213,6 +213,73 @@ impl ToTokens for EsRepo<'_> {
 
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
 
+        // The `repo.scoped(scope)` bound view: a borrowed view of the repo
+        // with the scope captured once, exposing every read fn without the
+        // per-call scope argument (each method delegates to the scope-arg
+        // fn). Only generated for scoped repos.
+        let (scoped_fn, scoped_view) = if let Some(info) = scope::ScopeInfo::from_opts(self.opts) {
+            let scoped_ident = self.opts.scoped_view_ident();
+            let scope_ty = &info.scope_ty;
+            let repo_ident = self.repo;
+
+            let mut scoped_generics = self.generics.clone();
+            scoped_generics
+                .params
+                .insert(0, syn::parse_quote!('scoped_repo));
+            let scoped_struct_where = scoped_generics.where_clause.clone();
+            let (scoped_impl_generics, scoped_ty_generics, scoped_where) =
+                scoped_generics.split_for_impl();
+
+            let find_by_delegates = self.find_by_fns.iter().map(|f| f.scoped_delegates());
+            let find_all_delegates = self.find_all_fn.scoped_delegates();
+            let list_by_delegates = self.list_by_fns.iter().map(|f| f.scoped_delegates());
+            let list_for_delegates = self.list_for_fns.iter().map(|f| f.scoped_delegates());
+            let list_for_filters_delegates = list_for_filters.scoped_delegates();
+
+            let scoped_doc = format!(
+                "Bound view of [`{repo_ident}`] with a [`{scope_ty}`] captured once: every \
+                 read method delegates to the corresponding scope-argument fn with the bound \
+                 scope. Obtained via [`{repo_ident}::scoped`]. Borrows the repo, so it is \
+                 naturally request-scoped."
+            );
+
+            (
+                quote! {
+                    pub fn scoped<'scoped_repo>(
+                        &'scoped_repo self,
+                        scope: impl Into<#scope_ty>,
+                    ) -> #scoped_ident #scoped_ty_generics {
+                        #scoped_ident {
+                            repo: self,
+                            scope: scope.into(),
+                        }
+                    }
+                },
+                quote! {
+                    #[doc = #scoped_doc]
+                    pub struct #scoped_ident #scoped_generics #scoped_struct_where {
+                        repo: &'scoped_repo #repo_ident #ty_generics,
+                        scope: #scope_ty,
+                    }
+
+                    impl #scoped_impl_generics #scoped_ident #scoped_ty_generics #scoped_where {
+                        #[inline(always)]
+                        pub fn scope(&self) -> #scope_ty {
+                            self.scope
+                        }
+
+                        #(#find_by_delegates)*
+                        #find_all_delegates
+                        #(#list_by_delegates)*
+                        #(#list_for_delegates)*
+                        #list_for_filters_delegates
+                    }
+                },
+            )
+        } else {
+            (quote! {}, quote! {})
+        };
+
         // If the event type has Forgettable fields, the repo must enable
         // `forgettable` — otherwise the payload machinery is never generated
         // and forgettable values would be lost. The repo cannot see the
@@ -264,6 +331,8 @@ impl ToTokens for EsRepo<'_> {
 
             #scope_type
 
+            #scoped_view
+
             #list_for_filters_struct
             #sort_by
 
@@ -272,6 +341,8 @@ impl ToTokens for EsRepo<'_> {
                 pub fn pool(&self) -> &es_entity::db::Pool {
                     &self.#pool_field
                 }
+
+                #scoped_fn
 
                 #map_constraint_fn
                 #begin
@@ -413,6 +484,62 @@ mod tests {
         // writes stay unscoped (custody principle)
         assert!(tokens.contains("fn create_in_op < OP > (& self , op : & mut OP , new_entity"));
         assert!(tokens.contains("fn update_in_op < OP > (& self , op : & mut OP , entity"));
+    }
+
+    #[test]
+    fn scoped_repo_generates_bound_view() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                columns(partner_id(ty = "PartnerId", scope), name(ty = "String"))
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("scoped repo should derive")
+            .to_string();
+        // the bound view type + constructor
+        assert!(tokens.contains("pub struct ScopedUsers"));
+        assert!(tokens.contains("pub fn scoped <"));
+        // view methods take no scope argument and forward the bound scope
+        assert!(tokens.contains("self . repo . find_by_id (self . scope"));
+        assert!(tokens.contains("self . repo . maybe_find_by_id_in_op (op , self . scope"));
+        assert!(tokens.contains("self . repo . find_all (self . scope"));
+        assert!(tokens.contains("self . repo . list_by_created_at (self . scope"));
+        assert!(tokens.contains("self . repo . list_for_filters (self . scope"));
+    }
+
+    #[test]
+    fn unscoped_repo_has_no_bound_view() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", columns(name(ty = "String")))]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input).unwrap().to_string();
+        assert!(!tokens.contains("ScopedUsers"));
+        assert!(!tokens.contains("pub fn scoped <"));
+    }
+
+    #[test]
+    fn scoped_repo_with_generics_generates_bound_view() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                columns(partner_id(ty = "PartnerId", scope))
+            )]
+            struct Users<E> {
+                pool: sqlx::PgPool,
+                _phantom: std::marker::PhantomData<E>,
+            }
+        };
+        let tokens = derive(input)
+            .expect("generic scoped repo should derive")
+            .to_string();
+        assert!(tokens.contains("pub struct ScopedUsers < 'scoped_repo , E >"));
     }
 
     #[test]
