@@ -74,6 +74,26 @@ SELECT id FROM user_documents
   ORDER BY id ASC LIMIT $3
 ```
 
+#### Compile-time cost — `sargable_filters` is opt-in
+
+The specialized matrix emits one `sqlx::query!` per filter combination × cursor state × direction. For an entity with N `list_for` columns that grows as 2^N (3^N with optional columns), and across many repos this can add thousands of compile-time-checked queries — a large release-codegen tax. The matrix is therefore **off by default** and the catch-all COALESCE query above is used for the multi-filter case.
+
+To opt in per repo (only for entities whose multi-filter list queries are hot paths that benefit from index usage), set `sargable_filters` on the `#[es_repo(...)]` attribute:
+
+```rust,ignore
+#[es_repo(
+    entity = "Transfer",
+    columns(
+        account_id(ty = "AccountId", list_for(by(created_at))),
+        status(ty = "String", list_for(by(created_at))),
+    ),
+    sargable_filters,
+)]
+pub struct Transfers { pool: PgPool }
+```
+
+Single-filter (`list_for_{col}_by_{sort}`) and no-filter (`list_by_{sort}`) queries are always sargable and cheap (O(N)), so they are generated regardless of this flag. Only the multi-filter combination matrix is gated.
+
 ### A Dispatch Function
 
 The `list_for_filters` function matches on the sort column and intelligently delegates to the most efficient underlying function:

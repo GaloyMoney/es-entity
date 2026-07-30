@@ -18,7 +18,8 @@ use es_entity::*;
         status(ty = "String", list_for(by(created_at))),
         reference(ty = "Option<String>", list_for),
         score(ty = "Option<i32>", list_by)
-    )
+    ),
+    sargable_filters
 )]
 pub struct Transfers {
     pool: PgPool,

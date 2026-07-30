@@ -176,6 +176,7 @@ pub struct ListForFiltersFn<'a> {
     post_hydrate_error: Option<&'a syn::Type>,
     forgettable_table_name: Option<&'a str>,
     scope: Option<ScopeInfo<'a>>,
+    sargable_filters: bool,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -203,6 +204,7 @@ impl<'a> ListForFiltersFn<'a> {
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             forgettable_table_name: opts.forgettable_table_name(),
             scope: ScopeInfo::from_opts(opts),
+            sargable_filters: opts.sargable_filters(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -346,6 +348,9 @@ impl<'a> ListForFiltersFn<'a> {
     /// everything else falls back to the catch-all COALESCE query
     /// (correctness preserved, just not sargable).
     fn is_specialized_combo(&self, combo: &[FilterState]) -> bool {
+        if !self.sargable_filters {
+            return false;
+        }
         let n = self.for_columns.len();
         if n <= 4 {
             return true;
@@ -1131,6 +1136,7 @@ mod tests {
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
+            sargable_filters: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1452,6 +1458,7 @@ mod tests {
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
+            sargable_filters: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1521,6 +1528,7 @@ mod tests {
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
+            sargable_filters: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1607,6 +1615,7 @@ mod tests {
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
+            sargable_filters: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1691,6 +1700,7 @@ mod tests {
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
+            sargable_filters: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1781,6 +1791,7 @@ mod tests {
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
+            sargable_filters: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1806,6 +1817,89 @@ mod tests {
         assert!(
             token_str.contains("COALESCE(a = $1, $1 IS NULL)"),
             "COALESCE fallback must remain for uncapped combinations"
+        );
+    }
+
+    /// With `sargable_filters` off (the default), the multi-filter cartesian
+    /// matrix is suppressed: only the catch-all COALESCE query is emitted,
+    /// regardless of filter-column count. This is what keeps downstream
+    /// compile times bounded (the fix for the lana-bank +2054-query regression).
+    #[test]
+    fn list_for_filters_sargable_off_emits_catch_all_only() {
+        let entity = Ident::new("Order", Span::call_site());
+        let query_error = syn::Ident::new("OrderQueryError", Span::call_site());
+        let id = syn::Ident::new("OrderId", proc_macro2::Span::call_site());
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        let id_column = Column::for_id(syn::parse_str("OrderId").unwrap());
+        let id_ident = syn::Ident::new("id", proc_macro2::Span::call_site());
+        let customer_id_column = Column::new_list_for(
+            syn::Ident::new("customer_id", proc_macro2::Span::call_site()),
+            syn::parse_str("CustomerId").unwrap(),
+            vec![id_ident.clone()],
+        );
+        let status_column = Column::new_list_for(
+            syn::Ident::new("status", proc_macro2::Span::call_site()),
+            syn::parse_str("OrderStatus").unwrap(),
+            vec![id_ident],
+        );
+
+        let for_columns = vec![&customer_id_column, &status_column];
+        let by_columns = vec![&id_column];
+        let id_cursor = CursorStruct {
+            column: &id_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+        let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
+
+        let build = |sargable: bool| -> String {
+            let fn_ = ListForFiltersFn {
+                filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
+                entity: &entity,
+                query_error: query_error.clone(),
+                for_columns: for_columns.clone(),
+                by_columns: by_columns.clone(),
+                cursor: &combo_cursor,
+                delete: DeleteOption::No,
+                cursor_mod: cursor_mod.clone(),
+                table_name: "orders",
+                ignore_prefix: None,
+                id: &id,
+                any_nested: false,
+                post_hydrate_error: None,
+                forgettable_table_name: None,
+                scope: None,
+                sargable_filters: sargable,
+                #[cfg(feature = "instrument")]
+                repo_name_snake: "test_repo".to_string(),
+            };
+            let mut tokens = TokenStream::new();
+            fn_.to_tokens(&mut tokens);
+            tokens.to_string()
+        };
+
+        let off = build(false);
+        let on = build(true);
+
+        let count = |s: &str| s.matches("es_query").count();
+        let off_count = count(&off);
+        let on_count = count(&on);
+
+        // Opt-in specializes all 2^2 = 4 filter combos (no COALESCE);
+        // default-off collapses to a single catch-all COALESCE query.
+        assert!(
+            on_count > off_count,
+            "opt-in should emit more dedicated queries: on={on_count} off={off_count}"
+        );
+        assert!(
+            off.contains("COALESCE"),
+            "default-off must emit the catch-all COALESCE query"
+        );
+        assert!(
+            !on.contains("COALESCE"),
+            "opt-in (all combos specialized) should not need the COALESCE fallback"
         );
     }
 }

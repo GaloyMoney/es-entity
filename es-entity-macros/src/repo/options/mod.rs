@@ -241,6 +241,14 @@ pub struct RepositoryOptions {
     forgettable: bool,
     #[darling(default, rename = "forgettable_tbl")]
     forgettable_table_name: Option<String>,
+
+    /// Opt into the sargable per-state/per-combination SQL matrix for multi-filter
+    /// list queries. Defaults to `false`: only the catch-all `COALESCE` query is
+    /// emitted, keeping compile times low. Set `sargable_filters` to emit a
+    /// dedicated indexed query per filter combination (the #162 feature) for
+    /// repos whose multi-filter list queries are hot paths.
+    #[darling(default)]
+    sargable_filters: Option<bool>,
 }
 
 impl RepositoryOptions {
@@ -324,6 +332,10 @@ impl RepositoryOptions {
         self.events_table_name
             .as_ref()
             .expect("Events table name is not set")
+    }
+
+    pub fn sargable_filters(&self) -> bool {
+        self.sargable_filters.unwrap_or(false)
     }
 
     pub fn cursor_mod(&self) -> syn::Ident {
