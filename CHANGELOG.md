@@ -1,3 +1,11 @@
+# [cala release v0.11.11](https://github.com/GaloyMoney/cala/releases/tag/0.11.11)
+
+
+
+### Performance
+
+- Gate sargable multi-filter matrix behind opt-in (#168)
+
 # [cala release v0.11.10](https://github.com/GaloyMoney/cala/releases/tag/0.11.10)
 
 
