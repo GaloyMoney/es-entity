@@ -3,7 +3,7 @@ use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
 use quote::{TokenStreamExt, quote};
 
-use super::options::*;
+use super::{options::*, scope::ScopeInfo};
 
 pub struct FindByFn<'a> {
     prefix: Option<&'a syn::LitStr>,
@@ -17,6 +17,7 @@ pub struct FindByFn<'a> {
     any_nested: bool,
     post_hydrate_error: Option<&'a syn::Type>,
     forgettable_table_name: Option<&'a str>,
+    scope: Option<ScopeInfo<'a>>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -35,6 +36,7 @@ impl<'a> FindByFn<'a> {
             any_nested: opts.any_nested(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             forgettable_table_name: opts.forgettable_table_name(),
+            scope: ScopeInfo::from_opts(opts),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -50,6 +52,11 @@ impl ToTokens for FindByFn<'_> {
         let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
         let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
         let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
+
+        let (scope_fn_arg, scope_fn_pass, scope_convert) = match &self.scope {
+            Some(scope) => (scope.fn_arg(), scope.fn_pass(), scope.convert()),
+            None => (quote! {}, quote! {}, quote! {}),
+        };
 
         for maybe in ["", "maybe_"] {
             let error = if maybe.is_empty() {
@@ -107,30 +114,56 @@ impl ToTokens for FindByFn<'_> {
                     quote! {}
                 };
 
-                let es_query_call = if let Some(prefix) = self.prefix {
-                    quote! {
-                        es_entity::es_query!(
-                            tbl_prefix = #prefix,
-                            #forgettable_tbl_arg
-                            #query,
-                            #column_name as &#column_type,
-                        )
-                    }
-                } else {
-                    quote! {
-                        es_entity::es_query!(
-                            entity = #entity,
-                            #forgettable_tbl_arg
-                            #query,
-                            #column_name as &#column_type,
-                        )
+                let make_es_query = |query: &str, extra_args: &TokenStream| -> TokenStream {
+                    if let Some(prefix) = self.prefix {
+                        quote! {
+                            es_entity::es_query!(
+                                tbl_prefix = #prefix,
+                                #forgettable_tbl_arg
+                                #query,
+                                #column_name as &#column_type,
+                                #extra_args
+                            )
+                        }
+                    } else {
+                        quote! {
+                            es_entity::es_query!(
+                                entity = #entity,
+                                #forgettable_tbl_arg
+                                #query,
+                                #column_name as &#column_type,
+                                #extra_args
+                            )
+                        }
                     }
                 };
+                let es_query_call = make_es_query(&query, &quote! {});
 
-                let fetch_optional_call = if delete == DeleteOption::Soft && self.any_nested {
-                    quote! { #es_query_call.fetch_optional_include_deleted(op).await? }
+                let fetch_method = if delete == DeleteOption::Soft && self.any_nested {
+                    quote! { fetch_optional_include_deleted }
                 } else {
-                    quote! { #es_query_call.fetch_optional(op).await? }
+                    quote! { fetch_optional }
+                };
+                let fetch_optional_call = if let Some(scope) = &self.scope {
+                    let scoped_query = format!(
+                        r#"SELECT id FROM {} WHERE {} {} $1 AND {}{}"#,
+                        self.table_name,
+                        column_name,
+                        filter_op,
+                        scope.predicate(2),
+                        if delete == DeleteOption::No {
+                            self.delete.not_deleted_condition()
+                        } else {
+                            ""
+                        }
+                    );
+                    let scoped_es_query_call = make_es_query(&scoped_query, &scope.arg_tokens());
+                    scope.dispatch(
+                        quote! { #es_query_call.#fetch_method(op).await? },
+                        quote! { #scoped_es_query_call.#fetch_method(op).await? },
+                    )
+                } else {
+                    quote! { #es_query_call.#fetch_method(op).await? }
                 };
 
                 let fetch_and_validate = if maybe.is_empty() {
@@ -206,21 +239,24 @@ impl ToTokens for FindByFn<'_> {
                 tokens.append_all(quote! {
                     pub async fn #fn_name(
                         &self,
+                        #scope_fn_arg
                         #column_name: #impl_expr
                     ) -> Result<#result_type, #error> {
-                        self.#fn_in_op(#query_fn_get_op, #column_name).await
+                        self.#fn_in_op(#query_fn_get_op, #scope_fn_pass #column_name).await
                     }
 
                     #instrument_attr_in_op
                     pub async fn #fn_in_op #query_fn_generics(
                         &self,
                         #query_fn_op_arg,
+                        #scope_fn_arg
                         #column_name: #impl_expr
                     ) -> Result<#result_type, #error>
                         where
                             OP: #query_fn_op_traits
                     {
                         let __result: Result<#result_type, #error> = async {
+                            #scope_convert
                             let #column_name = #column_name.#access_expr;
                             #record_field
                             #fetch_and_validate
@@ -262,6 +298,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -359,6 +396,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -453,6 +491,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -547,6 +586,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -576,6 +616,7 @@ mod tests {
             any_nested: true,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -607,6 +648,7 @@ mod tests {
             any_nested: true,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

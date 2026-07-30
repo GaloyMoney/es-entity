@@ -2,7 +2,7 @@ use darling::ToTokens;
 use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
-use super::options::*;
+use super::{options::*, scope::ScopeInfo};
 
 pub struct FindAllFn<'a> {
     prefix: Option<&'a syn::LitStr>,
@@ -13,6 +13,7 @@ pub struct FindAllFn<'a> {
     any_nested: bool,
     post_hydrate_error: Option<&'a syn::Type>,
     forgettable_table_name: Option<&'a str>,
+    scope: Option<ScopeInfo<'a>>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -28,6 +29,7 @@ impl<'a> From<&'a RepositoryOptions> for FindAllFn<'a> {
             any_nested: opts.any_nested(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             forgettable_table_name: opts.forgettable_table_name(),
+            scope: ScopeInfo::from_opts(opts),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -56,24 +58,48 @@ impl ToTokens for FindAllFn<'_> {
             quote! {}
         };
 
-        let es_query_call = if let Some(prefix) = self.prefix {
-            quote! {
-                es_entity::es_query!(
-                    tbl_prefix = #prefix,
-                    #forgettable_tbl_arg
-                    #query,
-                    ids as &[#id],
-                )
+        let make_es_query = |query: &str, extra_args: &TokenStream| -> TokenStream {
+            if let Some(prefix) = self.prefix {
+                quote! {
+                    es_entity::es_query!(
+                        tbl_prefix = #prefix,
+                        #forgettable_tbl_arg
+                        #query,
+                        ids as &[#id],
+                        #extra_args
+                    )
+                }
+            } else {
+                quote! {
+                    es_entity::es_query!(
+                        entity = #entity,
+                        #forgettable_tbl_arg
+                        #query,
+                        ids as &[#id],
+                        #extra_args
+                    )
+                }
             }
+        };
+        let es_query_call = make_es_query(&query, &quote! {});
+
+        let (scope_fn_arg, scope_fn_pass, scope_convert) = match &self.scope {
+            Some(scope) => (scope.fn_arg(), scope.fn_pass(), scope.convert()),
+            None => (quote! {}, quote! {}, quote! {}),
+        };
+        let fetch_call = if let Some(scope) = &self.scope {
+            let scoped_query = format!(
+                "SELECT id FROM {} WHERE id = ANY($1) AND {}",
+                self.table_name,
+                scope.predicate(2),
+            );
+            let scoped_es_query_call = make_es_query(&scoped_query, &scope.arg_tokens());
+            scope.dispatch(
+                quote! { #es_query_call.fetch_n(op, ids.len()).await? },
+                quote! { #scoped_es_query_call.fetch_n(op, ids.len()).await? },
+            )
         } else {
-            quote! {
-                es_entity::es_query!(
-                    entity = #entity,
-                    #forgettable_tbl_arg
-                    #query,
-                    ids as &[#id],
-                )
-            }
+            quote! { #es_query_call.fetch_n(op, ids.len()).await? }
         };
 
         let op_param = if self.any_nested {
@@ -107,18 +133,21 @@ impl ToTokens for FindAllFn<'_> {
         tokens.append_all(quote! {
             pub async fn find_all<Out: From<#entity>>(
                 &self,
+                #scope_fn_arg
                 ids: &[#id]
             ) -> Result<std::collections::HashMap<#id, Out>, #query_error> {
-                self.find_all_in_op(#query_fn_get_op, ids).await
+                self.find_all_in_op(#query_fn_get_op, #scope_fn_pass ids).await
             }
 
             #instrument_attr
             pub async fn find_all_in_op #generics(
                 &self,
                 #op_param,
+                #scope_fn_arg
                 ids: &[#id]
             ) -> Result<std::collections::HashMap<#id, Out>, #query_error> {
-                 let (entities, _) = #es_query_call.fetch_n(op, ids.len()).await?;
+                 #scope_convert
+                 let (entities, _) = #fetch_call;
                  #post_hydrate_check
                  Ok(entities.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
             }
@@ -147,6 +176,7 @@ mod tests {
             any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
