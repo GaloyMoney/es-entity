@@ -269,19 +269,43 @@ impl ToTokens for ListForFn<'_> {
                 None => (quote! {}, quote! {}, quote! {}),
             };
             let match_expr = if let Some(scope) = &self.scope {
-                let scoped_query_arms = build_query_arms(Some(scope));
-                scope.dispatch(
-                    quote! {
-                        match (direction, #(#cursor_state_scrutinee),*) {
-                            #query_arms
-                        }
-                    },
-                    quote! {
-                        match (direction, #(#cursor_state_scrutinee),*) {
-                            #scoped_query_arms
-                        }
-                    },
-                )
+                if scope.is_scope_column(self.for_column) {
+                    // The filter column IS the scope column: no second
+                    // predicate — compare the filter value against the scope
+                    // in Rust. A mismatch can only yield rows outside the
+                    // caller's scope, so short-circuit to an empty page; a
+                    // match reuses the single-predicate (unscoped-arm) query.
+                    scope.dispatch(
+                        quote! {
+                            match (direction, #(#cursor_state_scrutinee),*) {
+                                #query_arms
+                            }
+                        },
+                        quote! {
+                            if __scope_val == #filter_arg_name {
+                                match (direction, #(#cursor_state_scrutinee),*) {
+                                    #query_arms
+                                }
+                            } else {
+                                (Vec::new(), false)
+                            }
+                        },
+                    )
+                } else {
+                    let scoped_query_arms = build_query_arms(Some(scope));
+                    scope.dispatch(
+                        quote! {
+                            match (direction, #(#cursor_state_scrutinee),*) {
+                                #query_arms
+                            }
+                        },
+                        quote! {
+                            match (direction, #(#cursor_state_scrutinee),*) {
+                                #scoped_query_arms
+                            }
+                        },
+                    )
+                }
             } else {
                 quote! {
                     match (direction, #(#cursor_state_scrutinee),*) {

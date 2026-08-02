@@ -219,23 +219,41 @@ impl ToTokens for FindByFn<'_> {
                     quote! { fetch_optional }
                 };
                 let fetch_optional_call = if let Some(scope) = &self.scope {
-                    let scoped_query = format!(
-                        r#"SELECT id FROM {} WHERE {} {} $1 AND {}{}"#,
-                        self.table_name,
-                        column_name,
-                        filter_op,
-                        scope.predicate(2),
-                        if delete == DeleteOption::No {
-                            self.delete.not_deleted_condition()
-                        } else {
-                            ""
-                        }
-                    );
-                    let scoped_es_query_call = make_es_query(&scoped_query, &scope.arg_tokens());
-                    scope.dispatch(
-                        quote! { #es_query_call.#fetch_method(op).await? },
-                        quote! { #scoped_es_query_call.#fetch_method(op).await? },
-                    )
+                    if scope.is_scope_column(self.column) {
+                        // The lookup column IS the scope column: no second
+                        // predicate — compare the lookup value against the
+                        // scope in Rust. A mismatch is a scope-guaranteed
+                        // miss, so short-circuit without querying.
+                        scope.dispatch(
+                            quote! { #es_query_call.#fetch_method(op).await? },
+                            quote! {
+                                if __scope_val == #column_name {
+                                    #es_query_call.#fetch_method(op).await?
+                                } else {
+                                    None
+                                }
+                            },
+                        )
+                    } else {
+                        let scoped_query = format!(
+                            r#"SELECT id FROM {} WHERE {} {} $1 AND {}{}"#,
+                            self.table_name,
+                            column_name,
+                            filter_op,
+                            scope.predicate(2),
+                            if delete == DeleteOption::No {
+                                self.delete.not_deleted_condition()
+                            } else {
+                                ""
+                            }
+                        );
+                        let scoped_es_query_call =
+                            make_es_query(&scoped_query, &scope.arg_tokens());
+                        scope.dispatch(
+                            quote! { #es_query_call.#fetch_method(op).await? },
+                            quote! { #scoped_es_query_call.#fetch_method(op).await? },
+                        )
+                    }
                 } else {
                     quote! { #es_query_call.#fetch_method(op).await? }
                 };

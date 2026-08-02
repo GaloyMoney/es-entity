@@ -479,12 +479,6 @@ impl<'a> ListForFiltersFn<'a> {
         };
         let cursor_ident = cursor_struct.ident();
 
-        let n_filters: u32 = self
-            .for_columns
-            .iter()
-            .map(|c| if c.is_optional() { 2u32 } else { 1u32 })
-            .sum();
-
         let destructure_tokens = cursor_struct.destructure_tokens();
         let select_columns = cursor_struct.select_columns(None);
         let cursor_arg_tokens = cursor_struct.query_arg_tokens();
@@ -534,13 +528,18 @@ impl<'a> ListForFiltersFn<'a> {
         // Generate the catch-all fallback query (COALESCE-style, correctness
         // fallback for filter combinations above the specialization cap).
         // Parameterized over the scope: the scoped variant binds the scope
-        // column at `$1` and shifts every other parameter by one.
+        // column at `$1` and shifts every other parameter by one. When the
+        // scope column is itself a filter column, the scoped variant skips
+        // its filter fragment — the fn-entry guard already short-circuited a
+        // mismatch, so the scope predicate alone pins the column.
         let build_fallback = |scope: Option<&ScopeInfo>| -> (String, String, TokenStream) {
             let scope_offset: u32 = if scope.is_some() { 1 } else { 0 };
+            let is_scoped_filter = |col: &Column| scope.is_some_and(|s| s.is_scope_column(col));
             let mut param_idx = 1u32 + scope_offset;
             let where_fragments: Vec<String> = self
                 .for_columns
                 .iter()
+                .filter(|col| !is_scoped_filter(col))
                 .map(|col| FiltersStruct::where_clause_fragment(col, &mut param_idx))
                 .collect();
 
@@ -556,6 +555,7 @@ impl<'a> ListForFiltersFn<'a> {
             let filter_arg_bindings: TokenStream = self
                 .for_columns
                 .iter()
+                .filter(|col| !is_scoped_filter(col))
                 .map(|col| FiltersStruct::filter_arg_tokens(col))
                 .collect();
             let scope_args = scope.map(|s| s.arg_tokens()).unwrap_or_default();
@@ -570,28 +570,28 @@ impl<'a> ListForFiltersFn<'a> {
                 select_columns,
                 self.table_name,
                 filter_where,
-                cursor_struct.condition(n_filters + scope_offset, true),
+                cursor_struct.condition(param_idx - 1, true),
                 if delete == DeleteOption::No {
                     self.delete.not_deleted_condition()
                 } else {
                     ""
                 },
                 cursor_struct.order_by(true),
-                n_filters + scope_offset + 1,
+                param_idx,
             );
             let desc_query = format!(
                 r#"SELECT {} FROM {} WHERE {}({}){} ORDER BY {} LIMIT ${}"#,
                 select_columns,
                 self.table_name,
                 filter_where,
-                cursor_struct.condition(n_filters + scope_offset, false),
+                cursor_struct.condition(param_idx - 1, false),
                 if delete == DeleteOption::No {
                     self.delete.not_deleted_condition()
                 } else {
                     ""
                 },
                 cursor_struct.order_by(false),
-                n_filters + scope_offset + 1,
+                param_idx,
             );
             (asc_query, desc_query, fallback_arg_tokens)
         };
@@ -659,6 +659,12 @@ impl<'a> ListForFiltersFn<'a> {
                     for (col, state) in self.for_columns.iter().zip(combo.iter()) {
                         match state {
                             FilterState::Absent => {}
+                            // The scope column as a present filter needs no
+                            // predicate of its own in the scoped variant: the
+                            // fn-entry guard short-circuited a mismatch, so
+                            // the scope predicate already pins the value.
+                            FilterState::Present
+                                if scope.is_some_and(|s| s.is_scope_column(col)) => {}
                             FilterState::Present => {
                                 filter_conditions.push(format!("{} = ${}", col.name(), param_idx));
                                 param_idx += 1;
@@ -850,6 +856,39 @@ impl<'a> ListForFiltersFn<'a> {
             quote! {}
         };
 
+        // When the scope column is itself a filter column: under `Only(a)` a
+        // filter value `b != a` can only select rows outside the caller's
+        // scope, so short-circuit to an empty page without querying. On a
+        // match (or under `All`) the query arms run as usual — the scoped
+        // arms skip the redundant filter predicate.
+        let scope_filter_guard = self
+            .scope
+            .as_ref()
+            .and_then(|scope| {
+                self.for_columns
+                    .iter()
+                    .find(|c| scope.is_scope_column(c))
+                    .map(|col| {
+                        let filter_name =
+                            syn::Ident::new(&format!("filter_{}", col.name()), Span::call_site());
+                        let scope_ty = &scope.scope_ty;
+                        quote! {
+                            if matches!(
+                                (&__scope, #filter_name.as_ref()),
+                                (#scope_ty::Only(__scope_val), Some(__filter_val))
+                                    if __filter_val != __scope_val
+                            ) {
+                                return Ok(es_entity::PaginatedQueryRet {
+                                    entities: Vec::new(),
+                                    has_next_page: false,
+                                    end_cursor: None,
+                                });
+                            }
+                        }
+                    })
+            })
+            .unwrap_or_default();
+
         quote! {
             pub async fn #fn_name(
                 &self,
@@ -877,6 +916,7 @@ impl<'a> ListForFiltersFn<'a> {
                     #scope_convert
                     #extract_has_cursor
                     #destructure_filters
+                    #scope_filter_guard
                     #destructure_tokens
                     #record_fields
 

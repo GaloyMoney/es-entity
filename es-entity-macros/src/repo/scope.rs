@@ -50,6 +50,18 @@ impl<'a> ScopeInfo<'a> {
         format!("{} = ${}", self.column_name, param_idx)
     }
 
+    /// True when `col` is the scope column itself.
+    ///
+    /// The scope column may additionally be a query column (`find_by = true`,
+    /// `list_for`). Its composed read fns never emit a second SQL predicate:
+    /// under `Only` the caller-supplied value is compared against the scope
+    /// value in Rust — a mismatch short-circuits to an empty result without
+    /// touching the database, a match reuses the single-predicate query (the
+    /// scope predicate already pins the column).
+    pub fn is_scope_column(&self, col: &Column) -> bool {
+        col.name() == self.column_name
+    }
+
     /// The query binding for the `Only` arm (pairs with [`Self::dispatch`]'s
     /// `__scope_val` pattern binding).
     pub fn arg_tokens(&self) -> TokenStream {

@@ -25,9 +25,18 @@ impl Columns {
     }
 
     pub fn all_find_by(&self) -> impl Iterator<Item = &Column> {
-        self.all
-            .iter()
-            .filter(|c| c.opts.find_by() && !c.opts.scope)
+        self.all.iter().filter(|c| {
+            if c.opts.scope {
+                // `scope` flips the column's `find_by` default to false —
+                // every read is already filtered by it. Explicit
+                // `find_by = true` opts back in: the generated
+                // `find_by_{col}` composes with the scope (mismatching
+                // `Only` scope short-circuits to not-found).
+                c.opts.find_by == Some(true)
+            } else {
+                c.opts.find_by()
+            }
+        })
     }
 
     pub fn all_list_by(&self) -> impl Iterator<Item = &Column> {
@@ -51,11 +60,14 @@ impl Columns {
     ///   `nullable`-annotated types are rejected — nullable scope columns are
     ///   a future feature)
     /// - the scope column must not be `Forgettable<T>`
-    /// - the scope column must not also be a query column (`find_by`,
-    ///   `list_by`, `list_for`) — every generated read is already filtered by
-    ///   it, so per-tenant queries are the ordinary scoped fns
     /// - the scope column must not be the `parent` column (nested repos
     ///   cannot be scoped — children are custody-guarded via their parent)
+    ///
+    /// The scope column MAY additionally be a query column (`find_by = true`,
+    /// `list_by`, `list_for`): the generated fns compose with the scope —
+    /// under `Only(a)` a caller-supplied value `b` short-circuits to an empty
+    /// result when `a != b` and collapses into the scope predicate when
+    /// `a == b`, so caller input can never widen the scope.
     pub fn validate_scope(&self) -> darling::Result<()> {
         let scope_columns: Vec<_> = self.all.iter().filter(|c| c.opts.scope).collect();
         if scope_columns.len() > 1 {
@@ -75,15 +87,6 @@ impl Columns {
         if col.opts.forgettable {
             return Err(darling::Error::custom(format!(
                 "scope column '{}' cannot be Forgettable",
-                col.name(),
-            )));
-        }
-        if col.opts.find_by == Some(true)
-            || col.opts.list_by == Some(true)
-            || col.opts.list_for_opts.is_some()
-        {
-            return Err(darling::Error::custom(format!(
-                "scope column '{}' cannot also be find_by, list_by or list_for — every read is already filtered by it",
                 col.name(),
             )));
         }
