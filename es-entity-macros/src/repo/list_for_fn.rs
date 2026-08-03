@@ -269,10 +269,6 @@ impl ToTokens for ListForFn<'_> {
                 None => (quote! {}, quote! {}, quote! {}),
             };
             let match_expr = if let Some(scope) = &self.scope {
-                // When the filter column IS the scope column the `Only` arm
-                // double-specifies it (`col = $1 AND col = $2`) — a mismatch
-                // is a contradictory conjunct returning an empty page, which
-                // is exactly the intended composition semantics.
                 let scoped_query_arms = build_query_arms(Some(scope));
                 scope.dispatch(
                     quote! {

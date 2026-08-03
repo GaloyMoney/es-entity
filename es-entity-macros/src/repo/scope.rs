@@ -46,12 +46,6 @@ impl<'a> ScopeInfo<'a> {
     }
 
     /// The SQL conjunct for the `Only` arm at the given parameter index.
-    ///
-    /// When the scope column is also a query column (`find_by = true`,
-    /// `list_for`) its composed read fns simply double-specify the column —
-    /// once as the caller's filter, once as the scope conjunct. A mismatch is
-    /// a contradictory `col = $i AND col = $j` returning no rows, so caller
-    /// input can narrow but never widen the scope.
     pub fn predicate(&self, param_idx: u32) -> String {
         format!("{} = ${}", self.column_name, param_idx)
     }

@@ -528,10 +528,7 @@ impl<'a> ListForFiltersFn<'a> {
         // Generate the catch-all fallback query (COALESCE-style, correctness
         // fallback for filter combinations above the specialization cap).
         // Parameterized over the scope: the scoped variant binds the scope
-        // column at `$1` and shifts every other parameter by one. When the
-        // scope column is itself a filter column it is simply double-specified
-        // (as filter and as scope) — a mismatch is a contradictory conjunct
-        // returning no rows, which is the intended composition semantics.
+        // column at `$1` and shifts every other parameter by one.
         let build_fallback = |scope: Option<&ScopeInfo>| -> (String, String, TokenStream) {
             let scope_offset: u32 = if scope.is_some() { 1 } else { 0 };
             let mut param_idx = 1u32 + scope_offset;

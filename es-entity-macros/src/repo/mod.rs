@@ -641,8 +641,6 @@ mod tests {
             tokens
                 .contains("fn maybe_find_by_partner_id (& self , scope : impl Into < UserScope >")
         );
-        // the Only arm double-specifies the column (filter + scope conjunct):
-        // a mismatch is a contradictory predicate returning no rows
         assert!(tokens.contains("WHERE partner_id = $1 AND partner_id = $2"));
     }
 
@@ -668,8 +666,6 @@ mod tests {
         assert!(tokens.contains("pub struct UserFilters"));
         assert!(tokens.contains("pub partner_id : Option < PartnerId >"));
         assert!(tokens.contains("pub status : Option < String >"));
-        // list_for_partner_id_by_* exists; its Only arm double-specifies the
-        // column (filter at $1, scope conjunct at $2)
         assert!(tokens.contains(
             "fn list_for_partner_id_by_created_at (& self , scope : impl Into < UserScope >"
         ));

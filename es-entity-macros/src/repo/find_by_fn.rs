@@ -219,10 +219,6 @@ impl ToTokens for FindByFn<'_> {
                     quote! { fetch_optional }
                 };
                 let fetch_optional_call = if let Some(scope) = &self.scope {
-                    // When the lookup column IS the scope column the `Only`
-                    // arm double-specifies it (`col = $1 AND col = $2`) — a
-                    // mismatch is a contradictory conjunct returning no rows,
-                    // which is exactly the intended composition semantics.
                     let scoped_query = format!(
                         r#"SELECT id FROM {} WHERE {} {} $1 AND {}{}"#,
                         self.table_name,
