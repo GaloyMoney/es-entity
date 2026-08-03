@@ -46,20 +46,14 @@ impl<'a> ScopeInfo<'a> {
     }
 
     /// The SQL conjunct for the `Only` arm at the given parameter index.
+    ///
+    /// When the scope column is also a query column (`find_by = true`,
+    /// `list_for`) its composed read fns simply double-specify the column —
+    /// once as the caller's filter, once as the scope conjunct. A mismatch is
+    /// a contradictory `col = $i AND col = $j` returning no rows, so caller
+    /// input can narrow but never widen the scope.
     pub fn predicate(&self, param_idx: u32) -> String {
         format!("{} = ${}", self.column_name, param_idx)
-    }
-
-    /// True when `col` is the scope column itself.
-    ///
-    /// The scope column may additionally be a query column (`find_by = true`,
-    /// `list_for`). Its composed read fns never emit a second SQL predicate:
-    /// under `Only` the caller-supplied value is compared against the scope
-    /// value in Rust — a mismatch short-circuits to an empty result without
-    /// touching the database, a match reuses the single-predicate query (the
-    /// scope predicate already pins the column).
-    pub fn is_scope_column(&self, col: &Column) -> bool {
-        col.name() == self.column_name
     }
 
     /// The query binding for the `Only` arm (pairs with [`Self::dispatch`]'s

@@ -10,9 +10,9 @@ use es_entity::*;
 /// scope × filter composition must hold through the specialized per-state
 /// query matrix, not just the catch-all fallback (exercised by
 /// `scoped_repo.rs`, which keeps the default). The scope column doubles as a
-/// `list_for` filter column; under `Only` its filter predicate is skipped —
-/// a mismatch short-circuits in Rust, a match is already pinned by the scope
-/// predicate.
+/// `list_for` filter column; under `Only` it is double-specified (filter AND
+/// scope conjunct) — a mismatch is a contradictory predicate returning no
+/// rows.
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "Contact",
@@ -108,7 +108,7 @@ async fn sargable_scope_column_filter_combinations() -> anyhow::Result<()> {
     assert_eq!(ret.entities.len(), 2);
     assert!(ret.entities.iter().all(|c| c.partner_id == partner_a));
 
-    // Only(a) + Some(a): match — collapses into the scope predicate
+    // Only(a) + Some(a): match — the conjunct is satisfiable, same rows
     let ret = contacts
         .list_for_filters(
             partner_a,
@@ -122,7 +122,7 @@ async fn sargable_scope_column_filter_combinations() -> anyhow::Result<()> {
         .await?;
     assert_eq!(ret.entities.len(), 2);
 
-    // Only(a) + Some(b): mismatch — empty, short-circuited
+    // Only(a) + Some(b): mismatch — contradictory conjunct, empty
     let ret = contacts
         .list_for_filters(
             partner_a,
@@ -137,8 +137,8 @@ async fn sargable_scope_column_filter_combinations() -> anyhow::Result<()> {
     assert!(ret.entities.is_empty());
     assert!(!ret.has_next_page);
 
-    // multi-filter through the specialized scoped arms (scope-column filter
-    // predicate skipped, status predicate present)
+    // multi-filter through the specialized scoped arms (partner_id filter,
+    // status filter and the scope conjunct all present)
     let ret = contacts
         .list_for_filters(
             partner_a,

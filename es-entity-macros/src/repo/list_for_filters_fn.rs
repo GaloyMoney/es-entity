@@ -529,17 +529,15 @@ impl<'a> ListForFiltersFn<'a> {
         // fallback for filter combinations above the specialization cap).
         // Parameterized over the scope: the scoped variant binds the scope
         // column at `$1` and shifts every other parameter by one. When the
-        // scope column is itself a filter column, the scoped variant skips
-        // its filter fragment — the fn-entry guard already short-circuited a
-        // mismatch, so the scope predicate alone pins the column.
+        // scope column is itself a filter column it is simply double-specified
+        // (as filter and as scope) — a mismatch is a contradictory conjunct
+        // returning no rows, which is the intended composition semantics.
         let build_fallback = |scope: Option<&ScopeInfo>| -> (String, String, TokenStream) {
             let scope_offset: u32 = if scope.is_some() { 1 } else { 0 };
-            let is_scoped_filter = |col: &Column| scope.is_some_and(|s| s.is_scope_column(col));
             let mut param_idx = 1u32 + scope_offset;
             let where_fragments: Vec<String> = self
                 .for_columns
                 .iter()
-                .filter(|col| !is_scoped_filter(col))
                 .map(|col| FiltersStruct::where_clause_fragment(col, &mut param_idx))
                 .collect();
 
@@ -555,7 +553,6 @@ impl<'a> ListForFiltersFn<'a> {
             let filter_arg_bindings: TokenStream = self
                 .for_columns
                 .iter()
-                .filter(|col| !is_scoped_filter(col))
                 .map(|col| FiltersStruct::filter_arg_tokens(col))
                 .collect();
             let scope_args = scope.map(|s| s.arg_tokens()).unwrap_or_default();
@@ -659,12 +656,6 @@ impl<'a> ListForFiltersFn<'a> {
                     for (col, state) in self.for_columns.iter().zip(combo.iter()) {
                         match state {
                             FilterState::Absent => {}
-                            // The scope column as a present filter needs no
-                            // predicate of its own in the scoped variant: the
-                            // fn-entry guard short-circuited a mismatch, so
-                            // the scope predicate already pins the value.
-                            FilterState::Present
-                                if scope.is_some_and(|s| s.is_scope_column(col)) => {}
                             FilterState::Present => {
                                 filter_conditions.push(format!("{} = ${}", col.name(), param_idx));
                                 param_idx += 1;
@@ -856,39 +847,6 @@ impl<'a> ListForFiltersFn<'a> {
             quote! {}
         };
 
-        // When the scope column is itself a filter column: under `Only(a)` a
-        // filter value `b != a` can only select rows outside the caller's
-        // scope, so short-circuit to an empty page without querying. On a
-        // match (or under `All`) the query arms run as usual — the scoped
-        // arms skip the redundant filter predicate.
-        let scope_filter_guard = self
-            .scope
-            .as_ref()
-            .and_then(|scope| {
-                self.for_columns
-                    .iter()
-                    .find(|c| scope.is_scope_column(c))
-                    .map(|col| {
-                        let filter_name =
-                            syn::Ident::new(&format!("filter_{}", col.name()), Span::call_site());
-                        let scope_ty = &scope.scope_ty;
-                        quote! {
-                            if matches!(
-                                (&__scope, #filter_name.as_ref()),
-                                (#scope_ty::Only(__scope_val), Some(__filter_val))
-                                    if __filter_val != __scope_val
-                            ) {
-                                return Ok(es_entity::PaginatedQueryRet {
-                                    entities: Vec::new(),
-                                    has_next_page: false,
-                                    end_cursor: None,
-                                });
-                            }
-                        }
-                    })
-            })
-            .unwrap_or_default();
-
         quote! {
             pub async fn #fn_name(
                 &self,
@@ -916,7 +874,6 @@ impl<'a> ListForFiltersFn<'a> {
                     #scope_convert
                     #extract_has_cursor
                     #destructure_filters
-                    #scope_filter_guard
                     #destructure_tokens
                     #record_fields
 

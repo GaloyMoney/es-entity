@@ -622,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_column_find_by_composes_via_early_return() {
+    fn scope_column_find_by_composes_via_conjunct() {
         let input: syn::DeriveInput = parse_quote! {
             #[es_repo(
                 entity = "User",
@@ -641,14 +641,13 @@ mod tests {
             tokens
                 .contains("fn maybe_find_by_partner_id (& self , scope : impl Into < UserScope >")
         );
-        // the Only arm compares in Rust instead of emitting a second
-        // predicate: mismatch short-circuits to None without querying
-        assert!(tokens.contains("if __scope_val == partner_id"));
-        assert!(!tokens.contains("WHERE partner_id = $1 AND partner_id = $2"));
+        // the Only arm double-specifies the column (filter + scope conjunct):
+        // a mismatch is a contradictory predicate returning no rows
+        assert!(tokens.contains("WHERE partner_id = $1 AND partner_id = $2"));
     }
 
     #[test]
-    fn scope_column_list_for_composes_via_early_return() {
+    fn scope_column_list_for_composes_via_conjunct() {
         let input: syn::DeriveInput = parse_quote! {
             #[es_repo(
                 entity = "User",
@@ -669,16 +668,12 @@ mod tests {
         assert!(tokens.contains("pub struct UserFilters"));
         assert!(tokens.contains("pub partner_id : Option < PartnerId >"));
         assert!(tokens.contains("pub status : Option < String >"));
-        // list_for_partner_id_by_* exists and its Only arm compares in Rust
+        // list_for_partner_id_by_* exists; its Only arm double-specifies the
+        // column (filter at $1, scope conjunct at $2)
         assert!(tokens.contains(
             "fn list_for_partner_id_by_created_at (& self , scope : impl Into < UserScope >"
         ));
-        assert!(tokens.contains("if __scope_val == filter_partner_id"));
-        // the filters fns short-circuit on a scope/filter mismatch
-        assert!(tokens.contains("filter_partner_id . as_ref ()"));
-        // no double predicate on the scope column is ever emitted
-        assert!(!tokens.contains("partner_id = $1 AND partner_id"));
-        assert!(!tokens.contains("partner_id = $2 AND partner_id"));
+        assert!(tokens.contains("(partner_id = $1) AND partner_id = $2"));
     }
 
     #[test]

@@ -53,10 +53,11 @@ impl Columns {
     ///   cannot be scoped — children are custody-guarded via their parent)
     ///
     /// The scope column MAY additionally be a query column (`find_by = true`,
-    /// `list_by`, `list_for`): the generated fns compose with the scope —
-    /// under `Only(a)` a caller-supplied value `b` short-circuits to an empty
-    /// result when `a != b` and collapses into the scope predicate when
-    /// `a == b`, so caller input can never widen the scope.
+    /// `list_by`, `list_for`): the generated fns compose with the scope by
+    /// double-specifying the column (once as the caller's filter, once as the
+    /// scope conjunct) — under `Only(a)` a caller-supplied value `b != a` is a
+    /// contradictory predicate returning no rows, so caller input can narrow
+    /// but never widen the scope.
     pub fn validate_scope(&self) -> darling::Result<()> {
         let scope_columns: Vec<_> = self.all.iter().filter(|c| c.opts.scope).collect();
         if scope_columns.len() > 1 {
@@ -830,8 +831,9 @@ impl ColumnOpts {
     fn find_by(&self) -> bool {
         // `scope` flips the default to false — every read is already
         // filtered by the scope column. Explicit `find_by = true` opts back
-        // in: the generated `find_by_{col}` composes with the scope
-        // (mismatching `Only` scope short-circuits to not-found).
+        // in: the generated `find_by_{col}` composes with the scope (a value
+        // mismatching the `Only` scope is a contradictory conjunct returning
+        // not-found).
         self.find_by.unwrap_or(!self.scope)
     }
 

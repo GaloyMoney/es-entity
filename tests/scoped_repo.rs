@@ -14,8 +14,9 @@ use es_entity::*;
 ///
 /// The scope column additionally opts into `find_by`/`list_for`: callers
 /// filter by `partner_id` through the normal query surface, composing with
-/// the scope — under `Only(a)` a mismatching caller value short-circuits to
-/// an empty result, a matching one collapses into the scope predicate.
+/// the scope — under `Only(a)` the column is double-specified (filter AND
+/// scope conjunct), so a mismatching caller value is a contradictory
+/// predicate returning an empty result.
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "Contact",
@@ -475,9 +476,9 @@ async fn scoped_view_delegates() -> anyhow::Result<()> {
 }
 
 /// The scope column opted into `find_by = true`: the lookup composes with
-/// the scope. Under `Only(a)` a lookup of `b != a` is a scope-guaranteed
-/// miss — short-circuited in Rust without querying; `b == a` collapses into
-/// the single scope predicate.
+/// the scope via the double-specified conjunct (`partner_id = $1 AND
+/// partner_id = $2`). Under `Only(a)` a lookup of `b != a` is a
+/// contradictory predicate — not-found, indistinguishable from missing.
 #[tokio::test]
 async fn scope_column_find_by_composes() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -518,8 +519,8 @@ async fn scope_column_find_by_composes() -> anyhow::Result<()> {
 /// - `All` + `None`      → unfiltered
 /// - `All` + `Some(p)`   → rows of `p`
 /// - `Only(a)` + `None`  → rows of `a`
-/// - `Only(a)` + `Some(b)` → empty unless `a == b` (mismatch short-circuits
-///   without querying; a match collapses into the scope predicate)
+/// - `Only(a)` + `Some(b)` → `partner_id = b AND partner_id = a` — empty
+///   unless `a == b` (a caller filter can narrow but never widen the scope)
 #[tokio::test]
 async fn scope_column_filter_combinations() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -668,7 +669,7 @@ async fn scope_column_filter_combinations() -> anyhow::Result<()> {
 
 /// Cursor pagination respects the composed predicates: every page of an
 /// `All` + partner-filtered listing stays within the filtered partner, and a
-/// scope/filter mismatch with a cursor still short-circuits to an empty page.
+/// scope/filter mismatch with a cursor still yields an empty page.
 #[tokio::test]
 async fn scope_column_filter_cursor_pagination() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -716,7 +717,7 @@ async fn scope_column_filter_cursor_pagination() -> anyhow::Result<()> {
     let collected: std::collections::HashSet<_> = collected.into_iter().collect();
     assert_eq!(collected, expected);
 
-    // mismatch + cursor: still an empty page, no query needed
+    // mismatch + cursor: the contradictory conjunct still yields an empty page
     let cursor_page = contacts
         .list_for_partner_id_by_created_at(
             ContactScope::All,

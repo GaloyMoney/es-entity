@@ -135,22 +135,20 @@ and includes `partner_id: Option<PartnerId>` in the generated `Filters`
 struct. The caller value **composes** with the scope — it can narrow, never
 widen:
 
-| Scope     | Caller value | Result                                          |
-|-----------|--------------|-------------------------------------------------|
-| `All`     | none         | unfiltered                                      |
-| `All`     | `p`          | rows of `p`                                     |
-| `Only(a)` | none         | rows of `a`                                     |
-| `Only(a)` | `b != a`     | **empty** — short-circuited without querying    |
-| `Only(a)` | `a`          | rows of `a`                                     |
+| Scope     | Caller value | Result                                            |
+|-----------|--------------|---------------------------------------------------|
+| `All`     | none         | unfiltered                                        |
+| `All`     | `p`          | `WHERE partner_id = p`                            |
+| `Only(a)` | none         | `WHERE partner_id = a`                            |
+| `Only(a)` | `b`          | `WHERE partner_id = b AND partner_id = a` — **empty unless `a == b`** |
 
-Under `Only`, the caller value is compared against the scope value in Rust
-before any SQL runs: a mismatch can only select rows outside the caller's
-scope, so it honestly returns an empty result (`NotFound`/`None` for
-`find_by_*`) without a database roundtrip — instead of being silently
-ignored. A match adds no second predicate: the scope conjunct already pins
-the column, so the SQL stays the single-equality, sargable shape. The scope
-column's type must implement `PartialEq` for this comparison (entity id
-types do).
+Under `Only`, the column is simply double-specified — once as the caller's
+filter, once as the scope conjunct, exactly like any other filter column. A
+mismatching caller value is a contradictory predicate that honestly returns
+an empty result (`NotFound`/`None` for `find_by_*`) instead of being
+silently ignored — a caller filter can narrow but never widen the scope.
+Both predicates are plain equalities, so the query stays sargable against a
+scope-led index.
 
 ```rust,ignore
 // admin listing: scope from authz, partner choice from the request
