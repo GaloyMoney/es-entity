@@ -25,18 +25,7 @@ impl Columns {
     }
 
     pub fn all_find_by(&self) -> impl Iterator<Item = &Column> {
-        self.all.iter().filter(|c| {
-            if c.opts.scope {
-                // `scope` flips the column's `find_by` default to false —
-                // every read is already filtered by it. Explicit
-                // `find_by = true` opts back in: the generated
-                // `find_by_{col}` composes with the scope (mismatching
-                // `Only` scope short-circuits to not-found).
-                c.opts.find_by == Some(true)
-            } else {
-                c.opts.find_by()
-            }
-        })
+        self.all.iter().filter(|c| c.opts.find_by())
     }
 
     pub fn all_list_by(&self) -> impl Iterator<Item = &Column> {
@@ -839,7 +828,11 @@ impl ColumnOpts {
     }
 
     fn find_by(&self) -> bool {
-        self.find_by.unwrap_or(true)
+        // `scope` flips the default to false — every read is already
+        // filtered by the scope column. Explicit `find_by = true` opts back
+        // in: the generated `find_by_{col}` composes with the scope
+        // (mismatching `Only` scope short-circuits to not-found).
+        self.find_by.unwrap_or(!self.scope)
     }
 
     fn list_by(&self) -> bool {
