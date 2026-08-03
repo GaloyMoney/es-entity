@@ -479,12 +479,6 @@ impl<'a> ListForFiltersFn<'a> {
         };
         let cursor_ident = cursor_struct.ident();
 
-        let n_filters: u32 = self
-            .for_columns
-            .iter()
-            .map(|c| if c.is_optional() { 2u32 } else { 1u32 })
-            .sum();
-
         let destructure_tokens = cursor_struct.destructure_tokens();
         let select_columns = cursor_struct.select_columns(None);
         let cursor_arg_tokens = cursor_struct.query_arg_tokens();
@@ -570,28 +564,28 @@ impl<'a> ListForFiltersFn<'a> {
                 select_columns,
                 self.table_name,
                 filter_where,
-                cursor_struct.condition(n_filters + scope_offset, true),
+                cursor_struct.condition(param_idx - 1, true),
                 if delete == DeleteOption::No {
                     self.delete.not_deleted_condition()
                 } else {
                     ""
                 },
                 cursor_struct.order_by(true),
-                n_filters + scope_offset + 1,
+                param_idx,
             );
             let desc_query = format!(
                 r#"SELECT {} FROM {} WHERE {}({}){} ORDER BY {} LIMIT ${}"#,
                 select_columns,
                 self.table_name,
                 filter_where,
-                cursor_struct.condition(n_filters + scope_offset, false),
+                cursor_struct.condition(param_idx - 1, false),
                 if delete == DeleteOption::No {
                     self.delete.not_deleted_condition()
                 } else {
                     ""
                 },
                 cursor_struct.order_by(false),
-                n_filters + scope_offset + 1,
+                param_idx,
             );
             (asc_query, desc_query, fallback_arg_tokens)
         };

@@ -11,11 +11,17 @@ use es_entity::*;
 /// reads by the scope column; `All` reads across scopes. Writes (`create`,
 /// `update`, `delete`) keep their unscoped signatures — mutations operate on
 /// entities that could only have been obtained through a scoped read.
+///
+/// The scope column additionally opts into `find_by`/`list_for`: callers
+/// filter by `partner_id` through the normal query surface, composing with
+/// the scope — under `Only(a)` the column is double-specified (filter AND
+/// scope conjunct), so a mismatching caller value is a contradictory
+/// predicate returning an empty result.
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "Contact",
     columns(
-        partner_id(ty = "PartnerId", scope),
+        partner_id(ty = "PartnerId", scope, find_by = true, list_for(by(created_at))),
         email(ty = "String"),
         status(ty = "String", list_for(by(created_at))),
     )
@@ -253,6 +259,7 @@ async fn scoped_list_for_and_filters_dispatch() -> anyhow::Result<()> {
             partner_a,
             ContactFilters {
                 status: Some("inactive".to_string()),
+                ..Default::default()
             },
             Sort {
                 by: ContactSortBy::CreatedAt,
@@ -435,6 +442,7 @@ async fn scoped_view_delegates() -> anyhow::Result<()> {
         .list_for_filters(
             ContactFilters {
                 status: Some("inactive".to_string()),
+                ..Default::default()
             },
             Sort {
                 by: ContactSortBy::CreatedAt,
@@ -463,6 +471,277 @@ async fn scoped_view_delegates() -> anyhow::Result<()> {
     let all_view = contacts.scoped(ContactScope::All);
     all_view.find_by_id(ids_b[0]).await?;
     assert_eq!(all_view.find_all::<Contact>(&all_ids).await?.len(), 3);
+
+    Ok(())
+}
+
+/// The scope column opted into `find_by = true`: the lookup composes with
+/// the scope via the double-specified conjunct (`partner_id = $1 AND
+/// partner_id = $2`). Under `Only(a)` a lookup of `b != a` is a
+/// contradictory predicate — not-found, indistinguishable from missing.
+#[tokio::test]
+async fn scope_column_find_by_composes() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let contacts = Contacts::new(pool);
+
+    let partner_a = PartnerId::new();
+    let partner_b = PartnerId::new();
+    seed_contacts(&contacts, partner_a, &[("fb-a", "active")]).await?;
+    seed_contacts(&contacts, partner_b, &[("fb-b", "active")]).await?;
+
+    // All + value: plain lookup by the scope column
+    let found = contacts
+        .find_by_partner_id(ContactScope::All, partner_a)
+        .await?;
+    assert_eq!(found.partner_id, partner_a);
+
+    // Only(a) + a: match — behaves like the scoped read
+    let found = contacts.find_by_partner_id(partner_a, partner_a).await?;
+    assert_eq!(found.partner_id, partner_a);
+
+    // Only(a) + b: mismatch — not-found, indistinguishable from missing
+    let err = contacts.find_by_partner_id(partner_a, partner_b).await;
+    assert!(matches!(err, Err(ContactFindError::NotFound { .. })));
+    assert!(
+        contacts
+            .maybe_find_by_partner_id(partner_a, partner_b)
+            .await?
+            .is_none()
+    );
+
+    Ok(())
+}
+
+/// The scope column opted into `list_for`: `ContactFilters` carries
+/// `partner_id` and the predicates compose. The four scope × filter
+/// combinations:
+///
+/// - `All` + `None`      → unfiltered
+/// - `All` + `Some(p)`   → rows of `p`
+/// - `Only(a)` + `None`  → rows of `a`
+/// - `Only(a)` + `Some(b)` → `partner_id = b AND partner_id = a` — empty
+///   unless `a == b` (a caller filter can narrow but never widen the scope)
+#[tokio::test]
+async fn scope_column_filter_combinations() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let contacts = Contacts::new(pool);
+
+    let partner_a = PartnerId::new();
+    let partner_b = PartnerId::new();
+    let ids_a = seed_contacts(
+        &contacts,
+        partner_a,
+        &[("c1", "active"), ("c2", "inactive")],
+    )
+    .await?;
+    seed_contacts(&contacts, partner_b, &[("c3", "active")]).await?;
+
+    let query = || PaginatedQueryArgs {
+        first: 100,
+        after: None,
+    };
+    let sort = || Sort {
+        by: ContactSortBy::CreatedAt,
+        direction: ListDirection::Descending,
+    };
+    let partner_filter = |p: PartnerId| ContactFilters {
+        partner_id: Some(p),
+        ..Default::default()
+    };
+
+    // All + None: unfiltered (other tests seed the shared table — check
+    // containment, not count)
+    let ret = contacts
+        .list_for_filters(
+            ContactScope::All,
+            ContactFilters::default(),
+            sort(),
+            query(),
+        )
+        .await?;
+    assert!(
+        ids_a
+            .iter()
+            .all(|id| ret.entities.iter().any(|c| c.id == *id))
+    );
+
+    // All + Some(a): the caller's partner choice narrows the listing
+    let ret = contacts
+        .list_for_filters(
+            ContactScope::All,
+            partner_filter(partner_a),
+            sort(),
+            query(),
+        )
+        .await?;
+    assert_eq!(ret.entities.len(), 2);
+    assert!(ret.entities.iter().all(|c| c.partner_id == partner_a));
+
+    // Only(a) + None: the scope alone filters
+    let ret = contacts
+        .list_for_filters(partner_a, ContactFilters::default(), sort(), query())
+        .await?;
+    assert_eq!(ret.entities.len(), 2);
+
+    // Only(a) + Some(a): match — same result as the scope alone
+    let ret = contacts
+        .list_for_filters(partner_a, partner_filter(partner_a), sort(), query())
+        .await?;
+    assert_eq!(ret.entities.len(), 2);
+
+    // Only(a) + Some(b): a caller filter can never widen the scope — the
+    // mismatch honestly returns nothing instead of being silently ignored
+    let ret = contacts
+        .list_for_filters(partner_a, partner_filter(partner_b), sort(), query())
+        .await?;
+    assert!(ret.entities.is_empty());
+    assert!(!ret.has_next_page);
+    assert!(ret.end_cursor.is_none());
+
+    // dedicated single-filter fn composes the same way
+    let ret = contacts
+        .list_for_partner_id_by_created_at(
+            ContactScope::All,
+            partner_a,
+            PaginatedQueryArgs {
+                first: 100,
+                after: None,
+            },
+            ListDirection::Descending,
+        )
+        .await?;
+    assert_eq!(ret.entities.len(), 2);
+    let ret = contacts
+        .list_for_partner_id_by_created_at(
+            partner_a,
+            partner_b,
+            PaginatedQueryArgs {
+                first: 100,
+                after: None,
+            },
+            ListDirection::Descending,
+        )
+        .await?;
+    assert!(ret.entities.is_empty());
+
+    // multi-filter (scope column + status) routes through the filters fn
+    let ret = contacts
+        .list_for_filters(
+            partner_a,
+            ContactFilters {
+                partner_id: Some(partner_a),
+                status: Some("active".to_string()),
+            },
+            sort(),
+            query(),
+        )
+        .await?;
+    assert_eq!(ret.entities.len(), 1);
+    assert_eq!(ret.entities[0].status, "active");
+    let ret = contacts
+        .list_for_filters(
+            partner_a,
+            ContactFilters {
+                partner_id: Some(partner_b),
+                status: Some("active".to_string()),
+            },
+            sort(),
+            query(),
+        )
+        .await?;
+    assert!(ret.entities.is_empty());
+    let ret = contacts
+        .list_for_filters(
+            ContactScope::All,
+            ContactFilters {
+                partner_id: Some(partner_a),
+                status: Some("active".to_string()),
+            },
+            sort(),
+            query(),
+        )
+        .await?;
+    assert_eq!(ret.entities.len(), 1);
+    assert_eq!(ret.entities[0].partner_id, partner_a);
+
+    Ok(())
+}
+
+/// Cursor pagination respects the composed predicates: every page of an
+/// `All` + partner-filtered listing stays within the filtered partner, and a
+/// scope/filter mismatch with a cursor still yields an empty page.
+#[tokio::test]
+async fn scope_column_filter_cursor_pagination() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let contacts = Contacts::new(pool);
+
+    let partner_a = PartnerId::new();
+    let partner_b = PartnerId::new();
+    let specs: Vec<(&str, &str)> = (0..5).map(|_| ("pg", "active")).collect();
+    let ids_a = seed_contacts(&contacts, partner_a, &specs).await?;
+    seed_contacts(&contacts, partner_b, &specs).await?;
+
+    let mut collected = Vec::new();
+    let mut after = None;
+    let mut pages = 0;
+    loop {
+        let ret = contacts
+            .list_for_filters(
+                ContactScope::All,
+                ContactFilters {
+                    partner_id: Some(partner_a),
+                    ..Default::default()
+                },
+                Sort {
+                    by: ContactSortBy::CreatedAt,
+                    direction: ListDirection::Descending,
+                },
+                PaginatedQueryArgs { first: 2, after },
+            )
+            .await?;
+        pages += 1;
+        for entity in &ret.entities {
+            assert_eq!(
+                entity.partner_id, partner_a,
+                "partner filter leaked a foreign row"
+            );
+        }
+        collected.extend(ret.entities.iter().map(|c| c.id));
+        if !ret.has_next_page {
+            break;
+        }
+        after = ret.end_cursor;
+    }
+    assert!(pages >= 3, "expected pagination across pages, got {pages}");
+    let expected: std::collections::HashSet<_> = ids_a.into_iter().collect();
+    let collected: std::collections::HashSet<_> = collected.into_iter().collect();
+    assert_eq!(collected, expected);
+
+    // mismatch + cursor: the contradictory conjunct still yields an empty page
+    let cursor_page = contacts
+        .list_for_partner_id_by_created_at(
+            ContactScope::All,
+            partner_a,
+            PaginatedQueryArgs {
+                first: 1,
+                after: None,
+            },
+            ListDirection::Descending,
+        )
+        .await?;
+    let ret = contacts
+        .list_for_partner_id_by_created_at(
+            partner_b,
+            partner_a,
+            PaginatedQueryArgs {
+                first: 100,
+                after: cursor_page.end_cursor,
+            },
+            ListDirection::Descending,
+        )
+        .await?;
+    assert!(ret.entities.is_empty());
+    assert!(!ret.has_next_page);
 
     Ok(())
 }

@@ -25,9 +25,7 @@ impl Columns {
     }
 
     pub fn all_find_by(&self) -> impl Iterator<Item = &Column> {
-        self.all
-            .iter()
-            .filter(|c| c.opts.find_by() && !c.opts.scope)
+        self.all.iter().filter(|c| c.opts.find_by())
     }
 
     pub fn all_list_by(&self) -> impl Iterator<Item = &Column> {
@@ -51,9 +49,6 @@ impl Columns {
     ///   `nullable`-annotated types are rejected — nullable scope columns are
     ///   a future feature)
     /// - the scope column must not be `Forgettable<T>`
-    /// - the scope column must not also be a query column (`find_by`,
-    ///   `list_by`, `list_for`) — every generated read is already filtered by
-    ///   it, so per-tenant queries are the ordinary scoped fns
     /// - the scope column must not be the `parent` column (nested repos
     ///   cannot be scoped — children are custody-guarded via their parent)
     pub fn validate_scope(&self) -> darling::Result<()> {
@@ -75,15 +70,6 @@ impl Columns {
         if col.opts.forgettable {
             return Err(darling::Error::custom(format!(
                 "scope column '{}' cannot be Forgettable",
-                col.name(),
-            )));
-        }
-        if col.opts.find_by == Some(true)
-            || col.opts.list_by == Some(true)
-            || col.opts.list_for_opts.is_some()
-        {
-            return Err(darling::Error::custom(format!(
-                "scope column '{}' cannot also be find_by, list_by or list_for — every read is already filtered by it",
                 col.name(),
             )));
         }
@@ -836,7 +822,9 @@ impl ColumnOpts {
     }
 
     fn find_by(&self) -> bool {
-        self.find_by.unwrap_or(true)
+        // `scope` flips the default to false — every read is already
+        // filtered by the scope column; explicit `find_by = true` opts in.
+        self.find_by.unwrap_or(!self.scope)
     }
 
     fn list_by(&self) -> bool {
