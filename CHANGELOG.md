@@ -1,3 +1,11 @@
+# [cala release v0.11.12](https://github.com/GaloyMoney/cala/releases/tag/0.11.12)
+
+
+
+### Features
+
+- Scope column composes with find_by/list_for filters (#170)
+
 # [cala release v0.11.11](https://github.com/GaloyMoney/cala/releases/tag/0.11.11)
 
 
