@@ -149,6 +149,10 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                     n_events_map.insert(id.clone(), n_events);
                 }
 
+                if all_ids.is_empty() {
+                    return Ok(n_events_map);
+                }
+
                 let rows = sqlx::query(#query)
                         .bind(now)
                         .bind(&all_ids)
@@ -161,7 +165,10 @@ impl ToTokens for PersistEventsBatchFn<'_> {
 
                 #forgettable_insert
 
-                let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
+                let recorded_at = rows
+                    .first()
+                    .ok_or(sqlx::Error::RowNotFound)?
+                    .try_get("recorded_at")?;
 
                 for item in all_events.iter_mut() {
                     let events: &mut es_entity::EntityEvents<#event_type> = item.borrow_mut();
@@ -232,6 +239,10 @@ mod tests {
                     n_events_map.insert(id.clone(), n_events);
                 }
 
+                if all_ids.is_empty() {
+                    return Ok(n_events_map);
+                }
+
                 let rows = sqlx::query("INSERT INTO entity_events (id, recorded_at, sequence, event_type, event, context) SELECT unnested.id, COALESCE($1, NOW()), unnested.sequence, unnested.event_type, unnested.event, unnested.context FROM UNNEST($2, $3::INT[], $4::TEXT[], $5::JSONB[], $6::JSONB[]) AS unnested(id, sequence, event_type, event, context) RETURNING recorded_at")
                         .bind(now)
                         .bind(&all_ids)
@@ -246,7 +257,10 @@ mod tests {
                         .fetch_all(op.as_executor())
                         .await?;
 
-                let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
+                let recorded_at = rows
+                    .first()
+                    .ok_or(sqlx::Error::RowNotFound)?
+                    .try_get("recorded_at")?;
 
                 for item in all_events.iter_mut() {
                     let events: &mut es_entity::EntityEvents<EntityEvent> = item.borrow_mut();
@@ -309,6 +323,10 @@ mod tests {
                     n_events_map.insert(id.clone(), n_events);
                 }
 
+                if all_ids.is_empty() {
+                    return Ok(n_events_map);
+                }
+
                 let rows = sqlx::query("INSERT INTO entity_events (id, recorded_at, sequence, event_type, event) SELECT unnested.id, COALESCE($1, NOW()), unnested.sequence, unnested.event_type, unnested.event FROM UNNEST($2, $3::INT[], $4::TEXT[], $5::JSONB[]) AS unnested(id, sequence, event_type, event) RETURNING recorded_at")
                         .bind(now)
                         .bind(&all_ids)
@@ -318,7 +336,10 @@ mod tests {
                         .fetch_all(op.as_executor())
                         .await?;
 
-                let recorded_at = rows[0].try_get("recorded_at").expect("no recorded at");
+                let recorded_at = rows
+                    .first()
+                    .ok_or(sqlx::Error::RowNotFound)?
+                    .try_get("recorded_at")?;
 
                 for item in all_events.iter_mut() {
                     let events: &mut es_entity::EntityEvents<EntityEvent> = item.borrow_mut();
