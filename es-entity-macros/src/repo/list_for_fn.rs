@@ -213,7 +213,7 @@ impl ToTokens for ListForFn<'_> {
             let build_query_arms = |scope: Option<&ScopeInfo>| -> TokenStream {
                 let mut query_arms = TokenStream::new();
                 let offset = if scope.is_some() { 2 } else { 1 };
-                for state in cursor.cursor_states() {
+                for variant in cursor.cursor_variants() {
                     for ascending in [true, false] {
                         let mut conditions: Vec<String> =
                             vec![format!("({for_column_name} {filter_op} $1)")];
@@ -221,7 +221,7 @@ impl ToTokens for ListForFn<'_> {
                             conditions.push(scope.predicate(2));
                         }
                         if let Some(condition) =
-                            cursor.condition_for_state(*state, offset, ascending)
+                            cursor.condition_for_variant(variant, offset, ascending)
                         {
                             conditions.push(format!("({condition})"));
                         }
@@ -237,7 +237,7 @@ impl ToTokens for ListForFn<'_> {
                             &cursor.order_by(ascending),
                             offset + 1,
                         );
-                        let cursor_args = cursor.cursor_arg_tokens_for_state(*state);
+                        let cursor_args = cursor.cursor_arg_tokens_for_variant(variant);
                         let scope_args = scope.map(|s| s.arg_tokens()).unwrap_or_default();
                         let args = quote! {
                             #filter_arg_name as &#for_column_type,
@@ -251,7 +251,7 @@ impl ToTokens for ListForFn<'_> {
                         } else {
                             quote! { es_entity::ListDirection::Descending }
                         };
-                        let state_pattern = cursor.state_pattern_elems(*state);
+                        let state_pattern = cursor.variant_pattern_elems(variant);
                         query_arms.append_all(quote! {
                             (#direction_pattern, #(#state_pattern),*) => {
                                 #es_query_call.fetch_n(op, first).await?

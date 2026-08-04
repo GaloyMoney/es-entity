@@ -1,3 +1,14 @@
+# Unreleased
+
+### Features
+
+- Per-column `cursor = "catch_all"` option for `list_by` columns: emits a
+  single catch-all COALESCE query per direction (identical result
+  semantics) instead of the sargable per-cursor-state matrix — 4-6 static
+  queries down to 2 per list fn — letting repos trade the index-friendly
+  cursor predicate for less generated code on cold list paths. Honored by
+  `list_by_*`, `list_for_*_by_*` and `list_for_filters` pagination.
+
 # [cala release v0.11.12](https://github.com/GaloyMoney/cala/releases/tag/0.11.12)
 
 

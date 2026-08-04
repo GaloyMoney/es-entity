@@ -30,6 +30,7 @@ use options::RepositoryOptions;
 pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream> {
     let opts = RepositoryOptions::from_derive_input(&ast)?;
     opts.columns.validate_list_for_by_columns()?;
+    opts.columns.validate_cursor_pagination()?;
     opts.columns.validate_scope()?;
     opts.validate_forgettable()?;
     let repo = EsRepo::from(&opts);

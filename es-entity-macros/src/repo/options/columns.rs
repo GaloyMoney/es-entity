@@ -93,6 +93,25 @@ impl Columns {
             .find(|c| c.name() == name && c.opts.list_by())
     }
 
+    /// Validates the `cursor = "..."` column option: it is only meaningful
+    /// on `list_by` columns (it steers the cursor-pagination SQL of the
+    /// `list_by_*` / `list_for_*_by_*` / filter list fns).
+    pub fn validate_cursor_pagination(&self) -> darling::Result<()> {
+        let mut errors = darling::Error::accumulator();
+        for col in self
+            .all
+            .iter()
+            .filter(|c| c.opts.cursor.is_some() && !c.opts.list_by())
+        {
+            errors.push(darling::Error::custom(format!(
+                "column '{}' sets `cursor` but is not a list_by column — \
+                 cursor pagination is only generated for list_by columns",
+                col.name(),
+            )));
+        }
+        errors.finish()
+    }
+
     pub fn validate_list_for_by_columns(&self) -> darling::Result<()> {
         let mut errors = darling::Error::accumulator();
         for col in self.all.iter().filter(|c| c.opts.list_for()) {
@@ -512,6 +531,7 @@ impl Column {
                 forgettable: false,
                 scope: false,
                 list_by: Some(true),
+                cursor: None,
                 find_by: Some(true),
                 nullable: None,
                 list_for_opts: None,
@@ -540,6 +560,7 @@ impl Column {
                 forgettable: false,
                 scope: false,
                 list_by: Some(true),
+                cursor: None,
                 find_by: Some(false),
                 nullable: None,
                 list_for_opts: None,
@@ -603,6 +624,12 @@ impl Column {
     /// cursor `WHERE` clause in [`Self::condition`].
     pub fn is_nullable_column(&self) -> bool {
         self.is_optional() || self.opts.nullable()
+    }
+
+    /// How much static SQL the cursor-pagination fns generate for this sort
+    /// column. Defaults to [`CursorPagination::Sargable`].
+    pub fn cursor_pagination(&self) -> CursorPagination {
+        self.opts.cursor.unwrap_or_default()
     }
 
     pub fn name(&self) -> &syn::Ident {
@@ -751,6 +778,34 @@ fn option_inner(ty: &syn::Type) -> Option<syn::Type> {
     None
 }
 
+/// Cursor-pagination SQL mode for a `list_by` column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CursorPagination {
+    /// One static, sargable query per cursor state x direction (default):
+    /// page 1 and each cursor shape get their own index-friendly SQL text.
+    #[default]
+    Sargable,
+    /// A single catch-all COALESCE query per direction: same result
+    /// semantics as the per-state queries (it is the predicate the
+    /// `AfterMaybeNull` state and pre-0.11.9 versions use everywhere), but
+    /// non-sargable — the cursor predicate defeats composite-index
+    /// extraction. Halves-to-thirds the generated query surface (and thus
+    /// compile time) for the column.
+    CatchAll,
+}
+
+impl FromMeta for CursorPagination {
+    fn from_string(value: &str) -> darling::Result<Self> {
+        match value {
+            "sargable" => Ok(Self::Sargable),
+            "catch_all" => Ok(Self::CatchAll),
+            other => Err(darling::Error::custom(format!(
+                "unknown cursor pagination mode '{other}'; expected \"sargable\" or \"catch_all\""
+            ))),
+        }
+    }
+}
+
 #[derive(PartialEq, FromMeta)]
 struct ColumnOpts {
     ty: syn::Type,
@@ -770,6 +825,14 @@ struct ColumnOpts {
     find_by: Option<bool>,
     #[darling(default)]
     list_by: Option<bool>,
+    /// Cursor-pagination SQL mode for this sort column: `cursor =
+    /// "sargable"` (default) emits one static, index-friendly query per
+    /// cursor state x direction; `cursor = "catch_all"` emits a single
+    /// catch-all COALESCE query per direction — identical result semantics
+    /// with a fraction of the generated code (compile time), at the cost of
+    /// a non-sargable cursor predicate. Use for cold list paths.
+    #[darling(default)]
+    cursor: Option<CursorPagination>,
     /// Opt-in flag for columns whose Rust type is not syntactically `Option<T>`
     /// but whose underlying SQL column is nullable. When set, the macro emits
     /// the same nullable-aware cursor SQL (`IS NOT DISTINCT FROM`, `NULLS
@@ -801,6 +864,7 @@ impl ColumnOpts {
             scope: false,
             find_by: None,
             list_by: None,
+            cursor: None,
             nullable: None,
             list_for_opts: None,
             parent_opts: None,
@@ -1135,5 +1199,59 @@ mod tests {
             .expect("Failed to parse Column");
         assert_eq!(column.name().to_string(), "job_type");
         assert_eq!(column.custom_constraint(), Some("idx_unique_job_type"));
+    }
+
+    #[test]
+    fn cursor_pagination_defaults_to_sargable() {
+        let input: syn::Meta = parse_quote!(thing(ty = "String", list_by));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert!(values.list_by());
+        assert!(values.cursor.is_none());
+
+        let column = Column::new(parse_quote!(thing), syn::parse_str("String").unwrap());
+        assert_eq!(column.cursor_pagination(), CursorPagination::Sargable);
+    }
+
+    #[test]
+    fn cursor_pagination_catch_all_parses() {
+        let input: syn::Meta = parse_quote!(thing(ty = "String", list_by, cursor = "catch_all"));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert_eq!(values.cursor, Some(CursorPagination::CatchAll));
+
+        let input: syn::Meta = parse_quote!(thing(ty = "String", list_by, cursor = "sargable"));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert!(values.cursor == Some(CursorPagination::Sargable));
+    }
+
+    #[test]
+    fn cursor_pagination_rejects_unknown_mode() {
+        let input: syn::Meta = parse_quote!(thing(ty = "String", list_by, cursor = "bogus"));
+        let err = match ColumnOpts::from_meta(&input) {
+            Ok(_) => panic!("expected parse error for unknown cursor mode"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("bogus"),
+            "error should mention the mode: {err}"
+        );
+    }
+
+    #[test]
+    fn cursor_pagination_requires_list_by() {
+        let id_ident: syn::Ident = parse_quote!(TestId);
+        let input: syn::Meta = parse_quote!(thing(ty = "String", cursor = "catch_all"));
+        let opts = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        let col = Column {
+            name: parse_quote!(thing),
+            opts,
+        };
+        let columns = Columns::new(&id_ident, vec![col]);
+        let result = columns.validate_cursor_pagination();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("list_by"),
+            "error should mention list_by: {err}"
+        );
     }
 }

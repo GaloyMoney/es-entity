@@ -121,3 +121,49 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+## Cursor pagination SQL modes
+
+By default every `list_by` sort column gets **sargable per-cursor-state
+SQL**: one static query per cursor state (page 1 / cursor on a value /
+cursor on NULL) per direction, so the cursor predicate is always a bare
+`(col, id)` row comparison that rides a composite index. The price is
+generated code — every one of those queries is a compile-time-checked
+`es_query!` that downstream builds must type-check, optimize and (under
+`lto = "fat"`) re-optimize:
+
+| column shape | sargable (default) | `cursor = "catch_all"` |
+|---|---|---|
+| non-nullable sort column | 2 states x 2 directions = 4 queries | 2 queries |
+| nullable (`Option<T>`) sort column | 3 states x 2 directions = 6 queries | 2 queries |
+
+(per `list_by_*` fn variant; `list_for_*_by_<column>` and
+`list_for_filters` pagination by the column follow the same mode, and
+scoped repos double both columns of the table.)
+
+For cold list paths you can trade the index-friendly predicate for less
+generated code with `cursor = "catch_all"`:
+
+```rust,ignore
+#[derive(EsRepo)]
+#[es_repo(
+    entity = "User",
+    columns(
+        name(ty = "String", list_by),
+        // one catch-all COALESCE query per direction instead of the
+        // per-state matrix — identical result semantics, non-sargable
+        // cursor predicate, fraction of the compile-time cost
+        nickname(ty = "Option<String>", list_by, cursor = "catch_all")
+    )
+)]
+pub struct Users {
+    pool: sqlx::PgPool
+}
+```
+
+The catch-all mode returns exactly the same rows in the same order — it
+uses the all-cases `COALESCE` predicate that handles page 1, cursors on
+values and cursors on NULL rows in one query per direction. Only the
+query plan changes: the `COALESCE(..., $ IS NULL)` fallback defeats
+composite-index extraction, so prefer the default sargable mode for hot
+paths and large tables.

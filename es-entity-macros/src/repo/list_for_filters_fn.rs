@@ -669,10 +669,11 @@ impl<'a> ListForFiltersFn<'a> {
                         }
                     }
 
-                    for cursor_state in cursor_struct.cursor_states() {
-                        let cursor_patterns = cursor_struct.state_pattern_elems(*cursor_state);
+                    for cursor_variant in cursor_struct.cursor_variants() {
+                        let cursor_patterns = cursor_struct.variant_pattern_elems(cursor_variant);
                         let pattern = quote! { (#(#filter_patterns,)* #(#cursor_patterns,)*) };
-                        let cursor_args = cursor_struct.cursor_arg_tokens_for_state(*cursor_state);
+                        let cursor_args =
+                            cursor_struct.cursor_arg_tokens_for_variant(cursor_variant);
                         let args = quote! {
                             #filter_args
                             (first + 1) as i64,
@@ -681,8 +682,8 @@ impl<'a> ListForFiltersFn<'a> {
 
                         for ascending in [true, false] {
                             let mut conditions = filter_conditions.clone();
-                            if let Some(condition) = cursor_struct.condition_for_state(
-                                *cursor_state,
+                            if let Some(condition) = cursor_struct.condition_for_variant(
+                                cursor_variant,
                                 param_idx - 1,
                                 ascending,
                             ) {

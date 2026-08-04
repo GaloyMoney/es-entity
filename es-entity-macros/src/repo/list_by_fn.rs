@@ -30,6 +30,18 @@ pub enum CursorState {
     AfterMaybeNull,
 }
 
+/// A cursor-query variant to generate for a sort column: one per
+/// [`CursorState`] in the default sargable mode, or a single catch-all
+/// variant when the column sets `cursor = "catch_all"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CursorVariant {
+    State(CursorState),
+    /// One query per direction using the all-cases COALESCE predicate —
+    /// same semantics as the per-state queries, non-sargable, but a
+    /// fraction of the generated code.
+    CatchAll,
+}
+
 /// Assemble a `SELECT ... [WHERE ...] ORDER BY ... LIMIT $n` query string
 /// from individual predicates.
 pub fn assemble_select(
@@ -159,6 +171,57 @@ impl CursorStruct<'_> {
                 "COALESCE(({0}, id) {comp} (${column_offset}, ${id_offset}), ${id_offset} IS NULL)",
                 self.column.name(),
             )
+        }
+    }
+
+    /// The cursor-query variants to generate for this sort column:
+    /// one per [`CursorState`] in sargable mode (default), or a single
+    /// [`CursorVariant::CatchAll`] when the column sets
+    /// `cursor = "catch_all"`.
+    pub fn cursor_variants(&self) -> Vec<CursorVariant> {
+        match self.column.cursor_pagination() {
+            CursorPagination::CatchAll => vec![CursorVariant::CatchAll],
+            CursorPagination::Sargable => self
+                .cursor_states()
+                .iter()
+                .map(|s| CursorVariant::State(*s))
+                .collect(),
+        }
+    }
+
+    /// The cursor predicate for a variant, or `None` when the variant
+    /// needs no predicate ([`CursorState::First`]). See
+    /// [`Self::condition_for_state`].
+    pub fn condition_for_variant(
+        &self,
+        variant: CursorVariant,
+        offset: u32,
+        ascending: bool,
+    ) -> Option<String> {
+        match variant {
+            CursorVariant::CatchAll => Some(self.condition(offset, ascending)),
+            CursorVariant::State(state) => self.condition_for_state(state, offset, ascending),
+        }
+    }
+
+    /// Cursor value bindings (without the `LIMIT` binding) for a variant.
+    pub fn cursor_arg_tokens_for_variant(&self, variant: CursorVariant) -> TokenStream {
+        match variant {
+            CursorVariant::CatchAll => self.cursor_arg_tokens(),
+            CursorVariant::State(state) => self.cursor_arg_tokens_for_state(state),
+        }
+    }
+
+    /// Pattern elements matching [`Self::state_scrutinee_elems`] for one
+    /// variant. The catch-all variant ignores the cursor-shape scrutinee.
+    pub fn variant_pattern_elems(&self, variant: CursorVariant) -> Vec<TokenStream> {
+        match variant {
+            CursorVariant::CatchAll => self
+                .state_scrutinee_elems()
+                .iter()
+                .map(|_| quote! { _ })
+                .collect(),
+            CursorVariant::State(state) => self.state_pattern_elems(state),
         }
     }
 
@@ -293,7 +356,7 @@ impl CursorStruct<'_> {
         }
     }
 
-    fn cursor_arg_tokens(&self) -> TokenStream {
+    pub fn cursor_arg_tokens(&self) -> TokenStream {
         let id = self.id;
 
         if self.column.is_id() {
@@ -607,14 +670,14 @@ impl ToTokens for ListByFn<'_> {
             let build_query_arms = |scope: Option<&ScopeInfo>| -> TokenStream {
                 let mut query_arms = TokenStream::new();
                 let offset = if scope.is_some() { 1 } else { 0 };
-                for state in cursor.cursor_states() {
+                for variant in cursor.cursor_variants() {
                     for ascending in [true, false] {
                         let mut conditions: Vec<String> = Vec::new();
                         if let Some(scope) = scope {
                             conditions.push(scope.predicate(1));
                         }
                         if let Some(condition) =
-                            cursor.condition_for_state(*state, offset, ascending)
+                            cursor.condition_for_variant(variant, offset, ascending)
                         {
                             conditions.push(format!("({condition})"));
                         }
@@ -630,7 +693,7 @@ impl ToTokens for ListByFn<'_> {
                             &cursor.order_by(ascending),
                             offset + 1,
                         );
-                        let cursor_args = cursor.cursor_arg_tokens_for_state(*state);
+                        let cursor_args = cursor.cursor_arg_tokens_for_variant(variant);
                         let scope_args = scope.map(|s| s.arg_tokens()).unwrap_or_default();
                         let args = quote! {
                             #scope_args
@@ -643,7 +706,7 @@ impl ToTokens for ListByFn<'_> {
                         } else {
                             quote! { es_entity::ListDirection::Descending }
                         };
-                        let state_pattern = cursor.state_pattern_elems(*state);
+                        let state_pattern = cursor.variant_pattern_elems(variant);
                         query_arms.append_all(quote! {
                             (#direction_pattern, #(#state_pattern),*) => {
                                 #es_query_call.fetch_n(op, first).await?
@@ -1389,5 +1452,115 @@ mod tests {
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
+    }
+}
+
+#[cfg(test)]
+mod catch_all_tests {
+    use super::*;
+    use darling::FromMeta;
+    use proc_macro2::Span;
+    use syn::Ident;
+
+    fn catch_all_optional_column() -> Column {
+        let input: syn::Meta =
+            syn::parse_quote!(score(ty = "Option<i32>", list_by, cursor = "catch_all"));
+        Column::from_nested_meta(&darling::ast::NestedMeta::Meta(input))
+            .expect("Failed to parse Column")
+    }
+
+    #[test]
+    fn catch_all_column_has_single_variant() {
+        let id_type = Ident::new("EntityId", Span::call_site());
+        let entity = Ident::new("Entity", Span::call_site());
+        let column = catch_all_optional_column();
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        let cursor = CursorStruct {
+            column: &column,
+            id: &id_type,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        assert_eq!(cursor.cursor_variants(), vec![CursorVariant::CatchAll]);
+        // The catch-all variant reuses the all-cases COALESCE predicate
+        assert_eq!(
+            cursor.condition_for_variant(CursorVariant::CatchAll, 0, true),
+            Some(cursor.condition(0, true))
+        );
+        // ... and ignores the cursor-shape scrutinee (nullable optional
+        // column -> 2 scrutinee elems -> 2 wildcards)
+        let patterns = cursor.variant_pattern_elems(CursorVariant::CatchAll);
+        assert_eq!(patterns.len(), 2);
+        for pattern in patterns {
+            assert_eq!(pattern.to_string(), "_");
+        }
+    }
+
+    #[test]
+    fn sargable_column_has_per_state_variants() {
+        let id_type = Ident::new("EntityId", Span::call_site());
+        let entity = Ident::new("Entity", Span::call_site());
+        let input: syn::Meta = syn::parse_quote!(score(ty = "Option<i32>", list_by));
+        let column = Column::from_nested_meta(&darling::ast::NestedMeta::Meta(input))
+            .expect("Failed to parse Column");
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        let cursor = CursorStruct {
+            column: &column,
+            id: &id_type,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+
+        assert_eq!(
+            cursor.cursor_variants(),
+            vec![
+                CursorVariant::State(CursorState::First),
+                CursorVariant::State(CursorState::After),
+                CursorVariant::State(CursorState::AfterNull),
+            ]
+        );
+    }
+
+    #[test]
+    fn list_by_fn_catch_all_emits_one_query_per_direction() {
+        let id_type = Ident::new("EntityId", Span::call_site());
+        let entity = Ident::new("Entity", Span::call_site());
+        let query_error = syn::Ident::new("EntityQueryError", Span::call_site());
+        let column = catch_all_optional_column();
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        let persist_fn = ListByFn {
+            ignore_prefix: None,
+            column: &column,
+            id: &id_type,
+            entity: &entity,
+            table_name: "entities",
+            query_error,
+            delete: DeleteOption::SoftWithoutQueries,
+            cursor_mod,
+            any_nested: false,
+            post_hydrate_error: None,
+            forgettable_table_name: None,
+            scope: None,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        persist_fn.to_tokens(&mut tokens);
+        let generated = tokens.to_string();
+
+        // 1 catch-all variant x 2 directions = 2 static queries (vs 3
+        // states x 2 = 6 in sargable mode)
+        // (token-stream stringification puts a space before `!`)
+        assert_eq!(generated.matches("es_query !").count(), 2);
+        // catch-all COALESCE predicate for the nullable column (ASC form)
+        assert!(generated.contains("COALESCE(id > $2, true)"));
+        // NULLS FIRST/LAST ordering is preserved
+        assert!(generated.contains("NULLS FIRST"));
+        assert!(generated.contains("NULLS LAST"));
     }
 }
