@@ -377,6 +377,11 @@ impl<'a> ErrorTypes<'a> {
             #[derive(Debug)]
             pub enum #create_error {
                 Sqlx(sqlx::Error),
+                /// **Security note:** `value` is extracted from the PostgreSQL error
+                /// detail and may contain PII (e.g. an email address). Exposing it to
+                /// untrusted API clients enables user enumeration and may place PII in
+                /// logs — prefer the `was_duplicate` / `was_duplicate_by` helpers at
+                /// trust boundaries.
                 ConstraintViolation { column: Option<#column_enum>, value: Option<String>, inner: sqlx::Error },
                 ConcurrentModification,
                 HydrationError(es_entity::EntityHydrationError),
@@ -448,6 +453,10 @@ impl<'a> ErrorTypes<'a> {
                     matches!(self, Self::ConstraintViolation { column: Some(c), .. } if *c == column)
                 }
 
+                /// Returns the conflicting value extracted from the database error.
+                ///
+                /// **Security note:** may contain PII and enables user enumeration if
+                /// returned to untrusted clients. Handle with care.
                 pub fn duplicate_value(&self) -> Option<&str> {
                     match self {
                         Self::ConstraintViolation { value: Some(v), .. } => Some(v.as_str()),
@@ -628,6 +637,11 @@ impl<'a> ErrorTypes<'a> {
             #[derive(Debug)]
             pub enum #modify_error {
                 Sqlx(sqlx::Error),
+                /// **Security note:** `value` is extracted from the PostgreSQL error
+                /// detail and may contain PII (e.g. an email address). Exposing it to
+                /// untrusted API clients enables user enumeration and may place PII in
+                /// logs — prefer the `was_duplicate` / `was_duplicate_by` helpers at
+                /// trust boundaries.
                 ConstraintViolation { column: Option<#column_enum>, value: Option<String>, inner: sqlx::Error },
                 ConcurrentModification,
                 #pp_variant
@@ -687,6 +701,10 @@ impl<'a> ErrorTypes<'a> {
                     matches!(self, Self::ConstraintViolation { column: Some(c), .. } if *c == column)
                 }
 
+                /// Returns the conflicting value extracted from the database error.
+                ///
+                /// **Security note:** may contain PII and enables user enumeration if
+                /// returned to untrusted clients. Handle with care.
                 pub fn duplicate_value(&self) -> Option<&str> {
                     match self {
                         Self::ConstraintViolation { value: Some(v), .. } => Some(v.as_str()),
