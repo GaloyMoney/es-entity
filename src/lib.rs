@@ -46,6 +46,7 @@ pub mod prelude {
     pub use serde;
     pub use serde_json;
     pub use sqlx;
+    pub use tokio;
     pub use uuid;
 
     #[cfg(feature = "json-schema")]

@@ -43,15 +43,29 @@ pub fn make(
 
     let any_error = args.any_error.unwrap_or(false);
 
+    // Exponential backoff between attempts: 25ms, 50ms, 100ms, ... capped at 1s.
+    // Sleeping before the retry avoids hammering the database in a hot loop
+    // while the conflicting writer is still finishing its transaction.
+    let compute_backoff = quote::quote! {
+        let backoff = std::time::Duration::from_millis(25u64 << (n - 1).min(6))
+            .min(std::time::Duration::from_secs(1));
+    };
+    let sleep_backoff = quote::quote! {
+        es_entity::prelude::tokio::time::sleep(backoff).await;
+    };
+
     #[cfg(feature = "instrument")]
     let err_match = if any_error {
         quote::quote! {
             if result.is_err() {
+                #compute_backoff
                 tracing::warn!(
                     attempt = n,
                     max_retries = max_retries,
+                    backoff_ms = backoff.as_millis() as u64,
                     "Error detected, retrying"
                 );
+                #sleep_backoff
                 continue;
             }
         }
@@ -59,11 +73,14 @@ pub fn make(
         quote::quote! {
             if let Err(e) = result.as_ref() {
                 if e.was_concurrent_modification() {
+                    #compute_backoff
                     tracing::warn!(
                         attempt = n,
                         max_retries = max_retries,
+                        backoff_ms = backoff.as_millis() as u64,
                         "Concurrent modification detected, retrying"
                     );
+                    #sleep_backoff
                     continue;
                 }
             }
@@ -74,6 +91,8 @@ pub fn make(
     let err_match = if any_error {
         quote::quote! {
             if result.is_err() {
+                #compute_backoff
+                #sleep_backoff
                 continue;
             }
         }
@@ -81,6 +100,8 @@ pub fn make(
         quote::quote! {
             if let Err(e) = result.as_ref() {
                 if e.was_concurrent_modification() {
+                    #compute_backoff
+                    #sleep_backoff
                     continue;
                 }
             }
@@ -197,6 +218,9 @@ pub fn make(
 //                     }
 //                     if let Err(e) = result.as_ref() {
 //                         if e.was_concurrent_modification() {
+//                             let backoff = std::time::Duration::from_millis(25u64 << (n - 1).min(6))
+//                                 .min(std::time::Duration::from_secs(1));
+//                             es_entity::prelude::tokio::time::sleep(backoff).await;
 //                             continue;
 //                         }
 //                     }
