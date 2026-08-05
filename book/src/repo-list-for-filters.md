@@ -74,25 +74,27 @@ SELECT id FROM user_documents
   ORDER BY id ASC LIMIT $3
 ```
 
-#### Compile-time cost — `sargable_filters` is opt-in
+#### Specialization is driven by your physical indexes
 
-The specialized matrix emits one `sqlx::query!` per filter combination × cursor state × direction. For an entity with N `list_for` columns that grows as 2^N (3^N with optional columns), and across many repos this can add thousands of compile-time-checked queries — a large release-codegen tax. The matrix is therefore **off by default** and the catch-all COALESCE query above is used for the multi-filter case.
+A multi-filter combination gets a specialized sargable query only when a matching **composite index physically exists** — because sargable and catch-all SQL differ only when there is an index to ride. The derive discovers your indexes by parsing the committed migration `.sql` files at compile time (the migrations directory is the source of truth, exactly as `sqlx::migrate!` reads it), so there is nothing to declare and no per-repo flag: a combination filtering on the (order-insensitive) columns `C` and paginating by sort column `S` is specialized iff some index's leading key columns are a permutation of `C` immediately followed by `S`. Everything else uses the catch-all COALESCE query above (correct, just not sargable). Adding a `CREATE INDEX` migration is the single, PR-visible way to expand the specialized surface — build cost tracks your real indexes, never `2^N`.
 
-To opt in per repo (only for entities whose multi-filter list queries are hot paths that benefit from index usage), set `sargable_filters` on the `#[es_repo(...)]` attribute:
+For scoped repos the scope column is auto-prefixed: the scoped (`Only`) arm looks for `(scope_col, C…, S)` and the unscoped (`All`) arm for `(C…, S)`, matched independently against the catalog.
+
+Single-filter (`list_for_{col}_by_{sort}`) and no-filter (`list_by_{sort}`) queries, and all cursor pagination, are always emitted as a single unified query regardless of the catalog — sargable when the matching `(…, id)` index exists, harmlessly equivalent when it does not.
+
+**Resolving the migrations directory.** By default the derive reads `$CARGO_MANIFEST_DIR/migrations`. When your migrations live in a different crate (e.g. a `core/*` crate whose migrations are in `../../app/migrations`), point the derive at them from a `build.rs`:
 
 ```rust,ignore
-#[es_repo(
-    entity = "Transfer",
-    columns(
-        account_id(ty = "AccountId", list_for(by(created_at))),
-        status(ty = "String", list_for(by(created_at))),
-    ),
-    sargable_filters,
-)]
-pub struct Transfers { pool: PgPool }
+// build.rs
+fn main() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/migrations");
+    let dir = std::fs::canonicalize(&dir).unwrap();
+    println!("cargo:rustc-env=ES_ENTITY_MIGRATIONS_DIR={}", dir.display());
+    println!("cargo:rerun-if-changed={}", dir.display());
+}
 ```
 
-Single-filter (`list_for_{col}_by_{sort}`) and no-filter (`list_by_{sort}`) queries are always sargable and cheap (O(N)), so they are generated regardless of this flag. Only the multi-filter combination matrix is gated.
+The `ES_ENTITY_MIGRATIONS_DIR` env var (or a per-repo `#[es_repo(migrations_dir = "…")]` override) takes precedence over the default. With no directory resolved, the catalog is empty and every multi-filter combination falls back to the COALESCE query.
 
 ### A Dispatch Function
 
@@ -100,7 +102,7 @@ The `list_for_filters` function matches on the sort column and intelligently del
 
 - **No filters set** (`Filters::default()`): proxies to `list_by_{sort}` (simple query, full index usage)
 - **Exactly one filter set**: proxies to `list_for_{col}_by_{sort}` (single-column WHERE, full index usage)
-- **Two or more filters set**: uses the per-sort specialized query matching the exact filter combination (sargable), falling back to the COALESCE-based SQL only for combinations beyond the specialization cap
+- **Two or more filters set**: uses the per-sort specialized query matching the exact filter combination when a composite index backs it (sargable), falling back to the COALESCE-based SQL for un-indexed combinations
 
 ## Important Notes
 

@@ -242,13 +242,13 @@ pub struct RepositoryOptions {
     #[darling(default, rename = "forgettable_tbl")]
     forgettable_table_name: Option<String>,
 
-    /// Opt into the sargable per-state/per-combination SQL matrix for multi-filter
-    /// list queries. Defaults to `false`: only the catch-all `COALESCE` query is
-    /// emitted, keeping compile times low. Set `sargable_filters` to emit a
-    /// dedicated indexed query per filter combination (the #162 feature) for
-    /// repos whose multi-filter list queries are hot paths.
+    /// Override the migrations directory the index catalog is derived from.
+    /// Resolved relative to `$CARGO_MANIFEST_DIR`. Takes effect only when the
+    /// `ES_ENTITY_MIGRATIONS_DIR` environment variable (set by a `build.rs`
+    /// recipe, or directly) is not present. Defaults to
+    /// `$CARGO_MANIFEST_DIR/migrations` when that directory exists.
     #[darling(default)]
-    sargable_filters: Option<bool>,
+    migrations_dir: Option<String>,
 }
 
 impl RepositoryOptions {
@@ -334,8 +334,36 @@ impl RepositoryOptions {
             .expect("Events table name is not set")
     }
 
-    pub fn sargable_filters(&self) -> bool {
-        self.sargable_filters.unwrap_or(false)
+    /// Derive the physical index catalog for this repo's table from the
+    /// committed migration files, used to decide which `list_for_filters`
+    /// combinations get a specialized sargable query. Resolution order:
+    ///   1. `ES_ENTITY_MIGRATIONS_DIR` env var (a `build.rs` `rustc-env`, or a
+    ///      plain env var — both visible via `std::env::var` at expansion),
+    ///   2. the `migrations_dir` attribute (relative to `$CARGO_MANIFEST_DIR`),
+    ///   3. the default `$CARGO_MANIFEST_DIR/migrations` when it exists.
+    ///
+    /// When no directory resolves, the catalog is empty — every combination
+    /// falls back to the correct (non-sargable) `COALESCE` query, matching the
+    /// pre-`indexes` default.
+    pub fn index_catalog(&self) -> crate::index_catalog::IndexCatalog {
+        use crate::index_catalog::IndexCatalog;
+        use std::path::{Path, PathBuf};
+
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok();
+        let dir: Option<PathBuf> = if let Ok(dir) = std::env::var("ES_ENTITY_MIGRATIONS_DIR") {
+            Some(PathBuf::from(dir))
+        } else if let (Some(rel), Some(manifest)) = (&self.migrations_dir, &manifest_dir) {
+            Some(Path::new(manifest).join(rel))
+        } else {
+            manifest_dir.map(|m| Path::new(&m).join("migrations"))
+        };
+
+        match dir {
+            Some(dir) if dir.is_dir() => {
+                IndexCatalog::from_migrations_dir(&dir).unwrap_or_default()
+            }
+            _ => IndexCatalog::default(),
+        }
     }
 
     pub fn cursor_mod(&self) -> syn::Ident {
