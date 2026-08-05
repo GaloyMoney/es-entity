@@ -26,3 +26,8 @@ darling = "0.23"
 pluralizer = "0.5"
 convert_case = "0.11"
 regex = "1.12"
+# Minimal features: `recursive-protection` (default) would pull in
+# recursive -> stacker -> psm (C + build.rs) + libc and the
+# `Apache-2.0 WITH LLVM-exception` license. Migrations are shallow DDL, so the
+# stack-overflow guard is unnecessary; this leaves `log` as the only new dep.
+sqlparser = { version = "0.62", default-features = false, features = ["std"] }

@@ -1,5 +1,5 @@
-//! A best-effort PostgreSQL migration schema simulator that computes the final
-//! set of physical composite indexes per table.
+//! A PostgreSQL migration schema simulator that computes the final set of
+//! physical composite indexes per table.
 //!
 //! This is the `IndexCatalog` source consumed by `#[derive(EsRepo)]` to decide
 //! which `list_for_filters` combinations get a specialized sargable query (a
@@ -9,14 +9,26 @@
 //! (precedent: `sqlx::migrate!`), so codegen is a deterministic function of the
 //! checkout.
 //!
-//! It is intentionally a targeted parser over the controlled migration subset
-//! (`CREATE [UNIQUE] INDEX`, `CREATE TABLE` inline/table-level `PRIMARY KEY` /
-//! `UNIQUE`, `ALTER TABLE ADD/DROP CONSTRAINT`, `DROP INDEX`, `DROP TABLE`), not
-//! a full SQL grammar: unrecognized statements are skipped, and a test-DB
-//! verification lint (see `tests/`) catches any gap by diffing the parsed
-//! catalog against `pg_indexes`.
+//! Each statement is parsed with `sqlparser` (the PostgreSQL dialect) and the
+//! relevant DDL — `CREATE [UNIQUE] INDEX`, `CREATE TABLE` inline/table-level
+//! `PRIMARY KEY` / `UNIQUE`, `ALTER TABLE ADD/DROP CONSTRAINT`, `DROP INDEX`,
+//! `DROP TABLE` — is applied in filename order to a simulated schema. Statements
+//! are split first and parsed **individually** (best effort): a statement
+//! `sqlparser` cannot parse — an extension, a `CREATE FUNCTION` body, a
+//! dialect quirk — is skipped without discarding the rest of the file, and the
+//! test-DB verification lint (see `tests/index_catalog_verification.rs`) catches
+//! any resulting gap by comparing against `pg_indexes`.
 
 use std::path::Path;
+
+use sqlparser::{
+    ast::{
+        AlterTableOperation, ColumnOption, Expr, IndexColumn, ObjectName, ObjectType, Statement,
+        TableConstraint,
+    },
+    dialect::PostgreSqlDialect,
+    parser::Parser,
+};
 
 /// One physical composite index known for a table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,11 +89,18 @@ impl IndexCatalog {
         let mut sorted: Vec<&(String, String)> = files.iter().collect();
         sorted.sort_by(|a, b| a.0.cmp(&b.0));
 
+        let dialect = PostgreSqlDialect {};
         let mut entries: Vec<IndexEntry> = Vec::new();
         for (_, sql) in sorted {
             let stripped = strip_comments(sql);
             for statement in split_statements(&stripped) {
-                apply_statement(&mut entries, &statement);
+                // Parse each statement individually so one unparseable statement
+                // does not discard the rest of the file.
+                if let Ok(parsed) = Parser::parse_sql(&dialect, &statement) {
+                    for stmt in &parsed {
+                        apply_statement(&mut entries, stmt);
+                    }
+                }
             }
         }
         entries.dedup();
@@ -117,19 +136,148 @@ impl IndexCatalog {
     }
 }
 
-/// One token of the targeted DDL tokenizer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Tok {
-    /// An identifier / keyword / number / operator run (lowercased). Quoted
-    /// identifiers are folded in as continuations, string literals collapse to
-    /// the placeholder `''`.
-    Word(String),
-    /// A top-level comma.
-    Comma,
-    /// A balanced `( ... )` group.
-    Group(Vec<Tok>),
+// ── AST → catalog ───────────────────────────────────────────────────────────
+
+fn apply_statement(entries: &mut Vec<IndexEntry>, stmt: &Statement) {
+    match stmt {
+        Statement::CreateIndex(create) => {
+            let Some(table) = last_ident(&create.table_name) else {
+                return;
+            };
+            push_entry(
+                entries,
+                IndexEntry {
+                    table,
+                    columns: create.columns.iter().map(index_column_name).collect(),
+                    unique: create.unique,
+                    name: create.name.as_ref().and_then(last_ident),
+                    partial: create.predicate.is_some(),
+                },
+            );
+        }
+        Statement::CreateTable(create) => {
+            let Some(table) = last_ident(&create.name) else {
+                return;
+            };
+            // Inline column `PRIMARY KEY` / `UNIQUE` -> single-column unique index.
+            for column in &create.columns {
+                let inline_unique = column.options.iter().any(|opt| {
+                    matches!(
+                        opt.option,
+                        ColumnOption::PrimaryKey(_) | ColumnOption::Unique(_)
+                    )
+                });
+                if inline_unique {
+                    push_entry(
+                        entries,
+                        IndexEntry {
+                            table: table.clone(),
+                            columns: vec![column.name.value.to_lowercase()],
+                            unique: true,
+                            name: None,
+                            partial: false,
+                        },
+                    );
+                }
+            }
+            // Table-level `PRIMARY KEY (...)` / `UNIQUE (...)` constraints.
+            for constraint in &create.constraints {
+                if let Some(entry) = constraint_entry(&table, constraint) {
+                    push_entry(entries, entry);
+                }
+            }
+        }
+        Statement::AlterTable(alter) => {
+            let Some(table) = last_ident(&alter.name) else {
+                return;
+            };
+            for op in &alter.operations {
+                match op {
+                    AlterTableOperation::AddConstraint { constraint, .. } => {
+                        if let Some(entry) = constraint_entry(&table, constraint) {
+                            push_entry(entries, entry);
+                        }
+                    }
+                    AlterTableOperation::DropConstraint { name, .. } => {
+                        let name = name.value.to_lowercase();
+                        entries.retain(|e| e.name.as_deref() != Some(name.as_str()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Statement::Drop {
+            object_type, names, ..
+        } => match object_type {
+            ObjectType::Index => {
+                for name in names {
+                    if let Some(name) = last_ident(name) {
+                        entries.retain(|e| e.name.as_deref() != Some(name.as_str()));
+                    }
+                }
+            }
+            ObjectType::Table => {
+                for name in names {
+                    if let Some(table) = last_ident(name) {
+                        entries.retain(|e| e.table != table);
+                    }
+                }
+            }
+            _ => {}
+        },
+        _ => {}
+    }
 }
 
+/// A `UNIQUE` / `PRIMARY KEY` table constraint as a unique index entry; other
+/// constraint kinds (foreign key, check, …) yield `None`.
+fn constraint_entry(table: &str, constraint: &TableConstraint) -> Option<IndexEntry> {
+    let (name, columns) = match constraint {
+        TableConstraint::PrimaryKey(pk) => (&pk.name, &pk.columns),
+        TableConstraint::Unique(u) => (&u.name, &u.columns),
+        _ => return None,
+    };
+    Some(IndexEntry {
+        table: table.to_string(),
+        columns: columns.iter().map(index_column_name).collect(),
+        unique: true,
+        name: name.as_ref().map(|i| i.value.to_lowercase()),
+        partial: false,
+    })
+}
+
+/// The last identifier of a (possibly schema-qualified) object name, lowercased.
+fn last_ident(name: &ObjectName) -> Option<String> {
+    name.0
+        .last()
+        .and_then(|part| part.as_ident())
+        .map(|ident| ident.value.to_lowercase())
+}
+
+/// The plain column name of an index key element (`ASC`/`DESC`/`NULLS` live in
+/// the ordering options, not the expression), or the opaque sentinel for an
+/// expression key.
+fn index_column_name(column: &IndexColumn) -> String {
+    match &column.column.expr {
+        Expr::Identifier(ident) => ident.value.to_lowercase(),
+        Expr::CompoundIdentifier(parts) => parts
+            .last()
+            .map(|ident| ident.value.to_lowercase())
+            .unwrap_or_else(|| OPAQUE_COLUMN.to_string()),
+        _ => OPAQUE_COLUMN.to_string(),
+    }
+}
+
+fn push_entry(entries: &mut Vec<IndexEntry>, entry: IndexEntry) {
+    if !entries.contains(&entry) {
+        entries.push(entry);
+    }
+}
+
+// ── statement splitting ─────────────────────────────────────────────────────
+
+/// Strip line (`-- …`) and block (`/* … */`) comments, preserving string
+/// literals verbatim, so a `;` inside a comment cannot split a statement.
 fn strip_comments(sql: &str) -> String {
     let chars: Vec<char> = sql.chars().collect();
     let mut out = String::with_capacity(sql.len());
@@ -147,7 +295,6 @@ fn strip_comments(sql: &str) -> String {
             }
             i += 2;
         } else if c == '\'' {
-            // Preserve string literals verbatim (may contain -- or /* etc.).
             out.push(c);
             i += 1;
             while i < chars.len() {
@@ -171,41 +318,51 @@ fn strip_comments(sql: &str) -> String {
     out
 }
 
-/// Split on top-level `;` (ignoring semicolons inside parens or string
-/// literals).
+/// Split on top-level `;`, ignoring semicolons inside `'…'` string literals and
+/// `$tag$…$tag$` dollar-quoted bodies (e.g. `CREATE FUNCTION`).
 fn split_statements(sql: &str) -> Vec<String> {
     let chars: Vec<char> = sql.chars().collect();
     let mut out = Vec::new();
     let mut cur = String::new();
-    let mut depth = 0i32;
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
-        match c {
-            '\'' => {
-                cur.push(c);
-                i += 1;
-                while i < chars.len() {
-                    cur.push(chars[i]);
-                    if chars[i] == '\'' {
-                        i += 1;
-                        break;
-                    }
+        if c == '\'' {
+            cur.push(c);
+            i += 1;
+            while i < chars.len() {
+                cur.push(chars[i]);
+                if chars[i] == '\'' {
                     i += 1;
+                    if i < chars.len() && chars[i] == '\'' {
+                        cur.push('\'');
+                        i += 1;
+                        continue;
+                    }
+                    break;
                 }
-                continue;
-            }
-            '(' => depth += 1,
-            ')' => depth -= 1,
-            ';' if depth <= 0 => {
-                if !cur.trim().is_empty() {
-                    out.push(cur.trim().to_string());
-                }
-                cur.clear();
                 i += 1;
-                continue;
             }
-            _ => {}
+            continue;
+        }
+        if c == '$'
+            && let Some(tag) = dollar_tag(&chars, i)
+        {
+            // Copy the whole dollar-quoted body verbatim, tags included.
+            let end = find_dollar_close(&chars, i + tag.len(), &tag);
+            for &ch in &chars[i..end] {
+                cur.push(ch);
+            }
+            i = end;
+            continue;
+        }
+        if c == ';' {
+            if !cur.trim().is_empty() {
+                out.push(cur.trim().to_string());
+            }
+            cur.clear();
+            i += 1;
+            continue;
         }
         cur.push(c);
         i += 1;
@@ -216,357 +373,32 @@ fn split_statements(sql: &str) -> Vec<String> {
     out
 }
 
-fn tokenize(s: &str) -> Vec<Tok> {
-    let chars: Vec<char> = s.chars().collect();
-    let (toks, _) = tokenize_from(&chars, 0, false);
-    toks
+/// If a `$tag$` (or `$$`) dollar-quote tag opens at `start`, return the tag
+/// including both `$` delimiters.
+fn dollar_tag(chars: &[char], start: usize) -> Option<String> {
+    debug_assert_eq!(chars[start], '$');
+    let mut j = start + 1;
+    while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+        j += 1;
+    }
+    if j < chars.len() && chars[j] == '$' {
+        Some(chars[start..=j].iter().collect())
+    } else {
+        None
+    }
 }
 
-fn tokenize_from(chars: &[char], mut i: usize, in_group: bool) -> (Vec<Tok>, usize) {
-    let mut out: Vec<Tok> = Vec::new();
-    let mut cur = String::new();
-    let flush = |cur: &mut String, out: &mut Vec<Tok>| {
-        if !cur.is_empty() {
-            out.push(Tok::Word(std::mem::take(cur)));
+/// Index just past the closing dollar-quote `tag`, searching from `from`.
+fn find_dollar_close(chars: &[char], from: usize, tag: &str) -> usize {
+    let tag: Vec<char> = tag.chars().collect();
+    let mut i = from;
+    while i + tag.len() <= chars.len() {
+        if chars[i..i + tag.len()] == tag[..] {
+            return i + tag.len();
         }
-    };
-    while i < chars.len() {
-        let c = chars[i];
-        match c {
-            '(' => {
-                flush(&mut cur, &mut out);
-                let (group, next) = tokenize_from(chars, i + 1, true);
-                out.push(Tok::Group(group));
-                i = next;
-            }
-            ')' if in_group => {
-                flush(&mut cur, &mut out);
-                return (out, i + 1);
-            }
-            ',' => {
-                flush(&mut cur, &mut out);
-                out.push(Tok::Comma);
-                i += 1;
-            }
-            '"' => {
-                // Quoted identifier: fold into the current word (so
-                // `public."My_Tbl"` becomes one `public.my_tbl` token).
-                i += 1;
-                while i < chars.len() && chars[i] != '"' {
-                    cur.push(chars[i].to_ascii_lowercase());
-                    i += 1;
-                }
-                i += 1; // closing quote
-            }
-            '\'' => {
-                flush(&mut cur, &mut out);
-                i += 1;
-                while i < chars.len() {
-                    if chars[i] == '\'' {
-                        i += 1;
-                        if i < chars.len() && chars[i] == '\'' {
-                            i += 1;
-                            continue;
-                        }
-                        break;
-                    }
-                    i += 1;
-                }
-                out.push(Tok::Word("''".to_string()));
-            }
-            c if c.is_whitespace() => {
-                flush(&mut cur, &mut out);
-                i += 1;
-            }
-            c => {
-                cur.push(c.to_ascii_lowercase());
-                i += 1;
-            }
-        }
-    }
-    flush(&mut cur, &mut out);
-    (out, i)
-}
-
-fn strip_schema(word: &str) -> String {
-    word.rsplit('.').next().unwrap_or(word).to_string()
-}
-
-fn as_word(tok: &Tok) -> Option<&str> {
-    match tok {
-        Tok::Word(w) => Some(w.as_str()),
-        _ => None,
-    }
-}
-
-/// Extract the ordered plain column names from an index/constraint key-column
-/// group, splitting on top-level commas and stripping `ASC`/`DESC`/`NULLS ...`.
-fn columns_from_group(group: &[Tok]) -> Vec<String> {
-    let mut columns = Vec::new();
-    for item in split_items(group) {
-        let has_group = item.iter().any(|t| matches!(t, Tok::Group(_)));
-        match item.first() {
-            Some(Tok::Word(w)) if !has_group => columns.push(strip_schema(w)),
-            _ => columns.push(OPAQUE_COLUMN.to_string()),
-        }
-    }
-    columns
-}
-
-/// Split a token slice on top-level commas.
-fn split_items(toks: &[Tok]) -> Vec<Vec<Tok>> {
-    let mut items = Vec::new();
-    let mut cur = Vec::new();
-    for tok in toks {
-        if matches!(tok, Tok::Comma) {
-            items.push(std::mem::take(&mut cur));
-        } else {
-            cur.push(tok.clone());
-        }
-    }
-    if !cur.is_empty() {
-        items.push(cur);
-    }
-    items
-}
-
-fn apply_statement(entries: &mut Vec<IndexEntry>, statement: &str) {
-    let toks = tokenize(statement);
-    let head: Vec<&str> = toks.iter().filter_map(as_word).take(2).collect();
-    match head.as_slice() {
-        ["create", "table"] => parse_create_table(entries, &toks),
-        ["create", "unique"] | ["create", "index"] => parse_create_index(entries, &toks),
-        ["alter", "table"] => parse_alter_table(entries, &toks),
-        ["drop", "index"] => parse_drop_index(entries, &toks),
-        ["drop", "table"] => parse_drop_table(entries, &toks),
-        _ => {}
-    }
-}
-
-fn parse_create_index(entries: &mut Vec<IndexEntry>, toks: &[Tok]) {
-    let mut i = 1; // past `create`
-    let unique = matches!(toks.get(i), Some(Tok::Word(w)) if w == "unique");
-    if unique {
         i += 1;
     }
-    // `index`
-    if !matches!(toks.get(i), Some(Tok::Word(w)) if w == "index") {
-        return;
-    }
-    i += 1;
-    // optional CONCURRENTLY / IF NOT EXISTS
-    while let Some(Tok::Word(w)) = toks.get(i) {
-        if matches!(w.as_str(), "concurrently" | "if" | "not" | "exists") {
-            i += 1;
-        } else {
-            break;
-        }
-    }
-    // optional index name (anything before `on`)
-    let mut name: Option<String> = None;
-    if let Some(Tok::Word(w)) = toks.get(i)
-        && w != "on"
-    {
-        name = Some(w.clone());
-        i += 1;
-    }
-    // `on`
-    if !matches!(toks.get(i), Some(Tok::Word(w)) if w == "on") {
-        return;
-    }
-    i += 1;
-    if matches!(toks.get(i), Some(Tok::Word(w)) if w == "only") {
-        i += 1;
-    }
-    let table = match toks.get(i) {
-        Some(Tok::Word(w)) => strip_schema(w),
-        _ => return,
-    };
-    i += 1;
-    if matches!(toks.get(i), Some(Tok::Word(w)) if w == "using") {
-        i += 2; // `using` + method
-    }
-    // key column group
-    let columns = match toks.get(i) {
-        Some(Tok::Group(g)) => columns_from_group(g),
-        _ => return,
-    };
-    let partial = toks[i..]
-        .iter()
-        .any(|t| matches!(t, Tok::Word(w) if w == "where"));
-    push_entry(
-        entries,
-        IndexEntry {
-            table,
-            columns,
-            unique,
-            name,
-            partial,
-        },
-    );
-}
-
-fn parse_create_table(entries: &mut Vec<IndexEntry>, toks: &[Tok]) {
-    let mut i = 2; // past `create table`
-    while let Some(Tok::Word(w)) = toks.get(i) {
-        if matches!(w.as_str(), "if" | "not" | "exists") {
-            i += 1;
-        } else {
-            break;
-        }
-    }
-    let table = match toks.get(i) {
-        Some(Tok::Word(w)) => strip_schema(w),
-        _ => return,
-    };
-    i += 1;
-    let body = match toks.get(i) {
-        Some(Tok::Group(g)) => g,
-        _ => return,
-    };
-    for item in split_items(body) {
-        parse_table_item(entries, &table, &item);
-    }
-}
-
-fn parse_table_item(entries: &mut Vec<IndexEntry>, table: &str, item: &[Tok]) {
-    let words: Vec<&str> = item.iter().filter_map(as_word).collect();
-    let first = match words.first() {
-        Some(w) => *w,
-        None => return,
-    };
-    // Table-level constraints.
-    match first {
-        "primary" | "unique" | "constraint" => {
-            let (name, kind_at) = if first == "constraint" {
-                (words.get(1).map(|s| s.to_string()), 2)
-            } else {
-                (None, 0)
-            };
-            let is_unique = matches!(words.get(kind_at), Some(&"primary") | Some(&"unique"));
-            if !is_unique {
-                return;
-            }
-            // First group in the item is the column list.
-            if let Some(Tok::Group(g)) = item.iter().find(|t| matches!(t, Tok::Group(_))) {
-                push_entry(
-                    entries,
-                    IndexEntry {
-                        table: table.to_string(),
-                        columns: columns_from_group(g),
-                        unique: true,
-                        name,
-                        partial: false,
-                    },
-                );
-            }
-            return;
-        }
-        "foreign" | "check" | "exclude" | "like" => return,
-        _ => {}
-    }
-    // Column definition: `<col> <type...> [PRIMARY KEY | UNIQUE]`. An inline
-    // `UNIQUE` or `PRIMARY KEY` yields a single-column unique index. Guard
-    // against `... REFERENCES other(col)` which is a FK, not a local unique.
-    let col = strip_schema(first);
-    let has_pk = words.windows(2).any(|w| w == ["primary", "key"]);
-    let has_unique = words.contains(&"unique");
-    let is_fk = words.contains(&"references");
-    if (has_pk || has_unique) && !is_fk {
-        push_entry(
-            entries,
-            IndexEntry {
-                table: table.to_string(),
-                columns: vec![col],
-                unique: true,
-                name: None,
-                partial: false,
-            },
-        );
-    }
-}
-
-fn parse_alter_table(entries: &mut Vec<IndexEntry>, toks: &[Tok]) {
-    let mut i = 2; // past `alter table`
-    if matches!(toks.get(i), Some(Tok::Word(w)) if w == "only") {
-        i += 1;
-    }
-    let table = match toks.get(i) {
-        Some(Tok::Word(w)) => strip_schema(w),
-        _ => return,
-    };
-    i += 1;
-    match toks.get(i) {
-        Some(Tok::Word(w)) if w == "add" => {
-            let mut j = i + 1;
-            let mut name = None;
-            if matches!(toks.get(j), Some(Tok::Word(w)) if w == "constraint") {
-                name = toks.get(j + 1).and_then(as_word).map(|s| s.to_string());
-                j += 2;
-            }
-            let is_unique =
-                matches!(toks.get(j), Some(Tok::Word(w)) if w == "primary" || w == "unique");
-            if !is_unique {
-                return;
-            }
-            if let Some(Tok::Group(g)) = toks[j..].iter().find(|t| matches!(t, Tok::Group(_))) {
-                push_entry(
-                    entries,
-                    IndexEntry {
-                        table,
-                        columns: columns_from_group(g),
-                        unique: true,
-                        name,
-                        partial: false,
-                    },
-                );
-            }
-        }
-        Some(Tok::Word(w)) if w == "drop" => {
-            if matches!(toks.get(i + 1), Some(Tok::Word(w)) if w == "constraint") {
-                let mut j = i + 2;
-                while matches!(toks.get(j), Some(Tok::Word(w)) if w == "if" || w == "exists") {
-                    j += 1;
-                }
-                if let Some(name) = toks.get(j).and_then(as_word) {
-                    entries.retain(|e| e.name.as_deref() != Some(name));
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn parse_drop_index(entries: &mut Vec<IndexEntry>, toks: &[Tok]) {
-    let mut i = 2; // past `drop index`
-    while matches!(toks.get(i), Some(Tok::Word(w)) if matches!(w.as_str(), "concurrently" | "if" | "exists"))
-    {
-        i += 1;
-    }
-    for name in split_items(&toks[i..])
-        .iter()
-        .filter_map(|item| item.first().and_then(as_word))
-    {
-        let name = strip_schema(name);
-        entries.retain(|e| e.name.as_deref() != Some(name.as_str()));
-    }
-}
-
-fn parse_drop_table(entries: &mut Vec<IndexEntry>, toks: &[Tok]) {
-    let mut i = 2; // past `drop table`
-    while matches!(toks.get(i), Some(Tok::Word(w)) if w == "if" || w == "exists") {
-        i += 1;
-    }
-    if let Some(table) = toks.get(i).and_then(as_word) {
-        let table = strip_schema(table);
-        entries.retain(|e| e.table != table);
-    }
-}
-
-fn push_entry(entries: &mut Vec<IndexEntry>, entry: IndexEntry) {
-    if !entries.contains(&entry) {
-        entries.push(entry);
-    }
+    chars.len()
 }
 
 #[cfg(test)]
@@ -694,6 +526,19 @@ mod tests {
         let c = cat("-- a comment with ; inside\n\
              CREATE INDEX ON t (a); /* block ; comment */ CREATE INDEX ON u (b);");
         assert_eq!(c.entries.len(), 2);
+    }
+
+    #[test]
+    fn dollar_quoted_body_does_not_split_or_leak_indexes() {
+        // A function body containing `;` and even `CREATE INDEX`-looking text
+        // must not be mis-split into spurious statements.
+        let c = cat(
+            "CREATE FUNCTION f() RETURNS void AS $$ BEGIN CREATE INDEX ON t (a); END; $$ LANGUAGE plpgsql; \
+             CREATE INDEX real_idx ON u (b);",
+        );
+        assert_eq!(c.entries.len(), 1);
+        assert_eq!(c.entries[0].table, "u");
+        assert_eq!(c.entries[0].name.as_deref(), Some("real_idx"));
     }
 
     #[test]
