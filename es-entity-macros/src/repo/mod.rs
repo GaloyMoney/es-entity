@@ -32,8 +32,12 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
     opts.columns.validate_list_for_by_columns()?;
     opts.columns.validate_scope()?;
     opts.validate_forgettable()?;
+    // `include_bytes!` the resolved migrations so Cargo re-runs this derive when
+    // they change (keeps the migration-derived index catalog and error mapping
+    // in sync even for an auto-discovered ancestor `migrations/`).
+    let migrations_rerun = opts.migrations_rerun_tokens();
     let repo = EsRepo::from(&opts);
-    Ok(quote!(#repo))
+    Ok(quote!(#migrations_rerun #repo))
 }
 pub struct EsRepo<'a> {
     repo: &'a syn::Ident,

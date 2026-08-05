@@ -96,6 +96,8 @@ fn main() {
 
 The `ES_ENTITY_MIGRATIONS_DIR` env var (or a per-repo `#[es_repo(migrations_dir = "…")]` override) takes precedence over the default. With no directory resolved, the catalog is empty and every multi-filter combination falls back to the COALESCE query.
 
+**Rebuild invalidation.** The derive `include_bytes!`s the resolved migration files, so *editing* a migration re-runs it automatically — even for an auto-discovered ancestor `migrations/`. Picking up a newly *added* migration needs a rebuild trigger: the `build.rs` `rerun-if-changed` above (which also sets `ES_ENTITY_MIGRATIONS_DIR`, and then supersedes the per-file `include_bytes!`), or a `cargo clean`.
+
 ### A Dispatch Function
 
 The `list_for_filters` function matches on the sort column and intelligently delegates to the most efficient underlying function:

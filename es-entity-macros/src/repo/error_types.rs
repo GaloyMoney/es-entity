@@ -61,10 +61,12 @@ impl<'a> ErrorTypes<'a> {
     pub fn new(opts: &'a RepositoryOptions) -> Self {
         let table_name = opts.table_name();
         // The physical index catalog (parsed from the migrations) supplies the
-        // real names of any *named* unique index on a single column, replacing
-        // the former per-column `constraint = "…"` attribute. The Postgres
-        // name convention below still covers unnamed inline `UNIQUE` / `PRIMARY
-        // KEY` constraints, so error mapping keeps working with no migrations.
+        // real names of any *named* unique index whose last key column is this
+        // column (single-column, or a composite whose leading columns scope it),
+        // replacing the former per-column `constraint = "…"` attribute. The
+        // Postgres name convention below still covers unnamed inline `UNIQUE` /
+        // `PRIMARY KEY` constraints, so error mapping keeps working with no
+        // migrations.
         let catalog = opts.index_catalog();
         let column_variants: Vec<ColumnVariant> = opts
             .columns

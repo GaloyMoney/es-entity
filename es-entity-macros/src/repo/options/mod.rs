@@ -394,6 +394,45 @@ impl RepositoryOptions {
         }
     }
 
+    /// The resolved migration `.sql` files (sorted by name), or empty when no
+    /// migrations directory is discoverable.
+    fn migration_files(&self) -> Vec<std::path::PathBuf> {
+        let Some(dir) = self.migrations_dir() else {
+            return Vec::new();
+        };
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut files: Vec<std::path::PathBuf> = read
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("sql"))
+            .collect();
+        files.sort();
+        files
+    }
+
+    /// `include_bytes!` of every resolved migration file, so Cargo re-runs the
+    /// derive — rebuilding the index catalog (and the error-constraint mapping)
+    /// — whenever a migration is *edited*. This is what makes the zero-config
+    /// migrations auto-discovery (including an ancestor `migrations/` that no
+    /// crate-local `build.rs` watches) actually stay in sync.
+    ///
+    /// Skipped when `ES_ENTITY_MIGRATIONS_DIR` is set: that variable is emitted
+    /// by a `build.rs` recipe which also emits `rerun-if-changed` on the
+    /// directory (covering edits *and* additions), making per-file dependencies
+    /// redundant. Without that recipe, picking up a newly *added* migration
+    /// still needs a rebuild trigger (`cargo clean`, or the `build.rs`).
+    pub fn migrations_rerun_tokens(&self) -> proc_macro2::TokenStream {
+        if std::env::var_os("ES_ENTITY_MIGRATIONS_DIR").is_some() {
+            return quote! {};
+        }
+        let includes = self.migration_files().into_iter().filter_map(|path| {
+            let path = path.to_str()?;
+            Some(quote! { const _: &[u8] = include_bytes!(#path); })
+        });
+        quote! { #(#includes)* }
+    }
+
     pub fn cursor_mod(&self) -> syn::Ident {
         let name = format!("{}Cursor", self.entity_ident).to_case(Case::Snake);
         syn::Ident::new(&name, proc_macro2::Span::call_site())

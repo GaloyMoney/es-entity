@@ -94,7 +94,7 @@ impl IndexCatalog {
         for (_, sql) in sorted {
             let stripped = strip_comments(sql);
             for statement in split_statements(&stripped) {
-                // Parse each statement individually so one unparseable statement
+                // Parse each statement individually so one unparsable statement
                 // does not discard the rest of the file.
                 if let Ok(parsed) = Parser::parse_sql(&dialect, &statement) {
                     for stmt in &parsed {
@@ -135,22 +135,24 @@ impl IndexCatalog {
         })
     }
 
-    /// The names of every *named* unique index/constraint that covers exactly
-    /// the single column `column` on `table`. Used to map a duplicate-key
-    /// database error back to the offending column for a typed error.
+    /// The names of every *named* unique index/constraint on `table` whose
+    /// **last** key column is `column`. Used to map a duplicate-key database
+    /// error back to the offending column for a typed error.
     ///
-    /// Composite unique indexes are excluded — a `UNIQUE (a, b)` violation is a
-    /// duplicate of the *pair*, not attributable to one column — and unnamed
-    /// (inline `UNIQUE` / `PRIMARY KEY`) constraints are excluded because their
-    /// runtime name is Postgres-generated (covered by the `{table}_{col}_key` /
-    /// `{table}_pkey` convention the caller adds instead).
+    /// A composite `UNIQUE (a, b)` violation is attributed to its last column
+    /// (`b`) — the discriminating column, with the leading columns acting as
+    /// the scope (this is the convention downstream repos already follow when
+    /// hand-declaring these). Unnamed inline `UNIQUE` / `PRIMARY KEY`
+    /// constraints are excluded because their runtime name is Postgres-generated
+    /// (covered by the `{table}_{col}_key` / `{table}_pkey` convention the
+    /// caller adds instead).
     pub fn unique_index_names(&self, table: &str, column: &str) -> Vec<String> {
         let table = table.to_lowercase();
         let column = column.to_lowercase();
         self.entries
             .iter()
             .filter(|entry| {
-                entry.unique && entry.table == table && entry.columns.as_slice() == [column.clone()]
+                entry.unique && entry.table == table && entry.columns.last() == Some(&column)
             })
             .filter_map(|entry| entry.name.clone())
             .collect()
@@ -552,7 +554,7 @@ mod tests {
     #[test]
     fn dollar_quoted_body_does_not_split_or_leak_indexes() {
         // A function body containing `;` and even `CREATE INDEX`-looking text
-        // must not be mis-split into spurious statements.
+        // must not be wrongly split into spurious statements.
         let c = cat(
             "CREATE FUNCTION f() RETURNS void AS $$ BEGIN CREATE INDEX ON t (a); END; $$ LANGUAGE plpgsql; \
              CREATE INDEX real_idx ON u (b);",
@@ -563,23 +565,28 @@ mod tests {
     }
 
     #[test]
-    fn unique_index_names_single_column_named_only() {
+    fn unique_index_names_by_last_column() {
         let c = cat("CREATE UNIQUE INDEX idx_users_email ON users (email); \
-             CREATE UNIQUE INDEX users_email_key ON users (email); \
              CREATE UNIQUE INDEX users_org_email ON users (org_id, email); \
+             CREATE UNIQUE INDEX users_email_org ON users (email, org_id); \
              CREATE TABLE t (id uuid PRIMARY KEY, name varchar UNIQUE); \
              CREATE INDEX idx_users_email_nonunique ON users (email);");
-        // Both named single-column unique indexes on (email) are returned.
+        // Single-column, and a composite whose LAST column is `email`, both map
+        // to `email` (mirrors lana's composite `constraint = "…"` usage).
         let mut names = c.unique_index_names("users", "email");
         names.sort();
-        assert_eq!(names, vec!["idx_users_email", "users_email_key"]);
-        // Composite unique (org_id, email) is excluded — not attributable to one
-        // column. Non-unique index on email is excluded.
+        assert_eq!(names, vec!["idx_users_email", "users_org_email"]);
+        // A composite whose last column is `org_id` maps to `org_id`, not email.
+        assert_eq!(
+            c.unique_index_names("users", "org_id"),
+            vec!["users_email_org"]
+        );
+        // The non-unique index on email is not a constraint.
         assert!(
             !c.unique_index_names("users", "email")
-                .contains(&"users_org_email".to_string())
+                .contains(&"idx_users_email_nonunique".to_string())
         );
-        // Inline unnamed `UNIQUE` (Postgres-named at runtime) yields no name.
+        // Inline unnamed `UNIQUE` / `PRIMARY KEY` are Postgres-named at runtime.
         assert!(c.unique_index_names("t", "name").is_empty());
         assert!(c.unique_index_names("t", "id").is_empty());
     }
