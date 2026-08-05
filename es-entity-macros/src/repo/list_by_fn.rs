@@ -48,6 +48,62 @@ pub fn assemble_select(
     query
 }
 
+/// Assemble the unified cursor query: the per-state cursor predicates emitted
+/// as `UNION ALL` branches in a single static query.
+///
+/// Each branch carries its own `ORDER BY ... LIMIT` — this is load-bearing:
+/// without the per-branch order+limit the planner falls back to a full-table
+/// top-N sort instead of an early-exit index walk (`Merge Append` of ordered
+/// index scans). The outer `ORDER BY ... LIMIT` then merges the branches.
+///
+/// Every branch is gated by a parameter-only nullness guard (see
+/// [`CursorStruct::cursor_branches`]) that Postgres lifts into a `One-Time
+/// Filter`, so dead branches are skipped at execution and the live branch gets
+/// a plan identical to its standalone per-state twin. `leading` conjuncts
+/// (scope, filter) and `trailing` conjuncts (soft-delete) are replicated
+/// inside every branch.
+///
+/// Within each branch the cursor `predicate` is emitted **before** the gate,
+/// and [`CursorStruct::cursor_branches`] orders the branches so the page-1
+/// branch (whose only reference to the cursor `id` parameter is the bare
+/// `$id IS NULL` guard) comes last. This guarantees every parameter's first
+/// textual occurrence in the statement is a typed column comparison — required
+/// because Postgres infers untyped prepared-statement parameter types from
+/// their leftmost use across a `UNION`, and a bare `$n IS NULL` there yields
+/// "could not determine data type of parameter". Ordering conjuncts is free
+/// for both correctness (all `AND`ed) and the plan (the One-Time Filter is
+/// still recognised regardless of conjunct order — verified via EXPLAIN).
+pub fn assemble_union_select(
+    select_columns: &str,
+    table_name: &str,
+    leading: &[String],
+    branches: &[(String, Option<String>)],
+    trailing: &[String],
+    order_by: &str,
+    limit_param_idx: u32,
+) -> String {
+    let branch_sqls: Vec<String> = branches
+        .iter()
+        .map(|(gate, predicate)| {
+            let mut conditions: Vec<String> = leading.to_vec();
+            if let Some(predicate) = predicate {
+                conditions.push(format!("({predicate})"));
+            }
+            conditions.push(format!("({gate})"));
+            conditions.extend(trailing.iter().cloned());
+            format!(
+                "(SELECT {select_columns} FROM {table_name} WHERE {} ORDER BY {order_by} LIMIT ${limit_param_idx})",
+                conditions.join(" AND "),
+            )
+        })
+        .collect();
+
+    format!(
+        "{} ORDER BY {order_by} LIMIT ${limit_param_idx}",
+        branch_sqls.join(" UNION ALL "),
+    )
+}
+
 /// The `deleted = FALSE` predicate for repos with soft delete, on the
 /// non-`include_deleted` fn variants.
 pub fn not_deleted_predicate(delete: DeleteOption) -> Option<String> {
@@ -249,6 +305,57 @@ impl CursorStruct<'_> {
         }
     }
 
+    /// The `UNION ALL` branches of the unified cursor query for one direction.
+    ///
+    /// Each branch is a `(gate, predicate)` pair. `gate` is a parameter-only
+    /// nullness guard — it references only `$id`/`$col`, never a row column —
+    /// so Postgres lifts it into a `One-Time Filter` Result node and skips dead
+    /// branches at execution; the single live branch then gets a plan identical
+    /// to its standalone per-state twin. `predicate` is the sargable cursor
+    /// comparison (`None` for the page-1 branch, which needs no predicate).
+    ///
+    /// - id / non-nullable sort column: 2 branches (First, After).
+    /// - `Option<T>` or `nullable`-annotated sort column: 3 branches (First,
+    ///   After, AfterNull).
+    ///
+    /// The `nullable`-annotated (non-`Option`) case shares the same 3-branch
+    /// form as `Option<T>`: the gates dispatch on `$col IS NULL` *in the
+    /// database*, where the encoded SQL NULL-ness is always visible — even
+    /// though Rust cannot see it from the non-`Option` type. This is what lets
+    /// these columns use the sargable branch form instead of the non-sargable
+    /// `COALESCE` catch-all (`CursorState::AfterMaybeNull`), making them
+    /// index-friendly for the first time.
+    ///
+    /// Branches are ordered so the page-1 (`First`) branch — whose only cursor
+    /// reference is the bare `$id IS NULL` guard — comes **last**. Every other
+    /// branch leads with a typed column comparison of the cursor parameters, so
+    /// each parameter's first textual occurrence in the assembled `UNION` is
+    /// type-determined. See [`assemble_union_select`] for why this matters.
+    pub fn cursor_branches(&self, offset: u32, ascending: bool) -> Vec<(String, Option<String>)> {
+        let id_offset = offset + 2;
+        let column_offset = offset + 3;
+
+        let first = (format!("${id_offset} IS NULL"), None);
+
+        if self.column.is_id() || !self.column.is_nullable_column() {
+            let after = (
+                format!("${id_offset} IS NOT NULL"),
+                self.condition_for_state(CursorState::After, offset, ascending),
+            );
+            vec![after, first]
+        } else {
+            let after = (
+                format!("${id_offset} IS NOT NULL AND ${column_offset} IS NOT NULL"),
+                self.condition_for_state(CursorState::After, offset, ascending),
+            );
+            let after_null = (
+                format!("${id_offset} IS NOT NULL AND ${column_offset} IS NULL"),
+                self.condition_for_state(CursorState::AfterNull, offset, ascending),
+            );
+            vec![after, after_null, first]
+        }
+    }
+
     /// Scrutinee elements (one or two bool expressions over the destructured
     /// cursor locals) identifying the cursor state at runtime.
     pub fn state_scrutinee_elems(&self) -> Vec<TokenStream> {
@@ -293,7 +400,11 @@ impl CursorStruct<'_> {
         }
     }
 
-    fn cursor_arg_tokens(&self) -> TokenStream {
+    /// The full cursor-value bindings (`id`, and the sort column for
+    /// non-id cursors), always in the same shape regardless of cursor state —
+    /// the unified query binds every parameter once and the branch gates
+    /// dispatch on their nullness in SQL.
+    pub fn cursor_arg_tokens(&self) -> TokenStream {
         let id = self.id;
 
         if self.column.is_id() {
@@ -607,54 +718,49 @@ impl ToTokens for ListByFn<'_> {
             let build_query_arms = |scope: Option<&ScopeInfo>| -> TokenStream {
                 let mut query_arms = TokenStream::new();
                 let offset = if scope.is_some() { 1 } else { 0 };
-                for state in cursor.cursor_states() {
-                    for ascending in [true, false] {
-                        let mut conditions: Vec<String> = Vec::new();
-                        if let Some(scope) = scope {
-                            conditions.push(scope.predicate(1));
-                        }
-                        if let Some(condition) =
-                            cursor.condition_for_state(*state, offset, ascending)
-                        {
-                            conditions.push(format!("({condition})"));
-                        }
-                        if delete == DeleteOption::No
-                            && let Some(not_deleted) = not_deleted_predicate(self.delete)
-                        {
-                            conditions.push(not_deleted);
-                        }
-                        let query = assemble_select(
-                            &select_columns,
-                            self.table_name,
-                            &conditions,
-                            &cursor.order_by(ascending),
-                            offset + 1,
-                        );
-                        let cursor_args = cursor.cursor_arg_tokens_for_state(*state);
-                        let scope_args = scope.map(|s| s.arg_tokens()).unwrap_or_default();
-                        let args = quote! {
-                            #scope_args
-                            (first + 1) as i64,
-                            #cursor_args
-                        };
-                        let es_query_call = make_es_query(&query, &args);
-                        let direction_pattern = if ascending {
-                            quote! { es_entity::ListDirection::Ascending }
-                        } else {
-                            quote! { es_entity::ListDirection::Descending }
-                        };
-                        let state_pattern = cursor.state_pattern_elems(*state);
-                        query_arms.append_all(quote! {
-                            (#direction_pattern, #(#state_pattern),*) => {
-                                #es_query_call.fetch_n(op, first).await?
-                            },
-                        });
+                for ascending in [true, false] {
+                    let mut leading: Vec<String> = Vec::new();
+                    if let Some(scope) = scope {
+                        leading.push(scope.predicate(1));
                     }
+                    let mut trailing: Vec<String> = Vec::new();
+                    if delete == DeleteOption::No
+                        && let Some(not_deleted) = not_deleted_predicate(self.delete)
+                    {
+                        trailing.push(not_deleted);
+                    }
+                    let branches = cursor.cursor_branches(offset, ascending);
+                    let query = assemble_union_select(
+                        &select_columns,
+                        self.table_name,
+                        &leading,
+                        &branches,
+                        &trailing,
+                        &cursor.order_by(ascending),
+                        offset + 1,
+                    );
+                    let cursor_args = cursor.cursor_arg_tokens();
+                    let scope_args = scope.map(|s| s.arg_tokens()).unwrap_or_default();
+                    let args = quote! {
+                        #scope_args
+                        (first + 1) as i64,
+                        #cursor_args
+                    };
+                    let es_query_call = make_es_query(&query, &args);
+                    let direction_pattern = if ascending {
+                        quote! { es_entity::ListDirection::Ascending }
+                    } else {
+                        quote! { es_entity::ListDirection::Descending }
+                    };
+                    query_arms.append_all(quote! {
+                        #direction_pattern => {
+                            #es_query_call.fetch_n(op, first).await?
+                        },
+                    });
                 }
                 query_arms
             };
             let query_arms = build_query_arms(None);
-            let cursor_state_scrutinee = cursor.state_scrutinee_elems();
 
             let (scope_fn_arg, scope_fn_pass, scope_convert) = match &self.scope {
                 Some(scope) => (scope.fn_arg(), scope.fn_pass(), scope.convert()),
@@ -664,19 +770,19 @@ impl ToTokens for ListByFn<'_> {
                 let scoped_query_arms = build_query_arms(Some(scope));
                 scope.dispatch(
                     quote! {
-                        match (direction, #(#cursor_state_scrutinee),*) {
+                        match direction {
                             #query_arms
                         }
                     },
                     quote! {
-                        match (direction, #(#cursor_state_scrutinee),*) {
+                        match direction {
                             #scoped_query_arms
                         }
                     },
                 )
             } else {
                 quote! {
-                    match (direction, #(#cursor_state_scrutinee),*) {
+                    match direction {
                         #query_arms
                     }
                 }
@@ -926,39 +1032,21 @@ mod tests {
                         None
                     };
 
-                    let (entities, has_next_page) = match (direction, id.is_none()) {
-                        (es_entity::ListDirection::Ascending, true) => {
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT id FROM entities WHERE deleted = FALSE ORDER BY id ASC LIMIT $1",
-                                (first + 1) as i64,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        (es_entity::ListDirection::Descending, true) => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT id FROM entities WHERE deleted = FALSE ORDER BY id DESC LIMIT $1",
-                                (first + 1) as i64,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        (es_entity::ListDirection::Ascending, false) => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT id FROM entities WHERE (id > $2) AND deleted = FALSE ORDER BY id ASC LIMIT $1",
+                                "(SELECT id FROM entities WHERE (id > $2) AND ($2 IS NOT NULL) AND deleted = FALSE ORDER BY id ASC LIMIT $1) UNION ALL (SELECT id FROM entities WHERE ($2 IS NULL) AND deleted = FALSE ORDER BY id ASC LIMIT $1) ORDER BY id ASC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                             )
                                 .fetch_n(op, first)
                                 .await?
                         },
-                        (es_entity::ListDirection::Descending, false) => {
+                        es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT id FROM entities WHERE (id < $2) AND deleted = FALSE ORDER BY id DESC LIMIT $1",
+                                "(SELECT id FROM entities WHERE (id < $2) AND ($2 IS NOT NULL) AND deleted = FALSE ORDER BY id DESC LIMIT $1) UNION ALL (SELECT id FROM entities WHERE ($2 IS NULL) AND deleted = FALSE ORDER BY id DESC LIMIT $1) ORDER BY id DESC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                             )
@@ -1071,29 +1159,11 @@ mod tests {
                         (None, None)
                     };
 
-                    let (entities, has_next_page) = match (direction, id.is_none()) {
-                        (es_entity::ListDirection::Ascending, true) => {
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT name, id FROM entities ORDER BY name ASC, id ASC LIMIT $1",
-                                (first + 1) as i64,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        (es_entity::ListDirection::Descending, true) => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT name, id FROM entities ORDER BY name DESC, id DESC LIMIT $1",
-                                (first + 1) as i64,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        (es_entity::ListDirection::Ascending, false) => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) ORDER BY name ASC, id ASC LIMIT $1",
+                                "(SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) AND ($2 IS NOT NULL) ORDER BY name ASC, id ASC LIMIT $1) UNION ALL (SELECT name, id FROM entities WHERE ($2 IS NULL) ORDER BY name ASC, id ASC LIMIT $1) ORDER BY name ASC, id ASC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                                 name as Option<String>,
@@ -1101,10 +1171,10 @@ mod tests {
                                 .fetch_n(op, first)
                                 .await?
                         },
-                        (es_entity::ListDirection::Descending, false) => {
+                        es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT name, id FROM entities WHERE ((name, id) < ($3, $2)) ORDER BY name DESC, id DESC LIMIT $1",
+                                "(SELECT name, id FROM entities WHERE ((name, id) < ($3, $2)) AND ($2 IS NOT NULL) ORDER BY name DESC, id DESC LIMIT $1) UNION ALL (SELECT name, id FROM entities WHERE ($2 IS NULL) ORDER BY name DESC, id DESC LIMIT $1) ORDER BY name DESC, id DESC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                                 name as Option<String>,
@@ -1186,29 +1256,11 @@ mod tests {
                         (None, None)
                     };
 
-                    let (entities, has_next_page) = match (direction, id.is_some(), value.is_some()) {
-                        (es_entity::ListDirection::Ascending, false, _) => {
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT value, id FROM entities ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
-                                (first + 1) as i64,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        (es_entity::ListDirection::Descending, false, _) => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT value, id FROM entities ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
-                                (first + 1) as i64,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        (es_entity::ListDirection::Ascending, true, true) => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT value, id FROM entities WHERE ((value, id) > ($3, $2)) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
+                                "(SELECT value, id FROM entities WHERE ((value, id) > ($3, $2)) AND ($2 IS NOT NULL AND $3 IS NOT NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ((value IS NOT NULL OR id > $2)) AND ($2 IS NOT NULL AND $3 IS NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ($2 IS NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                                 value as Option<rust_decimal::Decimal>,
@@ -1216,33 +1268,13 @@ mod tests {
                                 .fetch_n(op, first)
                                 .await?
                         },
-                        (es_entity::ListDirection::Descending, true, true) => {
+                        es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT value, id FROM entities WHERE ((value IS NULL OR (value, id) < ($3, $2))) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
+                                "(SELECT value, id FROM entities WHERE ((value IS NULL OR (value, id) < ($3, $2))) AND ($2 IS NOT NULL AND $3 IS NOT NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ((value IS NULL AND id < $2)) AND ($2 IS NOT NULL AND $3 IS NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ($2 IS NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                                 value as Option<rust_decimal::Decimal>,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        (es_entity::ListDirection::Ascending, true, false) => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT value, id FROM entities WHERE ((value IS NOT NULL OR id > $2)) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
-                                (first + 1) as i64,
-                                id as Option<EntityId>,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        (es_entity::ListDirection::Descending, true, false) => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT value, id FROM entities WHERE ((value IS NULL AND id < $2)) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
-                                (first + 1) as i64,
-                                id as Option<EntityId>,
                             )
                                 .fetch_n(op, first)
                                 .await?
@@ -1269,15 +1301,22 @@ mod tests {
         // The `nullable` attribute lets non-Option<T> Rust types (e.g. domain
         // enums whose custom sqlx::Encode writes NULL for one variant) opt
         // into the nullable-aware cursor SQL form. The Rust type is NOT
-        // syntactically Option<T>, but the emitted SQL should match what an
-        // Option<T> column would get: `NULLS FIRST/LAST` ordering, the
-        // `IS NOT DISTINCT FROM` cursor form, and the direction-aware NULL
-        // fallback.
+        // syntactically Option<T>, but the emitted SQL matches what an
+        // `Option<T>` column gets: the unified 3-branch `UNION ALL` query with
+        // `NULLS FIRST/LAST` ordering and the direction-aware NULL branches.
         //
-        // The query parameter cast (else branch of query_arg_tokens) still
+        // Crucially, the AfterNull branch's gate (`$3 IS NULL`) dispatches on
+        // the *encoded SQL* NULL-ness of the cursor value in the database —
+        // where it is always visible — even though Rust cannot see it from the
+        // non-`Option` type. This is what lets `nullable`-annotated columns use
+        // the sargable branch form instead of the non-sargable `COALESCE`
+        // catch-all (the eliminated `CursorState::AfterMaybeNull`), making them
+        // index-friendly for the first time.
+        //
+        // The query parameter cast (else branch of cursor_arg_tokens) still
         // wraps the Rust type in Option<...> because is_optional() remains
-        // false — the type itself drives binding, while the new
-        // is_nullable_column() drives SQL shape.
+        // false — the type itself drives binding, while is_nullable_column()
+        // drives SQL shape.
         let id_type = Ident::new("EntityId", Span::call_site());
         let entity = Ident::new("Entity", Span::call_site());
         let query_error = syn::Ident::new("EntityQueryError", Span::call_site());
@@ -1333,29 +1372,11 @@ mod tests {
                         (None, None)
                     };
 
-                    let (entities, has_next_page) = match (direction, id.is_none()) {
-                        (es_entity::ListDirection::Ascending, true) => {
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT value, id FROM entities ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
-                                (first + 1) as i64,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        (es_entity::ListDirection::Descending, true) => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT value, id FROM entities ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
-                                (first + 1) as i64,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        (es_entity::ListDirection::Ascending, false) => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id > $2, true) OR COALESCE(value > $3, value IS NOT NULL)) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
+                                "(SELECT value, id FROM entities WHERE ((value, id) > ($3, $2)) AND ($2 IS NOT NULL AND $3 IS NOT NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ((value IS NOT NULL OR id > $2)) AND ($2 IS NOT NULL AND $3 IS NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ($2 IS NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                                 value as Option<DomainEnum>,
@@ -1363,10 +1384,10 @@ mod tests {
                                 .fetch_n(op, first)
                                 .await?
                         },
-                        (es_entity::ListDirection::Descending, false) => {
+                        es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT value, id FROM entities WHERE ((value IS NOT DISTINCT FROM $3) AND COALESCE(id < $2, true) OR COALESCE(value < $3, $2 IS NULL OR (value IS NULL AND $3 IS NOT NULL))) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
+                                "(SELECT value, id FROM entities WHERE ((value IS NULL OR (value, id) < ($3, $2))) AND ($2 IS NOT NULL AND $3 IS NOT NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ((value IS NULL AND id < $2)) AND ($2 IS NOT NULL AND $3 IS NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ($2 IS NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                                 value as Option<DomainEnum>,

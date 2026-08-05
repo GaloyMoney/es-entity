@@ -3,7 +3,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{TokenStreamExt, quote};
 
 use super::{
-    list_by_fn::{CursorStruct, assemble_select, not_deleted_predicate},
+    list_by_fn::{CursorStruct, assemble_union_select, not_deleted_predicate},
     options::*,
     scope::ScopeInfo,
 };
@@ -213,56 +213,51 @@ impl ToTokens for ListForFn<'_> {
             let build_query_arms = |scope: Option<&ScopeInfo>| -> TokenStream {
                 let mut query_arms = TokenStream::new();
                 let offset = if scope.is_some() { 2 } else { 1 };
-                for state in cursor.cursor_states() {
-                    for ascending in [true, false] {
-                        let mut conditions: Vec<String> =
-                            vec![format!("({for_column_name} {filter_op} $1)")];
-                        if let Some(scope) = scope {
-                            conditions.push(scope.predicate(2));
-                        }
-                        if let Some(condition) =
-                            cursor.condition_for_state(*state, offset, ascending)
-                        {
-                            conditions.push(format!("({condition})"));
-                        }
-                        if delete == DeleteOption::No
-                            && let Some(not_deleted) = not_deleted_predicate(self.delete)
-                        {
-                            conditions.push(not_deleted);
-                        }
-                        let query = assemble_select(
-                            &select_columns,
-                            self.table_name,
-                            &conditions,
-                            &cursor.order_by(ascending),
-                            offset + 1,
-                        );
-                        let cursor_args = cursor.cursor_arg_tokens_for_state(*state);
-                        let scope_args = scope.map(|s| s.arg_tokens()).unwrap_or_default();
-                        let args = quote! {
-                            #filter_arg_name as &#for_column_type,
-                            #scope_args
-                            (first + 1) as i64,
-                            #cursor_args
-                        };
-                        let es_query_call = make_es_query(&query, &args);
-                        let direction_pattern = if ascending {
-                            quote! { es_entity::ListDirection::Ascending }
-                        } else {
-                            quote! { es_entity::ListDirection::Descending }
-                        };
-                        let state_pattern = cursor.state_pattern_elems(*state);
-                        query_arms.append_all(quote! {
-                            (#direction_pattern, #(#state_pattern),*) => {
-                                #es_query_call.fetch_n(op, first).await?
-                            },
-                        });
+                for ascending in [true, false] {
+                    let mut leading: Vec<String> =
+                        vec![format!("({for_column_name} {filter_op} $1)")];
+                    if let Some(scope) = scope {
+                        leading.push(scope.predicate(2));
                     }
+                    let mut trailing: Vec<String> = Vec::new();
+                    if delete == DeleteOption::No
+                        && let Some(not_deleted) = not_deleted_predicate(self.delete)
+                    {
+                        trailing.push(not_deleted);
+                    }
+                    let branches = cursor.cursor_branches(offset, ascending);
+                    let query = assemble_union_select(
+                        &select_columns,
+                        self.table_name,
+                        &leading,
+                        &branches,
+                        &trailing,
+                        &cursor.order_by(ascending),
+                        offset + 1,
+                    );
+                    let cursor_args = cursor.cursor_arg_tokens();
+                    let scope_args = scope.map(|s| s.arg_tokens()).unwrap_or_default();
+                    let args = quote! {
+                        #filter_arg_name as &#for_column_type,
+                        #scope_args
+                        (first + 1) as i64,
+                        #cursor_args
+                    };
+                    let es_query_call = make_es_query(&query, &args);
+                    let direction_pattern = if ascending {
+                        quote! { es_entity::ListDirection::Ascending }
+                    } else {
+                        quote! { es_entity::ListDirection::Descending }
+                    };
+                    query_arms.append_all(quote! {
+                        #direction_pattern => {
+                            #es_query_call.fetch_n(op, first).await?
+                        },
+                    });
                 }
                 query_arms
             };
             let query_arms = build_query_arms(None);
-            let cursor_state_scrutinee = cursor.state_scrutinee_elems();
 
             let (scope_fn_arg, scope_fn_pass, scope_convert) = match &self.scope {
                 Some(scope) => (scope.fn_arg(), scope.fn_pass(), scope.convert()),
@@ -272,19 +267,19 @@ impl ToTokens for ListForFn<'_> {
                 let scoped_query_arms = build_query_arms(Some(scope));
                 scope.dispatch(
                     quote! {
-                        match (direction, #(#cursor_state_scrutinee),*) {
+                        match direction {
                             #query_arms
                         }
                     },
                     quote! {
-                        match (direction, #(#cursor_state_scrutinee),*) {
+                        match direction {
                             #scoped_query_arms
                         }
                     },
                 )
             } else {
                 quote! {
-                    match (direction, #(#cursor_state_scrutinee),*) {
+                    match direction {
                         #query_arms
                     }
                 }
@@ -476,31 +471,11 @@ mod tests {
                     } else {
                         None
                     };
-                    let (entities, has_next_page) = match (direction, id.is_none()) {
-                        (es_entity::ListDirection::Ascending, true) => {
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT customer_id, id FROM entities WHERE (customer_id = $1) ORDER BY id ASC LIMIT $2",
-                                filter_customer_id as &Uuid,
-                                (first + 1) as i64,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        (es_entity::ListDirection::Descending, true) => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT customer_id, id FROM entities WHERE (customer_id = $1) ORDER BY id DESC LIMIT $2",
-                                filter_customer_id as &Uuid,
-                                (first + 1) as i64,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        (es_entity::ListDirection::Ascending, false) => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND (id > $3) ORDER BY id ASC LIMIT $2",
+                                "(SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND (id > $3) AND ($3 IS NOT NULL) ORDER BY id ASC LIMIT $2) UNION ALL (SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND ($3 IS NULL) ORDER BY id ASC LIMIT $2) ORDER BY id ASC LIMIT $2",
                                 filter_customer_id as &Uuid,
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
@@ -508,10 +483,10 @@ mod tests {
                                 .fetch_n(op, first)
                                 .await?
                         },
-                        (es_entity::ListDirection::Descending, false) => {
+                        es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND (id < $3) ORDER BY id DESC LIMIT $2",
+                                "(SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND (id < $3) AND ($3 IS NOT NULL) ORDER BY id DESC LIMIT $2) UNION ALL (SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND ($3 IS NULL) ORDER BY id DESC LIMIT $2) ORDER BY id DESC LIMIT $2",
                                 filter_customer_id as &Uuid,
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
@@ -596,31 +571,11 @@ mod tests {
                     } else {
                         (None, None)
                     };
-                    let (entities, has_next_page) = match (direction, id.is_none()) {
-                        (es_entity::ListDirection::Ascending, true) => {
+                    let (entities, has_next_page) = match direction {
+                        es_entity::ListDirection::Ascending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT email, id FROM entities WHERE (email = $1) ORDER BY email ASC, id ASC LIMIT $2",
-                                filter_email as &str,
-                                (first + 1) as i64,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        (es_entity::ListDirection::Descending, true) => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT email, id FROM entities WHERE (email = $1) ORDER BY email DESC, id DESC LIMIT $2",
-                                filter_email as &str,
-                                (first + 1) as i64,
-                            )
-                                .fetch_n(op, first)
-                                .await?
-                        },
-                        (es_entity::ListDirection::Ascending, false) => {
-                            es_entity::es_query!(
-                                entity = Entity,
-                                "SELECT email, id FROM entities WHERE (email = $1) AND ((email, id) > ($4, $3)) ORDER BY email ASC, id ASC LIMIT $2",
+                                "(SELECT email, id FROM entities WHERE (email = $1) AND ((email, id) > ($4, $3)) AND ($3 IS NOT NULL) ORDER BY email ASC, id ASC LIMIT $2) UNION ALL (SELECT email, id FROM entities WHERE (email = $1) AND ($3 IS NULL) ORDER BY email ASC, id ASC LIMIT $2) ORDER BY email ASC, id ASC LIMIT $2",
                                 filter_email as &str,
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
@@ -629,10 +584,10 @@ mod tests {
                                 .fetch_n(op, first)
                                 .await?
                         },
-                        (es_entity::ListDirection::Descending, false) => {
+                        es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "SELECT email, id FROM entities WHERE (email = $1) AND ((email, id) < ($4, $3)) ORDER BY email DESC, id DESC LIMIT $2",
+                                "(SELECT email, id FROM entities WHERE (email = $1) AND ((email, id) < ($4, $3)) AND ($3 IS NOT NULL) ORDER BY email DESC, id DESC LIMIT $2) UNION ALL (SELECT email, id FROM entities WHERE (email = $1) AND ($3 IS NULL) ORDER BY email DESC, id DESC LIMIT $2) ORDER BY email DESC, id DESC LIMIT $2",
                                 filter_email as &str,
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
