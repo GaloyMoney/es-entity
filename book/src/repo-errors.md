@@ -55,20 +55,7 @@ match result {
 }
 ```
 
-The macro maps PostgreSQL constraint names to columns automatically using the convention `{table}_{column}_key` for unique constraints and `{table}_pkey` for the primary key. If your constraint uses a non-standard name, specify it explicitly:
-
-```rust,ignore
-#[derive(EsRepo)]
-#[es_repo(
-    entity = "User",
-    columns(
-        email(ty = "String", constraint = "idx_unique_email"),
-    )
-)]
-pub struct Users {
-    pool: sqlx::PgPool,
-}
-```
+The macro maps PostgreSQL constraint names to columns automatically. It uses the convention `{table}_{column}_key` for unique constraints and `{table}_pkey` for the primary key, and additionally derives the real names of any **named** single-column unique index from your migrations (the same index catalog that drives `list_for_filters` specialization — see [list_for_filters](./repo-list-for-filters.md)). So a `CREATE UNIQUE INDEX idx_unique_email ON users (email)` in a migration is mapped to the `email` column with no extra annotation — as long as the migrations directory is discoverable (crate-local `migrations/`, an ancestor `migrations/` up to the repo root, or `ES_ENTITY_MIGRATIONS_DIR`). Composite unique indexes are not mapped (a `UNIQUE (a, b)` violation is not attributable to a single column).
 
 ### Concurrent modification
 

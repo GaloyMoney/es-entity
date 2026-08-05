@@ -134,6 +134,27 @@ impl IndexCatalog {
             prefix == eq && entry.columns[eq.len()] == sort
         })
     }
+
+    /// The names of every *named* unique index/constraint that covers exactly
+    /// the single column `column` on `table`. Used to map a duplicate-key
+    /// database error back to the offending column for a typed error.
+    ///
+    /// Composite unique indexes are excluded — a `UNIQUE (a, b)` violation is a
+    /// duplicate of the *pair*, not attributable to one column — and unnamed
+    /// (inline `UNIQUE` / `PRIMARY KEY`) constraints are excluded because their
+    /// runtime name is Postgres-generated (covered by the `{table}_{col}_key` /
+    /// `{table}_pkey` convention the caller adds instead).
+    pub fn unique_index_names(&self, table: &str, column: &str) -> Vec<String> {
+        let table = table.to_lowercase();
+        let column = column.to_lowercase();
+        self.entries
+            .iter()
+            .filter(|entry| {
+                entry.unique && entry.table == table && entry.columns.as_slice() == [column.clone()]
+            })
+            .filter_map(|entry| entry.name.clone())
+            .collect()
+    }
 }
 
 // ── AST → catalog ───────────────────────────────────────────────────────────
@@ -539,6 +560,28 @@ mod tests {
         assert_eq!(c.entries.len(), 1);
         assert_eq!(c.entries[0].table, "u");
         assert_eq!(c.entries[0].name.as_deref(), Some("real_idx"));
+    }
+
+    #[test]
+    fn unique_index_names_single_column_named_only() {
+        let c = cat("CREATE UNIQUE INDEX idx_users_email ON users (email); \
+             CREATE UNIQUE INDEX users_email_key ON users (email); \
+             CREATE UNIQUE INDEX users_org_email ON users (org_id, email); \
+             CREATE TABLE t (id uuid PRIMARY KEY, name varchar UNIQUE); \
+             CREATE INDEX idx_users_email_nonunique ON users (email);");
+        // Both named single-column unique indexes on (email) are returned.
+        let mut names = c.unique_index_names("users", "email");
+        names.sort();
+        assert_eq!(names, vec!["idx_users_email", "users_email_key"]);
+        // Composite unique (org_id, email) is excluded — not attributable to one
+        // column. Non-unique index on email is excluded.
+        assert!(
+            !c.unique_index_names("users", "email")
+                .contains(&"users_org_email".to_string())
+        );
+        // Inline unnamed `UNIQUE` (Postgres-named at runtime) yields no name.
+        assert!(c.unique_index_names("t", "name").is_empty());
+        assert!(c.unique_index_names("t", "id").is_empty());
     }
 
     #[test]

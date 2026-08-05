@@ -334,35 +334,63 @@ impl RepositoryOptions {
             .expect("Events table name is not set")
     }
 
-    /// Derive the physical index catalog for this repo's table from the
-    /// committed migration files, used to decide which `list_for_filters`
-    /// combinations get a specialized sargable query. Resolution order:
+    /// Resolve the migrations directory this repo derives its index catalog and
+    /// error-constraint names from. Resolution order:
     ///   1. `ES_ENTITY_MIGRATIONS_DIR` env var (a `build.rs` `rustc-env`, or a
     ///      plain env var — both visible via `std::env::var` at expansion),
-    ///   2. the `migrations_dir` attribute (relative to `$CARGO_MANIFEST_DIR`),
-    ///   3. the default `$CARGO_MANIFEST_DIR/migrations` when it exists.
+    ///   2. the `#[es_repo(migrations_dir = "…")]` attribute (relative to
+    ///      `$CARGO_MANIFEST_DIR`),
+    ///   3. auto-discovery: `$CARGO_MANIFEST_DIR/migrations`, then a `migrations`
+    ///      directory in any ancestor up to the repository root (the first
+    ///      directory containing `.git`) — so a single-crate app or a workspace
+    ///      with root-level `migrations/` works with zero configuration.
     ///
-    /// When no directory resolves, the catalog is empty — every combination
-    /// falls back to the correct (non-sargable) `COALESCE` query, matching the
-    /// pre-`indexes` default.
-    pub fn index_catalog(&self) -> crate::index_catalog::IndexCatalog {
-        use crate::index_catalog::IndexCatalog;
+    /// Returns `None` when nothing resolves (e.g. migrations in a sibling
+    /// subtree of another crate) — the caller then uses an empty catalog and
+    /// everything still works, just without index-driven specialization.
+    fn migrations_dir(&self) -> Option<std::path::PathBuf> {
         use std::path::{Path, PathBuf};
 
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok();
-        let dir: Option<PathBuf> = if let Ok(dir) = std::env::var("ES_ENTITY_MIGRATIONS_DIR") {
-            Some(PathBuf::from(dir))
-        } else if let (Some(rel), Some(manifest)) = (&self.migrations_dir, &manifest_dir) {
-            Some(Path::new(manifest).join(rel))
-        } else {
-            manifest_dir.map(|m| Path::new(&m).join("migrations"))
-        };
+        if let Ok(dir) = std::env::var("ES_ENTITY_MIGRATIONS_DIR") {
+            let dir = PathBuf::from(dir);
+            return dir.is_dir().then_some(dir);
+        }
 
-        match dir {
-            Some(dir) if dir.is_dir() => {
-                IndexCatalog::from_migrations_dir(&dir).unwrap_or_default()
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+        let manifest_dir = Path::new(&manifest_dir);
+
+        if let Some(rel) = &self.migrations_dir {
+            let dir = manifest_dir.join(rel);
+            return dir.is_dir().then_some(dir);
+        }
+
+        // Auto-discovery: crate-local `migrations/`, then walk up to the repo
+        // root (a directory containing `.git`), checking each ancestor.
+        let mut cur = Some(manifest_dir);
+        while let Some(dir) = cur {
+            let candidate = dir.join("migrations");
+            if candidate.is_dir() {
+                return Some(candidate);
             }
-            _ => IndexCatalog::default(),
+            if dir.join(".git").exists() {
+                break; // reached the repo root; do not escape it
+            }
+            cur = dir.parent();
+        }
+        None
+    }
+
+    /// Derive the physical index catalog for this repo's table from the resolved
+    /// migrations directory (see [`Self::migrations_dir`]). An empty catalog
+    /// (no directory resolved) is safe: `list_for_filters` combinations fall
+    /// back to the correct non-sargable `COALESCE` query, and error mapping
+    /// keeps its attribute-derived name convention.
+    pub fn index_catalog(&self) -> crate::index_catalog::IndexCatalog {
+        match self.migrations_dir() {
+            Some(dir) => {
+                crate::index_catalog::IndexCatalog::from_migrations_dir(&dir).unwrap_or_default()
+            }
+            None => crate::index_catalog::IndexCatalog::default(),
         }
     }
 
