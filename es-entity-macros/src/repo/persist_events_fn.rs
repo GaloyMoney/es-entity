@@ -107,6 +107,9 @@ impl ToTokens for PersistEventsFn<'_> {
                 OP: es_entity::AtomicOperation,
             {
                 let id = events.id();
+                if !events.any_new() {
+                    return Ok(0);
+                }
                 let offset = events.len_persisted();
                 let events_types = events.new_event_types();
                 let serialized_events = events.serialize_new_events();
@@ -124,7 +127,10 @@ impl ToTokens for PersistEventsFn<'_> {
                         #ctx_arg
                     ).fetch_all(op.as_executor()).await?;
 
-                let recorded_at = rows[0].recorded_at;
+                let recorded_at = rows
+                    .first()
+                    .map(|row| row.recorded_at)
+                    .ok_or(sqlx::Error::RowNotFound)?;
                 let n_events = events.mark_new_events_persisted_at(recorded_at);
 
                 Ok(n_events)
@@ -175,6 +181,9 @@ mod tests {
                 OP: es_entity::AtomicOperation,
             {
                 let id = events.id();
+                if !events.any_new() {
+                    return Ok(0);
+                }
                 let offset = events.len_persisted();
                 let events_types = events.new_event_types();
                 let serialized_events = events.serialize_new_events();
@@ -191,7 +200,10 @@ mod tests {
                         contexts.as_deref() as Option<&[es_entity::ContextData]>,
                     ).fetch_all(op.as_executor()).await?;
 
-                let recorded_at = rows[0].recorded_at;
+                let recorded_at = rows
+                    .first()
+                    .map(|row| row.recorded_at)
+                    .ok_or(sqlx::Error::RowNotFound)?;
                 let n_events = events.mark_new_events_persisted_at(recorded_at);
 
                 Ok(n_events)
@@ -239,6 +251,9 @@ mod tests {
                 OP: es_entity::AtomicOperation,
             {
                 let id = events.id();
+                if !events.any_new() {
+                    return Ok(0);
+                }
                 let offset = events.len_persisted();
                 let events_types = events.new_event_types();
                 let serialized_events = events.serialize_new_events();
@@ -253,7 +268,10 @@ mod tests {
                         &serialized_events,
                     ).fetch_all(op.as_executor()).await?;
 
-                let recorded_at = rows[0].recorded_at;
+                let recorded_at = rows
+                    .first()
+                    .map(|row| row.recorded_at)
+                    .ok_or(sqlx::Error::RowNotFound)?;
                 let n_events = events.mark_new_events_persisted_at(recorded_at);
 
                 Ok(n_events)

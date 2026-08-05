@@ -169,8 +169,11 @@ where
     }
 
     /// Returns an iterator over the last `n` persisted events
+    ///
+    /// If fewer than `n` events have been persisted, all persisted events are
+    /// returned instead of panicking.
     pub fn last_persisted(&self, n: usize) -> LastPersisted<'_, T> {
-        let start = self.persisted_events.len() - n;
+        let start = self.persisted_events.len().saturating_sub(n);
         self.persisted_events[start..].iter()
     }
 
@@ -465,5 +468,29 @@ mod tests {
             EntityEvents::load_n(generic_events, 2).expect("Could not load");
         assert!(!more);
         assert_eq!(entity.len(), 2);
+    }
+
+    #[test]
+    fn last_persisted_does_not_panic_when_n_exceeds_len() {
+        let generic_events = vec![GenericEvent {
+            entity_id: Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap(),
+            sequence: 1,
+            event: serde_json::to_value(DummyEntityEvent::Created("dummy".to_owned()))
+                .expect("Could not serialize"),
+            context: None,
+            recorded_at: chrono::Utc::now(),
+            forgettable_payload: None,
+        }];
+        let entity: DummyEntity = EntityEvents::load_first(generic_events)
+            .expect("Could not load")
+            .expect("No entity found");
+        let events = entity.events();
+
+        // n == len works
+        assert_eq!(events.last_persisted(1).count(), 1);
+        // n > len clamps to all persisted events instead of underflowing
+        assert_eq!(events.last_persisted(10).count(), 1);
+        // n == 0 yields nothing
+        assert_eq!(events.last_persisted(0).count(), 0);
     }
 }
