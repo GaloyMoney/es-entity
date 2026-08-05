@@ -5,49 +5,6 @@ use quote::{TokenStreamExt, quote};
 
 use super::{options::*, scope::ScopeInfo};
 
-/// Cursor pagination states that each get their own SQL text, so that no
-/// variant needs the non-sargable `COALESCE(..., $ IS NULL)` catch-all.
-///
-/// The generated list fns dispatch on these states at runtime (on the
-/// `Some`-ness of the destructured cursor values) and every emitted query is
-/// a static `es_query!` literal — compile-time checked and index-friendly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CursorState {
-    /// Page 1 (no cursor): no cursor predicate at all — the query rides the
-    /// index ordering with an early-exit `LIMIT`.
-    First,
-    /// Cursor present on a non-NULL sort value: bare `(col, id)` row
-    /// comparison — sargable against a composite index.
-    After,
-    /// Cursor present on a NULL sort value (only possible for `Option<T>`
-    /// sort columns): explicit NULL-aware predicate.
-    AfterNull,
-    /// Cursor present, but whether the sort value encodes as SQL NULL is
-    /// undetectable from Rust (non-`Option` type annotated `nullable`, where
-    /// a custom `sqlx::Encode` may write NULL): the query must handle both
-    /// cases, so it keeps the all-cases COALESCE fallback predicate
-    /// (correct, not sargable).
-    AfterMaybeNull,
-}
-
-/// Assemble a `SELECT ... [WHERE ...] ORDER BY ... LIMIT $n` query string
-/// from individual predicates.
-pub fn assemble_select(
-    select_columns: &str,
-    table_name: &str,
-    conditions: &[String],
-    order_by: &str,
-    limit_param_idx: u32,
-) -> String {
-    let mut query = format!("SELECT {select_columns} FROM {table_name}");
-    if !conditions.is_empty() {
-        query.push_str(" WHERE ");
-        query.push_str(&conditions.join(" AND "));
-    }
-    query.push_str(&format!(" ORDER BY {order_by} LIMIT ${limit_param_idx}"));
-    query
-}
-
 /// Assemble the unified cursor query: the per-state cursor predicates emitted
 /// as `UNION ALL` branches in a single static query.
 ///
@@ -161,150 +118,6 @@ impl CursorStruct<'_> {
         }
     }
 
-    pub fn condition(&self, offset: u32, ascending: bool) -> String {
-        let comp = if ascending { ">" } else { "<" };
-        let id_offset = offset + 2;
-        let column_offset = offset + 3;
-
-        if self.column.is_id() {
-            format!("COALESCE(id {comp} ${id_offset}, true)")
-        } else if self.column.is_nullable_column() {
-            // The OR-clause's COALESCE fires when `col {comp} ${cursor}` is NULL,
-            // which happens whenever either side of the comparison is NULL. The
-            // fallback decides whether the row is "after" the cursor in
-            // (col, id) ordering — and the correct answer depends on direction
-            // (NULLS FIRST for ASC, NULLS LAST for DESC) and on whether we are
-            // on page 1 vs. paginating from a cursor sitting on a NULL row.
-            //
-            // - ASC NULLS FIRST: a non-NULL row with a NULL cursor is "after"
-            //   (non-NULL sorts after NULL), whether the NULL cursor represents
-            //   page 1 (no cursor) or a cursor sitting on a NULL row. Fallback
-            //   `col IS NOT NULL` covers both: TRUE for non-NULL rows, FALSE
-            //   for NULL rows (NULL rows with a non-NULL cursor were on page 1
-            //   already).
-            //
-            // - DESC NULLS LAST: asymmetric. NULL rows sort *last*, so:
-            //     • Page 1 (`$id_offset` IS NULL, no cursor): include all rows
-            //       — equivalent to "the sentinel before everything".
-            //     • Cursor on NULL row (`$id_offset` set, `${column_offset}`
-            //       NULL): non-NULL rows already shown → exclude.
-            //     • Cursor on non-NULL row, row NULL: NULL sorts after → include.
-            //   The DESC fallback `${id_offset} IS NULL OR
-            //   (col IS NULL AND ${column_offset} IS NOT NULL)` captures all
-            //   three: `${id_offset} IS NULL` short-circuits to TRUE on page 1,
-            //   while the second disjunct catches the "include NULL rows after
-            //   non-NULL cursor" case without re-including already-shown rows.
-            //
-            // The cursor=NULL + row=NULL case is handled by the AND-clause's
-            // `IS NOT DISTINCT FROM` + the id comparison, so the OR-clause's
-            // fallback must NOT fire then. Verified by truth-table on PR.
-            let null_handling = if ascending {
-                format!("{0} IS NOT NULL", self.column.name())
-            } else {
-                format!(
-                    "${id_offset} IS NULL OR ({0} IS NULL AND ${column_offset} IS NOT NULL)",
-                    self.column.name(),
-                )
-            };
-            format!(
-                "({0} IS NOT DISTINCT FROM ${column_offset}) AND COALESCE(id {comp} ${id_offset}, true) OR COALESCE({0} {comp} ${column_offset}, {null_handling})",
-                self.column.name(),
-            )
-        } else {
-            format!(
-                "COALESCE(({0}, id) {comp} (${column_offset}, ${id_offset}), ${id_offset} IS NULL)",
-                self.column.name(),
-            )
-        }
-    }
-
-    /// The cursor states this sort column needs distinct SQL for.
-    pub fn cursor_states(&self) -> &'static [CursorState] {
-        if self.column.is_id() || !self.column.is_nullable_column() {
-            &[CursorState::First, CursorState::After]
-        } else if self.column.is_optional() {
-            &[
-                CursorState::First,
-                CursorState::After,
-                CursorState::AfterNull,
-            ]
-        } else {
-            // `nullable`-annotated non-Option type: NULL-ness of the cursor
-            // value is invisible to Rust, so the cursor-present variant must
-            // keep the all-cases fallback predicate.
-            &[CursorState::First, CursorState::AfterMaybeNull]
-        }
-    }
-
-    /// The cursor predicate for a specialized state, or `None` for
-    /// [`CursorState::First`] (page 1 needs no predicate).
-    ///
-    /// `offset` is the number of query parameters preceding the `LIMIT`
-    /// parameter (i.e. LIMIT lands on `$(offset + 1)`).
-    ///
-    /// The specialized forms are sargable: a bare `(col, id)` row comparison
-    /// is an index qual against a composite index, unlike the
-    /// `COALESCE((col, id) < ($c, $i), $i IS NULL)` catch-all which defeats
-    /// index extraction. The NULL-cursor forms replicate the exact edge
-    /// semantics documented on [`Self::condition`]:
-    ///
-    /// - ASC (NULLS FIRST), cursor on a NULL row: all non-NULL rows plus
-    ///   NULL rows with a greater id come "after" → `col IS NOT NULL OR id >
-    ///   $i`.
-    /// - DESC (NULLS LAST), cursor on a NULL row: only NULL rows with a
-    ///   smaller id come after → `col IS NULL AND id < $i`.
-    /// - DESC (NULLS LAST), cursor on a non-NULL row: NULL rows sort last,
-    ///   so they are all still "after" → `col IS NULL OR (col, id) < ($c,
-    ///   $i)`.
-    pub fn condition_for_state(
-        &self,
-        state: CursorState,
-        offset: u32,
-        ascending: bool,
-    ) -> Option<String> {
-        let comp = if ascending { ">" } else { "<" };
-        let id_offset = offset + 2;
-        let column_offset = offset + 3;
-
-        match state {
-            CursorState::First => None,
-            CursorState::AfterMaybeNull => Some(self.condition(offset, ascending)),
-            CursorState::After => {
-                if self.column.is_id() {
-                    Some(format!("id {comp} ${id_offset}"))
-                } else if !self.column.is_nullable_column() {
-                    Some(format!(
-                        "({0}, id) {comp} (${column_offset}, ${id_offset})",
-                        self.column.name()
-                    ))
-                } else if ascending {
-                    Some(format!(
-                        "({0}, id) > (${column_offset}, ${id_offset})",
-                        self.column.name()
-                    ))
-                } else {
-                    Some(format!(
-                        "({0} IS NULL OR ({0}, id) < (${column_offset}, ${id_offset}))",
-                        self.column.name()
-                    ))
-                }
-            }
-            CursorState::AfterNull => {
-                if ascending {
-                    Some(format!(
-                        "({0} IS NOT NULL OR id > ${id_offset})",
-                        self.column.name()
-                    ))
-                } else {
-                    Some(format!(
-                        "({0} IS NULL AND id < ${id_offset})",
-                        self.column.name()
-                    ))
-                }
-            }
-        }
-    }
-
     /// The `UNION ALL` branches of the unified cursor query for one direction.
     ///
     /// Each branch is a `(gate, predicate)` pair. `gate` is a parameter-only
@@ -323,81 +136,69 @@ impl CursorStruct<'_> {
     /// database*, where the encoded SQL NULL-ness is always visible — even
     /// though Rust cannot see it from the non-`Option` type. This is what lets
     /// these columns use the sargable branch form instead of the non-sargable
-    /// `COALESCE` catch-all (`CursorState::AfterMaybeNull`), making them
+    /// `COALESCE` catch-all (formerly `AfterMaybeNull`), making them
     /// index-friendly for the first time.
     ///
-    /// Branches are ordered so the page-1 (`First`) branch — whose only cursor
+    /// Branches are ordered so the page-1 (First) branch — whose only cursor
     /// reference is the bare `$id IS NULL` guard — comes **last**. Every other
     /// branch leads with a typed column comparison of the cursor parameters, so
     /// each parameter's first textual occurrence in the assembled `UNION` is
     /// type-determined. See [`assemble_union_select`] for why this matters.
     pub fn cursor_branches(&self, offset: u32, ascending: bool) -> Vec<(String, Option<String>)> {
+        let comp = if ascending { ">" } else { "<" };
         let id_offset = offset + 2;
         let column_offset = offset + 3;
 
         let first = (format!("${id_offset} IS NULL"), None);
 
-        if self.column.is_id() || !self.column.is_nullable_column() {
+        // id column, or non-nullable sort column: 2 branches (After, First).
+        if self.column.is_id() {
             let after = (
                 format!("${id_offset} IS NOT NULL"),
-                self.condition_for_state(CursorState::After, offset, ascending),
+                Some(format!("id {comp} ${id_offset}")),
             );
-            vec![after, first]
-        } else {
+            return vec![after, first];
+        }
+        if !self.column.is_nullable_column() {
             let after = (
-                format!("${id_offset} IS NOT NULL AND ${column_offset} IS NOT NULL"),
-                self.condition_for_state(CursorState::After, offset, ascending),
+                format!("${id_offset} IS NOT NULL"),
+                Some(format!(
+                    "({0}, id) {comp} (${column_offset}, ${id_offset})",
+                    self.column.name()
+                )),
             );
-            let after_null = (
-                format!("${id_offset} IS NOT NULL AND ${column_offset} IS NULL"),
-                self.condition_for_state(CursorState::AfterNull, offset, ascending),
-            );
-            vec![after, after_null, first]
+            return vec![after, first];
         }
-    }
 
-    /// Scrutinee elements (one or two bool expressions over the destructured
-    /// cursor locals) identifying the cursor state at runtime.
-    pub fn state_scrutinee_elems(&self) -> Vec<TokenStream> {
-        if self.column.is_nullable_column() && self.column.is_optional() {
-            let column_name = self.column.name();
-            vec![quote! { id.is_some() }, quote! { #column_name.is_some() }]
+        // `Option<T>` or `nullable`-annotated column: 3 branches
+        // (After, AfterNull, First). Predicates mirror the direction-aware
+        // NULL edge semantics; the AfterNull gate dispatches on `$col IS NULL`
+        // in the database.
+        let after_predicate = if ascending {
+            format!(
+                "({0}, id) > (${column_offset}, ${id_offset})",
+                self.column.name()
+            )
         } else {
-            vec![quote! { id.is_none() }]
-        }
-    }
-
-    /// Pattern elements matching [`Self::state_scrutinee_elems`] for one
-    /// state.
-    pub fn state_pattern_elems(&self, state: CursorState) -> Vec<TokenStream> {
-        if self.column.is_nullable_column() && self.column.is_optional() {
-            match state {
-                CursorState::First => vec![quote! { false }, quote! { _ }],
-                CursorState::After => vec![quote! { true }, quote! { true }],
-                CursorState::AfterNull => vec![quote! { true }, quote! { false }],
-                CursorState::AfterMaybeNull => {
-                    unreachable!("Option columns never use AfterMaybeNull")
-                }
-            }
+            format!(
+                "({0} IS NULL OR ({0}, id) < (${column_offset}, ${id_offset}))",
+                self.column.name()
+            )
+        };
+        let after_null_predicate = if ascending {
+            format!("({0} IS NOT NULL OR id > ${id_offset})", self.column.name())
         } else {
-            match state {
-                CursorState::First => vec![quote! { true }],
-                _ => vec![quote! { false }],
-            }
-        }
-    }
-
-    /// Cursor value bindings (without the `LIMIT` binding) for a state.
-    pub fn cursor_arg_tokens_for_state(&self, state: CursorState) -> TokenStream {
-        let id = self.id;
-
-        match state {
-            CursorState::First => quote! {},
-            CursorState::AfterNull => quote! {
-                id as Option<#id>,
-            },
-            _ => self.cursor_arg_tokens(),
-        }
+            format!("({0} IS NULL AND id < ${id_offset})", self.column.name())
+        };
+        let after = (
+            format!("${id_offset} IS NOT NULL AND ${column_offset} IS NOT NULL"),
+            Some(after_predicate),
+        );
+        let after_null = (
+            format!("${id_offset} IS NOT NULL AND ${column_offset} IS NULL"),
+            Some(after_null_predicate),
+        );
+        vec![after, after_null, first]
     }
 
     /// The full cursor-value bindings (`id`, and the sort column for

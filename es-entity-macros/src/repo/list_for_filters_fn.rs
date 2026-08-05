@@ -5,7 +5,7 @@ use quote::{TokenStreamExt, quote};
 
 use super::{
     combo_cursor::ComboCursor,
-    list_by_fn::{CursorStruct, assemble_select, not_deleted_predicate},
+    list_by_fn::{CursorStruct, assemble_union_select, not_deleted_predicate},
     options::*,
     scope::ScopeInfo,
 };
@@ -525,8 +525,10 @@ impl<'a> ListForFiltersFn<'a> {
             })
             .collect();
 
-        // Generate the catch-all fallback query (COALESCE-style, correctness
-        // fallback for filter combinations above the specialization cap).
+        // Generate the non-specialized fallback query: correct for every filter
+        // combination, sargable only where a matching composite index exists.
+        // The filter predicates (COALESCE / apply-flag forms) are the leading
+        // conjuncts shared by every unified-cursor `UNION ALL` branch.
         // Parameterized over the scope: the scoped variant binds the scope
         // column at `$1` and shifts every other parameter by one.
         let build_fallback = |scope: Option<&ScopeInfo>| -> (String, String, TokenStream) {
@@ -538,13 +540,17 @@ impl<'a> ListForFiltersFn<'a> {
                 .map(|col| FiltersStruct::where_clause_fragment(col, &mut param_idx))
                 .collect();
 
-            let mut filter_where = if where_fragments.is_empty() {
-                String::new()
-            } else {
-                format!("{} AND ", where_fragments.join(" AND "))
-            };
+            let mut leading: Vec<String> = Vec::new();
             if let Some(scope) = scope {
-                filter_where = format!("{} AND {}", scope.predicate(1), filter_where);
+                leading.push(scope.predicate(1));
+            }
+            leading.extend(where_fragments);
+
+            let mut trailing: Vec<String> = Vec::new();
+            if delete == DeleteOption::No
+                && let Some(not_deleted) = not_deleted_predicate(self.delete)
+            {
+                trailing.push(not_deleted);
             }
 
             let filter_arg_bindings: TokenStream = self
@@ -559,32 +565,22 @@ impl<'a> ListForFiltersFn<'a> {
                 #cursor_arg_tokens
             };
 
-            let asc_query = format!(
-                r#"SELECT {} FROM {} WHERE {}({}){} ORDER BY {} LIMIT ${}"#,
-                select_columns,
+            let asc_query = assemble_union_select(
+                &select_columns,
                 self.table_name,
-                filter_where,
-                cursor_struct.condition(param_idx - 1, true),
-                if delete == DeleteOption::No {
-                    self.delete.not_deleted_condition()
-                } else {
-                    ""
-                },
-                cursor_struct.order_by(true),
+                &leading,
+                &cursor_struct.cursor_branches(param_idx - 1, true),
+                &trailing,
+                &cursor_struct.order_by(true),
                 param_idx,
             );
-            let desc_query = format!(
-                r#"SELECT {} FROM {} WHERE {}({}){} ORDER BY {} LIMIT ${}"#,
-                select_columns,
+            let desc_query = assemble_union_select(
+                &select_columns,
                 self.table_name,
-                filter_where,
-                cursor_struct.condition(param_idx - 1, false),
-                if delete == DeleteOption::No {
-                    self.delete.not_deleted_condition()
-                } else {
-                    ""
-                },
-                cursor_struct.order_by(false),
+                &leading,
+                &cursor_struct.cursor_branches(param_idx - 1, false),
+                &trailing,
+                &cursor_struct.order_by(false),
                 param_idx,
             );
             (asc_query, desc_query, fallback_arg_tokens)
@@ -669,51 +665,48 @@ impl<'a> ListForFiltersFn<'a> {
                         }
                     }
 
-                    for cursor_state in cursor_struct.cursor_states() {
-                        let cursor_patterns = cursor_struct.state_pattern_elems(*cursor_state);
-                        let pattern = quote! { (#(#filter_patterns,)* #(#cursor_patterns,)*) };
-                        let cursor_args = cursor_struct.cursor_arg_tokens_for_state(*cursor_state);
-                        let args = quote! {
-                            #filter_args
-                            (first + 1) as i64,
-                            #cursor_args
-                        };
+                    // The cursor-state dimension collapses into one unified
+                    // `UNION ALL` query per direction (the specialized filter
+                    // predicates are the leading conjuncts of every branch), so
+                    // the arm matches on the filter scrutinee alone.
+                    let pattern = quote! { (#(#filter_patterns,)*) };
+                    let cursor_args = cursor_struct.cursor_arg_tokens();
+                    let args = quote! {
+                        #filter_args
+                        (first + 1) as i64,
+                        #cursor_args
+                    };
 
-                        for ascending in [true, false] {
-                            let mut conditions = filter_conditions.clone();
-                            if let Some(condition) = cursor_struct.condition_for_state(
-                                *cursor_state,
-                                param_idx - 1,
-                                ascending,
-                            ) {
-                                conditions.push(format!("({condition})"));
-                            }
-                            if delete == DeleteOption::No
-                                && let Some(not_deleted) = not_deleted_predicate(self.delete)
-                            {
-                                conditions.push(not_deleted);
-                            }
-                            let query = assemble_select(
-                                &select_columns,
-                                self.table_name,
-                                &conditions,
-                                &cursor_struct.order_by(ascending),
-                                param_idx,
-                            );
-                            let es_query_call = make_es_query(&query, &args);
-                            if ascending {
-                                asc_arms.append_all(quote! {
-                                    #pattern => {
-                                        #es_query_call.fetch_n(op, first).await?
-                                    },
-                                });
-                            } else {
-                                desc_arms.append_all(quote! {
-                                    #pattern => {
-                                        #es_query_call.fetch_n(op, first).await?
-                                    },
-                                });
-                            }
+                    let mut trailing: Vec<String> = Vec::new();
+                    if delete == DeleteOption::No
+                        && let Some(not_deleted) = not_deleted_predicate(self.delete)
+                    {
+                        trailing.push(not_deleted);
+                    }
+
+                    for ascending in [true, false] {
+                        let query = assemble_union_select(
+                            &select_columns,
+                            self.table_name,
+                            &filter_conditions,
+                            &cursor_struct.cursor_branches(param_idx - 1, ascending),
+                            &trailing,
+                            &cursor_struct.order_by(ascending),
+                            param_idx,
+                        );
+                        let es_query_call = make_es_query(&query, &args);
+                        if ascending {
+                            asc_arms.append_all(quote! {
+                                #pattern => {
+                                    #es_query_call.fetch_n(op, first).await?
+                                },
+                            });
+                        } else {
+                            desc_arms.append_all(quote! {
+                                #pattern => {
+                                    #es_query_call.fetch_n(op, first).await?
+                                },
+                            });
                         }
                     }
                 }
@@ -721,11 +714,7 @@ impl<'a> ListForFiltersFn<'a> {
             };
         let (asc_arms, desc_arms, all_combos_specialized) = build_specialized_arms(None);
 
-        let scrutinee_elems: Vec<TokenStream> = self
-            .filter_scrutinee_elems()
-            .into_iter()
-            .chain(cursor_struct.state_scrutinee_elems())
-            .collect();
+        let scrutinee_elems: Vec<TokenStream> = self.filter_scrutinee_elems();
 
         // When every filter combination is specialized the explicit arms
         // already cover the entire pattern space, so no wildcard fallback arm
@@ -1169,40 +1158,21 @@ mod tests {
                     };
 
                     let (entities, has_next_page) = match direction {
-                        es_entity::ListDirection::Ascending => match (filter_customer_id.is_some(), filter_status.is_some(), id.is_none(),) {
-                            (false, false, true,) => {
+                        es_entity::ListDirection::Ascending => match (filter_customer_id.is_some(), filter_status.is_some(),) {
+                            (false, false,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders ORDER BY id ASC LIMIT $1",
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (false, false, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE (id > $2) ORDER BY id ASC LIMIT $1",
+                                    "(SELECT id FROM orders WHERE (id > $2) AND ($2 IS NOT NULL) ORDER BY id ASC LIMIT $1) UNION ALL (SELECT id FROM orders WHERE ($2 IS NULL) ORDER BY id ASC LIMIT $1) ORDER BY id ASC LIMIT $1",
                                     (first + 1) as i64,
                                     id as Option<OrderId>,
                                 )
                                     .fetch_n(op, first)
                                     .await?
                             },
-                            (false, true, true,) => {
+                            (false, true,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders WHERE status = $1 ORDER BY id ASC LIMIT $2",
-                                    filter_status as Option<OrderStatus>,
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (false, true, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE status = $1 AND (id > $3) ORDER BY id ASC LIMIT $2",
+                                    "(SELECT id FROM orders WHERE status = $1 AND (id > $3) AND ($3 IS NOT NULL) ORDER BY id ASC LIMIT $2) UNION ALL (SELECT id FROM orders WHERE status = $1 AND ($3 IS NULL) ORDER BY id ASC LIMIT $2) ORDER BY id ASC LIMIT $2",
                                     filter_status as Option<OrderStatus>,
                                     (first + 1) as i64,
                                     id as Option<OrderId>,
@@ -1210,20 +1180,10 @@ mod tests {
                                     .fetch_n(op, first)
                                     .await?
                             },
-                            (true, false, true,) => {
+                            (true, false,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 ORDER BY id ASC LIMIT $2",
-                                    filter_customer_id as Option<CustomerId>,
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (true, false, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 AND (id > $3) ORDER BY id ASC LIMIT $2",
+                                    "(SELECT id FROM orders WHERE customer_id = $1 AND (id > $3) AND ($3 IS NOT NULL) ORDER BY id ASC LIMIT $2) UNION ALL (SELECT id FROM orders WHERE customer_id = $1 AND ($3 IS NULL) ORDER BY id ASC LIMIT $2) ORDER BY id ASC LIMIT $2",
                                     filter_customer_id as Option<CustomerId>,
                                     (first + 1) as i64,
                                     id as Option<OrderId>,
@@ -1231,21 +1191,10 @@ mod tests {
                                     .fetch_n(op, first)
                                     .await?
                             },
-                            (true, true, true,) => {
+                            (true, true,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 ORDER BY id ASC LIMIT $3",
-                                    filter_customer_id as Option<CustomerId>,
-                                    filter_status as Option<OrderStatus>,
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (true, true, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND (id > $4) ORDER BY id ASC LIMIT $3",
+                                    "(SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND (id > $4) AND ($4 IS NOT NULL) ORDER BY id ASC LIMIT $3) UNION ALL (SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND ($4 IS NULL) ORDER BY id ASC LIMIT $3) ORDER BY id ASC LIMIT $3",
                                     filter_customer_id as Option<CustomerId>,
                                     filter_status as Option<OrderStatus>,
                                     (first + 1) as i64,
@@ -1255,40 +1204,21 @@ mod tests {
                                     .await?
                             },
                         },
-                        es_entity::ListDirection::Descending => match (filter_customer_id.is_some(), filter_status.is_some(), id.is_none(),) {
-                            (false, false, true,) => {
+                        es_entity::ListDirection::Descending => match (filter_customer_id.is_some(), filter_status.is_some(),) {
+                            (false, false,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders ORDER BY id DESC LIMIT $1",
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (false, false, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE (id < $2) ORDER BY id DESC LIMIT $1",
+                                    "(SELECT id FROM orders WHERE (id < $2) AND ($2 IS NOT NULL) ORDER BY id DESC LIMIT $1) UNION ALL (SELECT id FROM orders WHERE ($2 IS NULL) ORDER BY id DESC LIMIT $1) ORDER BY id DESC LIMIT $1",
                                     (first + 1) as i64,
                                     id as Option<OrderId>,
                                 )
                                     .fetch_n(op, first)
                                     .await?
                             },
-                            (false, true, true,) => {
+                            (false, true,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders WHERE status = $1 ORDER BY id DESC LIMIT $2",
-                                    filter_status as Option<OrderStatus>,
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (false, true, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE status = $1 AND (id < $3) ORDER BY id DESC LIMIT $2",
+                                    "(SELECT id FROM orders WHERE status = $1 AND (id < $3) AND ($3 IS NOT NULL) ORDER BY id DESC LIMIT $2) UNION ALL (SELECT id FROM orders WHERE status = $1 AND ($3 IS NULL) ORDER BY id DESC LIMIT $2) ORDER BY id DESC LIMIT $2",
                                     filter_status as Option<OrderStatus>,
                                     (first + 1) as i64,
                                     id as Option<OrderId>,
@@ -1296,20 +1226,10 @@ mod tests {
                                     .fetch_n(op, first)
                                     .await?
                             },
-                            (true, false, true,) => {
+                            (true, false,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 ORDER BY id DESC LIMIT $2",
-                                    filter_customer_id as Option<CustomerId>,
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (true, false, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 AND (id < $3) ORDER BY id DESC LIMIT $2",
+                                    "(SELECT id FROM orders WHERE customer_id = $1 AND (id < $3) AND ($3 IS NOT NULL) ORDER BY id DESC LIMIT $2) UNION ALL (SELECT id FROM orders WHERE customer_id = $1 AND ($3 IS NULL) ORDER BY id DESC LIMIT $2) ORDER BY id DESC LIMIT $2",
                                     filter_customer_id as Option<CustomerId>,
                                     (first + 1) as i64,
                                     id as Option<OrderId>,
@@ -1317,21 +1237,10 @@ mod tests {
                                     .fetch_n(op, first)
                                     .await?
                             },
-                            (true, true, true,) => {
+                            (true, true,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 ORDER BY id DESC LIMIT $3",
-                                    filter_customer_id as Option<CustomerId>,
-                                    filter_status as Option<OrderStatus>,
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (true, true, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND (id < $4) ORDER BY id DESC LIMIT $3",
+                                    "(SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND (id < $4) AND ($4 IS NOT NULL) ORDER BY id DESC LIMIT $3) UNION ALL (SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND ($4 IS NULL) ORDER BY id DESC LIMIT $3) ORDER BY id DESC LIMIT $3",
                                     filter_customer_id as Option<CustomerId>,
                                     filter_status as Option<OrderStatus>,
                                     (first + 1) as i64,
@@ -1703,22 +1612,26 @@ mod tests {
         list_for_filters_fn.to_tokens(&mut tokens);
         let token_str = tokens.to_string();
 
+        // Each specialized combo now emits one unified `UNION ALL` query per
+        // direction: an `After` branch (sargable `id > $k` gated on
+        // `$k IS NOT NULL`) then the page-1 `First` branch (gated on
+        // `$k IS NULL`), plus the outer merge. The filter equality predicates
+        // are the leading conjuncts shared by every branch.
         let expected_queries = [
-            // No filters, page 1: no WHERE at all — rides index ordering.
-            "SELECT id FROM tasks ORDER BY id ASC LIMIT $1",
-            // No filters, cursor page: bare comparison, no COALESCE.
-            "SELECT id FROM tasks WHERE (id > $2) ORDER BY id ASC LIMIT $1",
+            // No filters: First branch, then After branch.
+            "(SELECT id FROM tasks WHERE ($2 IS NULL) ORDER BY id ASC LIMIT $1)",
+            "(SELECT id FROM tasks WHERE (id > $2) AND ($2 IS NOT NULL) ORDER BY id ASC LIMIT $1)",
             // Single non-optional filter.
-            "SELECT id FROM tasks WHERE status = $1 ORDER BY id ASC LIMIT $2",
-            "SELECT id FROM tasks WHERE status = $1 AND (id > $3) ORDER BY id ASC LIMIT $2",
+            "(SELECT id FROM tasks WHERE status = $1 AND ($3 IS NULL) ORDER BY id ASC LIMIT $2)",
+            "(SELECT id FROM tasks WHERE status = $1 AND (id > $3) AND ($3 IS NOT NULL) ORDER BY id ASC LIMIT $2)",
             // Optional filter on a value: sargable `col = $k`.
-            "SELECT id FROM tasks WHERE workspace_id = $1 ORDER BY id ASC LIMIT $2",
+            "(SELECT id FROM tasks WHERE workspace_id = $1 AND ($3 IS NULL) ORDER BY id ASC LIMIT $2)",
             // Optional filter on NULL: `col IS NULL`, no parameter.
-            "SELECT id FROM tasks WHERE workspace_id IS NULL ORDER BY id ASC LIMIT $1",
+            "(SELECT id FROM tasks WHERE workspace_id IS NULL AND ($2 IS NULL) ORDER BY id ASC LIMIT $1)",
             // All filters present.
-            "SELECT id FROM tasks WHERE workspace_id = $1 AND status = $2 ORDER BY id ASC LIMIT $3",
-            "SELECT id FROM tasks WHERE workspace_id = $1 AND status = $2 AND (id > $4) ORDER BY id ASC LIMIT $3",
-            "SELECT id FROM tasks WHERE workspace_id IS NULL AND status = $1 ORDER BY id ASC LIMIT $2",
+            "(SELECT id FROM tasks WHERE workspace_id = $1 AND status = $2 AND ($4 IS NULL) ORDER BY id ASC LIMIT $3)",
+            "(SELECT id FROM tasks WHERE workspace_id = $1 AND status = $2 AND (id > $4) AND ($4 IS NOT NULL) ORDER BY id ASC LIMIT $3)",
+            "(SELECT id FROM tasks WHERE workspace_id IS NULL AND status = $1 AND ($3 IS NULL) ORDER BY id ASC LIMIT $2)",
         ];
         for query in expected_queries {
             assert!(
@@ -1795,11 +1708,17 @@ mod tests {
         let token_str = tokens.to_string();
 
         // No-filter, single-filter and all-filter combinations stay
-        // specialized...
-        assert!(token_str.contains("SELECT id FROM wides ORDER BY id ASC LIMIT $1"));
-        assert!(token_str.contains("SELECT id FROM wides WHERE a = $1 ORDER BY id ASC LIMIT $2"));
+        // specialized (shown here via each unified query's page-1 `First`
+        // branch)...
+        assert!(
+            token_str
+                .contains("(SELECT id FROM wides WHERE ($2 IS NULL) ORDER BY id ASC LIMIT $1)")
+        );
         assert!(token_str.contains(
-            "SELECT id FROM wides WHERE a = $1 AND b = $2 AND c = $3 AND d = $4 AND e = $5 ORDER BY id ASC LIMIT $6"
+            "(SELECT id FROM wides WHERE a = $1 AND ($3 IS NULL) ORDER BY id ASC LIMIT $2)"
+        ));
+        assert!(token_str.contains(
+            "(SELECT id FROM wides WHERE a = $1 AND b = $2 AND c = $3 AND d = $4 AND e = $5 AND ($7 IS NULL) ORDER BY id ASC LIMIT $6)"
         ));
         // ...but intermediate combinations (e.g. exactly two filters) fall
         // back to the catch-all COALESCE query, so no specialized SQL exists
