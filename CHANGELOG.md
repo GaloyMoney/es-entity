@@ -1,3 +1,9 @@
+<!--
+Note: 0.11.13 was yanked from crates.io. It shipped a breaking change (#178) as a
+patch release because the release script failed to detect the breaking marker. The
+identical code is re-released as 0.12.0. See #181 for the release-script fix.
+-->
+
 # [cala release v0.11.13](https://github.com/GaloyMoney/cala/releases/tag/0.11.13)
 
 
