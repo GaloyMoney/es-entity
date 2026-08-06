@@ -40,7 +40,7 @@ fi
 
 HAS_BREAKING=0
 HAS_FEATURES=0
-if grep -q '\[**breaking**\]' artifacts/gh-release-notes.md; then
+if grep -qF '[**breaking**]' artifacts/gh-release-notes.md; then
   HAS_BREAKING=1
 fi
 if grep -q '^### Features' artifacts/gh-release-notes.md; then
@@ -54,14 +54,11 @@ if [[ "$CURR_VER" == "0.0.0" ]]; then
 
 else
   if (( IS_PRE_1 == 1 )); then
-    # Pre-1.0.0 -> 0.MAJOR.(minor|patch)
+    # Pre-1.0.0 -> 0.MINOR.PATCH (breaking bumps the middle component: 0.Y.0)
     if (( HAS_BREAKING == 1 )); then
-      echo "Breaking change detected on pre-1.0.0. The middle component (0.Y.Z) is your MANUAL breaking channel." >&2
-      echo "Please bump the middle component manually (e.g., 0.$((VMIN+1)).0) and re-run." >&2
-      exit 2
-    fi
-
-    if (( HAS_FEATURES == 1 )); then
+      echo "Breaking change detected on pre-1.0.0 — bumping MINOR (middle component: 0.$((VMIN+1)).0)."
+      bump2version minor --current-version "$CURR_VER" --allow-dirty version/version
+    elif (( HAS_FEATURES == 1 )); then
       echo "Pre-1.0.0 feature detected — bumping PATCH (third component) to reflect new functionality safely."
       bump2version patch --current-version "$CURR_VER" --allow-dirty version/version
     else
