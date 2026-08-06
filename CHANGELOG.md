@@ -1,3 +1,27 @@
+# [cala release v0.11.13](https://github.com/GaloyMoney/cala/releases/tag/0.11.13)
+
+
+
+### Bug Fixes
+
+- Remove panic paths from event persistence and last_persisted (#172)
+
+### Documentation
+
+- Warn about PII/user-enumeration risk of ConstraintViolation values (#173)
+
+### Features
+
+- [**breaking**] Unify list_for_filters cursor + derive specialization & errors from migration indexes (P2+P3) (#178)
+- Unified cursor query emission (reverts per-state matrix) (#177)
+- Add exponential backoff to retry_on_concurrent_modification (#174)
+
+### Miscellaneous Tasks
+
+- All-dependencies group (syn 3) + darling 0.24 to fix the build (#180)
+- Bump event-listener to 5.4.2 to patch RUSTSEC-2026-0221 (#171)
+- Bump rustls-webpki 0.103.9 -> 0.103.13 (#176)
+
 # [cala release v0.11.12](https://github.com/GaloyMoney/cala/releases/tag/0.11.12)
 
 
