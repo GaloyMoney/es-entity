@@ -298,11 +298,10 @@ mod tests {
         let create_error = syn::Ident::new("EntityCreateError", Span::call_site());
 
         use darling::FromMeta;
-        let input: syn::Meta = syn::parse_quote!(columns(
-            id = "EntityId",
-            name(ty = "String", create(accessor = "name()"))
-        ));
-        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let input: syn::Meta =
+            syn::parse_quote!(columns(name(ty = "String", create(accessor = "name()"))));
+        let mut columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        columns.set_id_column(&Ident::new("EntityId", Span::call_site()));
 
         let create_fn = CreateFn {
             table_name: "entities",
