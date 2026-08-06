@@ -28,6 +28,11 @@ impl From<(&'static str, &'static str)> for CursorDestructureError {
 /// `Key (column)=(value) already exists.`
 ///
 /// Returns `None` if the detail is missing or doesn't match the expected format.
+///
+/// **Security note:** the extracted value is attacker-influenced input that
+/// was rejected by a unique constraint and may be PII (e.g. an email
+/// address). Returning it to untrusted API clients enables user
+/// enumeration; logging it may place PII in log pipelines.
 pub fn parse_constraint_detail_value(detail: Option<&str>) -> Option<String> {
     let detail = detail?;
     let start = detail.find("=(")? + 2;
@@ -44,6 +49,9 @@ pub fn parse_constraint_detail_value(detail: Option<&str>) -> Option<String> {
 ///
 /// Downcasts to [`sqlx::postgres::PgDatabaseError`], reads its `detail()`,
 /// and parses the conflicting value.
+///
+/// **Security note:** see [`parse_constraint_detail_value`] — the returned
+/// value may be PII and must not be exposed to untrusted clients.
 pub fn extract_constraint_value(db_err: &dyn sqlx::error::DatabaseError) -> Option<String> {
     let pg_err = db_err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()?;
     parse_constraint_detail_value(pg_err.detail())
