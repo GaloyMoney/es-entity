@@ -1,20 +1,8 @@
 # [cala release v0.12.0](https://github.com/GaloyMoney/cala/releases/tag/0.12.0)
 
-
-
-### Features
-
-- [**breaking**] Republish list_for_filters cursor unification as 0.12.0 (#178)
-
-<!--
-Note: 0.11.13 was yanked from crates.io. It shipped a breaking change (#178) as a
-patch release because the release script failed to detect the breaking marker. The
-identical code is re-released as 0.12.0. See #181 for the release-script fix.
--->
-
-# [cala release v0.11.13](https://github.com/GaloyMoney/cala/releases/tag/0.11.13)
-
-
+> Re-release of the **yanked** 0.11.13 under the correct version number. 0.11.13
+> shipped the breaking change #178 as a patch release; the code in 0.12.0 is
+> identical. Release-script fix that restores breaking-change detection: #181.
 
 ### Bug Fixes
 
@@ -35,6 +23,10 @@ identical code is re-released as 0.12.0. See #181 for the release-script fix.
 - All-dependencies group (syn 3) + darling 0.24 to fix the build (#180)
 - Bump event-listener to 5.4.2 to patch RUSTSEC-2026-0221 (#171)
 - Bump rustls-webpki 0.103.9 -> 0.103.13 (#176)
+
+# [cala release v0.11.13](https://github.com/GaloyMoney/cala/releases/tag/0.11.13) — YANKED
+
+Superseded by [0.12.0](https://github.com/GaloyMoney/cala/releases/tag/0.12.0) (identical code, correct version).
 
 # [cala release v0.11.12](https://github.com/GaloyMoney/cala/releases/tag/0.11.12)
 
