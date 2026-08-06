@@ -31,6 +31,7 @@ pub fn make_internal(args: TokenStream2, input: ItemFn) -> darling::Result<Token
         vis,
         sig,
         block,
+        ..
     } = input;
 
     let is_async = sig.asyncness.is_some();
