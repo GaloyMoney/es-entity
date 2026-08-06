@@ -20,9 +20,9 @@ proc-macro = true
 
 [dependencies]
 proc-macro2 = "1.0"
-syn = "2.0"
+syn = "3.0"
 quote = "1.0"
-darling = "0.23"
+darling = "0.24"
 pluralizer = "0.5"
 convert_case = "0.11"
 regex = "1.12"
