@@ -1,3 +1,11 @@
+# [cala release v0.12.0](https://github.com/GaloyMoney/cala/releases/tag/0.12.0)
+
+
+
+### Features
+
+- [**breaking**] Republish list_for_filters cursor unification as 0.12.0 (#178)
+
 <!--
 Note: 0.11.13 was yanked from crates.io. It shipped a breaking change (#178) as a
 patch release because the release script failed to detect the breaking marker. The
