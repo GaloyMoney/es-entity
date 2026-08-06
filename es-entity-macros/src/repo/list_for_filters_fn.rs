@@ -5,7 +5,7 @@ use quote::{TokenStreamExt, quote};
 
 use super::{
     combo_cursor::ComboCursor,
-    list_by_fn::{CursorStruct, assemble_select, not_deleted_predicate},
+    list_by_fn::{CursorStruct, assemble_union_select, not_deleted_predicate},
     options::*,
     scope::ScopeInfo,
 };
@@ -176,7 +176,7 @@ pub struct ListForFiltersFn<'a> {
     post_hydrate_error: Option<&'a syn::Type>,
     forgettable_table_name: Option<&'a str>,
     scope: Option<ScopeInfo<'a>>,
-    sargable_filters: bool,
+    index_catalog: crate::index_catalog::IndexCatalog,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -204,7 +204,7 @@ impl<'a> ListForFiltersFn<'a> {
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             forgettable_table_name: opts.forgettable_table_name(),
             scope: ScopeInfo::from_opts(opts),
-            sargable_filters: opts.sargable_filters(),
+            index_catalog: opts.index_catalog(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -339,24 +339,35 @@ impl<'a> ListForFiltersFn<'a> {
         }
     }
 
-    /// Whether a filter combination gets a specialized sargable query.
-    ///
-    /// Full specialization is 2^N combinations (3 per optional column) x 2
-    /// cursor states x 2 directions x per sort column, so for entities with
-    /// many filter columns the matrix is capped: only the no-filter,
-    /// all-filters, and single-filter combinations are specialized and
-    /// everything else falls back to the catch-all COALESCE query
-    /// (correctness preserved, just not sargable).
-    fn is_specialized_combo(&self, combo: &[FilterState]) -> bool {
-        if !self.sargable_filters {
-            return false;
+    /// Whether a filter combination, paginated by `by_column`, gets a
+    /// specialized sargable query — decided purely by the physical index
+    /// catalog (derived from the migrations). A combination is specialized iff
+    /// some composite index's leading key columns are a permutation of the
+    /// equality columns (the scope column, when present, plus every constrained
+    /// filter — `= $k` *and* `IS NULL` states both constrain the column)
+    /// immediately followed by the sort column. Everything else falls back to
+    /// the correct (non-sargable) `COALESCE` query. No arity cap: build cost
+    /// tracks declared indexes, not `3^n` combinations.
+    fn is_specialized_combo(
+        &self,
+        combo: &[FilterState],
+        by_column: &Column,
+        scope: Option<&ScopeInfo>,
+    ) -> bool {
+        let mut equality_cols: Vec<String> = Vec::new();
+        if let Some(scope) = scope {
+            equality_cols.push(scope.column_name.to_string());
         }
-        let n = self.for_columns.len();
-        if n <= 4 {
-            return true;
+        for (col, state) in self.for_columns.iter().zip(combo.iter()) {
+            if state.is_present() {
+                equality_cols.push(col.name().to_string());
+            }
         }
-        let present_count = combo.iter().filter(|s| s.is_present()).count();
-        present_count <= 1 || present_count == n
+        self.index_catalog.specializes(
+            self.table_name,
+            &equality_cols,
+            &by_column.name().to_string(),
+        )
     }
 
     fn generate_proxy_body(&self, by_col: &Column, delete: DeleteOption) -> TokenStream {
@@ -525,8 +536,10 @@ impl<'a> ListForFiltersFn<'a> {
             })
             .collect();
 
-        // Generate the catch-all fallback query (COALESCE-style, correctness
-        // fallback for filter combinations above the specialization cap).
+        // Generate the non-specialized fallback query: correct for every filter
+        // combination, sargable only where a matching composite index exists.
+        // The filter predicates (COALESCE / apply-flag forms) are the leading
+        // conjuncts shared by every unified-cursor `UNION ALL` branch.
         // Parameterized over the scope: the scoped variant binds the scope
         // column at `$1` and shifts every other parameter by one.
         let build_fallback = |scope: Option<&ScopeInfo>| -> (String, String, TokenStream) {
@@ -538,13 +551,17 @@ impl<'a> ListForFiltersFn<'a> {
                 .map(|col| FiltersStruct::where_clause_fragment(col, &mut param_idx))
                 .collect();
 
-            let mut filter_where = if where_fragments.is_empty() {
-                String::new()
-            } else {
-                format!("{} AND ", where_fragments.join(" AND "))
-            };
+            let mut leading: Vec<String> = Vec::new();
             if let Some(scope) = scope {
-                filter_where = format!("{} AND {}", scope.predicate(1), filter_where);
+                leading.push(scope.predicate(1));
+            }
+            leading.extend(where_fragments);
+
+            let mut trailing: Vec<String> = Vec::new();
+            if delete == DeleteOption::No
+                && let Some(not_deleted) = not_deleted_predicate(self.delete)
+            {
+                trailing.push(not_deleted);
             }
 
             let filter_arg_bindings: TokenStream = self
@@ -559,32 +576,22 @@ impl<'a> ListForFiltersFn<'a> {
                 #cursor_arg_tokens
             };
 
-            let asc_query = format!(
-                r#"SELECT {} FROM {} WHERE {}({}){} ORDER BY {} LIMIT ${}"#,
-                select_columns,
+            let asc_query = assemble_union_select(
+                &select_columns,
                 self.table_name,
-                filter_where,
-                cursor_struct.condition(param_idx - 1, true),
-                if delete == DeleteOption::No {
-                    self.delete.not_deleted_condition()
-                } else {
-                    ""
-                },
-                cursor_struct.order_by(true),
+                &leading,
+                &cursor_struct.cursor_branches(param_idx - 1, true),
+                &trailing,
+                &cursor_struct.order_by(true),
                 param_idx,
             );
-            let desc_query = format!(
-                r#"SELECT {} FROM {} WHERE {}({}){} ORDER BY {} LIMIT ${}"#,
-                select_columns,
+            let desc_query = assemble_union_select(
+                &select_columns,
                 self.table_name,
-                filter_where,
-                cursor_struct.condition(param_idx - 1, false),
-                if delete == DeleteOption::No {
-                    self.delete.not_deleted_condition()
-                } else {
-                    ""
-                },
-                cursor_struct.order_by(false),
+                &leading,
+                &cursor_struct.cursor_branches(param_idx - 1, false),
+                &trailing,
+                &cursor_struct.order_by(false),
                 param_idx,
             );
             (asc_query, desc_query, fallback_arg_tokens)
@@ -631,7 +638,7 @@ impl<'a> ListForFiltersFn<'a> {
                 let mut desc_arms = TokenStream::new();
                 let mut all_combos_specialized = true;
                 for combo in filter_state_combos(&self.for_columns) {
-                    if !self.is_specialized_combo(&combo) {
+                    if !self.is_specialized_combo(&combo, cursor_struct.column, scope) {
                         all_combos_specialized = false;
                         continue;
                     }
@@ -669,51 +676,48 @@ impl<'a> ListForFiltersFn<'a> {
                         }
                     }
 
-                    for cursor_state in cursor_struct.cursor_states() {
-                        let cursor_patterns = cursor_struct.state_pattern_elems(*cursor_state);
-                        let pattern = quote! { (#(#filter_patterns,)* #(#cursor_patterns,)*) };
-                        let cursor_args = cursor_struct.cursor_arg_tokens_for_state(*cursor_state);
-                        let args = quote! {
-                            #filter_args
-                            (first + 1) as i64,
-                            #cursor_args
-                        };
+                    // The cursor-state dimension collapses into one unified
+                    // `UNION ALL` query per direction (the specialized filter
+                    // predicates are the leading conjuncts of every branch), so
+                    // the arm matches on the filter scrutinee alone.
+                    let pattern = quote! { (#(#filter_patterns,)*) };
+                    let cursor_args = cursor_struct.cursor_arg_tokens();
+                    let args = quote! {
+                        #filter_args
+                        (first + 1) as i64,
+                        #cursor_args
+                    };
 
-                        for ascending in [true, false] {
-                            let mut conditions = filter_conditions.clone();
-                            if let Some(condition) = cursor_struct.condition_for_state(
-                                *cursor_state,
-                                param_idx - 1,
-                                ascending,
-                            ) {
-                                conditions.push(format!("({condition})"));
-                            }
-                            if delete == DeleteOption::No
-                                && let Some(not_deleted) = not_deleted_predicate(self.delete)
-                            {
-                                conditions.push(not_deleted);
-                            }
-                            let query = assemble_select(
-                                &select_columns,
-                                self.table_name,
-                                &conditions,
-                                &cursor_struct.order_by(ascending),
-                                param_idx,
-                            );
-                            let es_query_call = make_es_query(&query, &args);
-                            if ascending {
-                                asc_arms.append_all(quote! {
-                                    #pattern => {
-                                        #es_query_call.fetch_n(op, first).await?
-                                    },
-                                });
-                            } else {
-                                desc_arms.append_all(quote! {
-                                    #pattern => {
-                                        #es_query_call.fetch_n(op, first).await?
-                                    },
-                                });
-                            }
+                    let mut trailing: Vec<String> = Vec::new();
+                    if delete == DeleteOption::No
+                        && let Some(not_deleted) = not_deleted_predicate(self.delete)
+                    {
+                        trailing.push(not_deleted);
+                    }
+
+                    for ascending in [true, false] {
+                        let query = assemble_union_select(
+                            &select_columns,
+                            self.table_name,
+                            &filter_conditions,
+                            &cursor_struct.cursor_branches(param_idx - 1, ascending),
+                            &trailing,
+                            &cursor_struct.order_by(ascending),
+                            param_idx,
+                        );
+                        let es_query_call = make_es_query(&query, &args);
+                        if ascending {
+                            asc_arms.append_all(quote! {
+                                #pattern => {
+                                    #es_query_call.fetch_n(op, first).await?
+                                },
+                            });
+                        } else {
+                            desc_arms.append_all(quote! {
+                                #pattern => {
+                                    #es_query_call.fetch_n(op, first).await?
+                                },
+                            });
                         }
                     }
                 }
@@ -721,11 +725,7 @@ impl<'a> ListForFiltersFn<'a> {
             };
         let (asc_arms, desc_arms, all_combos_specialized) = build_specialized_arms(None);
 
-        let scrutinee_elems: Vec<TokenStream> = self
-            .filter_scrutinee_elems()
-            .into_iter()
-            .chain(cursor_struct.state_scrutinee_elems())
-            .collect();
+        let scrutinee_elems: Vec<TokenStream> = self.filter_scrutinee_elems();
 
         // When every filter combination is specialized the explicit arms
         // already cover the entire pattern space, so no wildcard fallback arm
@@ -1054,6 +1054,15 @@ mod tests {
     use proc_macro2::Span;
     use syn::Ident;
 
+    /// Build an index catalog from inline `CREATE INDEX` statements, standing in
+    /// for the migrations a real repo would parse.
+    fn catalog(sql: &str) -> crate::index_catalog::IndexCatalog {
+        crate::index_catalog::IndexCatalog::from_sql_files(&[(
+            "m.sql".to_string(),
+            sql.to_string(),
+        )])
+    }
+
     #[test]
     fn filters_struct() {
         let entity = Ident::new("Order", Span::call_site());
@@ -1130,7 +1139,12 @@ mod tests {
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
-            sargable_filters: true,
+            index_catalog: catalog(
+                "CREATE INDEX ON orders (id); \
+                 CREATE INDEX ON orders (customer_id, id); \
+                 CREATE INDEX ON orders (status, id); \
+                 CREATE INDEX ON orders (customer_id, status, id);",
+            ),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1169,40 +1183,21 @@ mod tests {
                     };
 
                     let (entities, has_next_page) = match direction {
-                        es_entity::ListDirection::Ascending => match (filter_customer_id.is_some(), filter_status.is_some(), id.is_none(),) {
-                            (false, false, true,) => {
+                        es_entity::ListDirection::Ascending => match (filter_customer_id.is_some(), filter_status.is_some(),) {
+                            (false, false,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders ORDER BY id ASC LIMIT $1",
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (false, false, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE (id > $2) ORDER BY id ASC LIMIT $1",
+                                    "(SELECT id FROM orders WHERE (id > $2) AND ($2 IS NOT NULL) ORDER BY id ASC LIMIT $1) UNION ALL (SELECT id FROM orders WHERE ($2 IS NULL) ORDER BY id ASC LIMIT $1) ORDER BY id ASC LIMIT $1",
                                     (first + 1) as i64,
                                     id as Option<OrderId>,
                                 )
                                     .fetch_n(op, first)
                                     .await?
                             },
-                            (false, true, true,) => {
+                            (false, true,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders WHERE status = $1 ORDER BY id ASC LIMIT $2",
-                                    filter_status as Option<OrderStatus>,
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (false, true, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE status = $1 AND (id > $3) ORDER BY id ASC LIMIT $2",
+                                    "(SELECT id FROM orders WHERE status = $1 AND (id > $3) AND ($3 IS NOT NULL) ORDER BY id ASC LIMIT $2) UNION ALL (SELECT id FROM orders WHERE status = $1 AND ($3 IS NULL) ORDER BY id ASC LIMIT $2) ORDER BY id ASC LIMIT $2",
                                     filter_status as Option<OrderStatus>,
                                     (first + 1) as i64,
                                     id as Option<OrderId>,
@@ -1210,20 +1205,10 @@ mod tests {
                                     .fetch_n(op, first)
                                     .await?
                             },
-                            (true, false, true,) => {
+                            (true, false,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 ORDER BY id ASC LIMIT $2",
-                                    filter_customer_id as Option<CustomerId>,
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (true, false, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 AND (id > $3) ORDER BY id ASC LIMIT $2",
+                                    "(SELECT id FROM orders WHERE customer_id = $1 AND (id > $3) AND ($3 IS NOT NULL) ORDER BY id ASC LIMIT $2) UNION ALL (SELECT id FROM orders WHERE customer_id = $1 AND ($3 IS NULL) ORDER BY id ASC LIMIT $2) ORDER BY id ASC LIMIT $2",
                                     filter_customer_id as Option<CustomerId>,
                                     (first + 1) as i64,
                                     id as Option<OrderId>,
@@ -1231,21 +1216,10 @@ mod tests {
                                     .fetch_n(op, first)
                                     .await?
                             },
-                            (true, true, true,) => {
+                            (true, true,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 ORDER BY id ASC LIMIT $3",
-                                    filter_customer_id as Option<CustomerId>,
-                                    filter_status as Option<OrderStatus>,
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (true, true, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND (id > $4) ORDER BY id ASC LIMIT $3",
+                                    "(SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND (id > $4) AND ($4 IS NOT NULL) ORDER BY id ASC LIMIT $3) UNION ALL (SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND ($4 IS NULL) ORDER BY id ASC LIMIT $3) ORDER BY id ASC LIMIT $3",
                                     filter_customer_id as Option<CustomerId>,
                                     filter_status as Option<OrderStatus>,
                                     (first + 1) as i64,
@@ -1255,40 +1229,21 @@ mod tests {
                                     .await?
                             },
                         },
-                        es_entity::ListDirection::Descending => match (filter_customer_id.is_some(), filter_status.is_some(), id.is_none(),) {
-                            (false, false, true,) => {
+                        es_entity::ListDirection::Descending => match (filter_customer_id.is_some(), filter_status.is_some(),) {
+                            (false, false,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders ORDER BY id DESC LIMIT $1",
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (false, false, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE (id < $2) ORDER BY id DESC LIMIT $1",
+                                    "(SELECT id FROM orders WHERE (id < $2) AND ($2 IS NOT NULL) ORDER BY id DESC LIMIT $1) UNION ALL (SELECT id FROM orders WHERE ($2 IS NULL) ORDER BY id DESC LIMIT $1) ORDER BY id DESC LIMIT $1",
                                     (first + 1) as i64,
                                     id as Option<OrderId>,
                                 )
                                     .fetch_n(op, first)
                                     .await?
                             },
-                            (false, true, true,) => {
+                            (false, true,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders WHERE status = $1 ORDER BY id DESC LIMIT $2",
-                                    filter_status as Option<OrderStatus>,
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (false, true, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE status = $1 AND (id < $3) ORDER BY id DESC LIMIT $2",
+                                    "(SELECT id FROM orders WHERE status = $1 AND (id < $3) AND ($3 IS NOT NULL) ORDER BY id DESC LIMIT $2) UNION ALL (SELECT id FROM orders WHERE status = $1 AND ($3 IS NULL) ORDER BY id DESC LIMIT $2) ORDER BY id DESC LIMIT $2",
                                     filter_status as Option<OrderStatus>,
                                     (first + 1) as i64,
                                     id as Option<OrderId>,
@@ -1296,20 +1251,10 @@ mod tests {
                                     .fetch_n(op, first)
                                     .await?
                             },
-                            (true, false, true,) => {
+                            (true, false,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 ORDER BY id DESC LIMIT $2",
-                                    filter_customer_id as Option<CustomerId>,
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (true, false, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 AND (id < $3) ORDER BY id DESC LIMIT $2",
+                                    "(SELECT id FROM orders WHERE customer_id = $1 AND (id < $3) AND ($3 IS NOT NULL) ORDER BY id DESC LIMIT $2) UNION ALL (SELECT id FROM orders WHERE customer_id = $1 AND ($3 IS NULL) ORDER BY id DESC LIMIT $2) ORDER BY id DESC LIMIT $2",
                                     filter_customer_id as Option<CustomerId>,
                                     (first + 1) as i64,
                                     id as Option<OrderId>,
@@ -1317,21 +1262,10 @@ mod tests {
                                     .fetch_n(op, first)
                                     .await?
                             },
-                            (true, true, true,) => {
+                            (true, true,) => {
                                 es_entity::es_query!(
                                     entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 ORDER BY id DESC LIMIT $3",
-                                    filter_customer_id as Option<CustomerId>,
-                                    filter_status as Option<OrderStatus>,
-                                    (first + 1) as i64,
-                                )
-                                    .fetch_n(op, first)
-                                    .await?
-                            },
-                            (true, true, false,) => {
-                                es_entity::es_query!(
-                                    entity = Order,
-                                    "SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND (id < $4) ORDER BY id DESC LIMIT $3",
+                                    "(SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND (id < $4) AND ($4 IS NOT NULL) ORDER BY id DESC LIMIT $3) UNION ALL (SELECT id FROM orders WHERE customer_id = $1 AND status = $2 AND ($4 IS NULL) ORDER BY id DESC LIMIT $3) ORDER BY id DESC LIMIT $3",
                                     filter_customer_id as Option<CustomerId>,
                                     filter_status as Option<OrderStatus>,
                                     (first + 1) as i64,
@@ -1452,7 +1386,7 @@ mod tests {
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
-            sargable_filters: true,
+            index_catalog: Default::default(),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1522,7 +1456,7 @@ mod tests {
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
-            sargable_filters: true,
+            index_catalog: Default::default(),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1561,9 +1495,8 @@ mod tests {
             syn::parse_str("String").unwrap(),
             vec![id_ident.clone()],
         );
-        // Three more columns push the entity past the specialization cap so
-        // the catch-all COALESCE fallback (the subject of this test) is
-        // still emitted.
+        // With an empty index catalog no combination is specialized, so the
+        // catch-all COALESCE fallback (the subject of this test) is emitted.
         let mk_col = |name: &str| {
             Column::new_list_for(
                 syn::Ident::new(name, proc_macro2::Span::call_site()),
@@ -1609,7 +1542,7 @@ mod tests {
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
-            sargable_filters: true,
+            index_catalog: Default::default(),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1694,7 +1627,12 @@ mod tests {
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
-            sargable_filters: true,
+            index_catalog: catalog(
+                "CREATE INDEX ON tasks (id); \
+                 CREATE INDEX ON tasks (workspace_id, id); \
+                 CREATE INDEX ON tasks (status, id); \
+                 CREATE INDEX ON tasks (workspace_id, status, id);",
+            ),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1703,22 +1641,26 @@ mod tests {
         list_for_filters_fn.to_tokens(&mut tokens);
         let token_str = tokens.to_string();
 
+        // Each specialized combo now emits one unified `UNION ALL` query per
+        // direction: an `After` branch (sargable `id > $k` gated on
+        // `$k IS NOT NULL`) then the page-1 `First` branch (gated on
+        // `$k IS NULL`), plus the outer merge. The filter equality predicates
+        // are the leading conjuncts shared by every branch.
         let expected_queries = [
-            // No filters, page 1: no WHERE at all — rides index ordering.
-            "SELECT id FROM tasks ORDER BY id ASC LIMIT $1",
-            // No filters, cursor page: bare comparison, no COALESCE.
-            "SELECT id FROM tasks WHERE (id > $2) ORDER BY id ASC LIMIT $1",
+            // No filters: First branch, then After branch.
+            "(SELECT id FROM tasks WHERE ($2 IS NULL) ORDER BY id ASC LIMIT $1)",
+            "(SELECT id FROM tasks WHERE (id > $2) AND ($2 IS NOT NULL) ORDER BY id ASC LIMIT $1)",
             // Single non-optional filter.
-            "SELECT id FROM tasks WHERE status = $1 ORDER BY id ASC LIMIT $2",
-            "SELECT id FROM tasks WHERE status = $1 AND (id > $3) ORDER BY id ASC LIMIT $2",
+            "(SELECT id FROM tasks WHERE status = $1 AND ($3 IS NULL) ORDER BY id ASC LIMIT $2)",
+            "(SELECT id FROM tasks WHERE status = $1 AND (id > $3) AND ($3 IS NOT NULL) ORDER BY id ASC LIMIT $2)",
             // Optional filter on a value: sargable `col = $k`.
-            "SELECT id FROM tasks WHERE workspace_id = $1 ORDER BY id ASC LIMIT $2",
+            "(SELECT id FROM tasks WHERE workspace_id = $1 AND ($3 IS NULL) ORDER BY id ASC LIMIT $2)",
             // Optional filter on NULL: `col IS NULL`, no parameter.
-            "SELECT id FROM tasks WHERE workspace_id IS NULL ORDER BY id ASC LIMIT $1",
+            "(SELECT id FROM tasks WHERE workspace_id IS NULL AND ($2 IS NULL) ORDER BY id ASC LIMIT $1)",
             // All filters present.
-            "SELECT id FROM tasks WHERE workspace_id = $1 AND status = $2 ORDER BY id ASC LIMIT $3",
-            "SELECT id FROM tasks WHERE workspace_id = $1 AND status = $2 AND (id > $4) ORDER BY id ASC LIMIT $3",
-            "SELECT id FROM tasks WHERE workspace_id IS NULL AND status = $1 ORDER BY id ASC LIMIT $2",
+            "(SELECT id FROM tasks WHERE workspace_id = $1 AND status = $2 AND ($4 IS NULL) ORDER BY id ASC LIMIT $3)",
+            "(SELECT id FROM tasks WHERE workspace_id = $1 AND status = $2 AND (id > $4) AND ($4 IS NOT NULL) ORDER BY id ASC LIMIT $3)",
+            "(SELECT id FROM tasks WHERE workspace_id IS NULL AND status = $1 AND ($3 IS NULL) ORDER BY id ASC LIMIT $2)",
         ];
         for query in expected_queries {
             assert!(
@@ -1736,7 +1678,7 @@ mod tests {
     }
 
     #[test]
-    fn list_for_filters_caps_specialization_above_four_columns() {
+    fn list_for_filters_specializes_only_indexed_combos() {
         let entity = Ident::new("Wide", Span::call_site());
         let query_error = syn::Ident::new("WideQueryError", Span::call_site());
         let id = syn::Ident::new("WideId", proc_macro2::Span::call_site());
@@ -1785,7 +1727,15 @@ mod tests {
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
-            sargable_filters: true,
+            index_catalog: catalog(
+                "CREATE INDEX ON wides (id); \
+                 CREATE INDEX ON wides (a, id); \
+                 CREATE INDEX ON wides (b, id); \
+                 CREATE INDEX ON wides (c, id); \
+                 CREATE INDEX ON wides (d, id); \
+                 CREATE INDEX ON wides (e, id); \
+                 CREATE INDEX ON wides (a, b, c, d, e, id);",
+            ),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1794,32 +1744,39 @@ mod tests {
         list_for_filters_fn.to_tokens(&mut tokens);
         let token_str = tokens.to_string();
 
-        // No-filter, single-filter and all-filter combinations stay
-        // specialized...
-        assert!(token_str.contains("SELECT id FROM wides ORDER BY id ASC LIMIT $1"));
-        assert!(token_str.contains("SELECT id FROM wides WHERE a = $1 ORDER BY id ASC LIMIT $2"));
+        // Only the combinations backed by a declared index are specialized
+        // (shown here via each unified query's page-1 `First` branch): the
+        // no-filter, each single-filter and the all-filters combos.
+        assert!(
+            token_str
+                .contains("(SELECT id FROM wides WHERE ($2 IS NULL) ORDER BY id ASC LIMIT $1)")
+        );
         assert!(token_str.contains(
-            "SELECT id FROM wides WHERE a = $1 AND b = $2 AND c = $3 AND d = $4 AND e = $5 ORDER BY id ASC LIMIT $6"
+            "(SELECT id FROM wides WHERE a = $1 AND ($3 IS NULL) ORDER BY id ASC LIMIT $2)"
         ));
-        // ...but intermediate combinations (e.g. exactly two filters) fall
-        // back to the catch-all COALESCE query, so no specialized SQL exists
-        // for them.
+        assert!(token_str.contains(
+            "(SELECT id FROM wides WHERE a = $1 AND b = $2 AND c = $3 AND d = $4 AND e = $5 AND ($7 IS NULL) ORDER BY id ASC LIMIT $6)"
+        ));
+        // Intermediate combinations (e.g. exactly two filters) have no matching
+        // index, so they fall back to the catch-all COALESCE query — no
+        // specialized SQL exists for them.
         assert!(
             !token_str.contains("SELECT id FROM wides WHERE a = $1 AND b = $2 ORDER"),
-            "two-filter combination should not be specialized above the cap"
+            "two-filter combination has no index and must not be specialized"
         );
         assert!(
             token_str.contains("COALESCE(a = $1, $1 IS NULL)"),
-            "COALESCE fallback must remain for uncapped combinations"
+            "COALESCE fallback must remain for un-indexed combinations"
         );
     }
 
-    /// With `sargable_filters` off (the default), the multi-filter cartesian
-    /// matrix is suppressed: only the catch-all COALESCE query is emitted,
-    /// regardless of filter-column count. This is what keeps downstream
-    /// compile times bounded (the fix for the lana-bank +2054-query regression).
+    /// With an empty index catalog (a repo with no declared indexes, or no
+    /// migrations dir) the multi-filter cartesian matrix is suppressed: only
+    /// the catch-all COALESCE query is emitted, regardless of filter-column
+    /// count. This is what keeps downstream compile times bounded (the fix for
+    /// the lana-bank +2054-query regression).
     #[test]
-    fn list_for_filters_sargable_off_emits_catch_all_only() {
+    fn list_for_filters_no_index_emits_catch_all_only() {
         let entity = Ident::new("Order", Span::call_site());
         let query_error = syn::Ident::new("OrderQueryError", Span::call_site());
         let id = syn::Ident::new("OrderId", proc_macro2::Span::call_site());
@@ -1848,7 +1805,7 @@ mod tests {
         };
         let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
 
-        let build = |sargable: bool| -> String {
+        let build = |index_catalog: crate::index_catalog::IndexCatalog| -> String {
             let fn_ = ListForFiltersFn {
                 filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
                 entity: &entity,
@@ -1865,7 +1822,7 @@ mod tests {
                 post_hydrate_error: None,
                 forgettable_table_name: None,
                 scope: None,
-                sargable_filters: sargable,
+                index_catalog,
                 #[cfg(feature = "instrument")]
                 repo_name_snake: "test_repo".to_string(),
             };
@@ -1874,26 +1831,32 @@ mod tests {
             tokens.to_string()
         };
 
-        let off = build(false);
-        let on = build(true);
+        let off = build(Default::default());
+        let on = build(catalog(
+            "CREATE INDEX ON orders (id); \
+             CREATE INDEX ON orders (customer_id, id); \
+             CREATE INDEX ON orders (status, id); \
+             CREATE INDEX ON orders (customer_id, status, id);",
+        ));
 
         let count = |s: &str| s.matches("es_query").count();
         let off_count = count(&off);
         let on_count = count(&on);
 
-        // Opt-in specializes all 2^2 = 4 filter combos (no COALESCE);
-        // default-off collapses to a single catch-all COALESCE query.
+        // An index-backed catalog specializes all 2^2 = 4 filter combos (no
+        // COALESCE); an empty catalog collapses to a single catch-all COALESCE
+        // query.
         assert!(
             on_count > off_count,
-            "opt-in should emit more dedicated queries: on={on_count} off={off_count}"
+            "indexed catalog should emit more dedicated queries: on={on_count} off={off_count}"
         );
         assert!(
             off.contains("COALESCE"),
-            "default-off must emit the catch-all COALESCE query"
+            "empty catalog must emit the catch-all COALESCE query"
         );
         assert!(
             !on.contains("COALESCE"),
-            "opt-in (all combos specialized) should not need the COALESCE fallback"
+            "fully-indexed catalog should not need the COALESCE fallback"
         );
     }
 }

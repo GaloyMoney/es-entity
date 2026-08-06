@@ -6,12 +6,14 @@ use sqlx::PgPool;
 use entities::contact::*;
 use es_entity::*;
 
-/// The scoped `Contacts` repo with `sargable_filters` opted in: the
-/// scope × filter composition must hold through the specialized per-state
-/// query matrix, not just the catch-all fallback (exercised by
-/// `scoped_repo.rs`, which keeps the default). The scope column doubles as a
-/// `list_for` filter column; under `Only` it is double-specified (filter AND
-/// scope conjunct) — a mismatch is a contradictory predicate returning no
+/// The scoped `Contacts` repo whose migrations declare a
+/// `(partner_id, created_at, id)` index, so the scoped `Only`-arm
+/// no-filter combo is specialized (the scope column is auto-prefixed): the
+/// scope × filter composition must hold through the specialized unified query,
+/// not just the catch-all fallback (exercised by `scoped_repo.rs`). The scope
+/// column doubles as a `list_for` filter column; under `Only` it is
+/// double-specified (filter AND scope conjunct) — a mismatch is a
+/// contradictory predicate returning no
 /// rows.
 #[derive(EsRepo, Debug)]
 #[es_repo(
@@ -20,8 +22,7 @@ use es_entity::*;
         partner_id(ty = "PartnerId", scope, list_for(by(created_at))),
         email(ty = "String"),
         status(ty = "String", list_for(by(created_at))),
-    ),
-    sargable_filters
+    )
 )]
 pub struct Contacts {
     pool: PgPool,

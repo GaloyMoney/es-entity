@@ -242,13 +242,13 @@ pub struct RepositoryOptions {
     #[darling(default, rename = "forgettable_tbl")]
     forgettable_table_name: Option<String>,
 
-    /// Opt into the sargable per-state/per-combination SQL matrix for multi-filter
-    /// list queries. Defaults to `false`: only the catch-all `COALESCE` query is
-    /// emitted, keeping compile times low. Set `sargable_filters` to emit a
-    /// dedicated indexed query per filter combination (the #162 feature) for
-    /// repos whose multi-filter list queries are hot paths.
+    /// Override the migrations directory the index catalog is derived from.
+    /// Resolved relative to `$CARGO_MANIFEST_DIR`. Takes effect only when the
+    /// `ES_ENTITY_MIGRATIONS_DIR` environment variable (set by a `build.rs`
+    /// recipe, or directly) is not present. Defaults to
+    /// `$CARGO_MANIFEST_DIR/migrations` when that directory exists.
     #[darling(default)]
-    sargable_filters: Option<bool>,
+    migrations_dir: Option<String>,
 }
 
 impl RepositoryOptions {
@@ -334,8 +334,103 @@ impl RepositoryOptions {
             .expect("Events table name is not set")
     }
 
-    pub fn sargable_filters(&self) -> bool {
-        self.sargable_filters.unwrap_or(false)
+    /// Resolve the migrations directory this repo derives its index catalog and
+    /// error-constraint names from. Resolution order:
+    ///   1. `ES_ENTITY_MIGRATIONS_DIR` env var (a `build.rs` `rustc-env`, or a
+    ///      plain env var — both visible via `std::env::var` at expansion),
+    ///   2. the `#[es_repo(migrations_dir = "…")]` attribute (relative to
+    ///      `$CARGO_MANIFEST_DIR`),
+    ///   3. auto-discovery: `$CARGO_MANIFEST_DIR/migrations`, then a `migrations`
+    ///      directory in any ancestor up to the repository root (the first
+    ///      directory containing `.git`) — so a single-crate app or a workspace
+    ///      with root-level `migrations/` works with zero configuration.
+    ///
+    /// Returns `None` when nothing resolves (e.g. migrations in a sibling
+    /// subtree of another crate) — the caller then uses an empty catalog and
+    /// everything still works, just without index-driven specialization.
+    fn migrations_dir(&self) -> Option<std::path::PathBuf> {
+        use std::path::{Path, PathBuf};
+
+        if let Ok(dir) = std::env::var("ES_ENTITY_MIGRATIONS_DIR") {
+            let dir = PathBuf::from(dir);
+            return dir.is_dir().then_some(dir);
+        }
+
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+        let manifest_dir = Path::new(&manifest_dir);
+
+        if let Some(rel) = &self.migrations_dir {
+            let dir = manifest_dir.join(rel);
+            return dir.is_dir().then_some(dir);
+        }
+
+        // Auto-discovery: crate-local `migrations/`, then walk up to the repo
+        // root (a directory containing `.git`), checking each ancestor.
+        let mut cur = Some(manifest_dir);
+        while let Some(dir) = cur {
+            let candidate = dir.join("migrations");
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
+            if dir.join(".git").exists() {
+                break; // reached the repo root; do not escape it
+            }
+            cur = dir.parent();
+        }
+        None
+    }
+
+    /// Derive the physical index catalog for this repo's table from the resolved
+    /// migrations directory (see [`Self::migrations_dir`]). An empty catalog
+    /// (no directory resolved) is safe: `list_for_filters` combinations fall
+    /// back to the correct non-sargable `COALESCE` query, and error mapping
+    /// keeps its attribute-derived name convention.
+    pub fn index_catalog(&self) -> crate::index_catalog::IndexCatalog {
+        match self.migrations_dir() {
+            Some(dir) => {
+                crate::index_catalog::IndexCatalog::from_migrations_dir(&dir).unwrap_or_default()
+            }
+            None => crate::index_catalog::IndexCatalog::default(),
+        }
+    }
+
+    /// The resolved migration `.sql` files (sorted by name), or empty when no
+    /// migrations directory is discoverable.
+    fn migration_files(&self) -> Vec<std::path::PathBuf> {
+        let Some(dir) = self.migrations_dir() else {
+            return Vec::new();
+        };
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut files: Vec<std::path::PathBuf> = read
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("sql"))
+            .collect();
+        files.sort();
+        files
+    }
+
+    /// `include_bytes!` of every resolved migration file, so Cargo re-runs the
+    /// derive — rebuilding the index catalog (and the error-constraint mapping)
+    /// — whenever a migration is *edited*. This is what makes the zero-config
+    /// migrations auto-discovery (including an ancestor `migrations/` that no
+    /// crate-local `build.rs` watches) actually stay in sync.
+    ///
+    /// Skipped when `ES_ENTITY_MIGRATIONS_DIR` is set: that variable is emitted
+    /// by a `build.rs` recipe which also emits `rerun-if-changed` on the
+    /// directory (covering edits *and* additions), making per-file dependencies
+    /// redundant. Without that recipe, picking up a newly *added* migration
+    /// still needs a rebuild trigger (`cargo clean`, or the `build.rs`).
+    pub fn migrations_rerun_tokens(&self) -> proc_macro2::TokenStream {
+        if std::env::var_os("ES_ENTITY_MIGRATIONS_DIR").is_some() {
+            return quote! {};
+        }
+        let includes = self.migration_files().into_iter().filter_map(|path| {
+            let path = path.to_str()?;
+            Some(quote! { const _: &[u8] = include_bytes!(#path); })
+        });
+        quote! { #(#includes)* }
     }
 
     pub fn cursor_mod(&self) -> syn::Ident {

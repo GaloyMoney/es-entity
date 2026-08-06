@@ -524,7 +524,6 @@ impl Column {
                     persist: Some(false),
                     accessor: None,
                 }),
-                constraint: None,
             },
         }
     }
@@ -556,17 +555,12 @@ impl Column {
                             .expect("entity not persisted")
                     )),
                 }),
-                constraint: None,
             },
         }
     }
 
     pub fn list_for_by_columns(&self) -> &[syn::Ident] {
         self.opts.list_for_by_columns()
-    }
-
-    pub fn custom_constraint(&self) -> Option<&str> {
-        self.opts.constraint.as_deref()
     }
 
     pub fn is_id(&self) -> bool {
@@ -788,8 +782,6 @@ struct ColumnOpts {
     create_opts: Option<CreateOpts>,
     #[darling(default, rename = "update")]
     update_opts: Option<UpdateOpts>,
-    #[darling(default)]
-    constraint: Option<String>,
 }
 
 impl ColumnOpts {
@@ -806,7 +798,6 @@ impl ColumnOpts {
             parent_opts: None,
             create_opts: None,
             update_opts: None,
-            constraint: None,
         };
         opts.normalize_forgettable();
         opts
@@ -1125,15 +1116,5 @@ mod tests {
         assert_eq!(values.list_for_by_columns().len(), 2);
         assert_eq!(values.list_for_by_columns()[0].to_string(), "created_at");
         assert_eq!(values.list_for_by_columns()[1].to_string(), "id");
-    }
-
-    #[test]
-    fn custom_constraint() {
-        let input: syn::Meta =
-            parse_quote!(job_type(ty = "String", constraint = "idx_unique_job_type"));
-        let column = Column::from_nested_meta(&darling::ast::NestedMeta::Meta(input))
-            .expect("Failed to parse Column");
-        assert_eq!(column.name().to_string(), "job_type");
-        assert_eq!(column.custom_constraint(), Some("idx_unique_job_type"));
     }
 }

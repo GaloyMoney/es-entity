@@ -5,6 +5,7 @@
 mod entity;
 mod es_event_context;
 mod event;
+mod index_catalog;
 mod query;
 mod repo;
 mod retry_on_concurrent_modification;

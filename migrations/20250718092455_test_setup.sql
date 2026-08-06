@@ -146,7 +146,11 @@ CREATE TABLE profiles (
   email VARCHAR NOT NULL,
   created_at TIMESTAMPTZ NOT NULL
 );
-CREATE UNIQUE INDEX profiles_email_key ON profiles (email);
+-- Deliberately NOT the `{table}_{column}_key` convention name: the duplicate
+-- error tests in tests/repo_errors.rs then map `email` to its column *only*
+-- via the migration-derived index catalog (the former `constraint = "…"`
+-- attribute), proving that path end-to-end.
+CREATE UNIQUE INDEX idx_profiles_email ON profiles (email);
 
 CREATE TABLE profile_events (
   id UUID NOT NULL REFERENCES profiles(id),
