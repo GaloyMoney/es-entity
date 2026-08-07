@@ -1,3 +1,7 @@
+# [cala release v0.12.2](https://github.com/GaloyMoney/cala/releases/tag/0.12.2)
+
+
+
 # [cala release v0.12.0](https://github.com/GaloyMoney/cala/releases/tag/0.12.0)
 
 > Re-release of the **yanked** 0.11.13 under the correct version number. 0.11.13
