@@ -39,12 +39,14 @@ struct ConstraintVariant {
 /// A readable variant ident for a constraint name: the `{table}_` prefix is
 /// stripped when present (`profiles_email_not_blank` → `EmailNotBlank`),
 /// falling back to the full name when stripping yields an invalid or already
-/// taken ident. `None` when even the full name collides.
+/// taken ident. Total: distinct constraint names that still camel-case
+/// identically (e.g. `t_a_b_key` vs `t_a__b_key`) are disambiguated with a
+/// deterministic numeric suffix rather than silently dropped from the enum.
 fn constraint_variant_ident(
     table_name: &str,
     constraint_name: &str,
     taken: &mut HashSet<String>,
-) -> Option<syn::Ident> {
+) -> syn::Ident {
     let stripped = constraint_name
         .strip_prefix(&format!("{table_name}_"))
         .unwrap_or(constraint_name);
@@ -57,10 +59,24 @@ fn constraint_variant_ident(
     {
         candidate = constraint_name.to_case(Case::UpperCamel);
     }
-    if !taken.insert(candidate.clone()) {
-        return None;
+    if !candidate
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic())
+    {
+        // Degenerate quoted identifiers (e.g. a constraint named "2fa_check").
+        candidate = format!("Constraint{candidate}");
     }
-    Some(syn::Ident::new(&candidate, Span::call_site()))
+    if taken.contains(&candidate) {
+        let base = candidate.clone();
+        let mut n = 2;
+        while taken.contains(&candidate) {
+            candidate = format!("{base}{n}");
+            n += 1;
+        }
+    }
+    taken.insert(candidate.clone());
+    syn::Ident::new(&candidate, Span::call_site())
 }
 
 struct NestedErrorInfo {
@@ -141,15 +157,12 @@ impl<'a> ErrorTypes<'a> {
             if !seen_names.insert(constraint_name.clone()) {
                 continue;
             }
-            if let Some(variant_name) =
-                constraint_variant_ident(table_name, &constraint_name, &mut taken)
-            {
-                constraint_variants.push(ConstraintVariant {
-                    variant_name,
-                    constraint_name,
-                    kind,
-                });
-            }
+            let variant_name = constraint_variant_ident(table_name, &constraint_name, &mut taken);
+            constraint_variants.push(ConstraintVariant {
+                variant_name,
+                constraint_name,
+                kind,
+            });
         }
 
         let type_param_idents: Vec<&syn::Ident> =
@@ -1277,6 +1290,23 @@ mod tests {
             post_hydrate_hook,
             post_persist_hook,
         }
+    }
+
+    #[test]
+    fn constraint_variant_idents_disambiguate_instead_of_dropping() {
+        let mut taken = std::collections::HashSet::new();
+        // Table prefix stripped for readability.
+        let a = constraint_variant_ident("t", "t_a_b_key", &mut taken);
+        assert_eq!(a.to_string(), "ABKey");
+        // Camel-case collision with the stripped name → full-name fallback.
+        let b = constraint_variant_ident("t", "t_a__b_key", &mut taken);
+        assert_eq!(b.to_string(), "TABKey");
+        // Full name collides too → deterministic numeric suffix, never dropped.
+        let c = constraint_variant_ident("t", "t_a___b_key", &mut taken);
+        assert_eq!(c.to_string(), "TABKey2");
+        // Degenerate quoted identifier starting with a digit stays a valid ident.
+        let d = constraint_variant_ident("t", "2fa_check", &mut taken);
+        assert_eq!(d.to_string(), "Constraint2FaCheck");
     }
 
     #[test]
