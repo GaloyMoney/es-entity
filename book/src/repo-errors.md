@@ -31,7 +31,7 @@ pub enum UserCreateError {
 
 ### Handling constraint violations
 
-When a `create` or `create_all` operation violates a unique constraint, the error is returned as `ConstraintViolation` rather than a raw `Sqlx` error. The `column` field identifies which column caused the violation and the `value` field contains the conflicting value extracted from the PostgreSQL error detail.
+When a `create` or `create_all` operation violates a **named** database constraint — unique, foreign key, check, or exclusion — the error is returned as `ConstraintViolation` rather than a raw `Sqlx` error. (`NOT NULL` violations carry no constraint name in PostgreSQL and remain `Sqlx`.) For unique violations, the `column` field identifies which column caused the violation and the `value` field contains the conflicting value extracted from the PostgreSQL error detail. For other constraint kinds — or unique constraints not recognized as belonging to one of the entity's columns — `column` and `value` are `None`, and the violated constraint's name is available via the `constraint_name()` helper.
 
 > **Security note:** `value` (and the `duplicate_value()` helper) contains attacker-influenced input that was rejected by a unique constraint and is frequently PII (e.g. an email address). Do not propagate it to untrusted API clients — a caller can probe which values already exist (user enumeration) — and be aware it may end up in logs via the error's `Display`/`Debug` output. At trust boundaries, prefer the boolean helpers `was_duplicate()` / `was_duplicate_by(column)` and map the error to a neutral client-facing message.
 
@@ -52,6 +52,18 @@ match result {
     Err(e) if e.was_duplicate_by(UserColumn::Email) => {
         let value = e.duplicate_value(); // Option<&str>
         println!("email {} already taken", value.unwrap_or("unknown"));
+    }
+    Err(e) => return Err(e.into()),
+}
+```
+
+The `was_duplicate()` / `was_duplicate_by(column)` helpers only fire for **unique** violations. To dispatch on a hand-written foreign-key or check constraint, match the constraint name:
+
+```rust,ignore
+match result {
+    Ok(entry) => { /* success */ }
+    Err(e) if e.constraint_name() == Some("entries_account_not_account_set_fkey") => {
+        return Err(AppError::EntryTargetsAccountSet);
     }
     Err(e) => return Err(e.into()),
 }

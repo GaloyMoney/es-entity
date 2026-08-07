@@ -449,7 +449,8 @@ impl<'a> ErrorTypes<'a> {
 
                 pub fn was_duplicate(&self) -> bool {
                     match self {
-                        Self::ConstraintViolation { .. } => true,
+                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. }
+                            if db_err.is_unique_violation() => true,
                         #(#nested_wd_checks)*
                         _ => false,
                     }
@@ -457,6 +458,18 @@ impl<'a> ErrorTypes<'a> {
 
                 pub fn was_duplicate_by(&self, column: #column_enum) -> bool {
                     matches!(self, Self::ConstraintViolation { column: Some(c), .. } if *c == column)
+                }
+
+                /// Returns the name of the violated database constraint, if any.
+                ///
+                /// Useful for dispatching on hand-written constraints (e.g. foreign
+                /// keys or check constraints) that don't map to a recognized unique
+                /// column.
+                pub fn constraint_name(&self) -> Option<&str> {
+                    match self {
+                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. } => db_err.constraint(),
+                        _ => None,
+                    }
                 }
 
                 /// Returns the conflicting value extracted from the database error.
@@ -697,7 +710,8 @@ impl<'a> ErrorTypes<'a> {
 
                 pub fn was_duplicate(&self) -> bool {
                     match self {
-                        Self::ConstraintViolation { .. } => true,
+                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. }
+                            if db_err.is_unique_violation() => true,
                         #(#modify_nested_wd_checks)*
                         _ => false,
                     }
@@ -705,6 +719,18 @@ impl<'a> ErrorTypes<'a> {
 
                 pub fn was_duplicate_by(&self, column: #column_enum) -> bool {
                     matches!(self, Self::ConstraintViolation { column: Some(c), .. } if *c == column)
+                }
+
+                /// Returns the name of the violated database constraint, if any.
+                ///
+                /// Useful for dispatching on hand-written constraints (e.g. foreign
+                /// keys or check constraints) that don't map to a recognized unique
+                /// column.
+                pub fn constraint_name(&self) -> Option<&str> {
+                    match self {
+                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. } => db_err.constraint(),
+                        _ => None,
+                    }
                 }
 
                 /// Returns the conflicting value extracted from the database error.
