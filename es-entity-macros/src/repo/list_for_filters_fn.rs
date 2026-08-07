@@ -1728,8 +1728,7 @@ mod tests {
             forgettable_table_name: None,
             scope: None,
             // A single composite; specialization keys on the equality columns
-            // being a *leading prefix* of it — the sort column need not follow
-            // (lana-bank#7996).
+            // being a *leading prefix* of it — the sort column need not follow.
             index_catalog: catalog("CREATE INDEX ON wides (a, b, id);"),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -1746,7 +1745,7 @@ mod tests {
         // {a, b}: leading prefix `a, b` → specialized. The old "sort must
         // immediately follow the equality prefix" rule wrongly dropped this
         // (there is no `(a, b, id)`-vs-sort match), sending a table-growing
-        // seq-scan fallback into production (lana-bank#7996).
+        // seq-scan fallback into production.
         assert!(
             token_str.contains(
                 "(SELECT id FROM wides WHERE a = $1 AND b = $2 AND ($4 IS NULL) ORDER BY id ASC LIMIT $3)"
