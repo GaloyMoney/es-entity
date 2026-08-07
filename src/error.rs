@@ -57,6 +57,25 @@ pub fn extract_constraint_value(db_err: &dyn sqlx::error::DatabaseError) -> Opti
     parse_constraint_detail_value(pg_err.detail())
 }
 
+/// The kind of database constraint behind a classified `ConstraintViolation`.
+///
+/// Returned by the generated `{Entity}Constraint::kind()` method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConstraintKind {
+    Unique,
+    ForeignKey,
+    Check,
+}
+
+#[doc(hidden)]
+/// `true` when the database error is a violation kind the generated repo
+/// classifiers surface as `ConstraintViolation`: unique (SQLSTATE 23505),
+/// foreign key (23503), or check (23514). `NOT NULL` (23502) and exclusion
+/// (23P01) violations are not classified and surface as `Sqlx`.
+pub fn is_classified_constraint_violation(db_err: &dyn sqlx::error::DatabaseError) -> bool {
+    db_err.is_unique_violation() || db_err.is_foreign_key_violation() || db_err.is_check_violation()
+}
+
 #[doc(hidden)]
 /// Wrapper used by generated code to format not-found values.
 /// Prefers `Display` over `Debug` via inherent-vs-trait method resolution.
