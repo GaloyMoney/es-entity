@@ -155,9 +155,9 @@ impl IndexCatalog {
     /// Requiring the full `(equality…, sort)` composite — the previous behaviour
     /// — silently sent single-filter listings that were backed by only a
     /// `(filter)` index (no `(filter, sort)` composite) to the seq-scanning
-    /// fallback, a regression that grew linearly with table size
-    /// (lana-bank#7996). When the equality columns match *no* index the two
-    /// plans both seq-scan, so the fallback is correct and saves a query.
+    /// fallback, a regression whose cost grew linearly with table size. When
+    /// the equality columns match *no* index the two plans both seq-scan, so
+    /// the fallback is correct and saves a query.
     ///
     /// With no equality filter the only benefit is index-ordered pagination, so
     /// the sort column must lead an index. Partial indexes are conservatively
@@ -809,20 +809,12 @@ mod tests {
         // need NOT immediately follow it (`account_id = $1` is still an index
         // scan; the COALESCE fallback would seq-scan).
         assert!(c.specializes("transfers", &["account_id".to_string()], "id"));
-        // Regression guard (lana-bank#7996): a bare `(credit_facility_id)` index
-        // specializes the per-facility listing sorted by created_at.
-        let c4 = cat("CREATE INDEX ON core_disbursals (credit_facility_id);");
-        assert!(c4.specializes(
-            "core_disbursals",
-            &["credit_facility_id".to_string()],
-            "created_at"
-        ));
+        // A bare `(filter)` index (no `(filter, sort)` composite) still
+        // specializes the listing sorted by another column.
+        let c4 = cat("CREATE INDEX ON transfers (account_id);");
+        assert!(c4.specializes("transfers", &["account_id".to_string()], "created_at"));
         // No index covering the equality column → both plans seq-scan → fall back.
-        assert!(!c4.specializes(
-            "core_disbursals",
-            &["obligation_id".to_string()],
-            "created_at"
-        ));
+        assert!(!c4.specializes("transfers", &["reference".to_string()], "created_at"));
         // No equality filter: the sort column must lead an index.
         assert!(!c.specializes("transfers", &[], "created_at"));
         assert!(c.specializes("transfers", &[], "account_id"));
