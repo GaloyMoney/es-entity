@@ -2,11 +2,15 @@ use convert_case::{Case, Casing};
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
 
+use std::collections::HashSet;
+
 use super::options::{PostHydrateHookConfig, PostPersistHookConfig, RepositoryOptions};
+use crate::index_catalog::ConstraintKind;
 
 pub struct ErrorTypes<'a> {
     entity: &'a syn::Ident,
     column_enum: syn::Ident,
+    constraint_enum: syn::Ident,
     create_error: syn::Ident,
     modify_error: syn::Ident,
     find_error: syn::Ident,
@@ -14,6 +18,7 @@ pub struct ErrorTypes<'a> {
     forget_error: syn::Ident,
     forgettable: bool,
     column_variants: Vec<ColumnVariant>,
+    constraint_variants: Vec<ConstraintVariant>,
     nested: Vec<NestedErrorInfo>,
     post_hydrate_hook: &'a Option<PostHydrateHookConfig>,
     post_persist_hook: &'a Option<PostPersistHookConfig>,
@@ -23,6 +28,55 @@ struct ColumnVariant {
     variant_name: syn::Ident,
     column_name: String,
     constraint_names: Vec<String>,
+}
+
+struct ConstraintVariant {
+    variant_name: syn::Ident,
+    constraint_name: String,
+    kind: ConstraintKind,
+}
+
+/// A readable variant ident for a constraint name: the `{table}_` prefix is
+/// stripped when present (`profiles_email_not_blank` → `EmailNotBlank`),
+/// falling back to the full name when stripping yields an invalid or already
+/// taken ident. Total: distinct constraint names that still camel-case
+/// identically (e.g. `t_a_b_key` vs `t_a__b_key`) are disambiguated with a
+/// deterministic numeric suffix rather than silently dropped from the enum.
+fn constraint_variant_ident(
+    table_name: &str,
+    constraint_name: &str,
+    taken: &mut HashSet<String>,
+) -> syn::Ident {
+    let stripped = constraint_name
+        .strip_prefix(&format!("{table_name}_"))
+        .unwrap_or(constraint_name);
+    let mut candidate = stripped.to_case(Case::UpperCamel);
+    if !candidate
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic())
+        || taken.contains(&candidate)
+    {
+        candidate = constraint_name.to_case(Case::UpperCamel);
+    }
+    if !candidate
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic())
+    {
+        // Degenerate quoted identifiers (e.g. a constraint named "2fa_check").
+        candidate = format!("Constraint{candidate}");
+    }
+    if taken.contains(&candidate) {
+        let base = candidate.clone();
+        let mut n = 2;
+        while taken.contains(&candidate) {
+            candidate = format!("{base}{n}");
+            n += 1;
+        }
+    }
+    taken.insert(candidate.clone());
+    syn::Ident::new(&candidate, Span::call_site())
 }
 
 struct NestedErrorInfo {
@@ -88,6 +142,29 @@ impl<'a> ErrorTypes<'a> {
             })
             .collect();
 
+        // The typed constraint enum: the declared columns' unique constraint
+        // names (convention + catalog derived, so the enum works even with no
+        // discoverable migrations) plus every classified constraint (unique /
+        // foreign key / check) the catalog found on this table.
+        let mut taken = HashSet::new();
+        let mut seen_names = HashSet::new();
+        let mut constraint_variants: Vec<ConstraintVariant> = Vec::new();
+        let unique_seed = column_variants
+            .iter()
+            .flat_map(|v| v.constraint_names.iter())
+            .map(|name| (name.clone(), ConstraintKind::Unique));
+        for (constraint_name, kind) in unique_seed.chain(catalog.table_constraints(table_name)) {
+            if !seen_names.insert(constraint_name.clone()) {
+                continue;
+            }
+            let variant_name = constraint_variant_ident(table_name, &constraint_name, &mut taken);
+            constraint_variants.push(ConstraintVariant {
+                variant_name,
+                constraint_name,
+                kind,
+            });
+        }
+
         let type_param_idents: Vec<&syn::Ident> =
             opts.generics.type_params().map(|p| &p.ident).collect();
 
@@ -119,6 +196,10 @@ impl<'a> ErrorTypes<'a> {
         Self {
             entity: opts.entity(),
             column_enum: opts.column_enum(),
+            constraint_enum: syn::Ident::new(
+                &format!("{}Constraint", opts.entity()),
+                Span::call_site(),
+            ),
             create_error: opts.create_error(),
             modify_error: opts.modify_error(),
             find_error: opts.find_error(),
@@ -126,6 +207,7 @@ impl<'a> ErrorTypes<'a> {
             forget_error: opts.forget_error(),
             forgettable: opts.forgettable_enabled(),
             column_variants,
+            constraint_variants,
             nested,
             post_hydrate_hook: &opts.post_hydrate_hook,
             post_persist_hook: &opts.post_persist_hook,
@@ -134,6 +216,7 @@ impl<'a> ErrorTypes<'a> {
 
     pub fn generate(&self) -> TokenStream {
         let column_enum = self.generate_column_enum();
+        let constraint_enum = self.generate_constraint_enum();
         let create_error = self.generate_create_error();
         let modify_error = self.generate_modify_error();
         let find_error = self.generate_find_error();
@@ -146,11 +229,94 @@ impl<'a> ErrorTypes<'a> {
 
         quote! {
             #column_enum
+            #constraint_enum
             #create_error
             #modify_error
             #find_error
             #query_error
             #forget_error
+        }
+    }
+
+    /// The typed constraint enum: one variant per constraint on the entity's
+    /// table known at compile time — the declared columns' unique constraints
+    /// plus every unique / foreign key / check constraint discoverable from
+    /// the migrations.
+    fn generate_constraint_enum(&self) -> TokenStream {
+        let constraint_enum = &self.constraint_enum;
+        let variants: Vec<_> = self
+            .constraint_variants
+            .iter()
+            .map(|v| &v.variant_name)
+            .collect();
+        let from_name_arms: Vec<_> = self
+            .constraint_variants
+            .iter()
+            .map(|v| {
+                let variant = &v.variant_name;
+                let name = &v.constraint_name;
+                quote! { #name => Some(Self::#variant), }
+            })
+            .collect();
+        let name_arms: Vec<_> = self
+            .constraint_variants
+            .iter()
+            .map(|v| {
+                let variant = &v.variant_name;
+                let name = &v.constraint_name;
+                quote! { Self::#variant => #name, }
+            })
+            .collect();
+        let kind_arms: Vec<_> = self
+            .constraint_variants
+            .iter()
+            .map(|v| {
+                let variant = &v.variant_name;
+                let kind = match v.kind {
+                    ConstraintKind::Unique => quote! { es_entity::ConstraintKind::Unique },
+                    ConstraintKind::ForeignKey => quote! { es_entity::ConstraintKind::ForeignKey },
+                    ConstraintKind::Check => quote! { es_entity::ConstraintKind::Check },
+                };
+                quote! { Self::#variant => #kind, }
+            })
+            .collect();
+
+        quote! {
+            #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+            pub enum #constraint_enum {
+                #(#variants,)*
+            }
+
+            impl #constraint_enum {
+                #[doc(hidden)]
+                #[inline(always)]
+                pub fn from_name(name: &str) -> Option<Self> {
+                    match name {
+                        #(#from_name_arms)*
+                        _ => None,
+                    }
+                }
+
+                /// The database constraint name.
+                pub fn name(&self) -> &'static str {
+                    match *self {
+                        #(#name_arms)*
+                    }
+                }
+
+                /// The kind of constraint (unique / foreign key / check).
+                pub fn kind(&self) -> es_entity::ConstraintKind {
+                    match *self {
+                        #(#kind_arms)*
+                    }
+                }
+            }
+
+            impl std::fmt::Display for #constraint_enum {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str(self.name())
+                }
+            }
         }
     }
 
@@ -270,6 +436,7 @@ impl<'a> ErrorTypes<'a> {
     fn generate_create_error(&self) -> TokenStream {
         let create_error = &self.create_error;
         let column_enum = &self.column_enum;
+        let constraint_enum = &self.constraint_enum;
         let entity = self.entity;
 
         // Nested child variants
@@ -327,6 +494,22 @@ impl<'a> ErrorTypes<'a> {
             .map(|n| {
                 let variant = &n.variant_name;
                 quote! { Self::#variant(e) => e.was_duplicate(), }
+            })
+            .collect();
+        let nested_fk_checks: Vec<_> = self
+            .nested
+            .iter()
+            .map(|n| {
+                let variant = &n.variant_name;
+                quote! { Self::#variant(e) => e.was_foreign_key_violation(), }
+            })
+            .collect();
+        let nested_ck_checks: Vec<_> = self
+            .nested
+            .iter()
+            .map(|n| {
+                let variant = &n.variant_name;
+                quote! { Self::#variant(e) => e.was_check_violation(), }
             })
             .collect();
         let nested_dv_checks: Vec<_> = self
@@ -449,14 +632,53 @@ impl<'a> ErrorTypes<'a> {
 
                 pub fn was_duplicate(&self) -> bool {
                     match self {
-                        Self::ConstraintViolation { .. } => true,
+                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. }
+                            if db_err.is_unique_violation() => true,
                         #(#nested_wd_checks)*
+                        _ => false,
+                    }
+                }
+
+                pub fn was_foreign_key_violation(&self) -> bool {
+                    match self {
+                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. }
+                            if db_err.is_foreign_key_violation() => true,
+                        #(#nested_fk_checks)*
+                        _ => false,
+                    }
+                }
+
+                pub fn was_check_violation(&self) -> bool {
+                    match self {
+                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. }
+                            if db_err.is_check_violation() => true,
+                        #(#nested_ck_checks)*
                         _ => false,
                     }
                 }
 
                 pub fn was_duplicate_by(&self, column: #column_enum) -> bool {
                     matches!(self, Self::ConstraintViolation { column: Some(c), .. } if *c == column)
+                }
+
+                /// Returns the name of the violated database constraint, if any.
+                ///
+                /// Useful for dispatching on hand-written constraints (e.g. foreign
+                /// keys or check constraints) that don't map to a recognized unique
+                /// column.
+                pub fn constraint_name(&self) -> Option<&str> {
+                    match self {
+                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. } => db_err.constraint(),
+                        _ => None,
+                    }
+                }
+
+                /// The violated constraint as a typed value, when the constraint
+                /// is known at compile time — the declared columns' unique
+                /// constraints plus every constraint discoverable from the
+                /// migrations.
+                pub fn violated_constraint(&self) -> Option<#constraint_enum> {
+                    self.constraint_name().and_then(#constraint_enum::from_name)
                 }
 
                 /// Returns the conflicting value extracted from the database error.
@@ -485,6 +707,7 @@ impl<'a> ErrorTypes<'a> {
     fn generate_modify_error(&self) -> TokenStream {
         let modify_error = &self.modify_error;
         let column_enum = &self.column_enum;
+        let constraint_enum = &self.constraint_enum;
         let entity = self.entity;
 
         // Nested variants: both Modify and Create for each child
@@ -562,6 +785,34 @@ impl<'a> ErrorTypes<'a> {
                 vec![
                     quote! { Self::#modify_variant(e) => e.was_duplicate(), },
                     quote! { Self::#create_variant(e) => e.was_duplicate(), },
+                ]
+            })
+            .collect();
+        let modify_nested_fk_checks: Vec<_> = self
+            .nested
+            .iter()
+            .flat_map(|n| {
+                let modify_variant =
+                    syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
+                let create_variant =
+                    syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
+                vec![
+                    quote! { Self::#modify_variant(e) => e.was_foreign_key_violation(), },
+                    quote! { Self::#create_variant(e) => e.was_foreign_key_violation(), },
+                ]
+            })
+            .collect();
+        let modify_nested_ck_checks: Vec<_> = self
+            .nested
+            .iter()
+            .flat_map(|n| {
+                let modify_variant =
+                    syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
+                let create_variant =
+                    syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
+                vec![
+                    quote! { Self::#modify_variant(e) => e.was_check_violation(), },
+                    quote! { Self::#create_variant(e) => e.was_check_violation(), },
                 ]
             })
             .collect();
@@ -697,14 +948,53 @@ impl<'a> ErrorTypes<'a> {
 
                 pub fn was_duplicate(&self) -> bool {
                     match self {
-                        Self::ConstraintViolation { .. } => true,
+                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. }
+                            if db_err.is_unique_violation() => true,
                         #(#modify_nested_wd_checks)*
+                        _ => false,
+                    }
+                }
+
+                pub fn was_foreign_key_violation(&self) -> bool {
+                    match self {
+                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. }
+                            if db_err.is_foreign_key_violation() => true,
+                        #(#modify_nested_fk_checks)*
+                        _ => false,
+                    }
+                }
+
+                pub fn was_check_violation(&self) -> bool {
+                    match self {
+                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. }
+                            if db_err.is_check_violation() => true,
+                        #(#modify_nested_ck_checks)*
                         _ => false,
                     }
                 }
 
                 pub fn was_duplicate_by(&self, column: #column_enum) -> bool {
                     matches!(self, Self::ConstraintViolation { column: Some(c), .. } if *c == column)
+                }
+
+                /// Returns the name of the violated database constraint, if any.
+                ///
+                /// Useful for dispatching on hand-written constraints (e.g. foreign
+                /// keys or check constraints) that don't map to a recognized unique
+                /// column.
+                pub fn constraint_name(&self) -> Option<&str> {
+                    match self {
+                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. } => db_err.constraint(),
+                        _ => None,
+                    }
+                }
+
+                /// The violated constraint as a typed value, when the constraint
+                /// is known at compile time — the declared columns' unique
+                /// constraints plus every constraint discoverable from the
+                /// migrations.
+                pub fn violated_constraint(&self) -> Option<#constraint_enum> {
+                    self.constraint_name().and_then(#constraint_enum::from_name)
                 }
 
                 /// Returns the conflicting value extracted from the database error.
@@ -987,6 +1277,7 @@ mod tests {
         ErrorTypes {
             entity,
             column_enum: Ident::new("OrderColumn", Span::call_site()),
+            constraint_enum: Ident::new("OrderConstraint", Span::call_site()),
             create_error: Ident::new("OrderCreateError", Span::call_site()),
             modify_error: Ident::new("OrderModifyError", Span::call_site()),
             find_error: Ident::new("OrderFindError", Span::call_site()),
@@ -994,10 +1285,28 @@ mod tests {
             forget_error: Ident::new("OrderForgetError", Span::call_site()),
             forgettable: false,
             column_variants: vec![],
+            constraint_variants: vec![],
             nested,
             post_hydrate_hook,
             post_persist_hook,
         }
+    }
+
+    #[test]
+    fn constraint_variant_idents_disambiguate_instead_of_dropping() {
+        let mut taken = std::collections::HashSet::new();
+        // Table prefix stripped for readability.
+        let a = constraint_variant_ident("t", "t_a_b_key", &mut taken);
+        assert_eq!(a.to_string(), "ABKey");
+        // Camel-case collision with the stripped name → full-name fallback.
+        let b = constraint_variant_ident("t", "t_a__b_key", &mut taken);
+        assert_eq!(b.to_string(), "TABKey");
+        // Full name collides too → deterministic numeric suffix, never dropped.
+        let c = constraint_variant_ident("t", "t_a___b_key", &mut taken);
+        assert_eq!(c.to_string(), "TABKey2");
+        // Degenerate quoted identifier starting with a digit stays a valid ident.
+        let d = constraint_variant_ident("t", "2fa_check", &mut taken);
+        assert_eq!(d.to_string(), "Constraint2FaCheck");
     }
 
     #[test]
@@ -1207,6 +1516,7 @@ mod tests {
         ErrorTypes {
             entity,
             column_enum: Ident::new("OrderColumn", Span::call_site()),
+            constraint_enum: Ident::new("OrderConstraint", Span::call_site()),
             create_error: Ident::new("OrderCreateError", Span::call_site()),
             modify_error: Ident::new("OrderModifyError", Span::call_site()),
             find_error: Ident::new("OrderFindError", Span::call_site()),
@@ -1214,6 +1524,7 @@ mod tests {
             forget_error: Ident::new("OrderForgetError", Span::call_site()),
             forgettable: false,
             column_variants: vec![],
+            constraint_variants: vec![],
             nested,
             post_hydrate_hook: ph,
             post_persist_hook: pp,

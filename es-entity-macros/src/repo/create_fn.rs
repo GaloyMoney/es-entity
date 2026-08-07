@@ -158,7 +158,7 @@ impl ToTokens for CreateFn<'_> {
                     .execute(op.as_executor())
                     .await
                     .map_err(|e| match &e {
-                        sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                        sqlx::Error::Database(db_err) if es_entity::is_classified_constraint_violation(db_err.as_ref()) => {
                             #create_error::ConstraintViolation {
                                 column: Self::map_constraint_column(db_err.constraint()),
                                 value: es_entity::extract_constraint_value(db_err.as_ref()),
@@ -265,7 +265,7 @@ mod tests {
                     .execute(op.as_executor())
                     .await
                     .map_err(|e| match &e {
-                        sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                        sqlx::Error::Database(db_err) if es_entity::is_classified_constraint_violation(db_err.as_ref()) => {
                             EntityCreateError::ConstraintViolation {
                                 column: Self::map_constraint_column(db_err.constraint()),
                                 value: es_entity::extract_constraint_value(db_err.as_ref()),
@@ -368,7 +368,7 @@ mod tests {
                     .execute(op.as_executor())
                     .await
                     .map_err(|e| match &e {
-                        sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                        sqlx::Error::Database(db_err) if es_entity::is_classified_constraint_violation(db_err.as_ref()) => {
                             EntityCreateError::ConstraintViolation {
                                 column: Self::map_constraint_column(db_err.constraint()),
                                 value: es_entity::extract_constraint_value(db_err.as_ref()),

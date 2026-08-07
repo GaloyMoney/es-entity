@@ -31,7 +31,7 @@ pub enum UserCreateError {
 
 ### Handling constraint violations
 
-When a `create` or `create_all` operation violates a unique constraint, the error is returned as `ConstraintViolation` rather than a raw `Sqlx` error. The `column` field identifies which column caused the violation and the `value` field contains the conflicting value extracted from the PostgreSQL error detail.
+When a `create` or `create_all` operation violates a **unique**, **foreign key**, or **check** constraint, the error is returned as `ConstraintViolation` rather than a raw `Sqlx` error. (`NOT NULL` and exclusion violations are not classified and remain `Sqlx`.) For unique violations, the `column` field identifies which column caused the violation and the `value` field contains the conflicting value extracted from the PostgreSQL error detail. For foreign key and check violations — or unique constraints not recognized as belonging to one of the entity's columns — `column` and `value` are `None`; use the typed `violated_constraint()` helper (or the raw `constraint_name()`) to identify the constraint instead.
 
 > **Security note:** `value` (and the `duplicate_value()` helper) contains attacker-influenced input that was rejected by a unique constraint and is frequently PII (e.g. an email address). Do not propagate it to untrusted API clients — a caller can probe which values already exist (user enumeration) — and be aware it may end up in logs via the error's `Display`/`Debug` output. At trust boundaries, prefer the boolean helpers `was_duplicate()` / `was_duplicate_by(column)` and map the error to a neutral client-facing message.
 
@@ -55,6 +55,30 @@ match result {
     }
     Err(e) => return Err(e.into()),
 }
+```
+
+The `was_duplicate()` / `was_duplicate_by(column)` helpers only fire for **unique** violations; `was_foreign_key_violation()` and `was_check_violation()` cover the other classified kinds.
+
+### Typed constraints: `UserConstraint`
+
+Alongside the column enum, the macro derives a `UserConstraint` enum with one variant per constraint on the entity's table known at compile time: the declared columns' unique constraints (convention names like `users_email_key` / `users_pkey`) plus every unique, foreign key, and check constraint discoverable from the migrations directory (the same catalog that drives `list_for_filters` specialization). Variant names strip the table prefix — `entries_account_not_account_set_fkey` on table `entries` becomes `EntryConstraint::AccountNotAccountSetFkey`.
+
+This makes dispatching on a hand-written foreign-key or check constraint typo-proof — no string matching at the call site, and a renamed constraint in a migration surfaces as a compile error instead of a silently dead match arm:
+
+```rust,ignore
+match result {
+    Ok(entry) => { /* success */ }
+    Err(e) if e.violated_constraint() == Some(EntryConstraint::AccountNotAccountSetFkey) => {
+        return Err(AppError::EntryTargetsAccountSet);
+    }
+    Err(e) => return Err(e.into()),
+}
+```
+
+Each variant knows its raw name (`constraint.name()` / `Display`) and kind (`constraint.kind()` → `ConstraintKind::{Unique, ForeignKey, Check}`). Constraints created outside discoverable migrations can't be typed; fall back to `constraint_name()` for those:
+
+```rust,ignore
+Err(e) if e.constraint_name() == Some("added_at_runtime_fkey") => { /* ... */ }
 ```
 
 The macro maps PostgreSQL constraint names to columns automatically. It uses the convention `{table}_{column}_key` for unique constraints and `{table}_pkey` for the primary key, and additionally derives the real names of any **named** single-column unique index from your migrations (the same index catalog that drives `list_for_filters` specialization — see [list_for_filters](./repo-list-for-filters.md)). So a `CREATE UNIQUE INDEX idx_unique_email ON users (email)` in a migration is mapped to the `email` column with no extra annotation — as long as the migrations directory is discoverable (crate-local `migrations/`, an ancestor `migrations/` up to the repo root, or `ES_ENTITY_MIGRATIONS_DIR`). A composite `UNIQUE (a, b)` is mapped to its **last** key column (`b`) — the discriminating column, with the leading columns acting as its scope — so a `UNIQUE (partner_id, name)` violation reports the `name` column.

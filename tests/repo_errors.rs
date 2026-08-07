@@ -1,7 +1,7 @@
 mod entities;
 mod helpers;
 
-use entities::{profile::*, user::*};
+use entities::{order::*, profile::*, user::*};
 use es_entity::*;
 use sqlx::PgPool;
 
@@ -44,6 +44,25 @@ impl Profiles {
     }
 }
 
+/// Same shape as the nested repo in tests/nested_entities.rs — used here
+/// standalone to violate the hand-written `order_items_order_id_fkey` foreign
+/// key through generated ops.
+#[derive(EsRepo, Debug)]
+#[es_repo(
+    entity = "OrderItem",
+    delete = "soft",
+    columns(order_id(ty = "OrderId", update(persist = false), parent))
+)]
+pub struct OrderItems {
+    pool: PgPool,
+}
+
+impl OrderItems {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
 // ===========================================================================
 // Constraint violation tests
 // ===========================================================================
@@ -77,6 +96,17 @@ async fn create_duplicate_email_returns_constraint_violation_with_value() -> any
     assert!(err.was_duplicate());
     assert!(err.was_duplicate_by(ProfileColumn::Email));
     assert_eq!(err.duplicate_value(), Some(email.as_str()));
+    assert_eq!(err.constraint_name(), Some("idx_profiles_email"));
+    assert_eq!(
+        err.violated_constraint(),
+        Some(ProfileConstraint::IdxProfilesEmail)
+    );
+    assert_eq!(
+        ProfileConstraint::IdxProfilesEmail.kind(),
+        ConstraintKind::Unique
+    );
+    assert!(!err.was_foreign_key_violation());
+    assert!(!err.was_check_violation());
 
     Ok(())
 }
@@ -100,6 +130,9 @@ async fn create_duplicate_id_returns_constraint_violation_with_value() -> anyhow
     assert!(err.was_duplicate());
     assert!(err.was_duplicate_by(UserColumn::Id));
     assert_eq!(err.duplicate_value(), Some(id.to_string().as_str()));
+    assert_eq!(err.constraint_name(), Some("users_pkey"));
+    assert_eq!(err.violated_constraint(), Some(UserConstraint::Pkey));
+    assert_eq!(UserConstraint::Pkey.kind(), ConstraintKind::Unique);
 
     Ok(())
 }
@@ -138,6 +171,157 @@ async fn update_to_duplicate_email_returns_constraint_violation_with_value() -> 
     assert!(err.was_duplicate());
     assert!(err.was_duplicate_by(ProfileColumn::Email));
     assert_eq!(err.duplicate_value(), Some(email_a.as_str()));
+
+    Ok(())
+}
+
+// ===========================================================================
+// Non-unique constraint classification tests (foreign key / check)
+// ===========================================================================
+
+#[tokio::test]
+async fn create_fk_violation_returns_constraint_violation() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let order_items = OrderItems::new(pool);
+
+    // No such order exists — violates order_items_order_id_fkey.
+    let item = NewOrderItem::builder()
+        .id(OrderItemId::new())
+        .order_id(OrderId::new())
+        .product_name("Orphan")
+        .quantity(1)
+        .price(1.0)
+        .build()
+        .unwrap();
+    let err = match order_items.create(item).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected constraint violation"),
+    };
+
+    // FK violations are classified but are not duplicates.
+    assert!(!err.was_duplicate());
+    assert!(err.was_foreign_key_violation());
+    assert!(!err.was_check_violation());
+    assert_eq!(err.constraint_name(), Some("order_items_order_id_fkey"));
+    assert_eq!(
+        err.violated_constraint(),
+        Some(OrderItemConstraint::OrderIdFkey)
+    );
+    assert_eq!(
+        OrderItemConstraint::OrderIdFkey.kind(),
+        ConstraintKind::ForeignKey
+    );
+    assert_eq!(err.duplicate_value(), None);
+    match &err {
+        OrderItemCreateError::ConstraintViolation { column: None, .. } => {}
+        other => panic!("expected ConstraintViolation without column, got: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_all_fk_violation_returns_constraint_violation() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let order_items = OrderItems::new(pool);
+
+    let item = NewOrderItem::builder()
+        .id(OrderItemId::new())
+        .order_id(OrderId::new())
+        .product_name("Orphan")
+        .quantity(1)
+        .price(1.0)
+        .build()
+        .unwrap();
+    let err = match order_items.create_all(vec![item]).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected constraint violation"),
+    };
+
+    assert!(!err.was_duplicate());
+    assert!(err.was_foreign_key_violation());
+    assert_eq!(err.constraint_name(), Some("order_items_order_id_fkey"));
+    assert_eq!(
+        err.violated_constraint(),
+        Some(OrderItemConstraint::OrderIdFkey)
+    );
+    match &err {
+        OrderItemCreateError::ConstraintViolation { column: None, .. } => {}
+        other => panic!("expected ConstraintViolation without column, got: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_check_violation_returns_constraint_violation() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let profiles = Profiles::new(pool);
+
+    // Blank email violates the profiles_email_not_blank CHECK constraint.
+    let profile = NewProfile::builder()
+        .id(ProfileId::new())
+        .name("Blank")
+        .email("")
+        .build()
+        .unwrap();
+    let err = match profiles.create(profile).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected constraint violation"),
+    };
+
+    assert!(!err.was_duplicate());
+    assert!(err.was_check_violation());
+    assert!(!err.was_foreign_key_violation());
+    assert_eq!(err.constraint_name(), Some("profiles_email_not_blank"));
+    assert_eq!(
+        err.violated_constraint(),
+        Some(ProfileConstraint::EmailNotBlank)
+    );
+    assert_eq!(
+        ProfileConstraint::EmailNotBlank.kind(),
+        ConstraintKind::Check
+    );
+    assert_eq!(err.duplicate_value(), None);
+    match &err {
+        ProfileCreateError::ConstraintViolation { column: None, .. } => {}
+        other => panic!("expected ConstraintViolation without column, got: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_check_violation_returns_constraint_violation() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let profiles = Profiles::new(pool);
+
+    let email = format!("check_{}@test.com", ProfileId::new());
+    let profile = NewProfile::builder()
+        .id(ProfileId::new())
+        .name("Check")
+        .email(&email)
+        .build()
+        .unwrap();
+    let mut profile = profiles.create(profile).await?;
+
+    let _ = profile.update_email(String::new());
+    let err = match profiles.update(&mut profile).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected constraint violation"),
+    };
+
+    assert!(!err.was_duplicate());
+    assert!(err.was_check_violation());
+    assert_eq!(err.constraint_name(), Some("profiles_email_not_blank"));
+    assert_eq!(
+        err.violated_constraint(),
+        Some(ProfileConstraint::EmailNotBlank)
+    );
+    match &err {
+        ProfileModifyError::ConstraintViolation { column: None, .. } => {}
+        other => panic!("expected ConstraintViolation without column, got: {other:?}"),
+    }
 
     Ok(())
 }

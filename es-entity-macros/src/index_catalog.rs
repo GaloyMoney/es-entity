@@ -47,11 +47,37 @@ pub struct IndexEntry {
     pub partial: bool,
 }
 
+/// The kind of a classified table constraint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConstraintKind {
+    /// `UNIQUE` / `PRIMARY KEY` constraints and `UNIQUE` indexes.
+    Unique,
+    /// `FOREIGN KEY` / `REFERENCES` constraints.
+    ForeignKey,
+    /// `CHECK` constraints.
+    Check,
+}
+
+/// One named (or deterministically Postgres-auto-named) constraint on a table
+/// whose violation the generated repo error classifier can type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstraintEntry {
+    /// Lowercased, unquoted table name (schema qualifier stripped).
+    pub table: String,
+    /// Constraint (or unique index) name as reported by Postgres at violation
+    /// time — explicit when the DDL names it, else synthesized with Postgres'
+    /// auto-naming convention.
+    pub name: String,
+    pub kind: ConstraintKind,
+}
+
 /// The set of indexes that exist after applying every migration statement in
 /// filename order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IndexCatalog {
     pub entries: Vec<IndexEntry>,
+    /// Classified constraints (unique / foreign key / check) per table.
+    pub constraints: Vec<ConstraintEntry>,
 }
 
 /// Sentinel column recorded for an expression/opaque index key element; it is
@@ -91,6 +117,7 @@ impl IndexCatalog {
 
         let dialect = PostgreSqlDialect {};
         let mut entries: Vec<IndexEntry> = Vec::new();
+        let mut constraints: Vec<ConstraintEntry> = Vec::new();
         for (_, sql) in sorted {
             let stripped = strip_comments(sql);
             for statement in split_statements(&stripped) {
@@ -98,13 +125,17 @@ impl IndexCatalog {
                 // does not discard the rest of the file.
                 if let Ok(parsed) = Parser::parse_sql(&dialect, &statement) {
                     for stmt in &parsed {
-                        apply_statement(&mut entries, stmt);
+                        apply_statement(&mut entries, &mut constraints, stmt);
                     }
                 }
             }
         }
         entries.dedup();
-        Self { entries }
+        constraints.dedup();
+        Self {
+            entries,
+            constraints,
+        }
     }
 
     /// Whether a `list_for_filters` query over `table`, filtering on the
@@ -157,23 +188,52 @@ impl IndexCatalog {
             .filter_map(|entry| entry.name.clone())
             .collect()
     }
+
+    /// Every classified constraint on `table` as `(name, kind)` pairs, deduped
+    /// by name in first-seen order. Feeds the generated `{Entity}Constraint`
+    /// enum.
+    pub fn table_constraints(&self, table: &str) -> Vec<(String, ConstraintKind)> {
+        let table = table.to_lowercase();
+        let mut seen: Vec<(String, ConstraintKind)> = Vec::new();
+        for entry in self.constraints.iter().filter(|c| c.table == table) {
+            if !seen.iter().any(|(name, _)| name == &entry.name) {
+                seen.push((entry.name.clone(), entry.kind));
+            }
+        }
+        seen
+    }
 }
 
 // ── AST → catalog ───────────────────────────────────────────────────────────
 
-fn apply_statement(entries: &mut Vec<IndexEntry>, stmt: &Statement) {
+fn apply_statement(
+    entries: &mut Vec<IndexEntry>,
+    constraints: &mut Vec<ConstraintEntry>,
+    stmt: &Statement,
+) {
     match stmt {
         Statement::CreateIndex(create) => {
             let Some(table) = last_ident(&create.table_name) else {
                 return;
             };
+            let columns: Vec<String> = create.columns.iter().map(index_column_name).collect();
+            let name = create.name.as_ref().and_then(last_ident);
+            if create.unique {
+                // Postgres names an unnamed index `{table}_{cols}_idx`.
+                let constraint_name = name
+                    .clone()
+                    .or_else(|| synthesized_name(&table, &columns, "idx"));
+                if let Some(constraint_name) = constraint_name {
+                    push_constraint(constraints, &table, constraint_name, ConstraintKind::Unique);
+                }
+            }
             push_entry(
                 entries,
                 IndexEntry {
                     table,
-                    columns: create.columns.iter().map(index_column_name).collect(),
+                    columns,
                     unique: create.unique,
-                    name: create.name.as_ref().and_then(last_ident),
+                    name,
                     partial: create.predicate.is_some(),
                 },
             );
@@ -183,31 +243,57 @@ fn apply_statement(entries: &mut Vec<IndexEntry>, stmt: &Statement) {
                 return;
             };
             // Inline column `PRIMARY KEY` / `UNIQUE` -> single-column unique index.
+            // All inline constraint kinds -> classified constraint entries.
             for column in &create.columns {
-                let inline_unique = column.options.iter().any(|opt| {
-                    matches!(
+                let col = column.name.value.to_lowercase();
+                for opt in &column.options {
+                    let explicit = |name: &Option<sqlparser::ast::Ident>| {
+                        name.as_ref()
+                            .or(opt.name.as_ref())
+                            .map(|i| i.value.to_lowercase())
+                    };
+                    let classified = match &opt.option {
+                        ColumnOption::PrimaryKey(pk) => Some((
+                            explicit(&pk.name).unwrap_or_else(|| format!("{table}_pkey")),
+                            ConstraintKind::Unique,
+                        )),
+                        ColumnOption::Unique(u) => Some((
+                            explicit(&u.name).unwrap_or_else(|| format!("{table}_{col}_key")),
+                            ConstraintKind::Unique,
+                        )),
+                        ColumnOption::ForeignKey(fk) => Some((
+                            explicit(&fk.name).unwrap_or_else(|| format!("{table}_{col}_fkey")),
+                            ConstraintKind::ForeignKey,
+                        )),
+                        ColumnOption::Check(c) => Some((
+                            explicit(&c.name).unwrap_or_else(|| format!("{table}_{col}_check")),
+                            ConstraintKind::Check,
+                        )),
+                        _ => None,
+                    };
+                    if let Some((name, kind)) = classified {
+                        push_constraint(constraints, &table, name, kind);
+                    }
+                    if matches!(
                         opt.option,
                         ColumnOption::PrimaryKey(_) | ColumnOption::Unique(_)
-                    )
-                });
-                if inline_unique {
-                    push_entry(
-                        entries,
-                        IndexEntry {
-                            table: table.clone(),
-                            columns: vec![column.name.value.to_lowercase()],
-                            unique: true,
-                            name: None,
-                            partial: false,
-                        },
-                    );
+                    ) {
+                        push_entry(
+                            entries,
+                            IndexEntry {
+                                table: table.clone(),
+                                columns: vec![col.clone()],
+                                unique: true,
+                                name: None,
+                                partial: false,
+                            },
+                        );
+                    }
                 }
             }
-            // Table-level `PRIMARY KEY (...)` / `UNIQUE (...)` constraints.
+            // Table-level constraints.
             for constraint in &create.constraints {
-                if let Some(entry) = constraint_entry(&table, constraint) {
-                    push_entry(entries, entry);
-                }
+                apply_table_constraint(entries, constraints, &table, constraint);
             }
         }
         Statement::AlterTable(alter) => {
@@ -217,13 +303,12 @@ fn apply_statement(entries: &mut Vec<IndexEntry>, stmt: &Statement) {
             for op in &alter.operations {
                 match op {
                     AlterTableOperation::AddConstraint { constraint, .. } => {
-                        if let Some(entry) = constraint_entry(&table, constraint) {
-                            push_entry(entries, entry);
-                        }
+                        apply_table_constraint(entries, constraints, &table, constraint);
                     }
                     AlterTableOperation::DropConstraint { name, .. } => {
                         let name = name.value.to_lowercase();
                         entries.retain(|e| e.name.as_deref() != Some(name.as_str()));
+                        constraints.retain(|c| !(c.table == table && c.name == name));
                     }
                     _ => {}
                 }
@@ -236,6 +321,7 @@ fn apply_statement(entries: &mut Vec<IndexEntry>, stmt: &Statement) {
                 for name in names {
                     if let Some(name) = last_ident(name) {
                         entries.retain(|e| e.name.as_deref() != Some(name.as_str()));
+                        constraints.retain(|c| c.name != name);
                     }
                 }
             }
@@ -243,6 +329,7 @@ fn apply_statement(entries: &mut Vec<IndexEntry>, stmt: &Statement) {
                 for name in names {
                     if let Some(table) = last_ident(name) {
                         entries.retain(|e| e.table != table);
+                        constraints.retain(|c| c.table != table);
                     }
                 }
             }
@@ -252,21 +339,118 @@ fn apply_statement(entries: &mut Vec<IndexEntry>, stmt: &Statement) {
     }
 }
 
-/// A `UNIQUE` / `PRIMARY KEY` table constraint as a unique index entry; other
-/// constraint kinds (foreign key, check, …) yield `None`.
-fn constraint_entry(table: &str, constraint: &TableConstraint) -> Option<IndexEntry> {
-    let (name, columns) = match constraint {
-        TableConstraint::PrimaryKey(pk) => (&pk.name, &pk.columns),
-        TableConstraint::Unique(u) => (&u.name, &u.columns),
-        _ => return None,
-    };
-    Some(IndexEntry {
+/// Apply one table-level constraint: `UNIQUE` / `PRIMARY KEY` become unique
+/// index entries, and every classifiable kind (unique, primary key, foreign
+/// key, check) becomes a classified constraint entry. Unnamed table-level
+/// `CHECK` constraints are skipped — Postgres derives their name from the
+/// columns referenced in the expression.
+fn apply_table_constraint(
+    entries: &mut Vec<IndexEntry>,
+    constraints: &mut Vec<ConstraintEntry>,
+    table: &str,
+    constraint: &TableConstraint,
+) {
+    match constraint {
+        TableConstraint::PrimaryKey(pk) => {
+            let columns: Vec<String> = pk.columns.iter().map(index_column_name).collect();
+            let name = pk.name.as_ref().map(|i| i.value.to_lowercase());
+            push_constraint(
+                constraints,
+                table,
+                name.clone().unwrap_or_else(|| format!("{table}_pkey")),
+                ConstraintKind::Unique,
+            );
+            push_entry(
+                entries,
+                IndexEntry {
+                    table: table.to_string(),
+                    columns,
+                    unique: true,
+                    name,
+                    partial: false,
+                },
+            );
+        }
+        TableConstraint::Unique(u) => {
+            let columns: Vec<String> = u.columns.iter().map(index_column_name).collect();
+            let name = u.name.as_ref().map(|i| i.value.to_lowercase());
+            let constraint_name = name
+                .clone()
+                .or_else(|| synthesized_name(table, &columns, "key"));
+            if let Some(constraint_name) = constraint_name {
+                push_constraint(constraints, table, constraint_name, ConstraintKind::Unique);
+            }
+            push_entry(
+                entries,
+                IndexEntry {
+                    table: table.to_string(),
+                    columns,
+                    unique: true,
+                    name,
+                    partial: false,
+                },
+            );
+        }
+        TableConstraint::ForeignKey(fk) => {
+            let columns: Vec<String> = fk.columns.iter().map(|i| i.value.to_lowercase()).collect();
+            let constraint_name = fk
+                .name
+                .as_ref()
+                .map(|i| i.value.to_lowercase())
+                .or_else(|| synthesized_name(table, &columns, "fkey"));
+            if let Some(constraint_name) = constraint_name {
+                push_constraint(
+                    constraints,
+                    table,
+                    constraint_name,
+                    ConstraintKind::ForeignKey,
+                );
+            }
+        }
+        TableConstraint::Check(c) => {
+            if let Some(name) = c.name.as_ref() {
+                push_constraint(
+                    constraints,
+                    table,
+                    name.value.to_lowercase(),
+                    ConstraintKind::Check,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Postgres' auto-name for an unnamed constraint/index: `{table}_{cols}_{suffix}`.
+/// `None` when any key element is an expression (opaque) or the joined name
+/// would exceed Postgres' 63-byte identifier limit (Postgres shortens such
+/// names with heuristics this simulator does not replicate).
+fn synthesized_name(table: &str, columns: &[String], suffix: &str) -> Option<String> {
+    if columns.is_empty() || columns.iter().any(|c| c == OPAQUE_COLUMN) {
+        return None;
+    }
+    let name = format!("{table}_{}_{suffix}", columns.join("_"));
+    (name.len() <= 63).then_some(name)
+}
+
+fn push_constraint(
+    constraints: &mut Vec<ConstraintEntry>,
+    table: &str,
+    name: String,
+    kind: ConstraintKind,
+) {
+    // Postgres truncates identifiers beyond 63 bytes; skip rather than guess.
+    if name.len() > 63 {
+        return;
+    }
+    let entry = ConstraintEntry {
         table: table.to_string(),
-        columns: columns.iter().map(index_column_name).collect(),
-        unique: true,
-        name: name.as_ref().map(|i| i.value.to_lowercase()),
-        partial: false,
-    })
+        name,
+        kind,
+    };
+    if !constraints.contains(&entry) {
+        constraints.push(entry);
+    }
 }
 
 /// The last identifier of a (possibly schema-qualified) object name, lowercased.
@@ -606,5 +790,93 @@ mod tests {
         // Partial indexes are ignored.
         let c3 = cat("CREATE INDEX ON t (a, created_at) WHERE deleted = FALSE;");
         assert!(!c3.specializes("t", &["a".to_string()], "created_at"));
+    }
+
+    // ── classified constraint catalog ───────────────────────────────────────
+
+    #[test]
+    fn constraints_inline_fk_and_pk_synthesized_names() {
+        let c = cat("CREATE TABLE order_items (id uuid PRIMARY KEY, \
+             order_id uuid NOT NULL REFERENCES orders(id));");
+        assert_eq!(
+            c.table_constraints("order_items"),
+            vec![
+                ("order_items_pkey".to_string(), ConstraintKind::Unique),
+                (
+                    "order_items_order_id_fkey".to_string(),
+                    ConstraintKind::ForeignKey
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn constraints_inline_unique_and_check_synthesized_names() {
+        let c = cat("CREATE TABLE t (email varchar UNIQUE, a int CHECK (a > 0));");
+        let cons = c.table_constraints("t");
+        assert!(cons.contains(&("t_email_key".to_string(), ConstraintKind::Unique)));
+        assert!(cons.contains(&("t_a_check".to_string(), ConstraintKind::Check)));
+    }
+
+    #[test]
+    fn constraints_named_check_via_alter_then_drop() {
+        let sql = "CREATE TABLE profiles (id uuid PRIMARY KEY, email varchar NOT NULL); \
+             ALTER TABLE profiles ADD CONSTRAINT profiles_email_not_blank CHECK (email <> '');";
+        let c = cat(sql);
+        assert!(c.table_constraints("profiles").contains(&(
+            "profiles_email_not_blank".to_string(),
+            ConstraintKind::Check
+        )));
+
+        let dropped = cat(&format!(
+            "{sql} ALTER TABLE profiles DROP CONSTRAINT profiles_email_not_blank;"
+        ));
+        assert!(
+            !dropped
+                .table_constraints("profiles")
+                .iter()
+                .any(|(_, k)| *k == ConstraintKind::Check)
+        );
+    }
+
+    #[test]
+    fn constraints_table_level_fk_named_and_unnamed() {
+        let c = cat("CREATE TABLE t (a int, b int, \
+             CONSTRAINT my_fk FOREIGN KEY (a) REFERENCES o(x), \
+             FOREIGN KEY (b) REFERENCES o(y));");
+        let cons = c.table_constraints("t");
+        assert!(cons.contains(&("my_fk".to_string(), ConstraintKind::ForeignKey)));
+        assert!(cons.contains(&("t_b_fkey".to_string(), ConstraintKind::ForeignKey)));
+    }
+
+    #[test]
+    fn constraints_unnamed_table_level_check_skipped() {
+        // Postgres derives the name from the expression's columns — not simulated.
+        let c = cat("CREATE TABLE t (a int, CHECK (a > 0));");
+        assert!(
+            c.table_constraints("t")
+                .iter()
+                .all(|(_, k)| *k != ConstraintKind::Check)
+        );
+    }
+
+    #[test]
+    fn constraints_named_unique_index_and_drop_index() {
+        let sql = "CREATE TABLE users (id uuid, email varchar); \
+             CREATE UNIQUE INDEX idx_users_email ON users (email);";
+        let c = cat(sql);
+        assert!(
+            c.table_constraints("users")
+                .contains(&("idx_users_email".to_string(), ConstraintKind::Unique))
+        );
+
+        let dropped = cat(&format!("{sql} DROP INDEX idx_users_email;"));
+        assert!(dropped.table_constraints("users").is_empty());
+    }
+
+    #[test]
+    fn constraints_drop_table_removes_all() {
+        let c = cat("CREATE TABLE t (id uuid PRIMARY KEY, o uuid REFERENCES x(id)); DROP TABLE t;");
+        assert!(c.table_constraints("t").is_empty());
     }
 }
