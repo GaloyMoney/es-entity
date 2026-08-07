@@ -48,18 +48,31 @@ async fn index_key_columns(
     Ok(out)
 }
 
-/// Mirrors `IndexCatalog::specializes`: some index's leading key columns are a
-/// permutation of `equality_cols` immediately followed by `sort_col`.
+/// Mirrors `IndexCatalog::specializes`: the equality columns are a **leading
+/// prefix** of some index — any key columns may follow, the sort column need
+/// not immediately succeed the prefix. A `col = $k` predicate is an index qual
+/// on such an index regardless of what trails it, which the `COALESCE` fallback
+/// can never be; that alone makes the specialization preferable (#185). With no
+/// equality filter the only benefit is index-ordered pagination, so the sort
+/// column must itself lead an index.
 fn covered(indexes: &[Vec<String>], equality_cols: &[&str], sort_col: &str) -> bool {
+    let sort = sort_col.to_lowercase();
     let mut eq: Vec<String> = equality_cols.iter().map(|c| c.to_lowercase()).collect();
     eq.sort();
     indexes.iter().any(|cols| {
-        if cols.len() < eq.len() + 1 {
+        if cols.len() < eq.len() {
             return false;
         }
         let mut prefix = cols[..eq.len()].to_vec();
         prefix.sort();
-        prefix == eq && cols[eq.len()] == sort_col.to_lowercase()
+        if prefix != eq {
+            return false;
+        }
+        if eq.is_empty() {
+            cols.first().map(String::as_str) == Some(sort.as_str())
+        } else {
+            true
+        }
     })
 }
 
@@ -91,14 +104,61 @@ async fn specialization_relied_on_indexes_physically_exist() -> anyhow::Result<(
          got {contacts:?}"
     );
 
-    // A combination with no matching index must correctly report *not* covered
-    // (guards the check itself against always-true bugs): transfers has no
-    // (status, created_at) index.
+    // Newly-permitted shape (#185): a bare `(status)` index covers the status
+    // listing sorted by created_at even though the sort column does not follow
+    // it in the index — the exact combo the pre-fix mirror wrongly reported
+    // uncovered while `specializes` accepted it.
     assert!(
-        !covered(&transfers, &["status"], "created_at"),
-        "sanity: transfers has no (status, created_at) index"
+        covered(&transfers, &["status"], "created_at"),
+        "transfers has a bare (status) index; the relaxed mirror must cover it; \
+         got {transfers:?}"
+    );
+
+    // A combination with no matching index must correctly report *not* covered
+    // (guards the check itself against always-true bugs): `reference` is
+    // unindexed, so no index has it as a leading prefix.
+    assert!(
+        !covered(&transfers, &["reference"], "created_at"),
+        "sanity: transfers has no index on `reference`"
     );
 
     conn.close().await?;
     Ok(())
+}
+
+/// Pins the `covered` mirror to `IndexCatalog::specializes` (macros crate
+/// `specializes_on_equality_prefix`) on the shapes #185 newly permitted — an
+/// equality prefix whose index does *not* continue with the sort column. Pure
+/// (no DB), so it also runs under offline `nix flake check`. The two functions
+/// live in different crates (the proc-macro crate cannot export the catalog),
+/// so this hand-checked parallel is the only thing keeping the mirror honest.
+#[test]
+fn covered_mirrors_specializes() {
+    // (account_id, created_at, id) supports {account_id} + sort created_at.
+    let transfers = vec![vec![
+        "account_id".to_string(),
+        "created_at".to_string(),
+        "id".to_string(),
+    ]];
+    assert!(covered(&transfers, &["account_id"], "created_at"));
+    // Equality set is order-insensitive within the prefix.
+    let abc = vec![vec![
+        "a".to_string(),
+        "b".to_string(),
+        "created_at".to_string(),
+        "id".to_string(),
+    ]];
+    assert!(covered(&abc, &["b", "a"], "created_at"));
+    // NEWLY PERMITTED (#185): the equality being a leading prefix is sufficient —
+    // the sort column need not immediately follow it.
+    assert!(covered(&transfers, &["account_id"], "id"));
+    // NEWLY PERMITTED (#185): a bare `(status)` index covers the status listing
+    // sorted by any column — the combo the pre-fix mirror wrongly rejected.
+    let bare = vec![vec!["status".to_string()]];
+    assert!(covered(&bare, &["status"], "created_at"));
+    // No index with the equality column as a leading prefix → not covered.
+    assert!(!covered(&bare, &["obligation_id"], "created_at"));
+    // No equality filter: the sort column must lead an index (preserved).
+    assert!(!covered(&transfers, &[], "created_at"));
+    assert!(covered(&transfers, &[], "account_id"));
 }

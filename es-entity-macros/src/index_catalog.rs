@@ -140,13 +140,28 @@ impl IndexCatalog {
 
     /// Whether a `list_for_filters` query over `table`, filtering on the
     /// (order-insensitive) equality columns `equality_cols` and paginating by
-    /// `sort_col`, is backed by a physical composite index: some index's leading
-    /// key columns are a permutation of `equality_cols` immediately followed by
-    /// `sort_col`. The implied trailing `id` tiebreak and any further index
-    /// columns are irrelevant to the prefix match.
+    /// `sort_col`, should emit the sargable specialization rather than the
+    /// `COALESCE` fallback.
     ///
-    /// Partial indexes are conservatively ignored (those combos fall back —
-    /// correct, just not sargable).
+    /// It should whenever the equality columns are a **leading prefix** of some
+    /// (non-partial) index — then the specialized query's `col = $k` predicates
+    /// are an index qual (an index scan bounded to the matching rows), which the
+    /// `COALESCE(col = $k, $k IS NULL)` fallback can never be (the `COALESCE`
+    /// defeats index extraction, forcing a full sequential scan). That alone
+    /// makes the specialization strictly preferable; the sort column following
+    /// the equality prefix is a *further* optimisation (the planner can skip the
+    /// sort node), not a requirement.
+    ///
+    /// Requiring the full `(equality…, sort)` composite — the previous behaviour
+    /// — silently sent single-filter listings that were backed by only a
+    /// `(filter)` index (no `(filter, sort)` composite) to the seq-scanning
+    /// fallback, a regression whose cost grew linearly with table size. When
+    /// the equality columns match *no* index the two plans both seq-scan, so
+    /// the fallback is correct and saves a query.
+    ///
+    /// With no equality filter the only benefit is index-ordered pagination, so
+    /// the sort column must lead an index. Partial indexes are conservatively
+    /// ignored (those combos fall back — correct, just not sargable).
     pub fn specializes(&self, table: &str, equality_cols: &[String], sort_col: &str) -> bool {
         let table = table.to_lowercase();
         let sort = sort_col.to_lowercase();
@@ -157,12 +172,19 @@ impl IndexCatalog {
             if entry.partial || entry.table != table {
                 return false;
             }
-            if entry.columns.len() < eq.len() + 1 {
+            if entry.columns.len() < eq.len() {
                 return false;
             }
             let mut prefix = entry.columns[..eq.len()].to_vec();
             prefix.sort();
-            prefix == eq && entry.columns[eq.len()] == sort
+            if prefix != eq {
+                return false;
+            }
+            if eq.is_empty() {
+                entry.columns.first().map(String::as_str) == Some(sort.as_str())
+            } else {
+                true
+            }
         })
     }
 
@@ -776,17 +798,26 @@ mod tests {
     }
 
     #[test]
-    fn specializes_prefix_permutation_then_sort() {
+    fn specializes_on_equality_prefix() {
         // (account_id, created_at, id) supports {account_id} + sort created_at.
         let c = cat("CREATE INDEX ON transfers (account_id, created_at DESC, id);");
         assert!(c.specializes("transfers", &["account_id".to_string()], "created_at"));
         // Equality set is order-insensitive within the prefix.
         let c2 = cat("CREATE INDEX ON t (a, b, created_at, id);");
         assert!(c2.specializes("t", &["b".to_string(), "a".to_string()], "created_at"));
-        // Sort must immediately follow the equality prefix.
-        assert!(!c.specializes("transfers", &["account_id".to_string()], "id"));
-        // Missing equality column → no match.
+        // The equality being a leading prefix is sufficient — the sort column
+        // need NOT immediately follow it (`account_id = $1` is still an index
+        // scan; the COALESCE fallback would seq-scan).
+        assert!(c.specializes("transfers", &["account_id".to_string()], "id"));
+        // A bare `(filter)` index (no `(filter, sort)` composite) still
+        // specializes the listing sorted by another column.
+        let c4 = cat("CREATE INDEX ON transfers (account_id);");
+        assert!(c4.specializes("transfers", &["account_id".to_string()], "created_at"));
+        // No index covering the equality column → both plans seq-scan → fall back.
+        assert!(!c4.specializes("transfers", &["reference".to_string()], "created_at"));
+        // No equality filter: the sort column must lead an index.
         assert!(!c.specializes("transfers", &[], "created_at"));
+        assert!(c.specializes("transfers", &[], "account_id"));
         // Partial indexes are ignored.
         let c3 = cat("CREATE INDEX ON t (a, created_at) WHERE deleted = FALSE;");
         assert!(!c3.specializes("t", &["a".to_string()], "created_at"));

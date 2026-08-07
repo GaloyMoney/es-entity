@@ -1678,7 +1678,7 @@ mod tests {
     }
 
     #[test]
-    fn list_for_filters_specializes_only_indexed_combos() {
+    fn list_for_filters_specializes_equality_prefix_combos() {
         let entity = Ident::new("Wide", Span::call_site());
         let query_error = syn::Ident::new("WideQueryError", Span::call_site());
         let id = syn::Ident::new("WideId", proc_macro2::Span::call_site());
@@ -1727,15 +1727,9 @@ mod tests {
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
-            index_catalog: catalog(
-                "CREATE INDEX ON wides (id); \
-                 CREATE INDEX ON wides (a, id); \
-                 CREATE INDEX ON wides (b, id); \
-                 CREATE INDEX ON wides (c, id); \
-                 CREATE INDEX ON wides (d, id); \
-                 CREATE INDEX ON wides (e, id); \
-                 CREATE INDEX ON wides (a, b, c, d, e, id);",
-            ),
+            // A single composite; specialization keys on the equality columns
+            // being a *leading prefix* of it — the sort column need not follow.
+            index_catalog: catalog("CREATE INDEX ON wides (a, b, id);"),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1744,29 +1738,30 @@ mod tests {
         list_for_filters_fn.to_tokens(&mut tokens);
         let token_str = tokens.to_string();
 
-        // Only the combinations backed by a declared index are specialized
-        // (shown here via each unified query's page-1 `First` branch): the
-        // no-filter, each single-filter and the all-filters combos.
-        assert!(
-            token_str
-                .contains("(SELECT id FROM wides WHERE ($2 IS NULL) ORDER BY id ASC LIMIT $1)")
-        );
+        // {a}: leading prefix `a` of `(a, b, id)` → specialized.
         assert!(token_str.contains(
             "(SELECT id FROM wides WHERE a = $1 AND ($3 IS NULL) ORDER BY id ASC LIMIT $2)"
         ));
-        assert!(token_str.contains(
-            "(SELECT id FROM wides WHERE a = $1 AND b = $2 AND c = $3 AND d = $4 AND e = $5 AND ($7 IS NULL) ORDER BY id ASC LIMIT $6)"
-        ));
-        // Intermediate combinations (e.g. exactly two filters) have no matching
-        // index, so they fall back to the catch-all COALESCE query — no
-        // specialized SQL exists for them.
+        // {a, b}: leading prefix `a, b` → specialized. The old "sort must
+        // immediately follow the equality prefix" rule wrongly dropped this
+        // (there is no `(a, b, id)`-vs-sort match), sending a table-growing
+        // seq-scan fallback into production.
         assert!(
-            !token_str.contains("SELECT id FROM wides WHERE a = $1 AND b = $2 ORDER"),
-            "two-filter combination has no index and must not be specialized"
+            token_str.contains(
+                "(SELECT id FROM wides WHERE a = $1 AND b = $2 AND ($4 IS NULL) ORDER BY id ASC LIMIT $3)"
+            ),
+            "a combo whose equality is an index prefix must be specialized"
+        );
+        // {b}: `b` is not a leading prefix of `(a, b, id)` → both plans seq-scan,
+        // so it correctly falls back to the COALESCE query (a build win, no
+        // runtime loss).
+        assert!(
+            !token_str.contains("(SELECT id FROM wides WHERE b = $1 AND ($3 IS NULL)"),
+            "`b` alone is not a leading index prefix and must fall back"
         );
         assert!(
-            token_str.contains("COALESCE(a = $1, $1 IS NULL)"),
-            "COALESCE fallback must remain for un-indexed combinations"
+            token_str.contains("COALESCE(b = $2, $2 IS NULL)"),
+            "COALESCE fallback must remain for combos with no index prefix"
         );
     }
 
