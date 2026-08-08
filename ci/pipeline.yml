@@ -9,6 +9,7 @@
 #@   "rust_task_image_config",
 #@   "gh_release_resource",
 #@   "nix_task_image_config",
+#@   "gcr_resource_type",
 #@ )
 
 #@ def retry_task():
@@ -30,8 +31,95 @@ groups:
   - tests
   - release
   - set-dev-version
+  - fuzz
 
 jobs:
+#! Nightly coverage-guided fuzzing (cargo-fuzz / libFuzzer).
+#!
+#! The targets are pure (no Postgres), so this runs lighter than `tests`. The
+#! evolving corpus is persisted to GCS (not git): `get` restores the latest
+#! corpus tarball before fuzzing, and `put` uploads the grown one after, so
+#! coverage accumulates across daily runs. Each run fuzzes both targets in
+#! parallel (2 libFuzzer processes = 2 cores, bounded well under the worker's
+#! capacity) for FUZZ_SECONDS wall time. A crash fails the job (the existing
+#! Zenduty alert on failed jobs fires) and the crash input is left in the build
+#! log; the corpus tarball upload is skipped so we don't persist a crashing run.
+- name: fuzz
+  serial: true
+  plan:
+  - in_parallel:
+    - { get: repo }
+    - { get: pipeline-tasks }
+    - { get: fuzz-time, trigger: true }
+    - { get: fuzz-corpus }
+  - task: fuzz
+    config:
+      platform: linux
+      image_resource: #@ nix_task_image_config()
+      inputs:
+      - name: repo
+      - name: fuzz-corpus
+      outputs:
+      - name: fuzz-corpus-out
+      caches:
+      - path: cargo-home
+      - path: cargo-target-dir
+      run:
+        path: sh
+        args:
+          - -exc
+          - |
+            set -euo pipefail
+            cd repo
+            cachix use $CACHIX_CACHE_NAME
+            cachix watch-exec $CACHIX_CACHE_NAME -- nix -L develop . -c sh -exc '
+              set -euo pipefail
+              export CARGO_HOME=$PWD/../cargo-home
+              export CARGO_TARGET_DIR=$PWD/../cargo-target-dir
+
+              # cargo-fuzz is cached across runs via the cargo-home cache.
+              cargo install cargo-fuzz --locked || true
+
+              # Restore the evolving corpus from GCS (no-op on the first run).
+              mkdir -p fuzz/corpus
+              if compgen -G "../fuzz-corpus/*.tgz" > /dev/null; then
+                tar -xzf ../fuzz-corpus/*.tgz -C fuzz/
+              fi
+
+              (cd fuzz && cargo fuzz build --sanitizer=none)
+
+              # Run both targets in parallel (2 libFuzzer processes = 2 cores).
+              # To use more of the CPU budget, add `-jobs=N` to each (N cores per
+              # target); keep total processes <= the worker bound.
+              pids=""; rc=0
+              for target in fuzz_parse_constraint_detail fuzz_event_hydration; do
+                (cd fuzz && cargo fuzz run "$target" --sanitizer=none -- \
+                  -max_total_time="$FUZZ_SECONDS" -timeout=25 \
+                  -artifact_prefix="artifacts/$target/") &
+                pids="$pids $!"
+              done
+              for p in $pids; do wait "$p" || rc=1; done
+
+              if [ "$rc" -ne 0 ]; then
+                echo "==== FUZZ CRASH DETECTED ===="
+                find fuzz/artifacts -type f -print || true
+                exit "$rc"
+              fi
+
+              # Package the evolved corpus for GCS.
+              mkdir -p ../fuzz-corpus-out
+              ts=$(date -u +%Y%m%d-%H%M%S)
+              tar -czf "../fuzz-corpus-out/corpus-v${ts}.tgz" -C fuzz corpus
+              echo "packaged corpus-v${ts}.tgz"
+            '
+      params:
+        CACHIX_AUTH_TOKEN: #@ data.values.cachix_auth_token
+        CACHIX_CACHE_NAME: #@ data.values.cachix_cache_name
+        FUZZ_SECONDS: "14400"   #! 4h per target per daily run
+  - put: fuzz-corpus
+    params:
+      file: fuzz-corpus-out/corpus-v*.tgz
+
 - name: check-code
   serial: true
   plan:
@@ -185,3 +273,22 @@ resources:
 - #@ gh_release_resource()
 - #@ pipeline_tasks_resource()
 - #@ version_resource()
+
+#! Versioned tarball of the evolving libFuzzer corpus. `get` restores the latest
+#! before a fuzz run; `put` uploads the grown one after (filenames embed a
+#! UTC timestamp so the regex capture group orders them correctly).
+#! NOTE: reuses the shared `staging-gcp-creds` bucket like `bundled_deps_resource`;
+#! swap for a dedicated fuzz credential if that isn't available to this team.
+- name: fuzz-corpus
+  type: gcs-resource
+  source:
+    bucket: ((staging-gcp-creds.bucket_name))
+    json_key: ((staging-gcp-creds.creds_json))
+    regexp: #@ data.values.gh_repository + "-artifacts/fuzz-corpus/corpus-v(.*).tgz"
+- name: fuzz-time
+  type: time
+  source:
+    interval: 24h
+
+resource_types:
+- #@ gcr_resource_type()
