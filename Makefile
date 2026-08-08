@@ -1,6 +1,9 @@
 NIX_DEPS_DIR := .nix-deps
 
-.PHONY: start-deps clean-deps setup-db reset-deps sqlx-prepare check-code test-book test-chapter serve-book
+# Seconds each fuzz target runs in `make fuzz`.
+FUZZ_TIME := 60
+
+.PHONY: start-deps clean-deps setup-db reset-deps sqlx-prepare check-code test-book test-chapter serve-book fuzz
 
 start-deps:
 	@mkdir -p $(NIX_DEPS_DIR)
@@ -41,6 +44,12 @@ test-chapter:
 
 check-code:
 	nix flake check
+
+# Coverage-guided fuzzing (stable toolchain; --sanitizer=none since ASAN needs nightly).
+# Each target runs for $(FUZZ_TIME)s against its evolving corpus in fuzz/corpus/.
+fuzz:
+	cargo fuzz run fuzz_parse_constraint_detail --sanitizer=none -- -max_total_time=$(FUZZ_TIME)
+	cargo fuzz run fuzz_event_hydration --sanitizer=none -- -max_total_time=$(FUZZ_TIME)
 
 sqlx-prepare:
 	cargo sqlx prepare --workspace
