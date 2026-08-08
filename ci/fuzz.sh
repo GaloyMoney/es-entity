@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
 #
-# Run the cargo-fuzz targets in parallel, with optional corpus restore/package.
+# Run the cargo-fuzz targets in parallel, with optional corpus restore/persist.
 #
-# This is the single source of truth for fuzzing logic, shared by:
-#   - the Concourse `fuzz` job (ci/pipeline.yml)  — sets CORPUS_TARBALL_IN/OUT (GCS)
-#   - `nix run .#fuzz`                             — flake-provided toolchain
-#   - `make fuzz`                                  — local, in the dev shell
+# Single source of truth, shared by:
+#   - the Concourse `fuzz` job (ci/pipeline.yml) — sets GCS_BUCKET/CREDS/PREFIX
+#   - `nix run .#fuzz`                          — flake-provided toolchain
+#   - `make fuzz`                               — local, in the dev shell
 #
-# Env vars (all optional, local-friendly defaults):
+# Corpus handling (mutually exclusive):
+#   GCS_BUCKET (+ GCS_CREDS + GCS_PREFIX)  — download latest / upload new via gsutil
+#                                            (CI). Self-bootstraps: first run
+#                                            finds no corpus and fuzzes from scratch.
+#   CORPUS_TARBALL_IN / CORPUS_TARBALL_OUT  — local tarball (elsewhere).
+#
+# Other env vars (optional, local-friendly defaults):
 #   FUZZ_SECONDS        seconds to fuzz each target (default: 60)
-#   FUZZ_JOBS           libFuzzer `-jobs` per target; total cores = 2 targets * FUZZ_JOBS
+#   FUZZ_JOBS           libFuzzer `-jobs` per target; cores = 2 targets * FUZZ_JOBS
 #                       (unset => 1 process per target => 2 cores)
-#   CORPUS_TARBALL_IN   glob of a corpus tarball to extract before fuzzing
-#   CORPUS_TARBALL_OUT  path to write the evolved corpus tarball after fuzzing
 #
 # Requires: bash, git, cargo, tar, and cargo-fuzz (auto-installed if missing).
+# GCS mode additionally requires: gcloud + gsutil (google-cloud-sdk).
 
 set -euo pipefail
 
@@ -28,9 +33,21 @@ fi
 
 FUZZ_SECONDS="${FUZZ_SECONDS:-60}"
 
-# Restore the corpus (no-op unless CORPUS_TARBALL_IN is set and matches a file).
+# ── Restore the corpus ────────────────────────────────────────────────
 mkdir -p fuzz/corpus
-if [ -n "${CORPUS_TARBALL_IN:-}" ] && compgen -G "$CORPUS_TARBALL_IN" >/dev/null; then
+if [ -n "${GCS_BUCKET:-}" ]; then
+  printf '%s' "${GCS_CREDS:?GCS_BUCKET set but GCS_CREDS missing}" > /tmp/gcs-key.json
+  gcloud auth activate-service-account --key-file=/tmp/gcs-key.json >/dev/null
+  prefix="gs://$GCS_BUCKET/${GCS_PREFIX:?GCS_BUCKET set but GCS_PREFIX missing}"
+  latest="$(gsutil ls "$prefix/corpus-v*.tgz" 2>/dev/null | sort | tail -1 || true)"
+  if [ -n "$latest" ]; then
+    echo "restoring corpus from $latest"
+    gsutil cp "$latest" /tmp/corpus-in.tgz
+    tar -xzf /tmp/corpus-in.tgz -C fuzz/
+  else
+    echo "no existing corpus in GCS; bootstrapping from scratch"
+  fi
+elif [ -n "${CORPUS_TARBALL_IN:-}" ] && compgen -G "$CORPUS_TARBALL_IN" >/dev/null; then
   echo "restoring corpus from $CORPUS_TARBALL_IN"
   tar -xzf $CORPUS_TARBALL_IN -C fuzz/
 fi
@@ -61,8 +78,13 @@ if [ "$rc" -ne 0 ]; then
   exit "$rc"
 fi
 
-# Package the evolved corpus (no-op unless CORPUS_TARBALL_OUT is set).
-if [ -n "${CORPUS_TARBALL_OUT:-}" ]; then
+# ── Persist the evolved corpus ────────────────────────────────────────
+if [ -n "${GCS_BUCKET:-}" ]; then
+  ts=$(date -u +%Y%m%d-%H%M%S)
+  tar -czf /tmp/corpus-v${ts}.tgz -C fuzz corpus
+  gsutil cp /tmp/corpus-v${ts}.tgz "$prefix/corpus-v${ts}.tgz"
+  echo "uploaded corpus-v${ts}.tgz"
+elif [ -n "${CORPUS_TARBALL_OUT:-}" ]; then
   mkdir -p "$(dirname "$CORPUS_TARBALL_OUT")"
   tar -czf "$CORPUS_TARBALL_OUT" -C fuzz corpus
   echo "packaged corpus -> $CORPUS_TARBALL_OUT"

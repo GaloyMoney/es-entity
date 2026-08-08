@@ -446,6 +446,20 @@
           '';
         };
 
+        # Lean dev shell for fuzzing: Rust toolchain + cargo-fuzz + gsutil (for
+        # the CI corpus round-trip) + tar. No Postgres/devEnv needed — the fuzz
+        # targets are pure. Used by the Concourse `fuzz` job (`nix develop .#fuzz`).
+        devShells.fuzz = mkShell {
+          packages = [
+            rustToolchain
+            pkgs.cargo-fuzz
+            pkgs.google-cloud-sdk
+            pkgs.gnutar
+            pkgs.coreutils
+            pkgs.git
+          ];
+        };
+
         formatter = alejandra;
       });
 }
