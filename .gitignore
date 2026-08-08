@@ -21,3 +21,7 @@ target/
 
 # mdBook generated files
 book/book/
+
+# cargo-fuzz run artifacts (crash outputs + explored corpus); build dir covered by `target/`
+fuzz/artifacts/
+fuzz/corpus/
