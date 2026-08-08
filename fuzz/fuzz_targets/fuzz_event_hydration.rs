@@ -71,12 +71,19 @@ impl TryFromEvents<FuzzEvent> for FuzzEntity {
 }
 
 fn make_events(values: &[serde_json::Value]) -> Vec<GenericEvent<Uuid>> {
+    // Partition events into contiguous groups (each group = one entity) so that
+    // `load_n` actually reconstructs multiple entities and exercises its
+    // grouping + early-return-at-n paths — previously every event shared
+    // `Uuid::nil()`, so only one entity was ever built and the `len <= n`
+    // coverage was vacuous. `load_n` assumes events grouped by id, ordered by
+    // sequence per id; a varying stride gives a range of groupings.
+    let stride = (values.len() % 4).max(1);
     values
         .iter()
         .enumerate()
         .map(|(i, v)| GenericEvent {
-            entity_id: Uuid::nil(),
-            sequence: i as i32,
+            entity_id: Uuid::from_u128((i / stride) as u128),
+            sequence: (i % stride) as i32,
             event: v.clone(),
             context: None,
             recorded_at: Utc::now(),

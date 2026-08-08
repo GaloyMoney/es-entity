@@ -60,14 +60,17 @@ jobs:
     - { get: repo }
     - { get: pipeline-tasks }
     - { get: fuzz-time, trigger: true }
-    - { get: fuzz-corpus }
+    #! No `get: fuzz-corpus` here: restoring the corpus via the gcs-resource
+    #! fails when the bucket prefix is empty (an unseeded first run), which
+    #! would page Zenduty before the job ever fuzzes. Instead the task restores
+    #! the latest tarball with gsutil (tolerant of "not found") and only the
+    #! `put` below uses the gcs-resource.
   - task: fuzz
     config:
       platform: linux
       image_resource: #@ nix_task_image_config()
       inputs:
       - name: repo
-      - name: fuzz-corpus
       outputs:
       - name: fuzz-corpus-out
       caches:
@@ -86,9 +89,23 @@ jobs:
               export CARGO_HOME=$PWD/../cargo-home
               export CARGO_TARGET_DIR=$PWD/../cargo-target-dir
 
-              # Delegate to the shared fuzz script (ci/fuzz.sh), which restores
-              # the corpus, runs both targets in parallel, detects crashes, and
-              # packages the evolved corpus. FUZZ_SECONDS comes from the task params.
+              # Restore the latest corpus from GCS via gsutil. Auth uses the
+              # service-account key through BOTO_CONFIG (no gcloud needed). This
+              # is a no-op on an unseeded bucket, so the first run bootstraps.
+              echo "$GCS_CREDS_JSON" > /tmp/gcs-key.json
+              printf "[Credentials]\ngs_service_key_file = /tmp/gcs-key.json\n" > /tmp/.boto
+              export BOTO_CONFIG=/tmp/.boto
+              PREFIX="gs://$GCS_BUCKET/es-entity-artifacts/fuzz-corpus"
+              mkdir -p ../fuzz-corpus
+              if LATEST=$(gsutil ls "$PREFIX/corpus-v*.tgz" 2>/dev/null | sort | tail -1) && [ -n "$LATEST" ]; then
+                echo "restoring corpus from $LATEST"
+                gsutil cp "$LATEST" ../fuzz-corpus/
+              else
+                echo "no corpus in GCS yet (first run); fuzzing from scratch"
+              fi
+
+              # Delegate the build + parallel fuzz + crash detection + corpus
+              # packaging to the shared script. FUZZ_SECONDS comes from the task params.
               export CORPUS_TARBALL_IN="../fuzz-corpus/*.tgz"
               export CORPUS_TARBALL_OUT="../fuzz-corpus-out/corpus-v$(date -u +%Y%m%d-%H%M%S).tgz"
               bash ci/fuzz.sh
@@ -97,6 +114,8 @@ jobs:
         CACHIX_AUTH_TOKEN: #@ data.values.cachix_auth_token
         CACHIX_CACHE_NAME: #@ data.values.cachix_cache_name
         FUZZ_SECONDS: "3600"    #! 1h per target per daily run (bump to 4h once proven)
+        GCS_BUCKET: ((staging-gcp-creds.bucket_name))
+        GCS_CREDS_JSON: ((staging-gcp-creds.creds_json))
   - put: fuzz-corpus
     params:
       file: fuzz-corpus-out/corpus-v*.tgz
