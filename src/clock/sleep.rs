@@ -62,7 +62,8 @@ impl ClockSleep {
                 sleep: rt.sleep(duration),
             },
             ClockInner::Manual(manual) => {
-                let wake_at_ms = manual.now_ms() + duration.as_millis() as i64;
+                let added = i64::try_from(duration.as_millis()).unwrap_or(i64::MAX);
+                let wake_at_ms = manual.now_ms().saturating_add(added);
 
                 ClockSleepInner::Manual {
                     wake_at_ms,

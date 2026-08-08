@@ -233,6 +233,14 @@ where
         events: impl IntoIterator<Item = GenericEvent<<T as EsEvent>::EntityId>>,
         n: usize,
     ) -> Result<(Vec<E>, bool), EntityHydrationError> {
+        if n == 0 {
+            // Asking for zero entities yields zero entities. `has_more` reports
+            // whether the stream was non-empty, mirroring the `LIMIT n + 1`
+            // over-fetch contract the generated repos rely on: callers query
+            // `LIMIT (first + 1)`, so a non-empty stream means a next page exists.
+            let has_more = events.into_iter().next().is_some();
+            return Ok((Vec::new(), has_more));
+        }
         let mut ret: Vec<E> = Vec::new();
         let mut current_id = None;
         let mut current = None;
@@ -355,7 +363,46 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use uuid::Uuid;
+
+    /// Builds a `GenericEvent` whose JSON deserializes to `Created(name)`.
+    fn valid_event(id: Uuid, sequence: i32, name: &str) -> GenericEvent<Uuid> {
+        GenericEvent {
+            entity_id: id,
+            sequence,
+            event: serde_json::to_value(DummyEntityEvent::Created(name.to_string()))
+                .expect("could not serialize"),
+            context: None,
+            recorded_at: chrono::Utc::now(),
+            forgettable_payload: None,
+        }
+    }
+
+    /// Small bounded JSON strategy covering null/bool/int/float/string plus one
+    /// level of array/object nesting. Cheap to shrink and enough to exercise the
+    /// serde error paths without ballooning runtime.
+    fn json_value() -> impl Strategy<Value = serde_json::Value> {
+        let scalar = prop_oneof![
+            Just(serde_json::Value::Null),
+            any::<bool>().prop_map(serde_json::Value::Bool),
+            any::<i64>().prop_map(serde_json::Value::from),
+            any::<f64>().prop_map(serde_json::Value::from),
+            ".{0,15}".prop_map(serde_json::Value::String),
+        ]
+        .boxed();
+        let nested = prop_oneof![
+            proptest::collection::vec(scalar.clone(), 0..4).prop_map(serde_json::Value::Array),
+            proptest::collection::vec((".{0,6}", scalar.clone()), 0..4).prop_map(|pairs| {
+                let mut m = serde_json::Map::new();
+                for (k, v) in pairs {
+                    m.insert(k, v);
+                }
+                serde_json::Value::Object(m)
+            },),
+        ];
+        prop_oneof![scalar, nested]
+    }
 
     #[derive(Debug, serde::Serialize, serde::Deserialize)]
     enum DummyEntityEvent {
@@ -492,5 +539,167 @@ mod tests {
         assert_eq!(events.last_persisted(10).count(), 1);
         // n == 0 yields nothing
         assert_eq!(events.last_persisted(0).count(), 0);
+    }
+
+    proptest! {
+        #[test]
+        fn load_first_empty_input_returns_none(_ in Just(())) {
+            let res = EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity>(vec![]);
+            prop_assert!(matches!(res, Ok(None)));
+        }
+
+        #[test]
+        fn load_first_non_empty_valid_hydrates(
+            count in 1u8..8,
+            names in proptest::collection::vec(".{0,10}", 1..8),
+        ) {
+            let id = Uuid::nil();
+            let events: Vec<_> = (1..=count as i32)
+                .zip(names.iter())
+                .map(|(s, n)| valid_event(id, s, n))
+                .collect();
+            let res = EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity>(events);
+            prop_assert!(matches!(res, Ok(Some(_))));
+        }
+
+        /// Feeds arbitrary JSON through the loader. It may hydrate or error, but
+        /// it must never panic — and `Ok(None)` is only possible for empty input.
+        #[test]
+        fn load_first_arbitrary_json_never_panics(
+            raw in proptest::collection::vec(json_value(), 0..10),
+        ) {
+            let events: Vec<_> = raw
+                .into_iter()
+                .enumerate()
+                .map(|(i, v)| GenericEvent {
+                    entity_id: Uuid::nil(),
+                    sequence: i as i32,
+                    event: v,
+                    context: None,
+                    recorded_at: chrono::Utc::now(),
+                    forgettable_payload: None,
+                })
+                .collect();
+            let is_empty = events.is_empty();
+            let res = EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity>(events);
+            if let Ok(None) = res {
+                prop_assert!(is_empty);
+            }
+        }
+
+        /// With a grouped, ascending stream (the documented precondition) and
+        /// `n >= 1`, `load_n` returns `min(n, k)` entities and reports `has_more`
+        /// exactly when `n < k`.
+        #[test]
+        fn load_n_respects_limit_and_more_flag(
+            k in 1u8..8,
+            per in 1u8..4,
+            n in 1u8..12,
+        ) {
+            let mut events = Vec::new();
+            for i in 0..k {
+                let id = Uuid::from_u128(i as u128);
+                for s in 1..=per as i32 {
+                    events.push(valid_event(id, s, &format!("e{i}-{s}")));
+                }
+            }
+            let (entities, has_more) =
+                EntityEvents::<DummyEntityEvent>::load_n::<DummyEntity>(events, n as usize)
+                    .expect("valid events hydrate");
+            prop_assert_eq!(entities.len(), (n as usize).min(k as usize));
+            prop_assert_eq!(has_more, n < k);
+        }
+
+        /// Regression for the `n = 0` degenerate case: previously returned *all*
+        /// entities instead of zero. Now returns none and reports `has_more` iff
+        /// the stream was non-empty (the `LIMIT n + 1` contract).
+        #[test]
+        fn load_n_zero_returns_no_entities(k in 0u8..5, per in 1u8..3) {
+            let mut events = Vec::new();
+            for i in 0..k {
+                let id = Uuid::from_u128(i as u128);
+                for s in 1..=per as i32 {
+                    events.push(valid_event(id, s, &format!("e{i}-{s}")));
+                }
+            }
+            let (entities, has_more) =
+                EntityEvents::<DummyEntityEvent>::load_n::<DummyEntity>(events, 0)
+                    .expect("valid events hydrate");
+            prop_assert!(entities.is_empty());
+            prop_assert_eq!(has_more, k > 0);
+        }
+
+        #[test]
+        fn load_n_arbitrary_json_never_panics(
+            raw in proptest::collection::vec(json_value(), 0..10),
+            n in 0u8..12,
+        ) {
+            let events: Vec<_> = raw
+                .into_iter()
+                .enumerate()
+                .map(|(i, v)| GenericEvent {
+                    entity_id: Uuid::nil(),
+                    sequence: i as i32,
+                    event: v,
+                    context: None,
+                    recorded_at: chrono::Utc::now(),
+                    forgettable_payload: None,
+                })
+                .collect();
+            let _ = EntityEvents::<DummyEntityEvent>::load_n::<DummyEntity>(events, n as usize);
+        }
+
+        /// `last_persisted(n)` must clamp to the available events for any `n`,
+        /// generalizing the dedicated saturating-sub test above.
+        #[test]
+        fn last_persisted_clamps_for_any_n(
+            p in 1u8..8,
+            n in 0u16..12,
+        ) {
+            let id = Uuid::nil();
+            let events: Vec<_> = (1..=p as i32)
+                .map(|s| valid_event(id, s, &format!("n{s}")))
+                .collect();
+            let entity: DummyEntity =
+                EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity>(events)
+                    .expect("load")
+                    .expect("some");
+            let count = entity.events().last_persisted(n as usize).count();
+            prop_assert_eq!(count, (n as usize).min(p as usize));
+        }
+
+        /// Marking new events as persisted must drain `new_events`, leave
+        /// `len_persisted` consistent, and assign contiguous 1-based sequences
+        /// across repeated calls.
+        #[test]
+        fn mark_new_events_assigns_contiguous_sequences(
+            a in 0u8..5,
+            b in 0u8..5,
+        ) {
+            let id = Uuid::nil();
+            let mut events = EntityEvents::init(
+                id,
+                (0..a).map(|i| DummyEntityEvent::Created(format!("n{i}"))),
+            );
+            let now = chrono::Utc::now();
+
+            prop_assert_eq!(events.mark_new_events_persisted_at(now), a as usize);
+            prop_assert!(!events.any_new());
+            prop_assert_eq!(events.len_persisted(), a as usize);
+            let seqs: Vec<usize> = events.iter_persisted().map(|e| e.sequence).collect();
+            prop_assert_eq!(seqs, (1..=a as usize).collect::<Vec<_>>());
+
+            for i in 0..b {
+                events.push(DummyEntityEvent::Created(format!("m{i}")));
+            }
+            if b > 0 {
+                prop_assert!(events.any_new());
+            }
+            prop_assert_eq!(events.mark_new_events_persisted_at(now), b as usize);
+            prop_assert!(!events.any_new());
+            prop_assert_eq!(events.len_persisted(), (a + b) as usize);
+            let seqs: Vec<usize> = events.iter_persisted().map(|e| e.sequence).collect();
+            prop_assert_eq!(seqs, (1..=(a + b) as usize).collect::<Vec<_>>());
+        }
     }
 }

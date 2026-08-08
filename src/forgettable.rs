@@ -228,6 +228,31 @@ pub fn inject_forgettable_payload(event_json: &mut serde_json::Value, payload: s
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    /// Bounded JSON strategy (null/bool/int/float/string + one level of
+    /// array/object nesting) used to exercise the merge and serde paths.
+    fn json_value() -> impl Strategy<Value = serde_json::Value> {
+        let scalar = prop_oneof![
+            Just(serde_json::Value::Null),
+            any::<bool>().prop_map(serde_json::Value::Bool),
+            any::<i64>().prop_map(serde_json::Value::from),
+            any::<f64>().prop_map(serde_json::Value::from),
+            ".{0,15}".prop_map(serde_json::Value::String),
+        ]
+        .boxed();
+        let nested = prop_oneof![
+            proptest::collection::vec(scalar.clone(), 0..4).prop_map(serde_json::Value::Array),
+            proptest::collection::vec((".{0,6}", scalar.clone()), 0..4).prop_map(|pairs| {
+                let mut m = serde_json::Map::new();
+                for (k, v) in pairs {
+                    m.insert(k, v);
+                }
+                serde_json::Value::Object(m)
+            },),
+        ];
+        prop_oneof![scalar, nested]
+    }
 
     #[test]
     fn serialize_set_emits_null() {
@@ -370,5 +395,60 @@ mod tests {
         let f: Forgettable<String> = "Alice".to_string().into();
         assert!(f.is_set());
         assert_eq!(&*f.value().unwrap(), "Alice");
+    }
+
+    proptest! {
+        /// `inject_forgettable_payload` must never panic on any pair of JSON
+        /// values. When both sides are objects it merges payload over event
+        /// (payload wins on conflict); otherwise the event is left untouched.
+        #[test]
+        fn inject_never_panics_and_merges_only_objects(
+            event_in in json_value(),
+            payload in json_value(),
+        ) {
+            let mut event = event_in.clone();
+            inject_forgettable_payload(&mut event, payload.clone());
+
+            if event_in.is_object() && payload.is_object() {
+                let payload_obj = payload.as_object().unwrap();
+                // payload keys are present in the result with payload's values.
+                for (k, v) in payload_obj {
+                    prop_assert_eq!(event.get(k), Some(v));
+                }
+                // non-overwritten original keys are retained.
+                for (k, v) in event_in.as_object().unwrap() {
+                    if !payload_obj.contains_key(k) {
+                        prop_assert_eq!(event.get(k), Some(v));
+                    }
+                }
+            } else {
+                prop_assert_eq!(event, event_in);
+            }
+        }
+
+        /// A set `Forgettable` and a forgotten one serialize identically to
+        /// `null` (data-leakage guard), and the set/forgotten flags are always
+        /// mutually exclusive.
+        #[test]
+        fn forgettable_always_serializes_to_null(opt in any::<Option<String>>()) {
+            let v = serde_json::to_value(&opt).expect("serialize option");
+            let f: Forgettable<String> =
+                serde_json::from_value(v.clone()).expect("deserialize forgettable");
+            prop_assert_eq!(f.is_set(), opt.is_some());
+            prop_assert_eq!(f.is_forgotten(), opt.is_none());
+            prop_assert_eq!(serde_json::to_value(&f).unwrap(), serde_json::Value::Null);
+            // round-trip from null yields forgotten.
+            let from_null: Forgettable<String> =
+                serde_json::from_value(serde_json::Value::Null).unwrap();
+            prop_assert!(from_null.is_forgotten());
+        }
+
+        /// Deserializing a non-string, non-null value must error (never panic).
+        #[test]
+        fn forgettable_rejects_non_string_value(n in any::<i64>()) {
+            let res: Result<Forgettable<String>, _> =
+                serde_json::from_value(serde_json::Value::from(n));
+            prop_assert!(res.is_err());
+        }
     }
 }
