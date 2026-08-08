@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 #
-# Run the cargo-fuzz targets in parallel, with optional corpus restore/package.
+# Run the cargo-fuzz targets in parallel, with optional corpus restore/persist.
 #
-# This is the single source of truth for fuzzing logic, shared by:
-#   - the Concourse `fuzz` job (ci/pipeline.yml)  — sets CORPUS_TARBALL_IN/OUT (GCS)
-#   - `nix run .#fuzz`                             — flake-provided toolchain
-#   - `make fuzz`                                  — local, in the dev shell
+# Single source of truth, shared by:
+#   - the Concourse `fuzz` job (ci/pipeline.yml) — restore/store steps pass the
+#     corpus in/out as a tarball via CORPUS_TARBALL_IN/OUT (GCS handled by the
+#     google/cloud-sdk steps, not here)
+#   - `nix run .#fuzz`                          — flake-provided toolchain
+#   - `make fuzz`                               — local, in the dev shell
 #
 # Env vars (all optional, local-friendly defaults):
 #   FUZZ_SECONDS        seconds to fuzz each target (default: 60)
-#   FUZZ_JOBS           libFuzzer `-jobs` per target; total cores = 2 targets * FUZZ_JOBS
+#   FUZZ_JOBS           libFuzzer `-jobs` per target; cores = 2 targets * FUZZ_JOBS
 #                       (unset => 1 process per target => 2 cores)
 #   CORPUS_TARBALL_IN   glob of a corpus tarball to extract before fuzzing
 #   CORPUS_TARBALL_OUT  path to write the evolved corpus tarball after fuzzing
