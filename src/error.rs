@@ -101,6 +101,7 @@ impl<T: std::fmt::Debug + ?Sized> ToNotFoundValueFallback for NotFoundValue<'_, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn parse_simple_uuid_value() {
@@ -180,5 +181,33 @@ mod tests {
 
         let val = OnlyDebug(7);
         assert_eq!(NotFoundValue(&val).to_not_found_value(), "OnlyDebug(7)");
+    }
+
+    proptest! {
+        /// The parser does byte-index arithmetic over attacker-controlled strings.
+        /// It must never panic, and any value it returns must be an honest
+        /// substring bounded by the real markers.
+        #[test]
+        fn constraint_detail_never_panics_and_is_honest(detail in ".*") {
+            match parse_constraint_detail_value(Some(&detail)) {
+                None => {}
+                Some(v) => {
+                    // Returned value is always a genuine substring of the input.
+                    prop_assert!(detail.contains(&v));
+                    // The markers that drove the indices must actually be present.
+                    let start = detail.find("=(").expect("start marker present") + 2;
+                    let end = detail
+                        .rfind(") already")
+                        .expect("end marker present");
+                    prop_assert!(start <= end);
+                    prop_assert_eq!(&detail[start..end], v.as_str());
+                }
+            }
+        }
+
+        #[test]
+        fn constraint_detail_none_input_returns_none(_ in Just(())) {
+            prop_assert_eq!(parse_constraint_detail_value(None), None);
+        }
     }
 }

@@ -15,6 +15,20 @@ fn truncate_to_millis(time: DateTime<Utc>) -> DateTime<Utc> {
     DateTime::from_timestamp_millis(time.timestamp_millis()).expect("valid timestamp")
 }
 
+/// Convert epoch milliseconds to a `DateTime`, saturating to chrono's
+/// representable range. `from_timestamp_millis` returns `None` out of range,
+/// so we fall back to chrono's own canonical bounds (`MAX_UTC` / `MIN_UTC`).
+/// This keeps `now()` and `advance_to_next_wake()` total — they never panic —
+/// even when an absurd `Duration` (e.g. `Duration::MAX`) overflows the `as i64`
+/// cast in `advance()` and leaves `current_ms` outside the representable range.
+fn datetime_from_millis(ms: i64) -> DateTime<Utc> {
+    DateTime::from_timestamp_millis(ms).unwrap_or(if ms > 0 {
+        DateTime::<Utc>::MAX_UTC
+    } else {
+        DateTime::<Utc>::MIN_UTC
+    })
+}
+
 /// Manual clock where time only advances via explicit controller calls.
 pub(crate) struct ManualClock {
     /// Current time as epoch milliseconds.
@@ -77,7 +91,7 @@ impl ManualClock {
 
     /// Get the current time.
     pub fn now(&self) -> DateTime<Utc> {
-        DateTime::from_timestamp_millis(self.now_ms()).expect("valid timestamp")
+        datetime_from_millis(self.now_ms())
     }
 
     /// Get the current time as epoch milliseconds.
@@ -164,7 +178,12 @@ impl ManualClock {
     /// Returns the number of wake events processed.
     pub async fn advance(&self, duration: Duration) -> usize {
         let start_ms = self.current_ms.load(Ordering::SeqCst);
-        let target_ms = start_ms + duration.as_millis() as i64;
+        // Saturating add over `as i64`: `duration.as_millis()` is `u128` and a
+        // huge duration must not wrap `target_ms` negative (which would both
+        // break monotonicity and, once stored, panic `now()`). `now()` clamps
+        // any out-of-range result back into chrono's range.
+        let added = i64::try_from(duration.as_millis()).unwrap_or(i64::MAX);
+        let target_ms = start_ms.saturating_add(added);
         let mut total_woken = 0;
 
         // Process regular wakes at intermediate boundaries
@@ -219,7 +238,7 @@ impl ManualClock {
         self.wake_coalesce_tasks_at(next_wake_ms);
         tokio::task::yield_now().await;
 
-        Some(DateTime::from_timestamp_millis(next_wake_ms).expect("valid timestamp"))
+        Some(datetime_from_millis(next_wake_ms))
     }
 
     /// Wake all coalesceable tasks scheduled at or before the given time.
@@ -266,6 +285,7 @@ impl ManualClock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn test_manual_now() {
@@ -297,5 +317,112 @@ mod tests {
         clock.wake_tasks_at(2000);
 
         assert_eq!(clock.next_wake_time(), Some(3000));
+    }
+
+    proptest! {
+        /// After each insertion the heap's peek must equal the running minimum of
+        /// all registered `wake_at_ms`, and the count must stay in sync.
+        #[test]
+        fn next_wake_time_tracks_min_after_each_insert(
+            raw in proptest::collection::vec((any::<i64>(), any::<u64>()), 0..30),
+        ) {
+            let clock = ManualClock::new();
+            let mut seen = std::collections::HashSet::<u64>::new();
+            let mut running_min: Option<i64> = None;
+            let mut count = 0usize;
+            for (ms, id) in raw {
+                if !seen.insert(id) {
+                    continue;
+                }
+                clock.register_wake(ms, id, futures::task::noop_waker());
+                running_min = Some(running_min.map_or(ms, |m| m.min(ms)));
+                count += 1;
+                prop_assert_eq!(clock.next_wake_time(), running_min);
+                prop_assert_eq!(clock.pending_wake_count(), count);
+            }
+        }
+
+        /// Draining the heap by repeatedly popping at the current minimum must
+        /// produce wake times in non-decreasing order and wake every entry
+        /// exactly once. This exercises the reversed `Ord` impl.
+        #[test]
+        fn wakes_drain_in_nondecreasing_order(
+            raw in proptest::collection::vec((any::<i64>(), any::<u64>()), 0..30),
+        ) {
+            let clock = ManualClock::new();
+            let mut seen = std::collections::HashSet::<u64>::new();
+            let mut inserted = 0usize;
+            for (ms, id) in raw {
+                if seen.insert(id) {
+                    clock.register_wake(ms, id, futures::task::noop_waker());
+                    inserted += 1;
+                }
+            }
+            let mut prev: Option<i64> = None;
+            let mut total = 0usize;
+            while let Some(cur) = clock.next_wake_time() {
+                if let Some(p) = prev {
+                    prop_assert!(cur >= p, "wake time decreased: {cur} < {p}");
+                }
+                prev = Some(cur);
+                total += clock.wake_tasks_at(cur);
+            }
+            prop_assert_eq!(total, inserted);
+            prop_assert_eq!(clock.pending_wake_count(), 0);
+        }
+
+        /// `cancel_wake` removes exactly the targeted entry, is idempotent, and
+        /// leaves the remaining entries fully drainable.
+        #[test]
+        fn cancel_wake_removes_exactly_one(
+            raw in proptest::collection::vec((any::<i64>(), any::<u64>()), 1..20),
+        ) {
+            let clock = ManualClock::new();
+            let mut seen = std::collections::HashSet::<u64>::new();
+            let mut ids: Vec<u64> = Vec::new();
+            for (ms, id) in raw {
+                if seen.insert(id) {
+                    clock.register_wake(ms, id, futures::task::noop_waker());
+                    ids.push(id);
+                }
+            }
+            let before = clock.pending_wake_count();
+            let victim = ids[0];
+            clock.cancel_wake(victim);
+            prop_assert_eq!(clock.pending_wake_count(), before - 1);
+            // cancelling an already-cancelled id is a no-op.
+            clock.cancel_wake(victim);
+            prop_assert_eq!(clock.pending_wake_count(), before - 1);
+            // everything else still drains cleanly.
+            let mut total = 0usize;
+            while let Some(cur) = clock.next_wake_time() {
+                total += clock.wake_tasks_at(cur);
+            }
+            prop_assert_eq!(total, before - 1);
+        }
+
+        /// `now()` must never panic for *any* value held in `current_ms`,
+        /// including out-of-range values an absurd `advance()` could store.
+        #[test]
+        fn now_never_panics_for_any_stored_ms(ms in any::<i64>()) {
+            let clock = ManualClock::new();
+            clock
+                .current_ms
+                .store(ms, std::sync::atomic::Ordering::SeqCst);
+            let _ = clock.now();
+        }
+    }
+
+    /// Regression for the overflow panic: `Duration::MAX` overflowed
+    /// `as_millis() as i64`, stored an out-of-range `current_ms`, and the next
+    /// `now()` panicked in `from_timestamp_millis(...).expect(...)`.
+    #[tokio::test]
+    async fn advance_huge_duration_does_not_panic_in_now() {
+        let clock = ManualClock::new();
+        let start = clock.now();
+        clock.advance(Duration::MAX).await;
+        let after = clock.now();
+        // Must not panic, and time stays monotonic (saturated to MAX_UTC).
+        assert!(after >= start);
     }
 }
