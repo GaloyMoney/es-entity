@@ -328,10 +328,29 @@
 
         echo "Tests completed successfully!"
       '';
+
+      # ── Fuzz runner (cargo-fuzz / libFuzzer) ───────────────────────────
+      # Wraps ci/fuzz.sh with the Rust toolchain + cargo-fuzz on PATH so the
+      # same script runs locally (`nix run .#fuzz`) and in the Concourse `fuzz`
+      # job. The targets are pure — no Postgres needed. FUZZ_SECONDS etc. are
+      # passed through the environment; see ci/fuzz.sh.
+      fuzz-runner = pkgs.writeShellScriptBin "fuzz" ''
+        set -e
+        export PATH="${pkgs.lib.makeBinPath [
+          rustToolchain
+          pkgs.cargo-fuzz
+          pkgs.gnutar
+          pkgs.coreutils
+          pkgs.git
+          pkgs.stdenv.cc
+        ]}:$PATH"
+        exec bash ${./ci/fuzz.sh} "$@"
+      '';
     in
       with pkgs; {
         packages = {
           nextest = nextest-runner;
+          fuzz = fuzz-runner;
           setup-db-dev = setupDbDev;
           dev-env = devEnv;
           inherit nix-deps-base;

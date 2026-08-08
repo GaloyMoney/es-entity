@@ -45,11 +45,11 @@ test-chapter:
 check-code:
 	nix flake check
 
-# Coverage-guided fuzzing (stable toolchain; --sanitizer=none since ASAN needs nightly).
-# Each target runs for $(FUZZ_TIME)s against its evolving corpus in fuzz/corpus/.
+# Coverage-guided fuzzing via the shared script (ci/fuzz.sh), also used by
+# `nix run .#fuzz` and the Concourse `fuzz` job. Runs both targets in parallel
+# for $(FUZZ_TIME)s; the corpus lives in fuzz/corpus/ (gitignored).
 fuzz:
-	cargo fuzz run fuzz_parse_constraint_detail --sanitizer=none -- -max_total_time=$(FUZZ_TIME)
-	cargo fuzz run fuzz_event_hydration --sanitizer=none -- -max_total_time=$(FUZZ_TIME)
+	FUZZ_SECONDS=$(FUZZ_TIME) bash ci/fuzz.sh
 
 sqlx-prepare:
 	cargo sqlx prepare --workspace

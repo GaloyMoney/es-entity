@@ -86,40 +86,12 @@ jobs:
               export CARGO_HOME=$PWD/../cargo-home
               export CARGO_TARGET_DIR=$PWD/../cargo-target-dir
 
-              # cargo-fuzz is cached across runs via the cargo-home cache.
-              cargo install cargo-fuzz --locked || true
-
-              # Restore the evolving corpus from GCS (no-op on the first run).
-              mkdir -p fuzz/corpus
-              if compgen -G "../fuzz-corpus/*.tgz" > /dev/null; then
-                tar -xzf ../fuzz-corpus/*.tgz -C fuzz/
-              fi
-
-              (cd fuzz && cargo fuzz build --sanitizer=none)
-
-              # Run both targets in parallel (2 libFuzzer processes = 2 cores).
-              # To use more of the CPU budget, add `-jobs=N` to each (N cores per
-              # target); keep total processes <= the worker bound.
-              pids=""; rc=0
-              for target in fuzz_parse_constraint_detail fuzz_event_hydration; do
-                (cd fuzz && cargo fuzz run "$target" --sanitizer=none -- \
-                  -max_total_time="$FUZZ_SECONDS" -timeout=25 \
-                  -artifact_prefix="artifacts/$target/") &
-                pids="$pids $!"
-              done
-              for p in $pids; do wait "$p" || rc=1; done
-
-              if [ "$rc" -ne 0 ]; then
-                echo "==== FUZZ CRASH DETECTED ===="
-                find fuzz/artifacts -type f -print || true
-                exit "$rc"
-              fi
-
-              # Package the evolved corpus for GCS.
-              mkdir -p ../fuzz-corpus-out
-              ts=$(date -u +%Y%m%d-%H%M%S)
-              tar -czf "../fuzz-corpus-out/corpus-v${ts}.tgz" -C fuzz corpus
-              echo "packaged corpus-v${ts}.tgz"
+              # Delegate to the shared fuzz script (ci/fuzz.sh), which restores
+              # the corpus, runs both targets in parallel, detects crashes, and
+              # packages the evolved corpus. FUZZ_SECONDS comes from the task params.
+              export CORPUS_TARBALL_IN="../fuzz-corpus/*.tgz"
+              export CORPUS_TARBALL_OUT="../fuzz-corpus-out/corpus-v$(date -u +%Y%m%d-%H%M%S).tgz"
+              bash ci/fuzz.sh
             '
       params:
         CACHIX_AUTH_TOKEN: #@ data.values.cachix_auth_token
