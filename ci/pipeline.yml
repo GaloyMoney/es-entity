@@ -24,6 +24,15 @@ config:
     - "sleep 5"
 #@ end
 
+#! Fires a Zenduty alert (non-critical) — used as a job-level on_failure/on_error
+#! hook so a failed/crashed fuzz run pages the on-call rotation, same as the
+#! lana-bank pipeline. Requires the `zenduty-notification` resource + type below.
+#@ def zenduty_notification_hook():
+put: zenduty-notification
+params:
+  alert_type: non-critical
+#@ end
+
 groups:
 - name: es-entity
   jobs:
@@ -119,6 +128,8 @@ jobs:
   - put: fuzz-corpus
     params:
       file: fuzz-corpus-out/corpus-v*.tgz
+  on_failure: #@ zenduty_notification_hook()
+  on_error: #@ zenduty_notification_hook()
 
 - name: check-code
   serial: true
@@ -290,5 +301,17 @@ resources:
   source:
     interval: 24h
 
+- name: zenduty-notification
+  type: zenduty-notification
+  source:
+    webhook_url: #@ data.values.zenduty_webhook_url
+
 resource_types:
 - #@ gcr_resource_type()
+- name: zenduty-notification
+  type: registry-image
+  source:
+    username: #@ data.values.gar_registry_user
+    password: #@ data.values.gar_registry_password
+    repository: #@ public_docker_registry() + "/zenduty-notification-resource"
+    tag: edge
