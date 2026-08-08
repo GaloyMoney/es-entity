@@ -22,6 +22,6 @@ target/
 # mdBook generated files
 book/book/
 
-# cargo-fuzz run artifacts (crash outputs + explored corpus); build dir covered by `target/`
+# cargo-fuzz crash outputs. The corpus/ is committed (a minimized,
+# coverage-equivalent set); fuzz/target/ is covered by the global `target/` ignore.
 fuzz/artifacts/
-fuzz/corpus/
