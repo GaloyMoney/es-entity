@@ -21,3 +21,8 @@ target/
 
 # mdBook generated files
 book/book/
+
+# cargo-fuzz: the evolving corpus is persisted to GCS (not git); crash outputs
+# and the build dir (covered by global `target/`) are ignored.
+fuzz/artifacts/
+fuzz/corpus/

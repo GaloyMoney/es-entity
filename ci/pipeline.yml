@@ -9,6 +9,7 @@
 #@   "rust_task_image_config",
 #@   "gh_release_resource",
 #@   "nix_task_image_config",
+#@   "gcr_resource_type",
 #@ )
 
 #@ def retry_task():
@@ -23,6 +24,15 @@ config:
     - "sleep 5"
 #@ end
 
+#! Fires a Zenduty alert (non-critical) — used as a job-level on_failure/on_error
+#! hook so a failed/crashed fuzz run pages the on-call rotation, same as the
+#! lana-bank pipeline. Requires the `zenduty-notification` resource + type below.
+#@ def zenduty_notification_hook():
+put: zenduty-notification
+params:
+  alert_type: non-critical
+#@ end
+
 groups:
 - name: es-entity
   jobs:
@@ -30,8 +40,69 @@ groups:
   - tests
   - release
   - set-dev-version
+  - fuzz
 
 jobs:
+#! Nightly coverage-guided fuzzing (cargo-fuzz / libFuzzer).
+#!
+#! The targets are pure (no Postgres), so this runs lighter than `tests`. The
+#! evolving corpus is persisted to GCS (not git): `get` restores the latest
+#! corpus tarball before fuzzing, and `put` uploads the grown one after, so
+#! coverage accumulates across daily runs. Each run fuzzes both targets in
+#! parallel (2 libFuzzer processes = 2 cores, bounded well under the worker's
+#! capacity) for FUZZ_SECONDS wall time. A crash fails the job (the existing
+#! Zenduty alert on failed jobs fires) and the crash input is left in the build
+#! log; the corpus tarball upload is skipped so we don't persist a crashing run.
+- name: fuzz
+  serial: true
+  plan:
+  - in_parallel:
+    - { get: repo }
+    - { get: pipeline-tasks }
+    - { get: fuzz-time, trigger: true }
+    - { get: fuzz-corpus }
+  - task: fuzz
+    config:
+      platform: linux
+      image_resource: #@ nix_task_image_config()
+      inputs:
+      - name: repo
+      - name: fuzz-corpus
+      outputs:
+      - name: fuzz-corpus-out
+      caches:
+      - path: cargo-home
+      - path: cargo-target-dir
+      run:
+        path: sh
+        args:
+          - -exc
+          - |
+            set -euo pipefail
+            cd repo
+            cachix use $CACHIX_CACHE_NAME
+            cachix watch-exec $CACHIX_CACHE_NAME -- nix -L develop . -c sh -exc '
+              set -euo pipefail
+              export CARGO_HOME=$PWD/../cargo-home
+              export CARGO_TARGET_DIR=$PWD/../cargo-target-dir
+
+              # Delegate to the shared fuzz script (ci/fuzz.sh), which restores
+              # the corpus, runs both targets in parallel, detects crashes, and
+              # packages the evolved corpus. FUZZ_SECONDS comes from the task params.
+              export CORPUS_TARBALL_IN="../fuzz-corpus/*.tgz"
+              export CORPUS_TARBALL_OUT="../fuzz-corpus-out/corpus-v$(date -u +%Y%m%d-%H%M%S).tgz"
+              bash ci/fuzz.sh
+            '
+      params:
+        CACHIX_AUTH_TOKEN: #@ data.values.cachix_auth_token
+        CACHIX_CACHE_NAME: #@ data.values.cachix_cache_name
+        FUZZ_SECONDS: "3600"    #! 1h per target per daily run (bump to 4h once proven)
+  - put: fuzz-corpus
+    params:
+      file: fuzz-corpus-out/corpus-v*.tgz
+  on_failure: #@ zenduty_notification_hook()
+  on_error: #@ zenduty_notification_hook()
+
 - name: check-code
   serial: true
   plan:
@@ -185,3 +256,34 @@ resources:
 - #@ gh_release_resource()
 - #@ pipeline_tasks_resource()
 - #@ version_resource()
+
+#! Versioned tarball of the evolving libFuzzer corpus. `get` restores the latest
+#! before a fuzz run; `put` uploads the grown one after (filenames embed a
+#! UTC timestamp so the regex capture group orders them correctly).
+#! NOTE: reuses the shared `staging-gcp-creds` bucket like `bundled_deps_resource`;
+#! swap for a dedicated fuzz credential if that isn't available to this team.
+- name: fuzz-corpus
+  type: gcs-resource
+  source:
+    bucket: ((staging-gcp-creds.bucket_name))
+    json_key: ((staging-gcp-creds.creds_json))
+    regexp: #@ data.values.gh_repository + "-artifacts/fuzz-corpus/corpus-v(.*).tgz"
+- name: fuzz-time
+  type: time
+  source:
+    interval: 24h
+
+- name: zenduty-notification
+  type: zenduty-notification
+  source:
+    webhook_url: #@ data.values.zenduty_webhook_url
+
+resource_types:
+- #@ gcr_resource_type()
+- name: zenduty-notification
+  type: registry-image
+  source:
+    username: #@ data.values.gar_registry_user
+    password: #@ data.values.gar_registry_password
+    repository: #@ public_docker_registry() + "/zenduty-notification-resource"
+    tag: edge

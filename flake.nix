@@ -58,6 +58,49 @@
       };
       cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
+      # `fly` — the Concourse CLI, used by `ci/repipe` to set the pipeline.
+      # Mirrors the lana-bank flake: fetch the binary from ci.galoy.io per arch.
+      concourseFly = let
+        artifacts = {
+          x86_64-linux = {
+            arch = "amd64";
+            platform = "linux";
+            hash = "sha256-2K+9KcGyIXUxN/dbOsju6EKLcXDCMKEDwLXSZgIFnZc=";
+          };
+          aarch64-linux = {
+            arch = "arm64";
+            platform = "linux";
+            hash = "sha256-si+WUXm8B3ItRrUYER0SHAgIHlhjYdZTNLhO4JDNS34=";
+          };
+          x86_64-darwin = {
+            arch = "amd64";
+            platform = "darwin";
+            hash = "sha256-G9ZHUaAjdChzOhnQdnKuhXTpoO0RzVPY6PleuWOaktM=";
+          };
+          aarch64-darwin = {
+            arch = "arm64";
+            platform = "darwin";
+            hash = "sha256-j8AqvNbyCgl+AyOHwwlgfxss72Az10fxTlnqI/1lv5g=";
+          };
+        };
+        artifact = artifacts.${system} or (throw "Unsupported fly platform: ${system}");
+      in
+        pkgs.stdenvNoCC.mkDerivation {
+          pname = "fly";
+          version = "8.2.4";
+
+          src = pkgs.fetchurl {
+            url = "https://ci.galoy.io/api/v1/cli?arch=${artifact.arch}&platform=${artifact.platform}";
+            hash = artifact.hash;
+          };
+
+          dontUnpack = true;
+
+          installPhase = ''
+            install -D -m755 "$src" "$out/bin/fly"
+          '';
+        };
+
       nativeBuildInputs = with pkgs; [
         rustToolchain
         alejandra
@@ -71,6 +114,7 @@
         process-compose
         curl
         ytt
+        concourseFly
       ];
 
       pgPort = 5432;
@@ -328,10 +372,29 @@
 
         echo "Tests completed successfully!"
       '';
+
+      # ── Fuzz runner (cargo-fuzz / libFuzzer) ───────────────────────────
+      # Wraps ci/fuzz.sh with the Rust toolchain + cargo-fuzz on PATH so the
+      # same script runs locally (`nix run .#fuzz`) and in the Concourse `fuzz`
+      # job. The targets are pure — no Postgres needed. FUZZ_SECONDS etc. are
+      # passed through the environment; see ci/fuzz.sh.
+      fuzz-runner = pkgs.writeShellScriptBin "fuzz" ''
+        set -e
+        export PATH="${pkgs.lib.makeBinPath [
+          rustToolchain
+          pkgs.cargo-fuzz
+          pkgs.gnutar
+          pkgs.coreutils
+          pkgs.git
+          pkgs.stdenv.cc
+        ]}:$PATH"
+        exec bash ${./ci/fuzz.sh} "$@"
+      '';
     in
       with pkgs; {
         packages = {
           nextest = nextest-runner;
+          fuzz = fuzz-runner;
           setup-db-dev = setupDbDev;
           dev-env = devEnv;
           inherit nix-deps-base;
