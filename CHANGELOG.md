@@ -1,3 +1,11 @@
+# [cala release v0.12.3](https://github.com/GaloyMoney/cala/releases/tag/0.12.3)
+
+
+
+### Bug Fixes
+
+- Specialize list_for_filters on any equality index prefix (#185)
+
 # [cala release v0.12.2](https://github.com/GaloyMoney/cala/releases/tag/0.12.2)
 
 
