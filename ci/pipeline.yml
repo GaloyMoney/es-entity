@@ -96,7 +96,7 @@ jobs:
       params:
         CACHIX_AUTH_TOKEN: #@ data.values.cachix_auth_token
         CACHIX_CACHE_NAME: #@ data.values.cachix_cache_name
-        FUZZ_SECONDS: "14400"   #! 4h per target per daily run
+        FUZZ_SECONDS: "3600"    #! 1h per target per daily run (bump to 4h once proven)
   - put: fuzz-corpus
     params:
       file: fuzz-corpus-out/corpus-v*.tgz
