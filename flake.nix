@@ -115,7 +115,6 @@
         curl
         ytt
         concourseFly
-        google-cloud-sdk # gsutil/gcloud — used by the Concourse fuzz job for GCS corpus restore
       ];
 
       pgPort = 5432;
