@@ -4,6 +4,7 @@ use es_entity::operation::{
     AtomicOperation, DbOp, OpWithTime,
     hooks::{CommitHook, HookOperation, PreCommitRet},
 };
+use sqlx::Connection;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]
@@ -571,6 +572,334 @@ async fn supports_hooks_reflects_op_capability() -> anyhow::Result<()> {
     let tx = pool.begin().await?;
     assert!(!tx.supports_hooks());
     tx.rollback().await?;
+
+    Ok(())
+}
+
+// ===========================================================================
+// on_rollback tests
+// ===========================================================================
+
+/// Records lifecycle callbacks by label. Optionally fails its own `pre_commit`
+/// (to drive the rollback path for the *other*, earlier hooks).
+#[derive(Debug)]
+struct RollbackProbe {
+    label: &'static str,
+    fail_pre: bool,
+    pre_order: Arc<Mutex<Vec<&'static str>>>,
+    post_order: Arc<Mutex<Vec<&'static str>>>,
+    rollback_order: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl CommitHook for RollbackProbe {
+    async fn pre_commit(
+        self,
+        op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        self.pre_order.lock().unwrap().push(self.label);
+        if self.fail_pre {
+            return Err(sqlx::Error::Protocol(format!(
+                "hook '{}' intentionally fails pre_commit",
+                self.label
+            )));
+        }
+        PreCommitRet::ok(self, op)
+    }
+
+    fn post_commit(self) {
+        self.post_order.lock().unwrap().push(self.label);
+    }
+
+    fn on_rollback(self) {
+        self.rollback_order.lock().unwrap().push(self.label);
+    }
+}
+
+#[tokio::test]
+async fn on_rollback_fires_for_earlier_hooks_when_later_hook_fails() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let pre = Arc::new(Mutex::new(Vec::new()));
+    let post = Arc::new(Mutex::new(Vec::new()));
+    let rollback = Arc::new(Mutex::new(Vec::new()));
+
+    let mk = |label: &'static str, fail_pre: bool| RollbackProbe {
+        label,
+        fail_pre,
+        pre_order: pre.clone(),
+        post_order: post.clone(),
+        rollback_order: rollback.clone(),
+    };
+
+    op.add_commit_hook(mk("a", false)).unwrap();
+    op.add_commit_hook(mk("b", true)).unwrap();
+    // Registered after the failing hook: its pre_commit never runs.
+    op.add_commit_hook(mk("c", false)).unwrap();
+
+    let result = op.commit().await;
+    assert!(
+        result.is_err(),
+        "commit must fail because hook 'b' fails pre_commit"
+    );
+
+    // 'a' and 'b' ran pre_commit; 'c' never did (the loop stops at the failure).
+    assert_eq!(*pre.lock().unwrap(), vec!["a", "b"]);
+    // Only 'a' is notified: 'b' is consumed by its own failing pre_commit and
+    // signals from that branch; 'c' never ran.
+    assert_eq!(*rollback.lock().unwrap(), vec!["a"]);
+    // No post_commit on the failure path.
+    assert!(post.lock().unwrap().is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn on_rollback_not_fired_on_commit_success() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let pre = Arc::new(Mutex::new(Vec::new()));
+    let post = Arc::new(Mutex::new(Vec::new()));
+    let rollback = Arc::new(Mutex::new(Vec::new()));
+
+    op.add_commit_hook(RollbackProbe {
+        label: "a",
+        fail_pre: false,
+        pre_order: pre.clone(),
+        post_order: post.clone(),
+        rollback_order: rollback.clone(),
+    })
+    .unwrap();
+
+    op.commit().await?;
+
+    assert_eq!(*pre.lock().unwrap(), vec!["a"]);
+    assert_eq!(*post.lock().unwrap(), vec!["a"]);
+    assert!(
+        rollback.lock().unwrap().is_empty(),
+        "on_rollback must not fire on a successful commit"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn on_rollback_not_fired_when_op_dropped_without_commit() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+
+    let pre = Arc::new(Mutex::new(Vec::new()));
+    let post = Arc::new(Mutex::new(Vec::new()));
+    let rollback = Arc::new(Mutex::new(Vec::new()));
+
+    {
+        let mut op = DbOp::init(&pool).await?;
+        op.add_commit_hook(RollbackProbe {
+            label: "a",
+            fail_pre: false,
+            pre_order: pre.clone(),
+            post_order: post.clone(),
+            rollback_order: rollback.clone(),
+        })
+        .unwrap();
+        // `op` is dropped here without commit(): pre_commit never ran, so there
+        // is nothing to compensate.
+    }
+
+    assert!(
+        pre.lock().unwrap().is_empty(),
+        "pre_commit only runs at commit()"
+    );
+    assert!(post.lock().unwrap().is_empty());
+    assert!(
+        rollback.lock().unwrap().is_empty(),
+        "on_rollback must not fire for an op dropped without commit()"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn on_rollback_fires_in_registration_order() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let pre = Arc::new(Mutex::new(Vec::new()));
+    let post = Arc::new(Mutex::new(Vec::new()));
+    let rollback = Arc::new(Mutex::new(Vec::new()));
+
+    let mk = |label: &'static str, fail_pre: bool| RollbackProbe {
+        label,
+        fail_pre,
+        pre_order: pre.clone(),
+        post_order: post.clone(),
+        rollback_order: rollback.clone(),
+    };
+
+    op.add_commit_hook(mk("a1", false)).unwrap();
+    op.add_commit_hook(mk("a2", false)).unwrap();
+    op.add_commit_hook(mk("a3", false)).unwrap();
+    op.add_commit_hook(mk("boom", true)).unwrap();
+
+    assert!(op.commit().await.is_err());
+
+    // on_rollback mirrors post_commit's registration order.
+    assert_eq!(*rollback.lock().unwrap(), vec!["a1", "a2", "a3"]);
+    assert!(post.lock().unwrap().is_empty());
+
+    Ok(())
+}
+
+/// A hook that does NOT override `on_rollback`, exercising the defaulted no-op.
+#[derive(Debug)]
+struct DefaultOnRollbackHook {
+    pre_order: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl CommitHook for DefaultOnRollbackHook {
+    async fn pre_commit(
+        self,
+        op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        self.pre_order.lock().unwrap().push("default");
+        PreCommitRet::ok(self, op)
+    }
+    // `on_rollback` intentionally not overridden — uses the default no-op.
+}
+
+#[tokio::test]
+async fn default_on_rollback_is_a_harmless_noop() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let pre = Arc::new(Mutex::new(Vec::new()));
+    let rollback = Arc::new(Mutex::new(Vec::new()));
+
+    // Earlier hook relies on the DEFAULT on_rollback (no override).
+    op.add_commit_hook(DefaultOnRollbackHook {
+        pre_order: pre.clone(),
+    })
+    .unwrap();
+    // Later hook fails, so the earlier hook's default no-op on_rollback fires.
+    op.add_commit_hook(RollbackProbe {
+        label: "boom",
+        fail_pre: true,
+        pre_order: pre.clone(),
+        post_order: Arc::new(Mutex::new(Vec::new())),
+        rollback_order: rollback.clone(),
+    })
+    .unwrap();
+
+    assert!(op.commit().await.is_err());
+
+    // The default hook ran pre_commit and its default no-op on_rollback did not
+    // panic; the failing hook is consumed by its own failure.
+    assert_eq!(*pre.lock().unwrap(), vec!["default", "boom"]);
+    assert!(rollback.lock().unwrap().is_empty());
+
+    Ok(())
+}
+
+/// Holds a transaction-scoped advisory lock in `pre_commit`; when its
+/// `on_rollback` fires it probes, from a *separate* connection, whether the lock
+/// is free — which it can only be if the operation's transaction has already
+/// been rolled back. Proves `on_rollback` runs strictly after the rollback.
+#[derive(Debug)]
+struct AdvisoryLockProbe {
+    lock_key: i64,
+    /// `Some(true)` iff the second connection acquired the lock inside on_rollback.
+    acquired_after_rollback: Arc<Mutex<Option<bool>>>,
+}
+
+impl CommitHook for AdvisoryLockProbe {
+    async fn pre_commit(
+        self,
+        mut op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        // Transaction-scoped: auto-released only when this operation's tx ends.
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(self.lock_key)
+            .execute(op.as_executor())
+            .await?;
+        PreCommitRet::ok(self, op)
+    }
+
+    fn on_rollback(self) {
+        // The callback is sync, so run the async probe on its own thread with a
+        // dedicated runtime and a fresh connection — fully independent of the
+        // test's runtime and connection pool. A plain SELECT of the row is not a
+        // valid probe (under READ COMMITTED an uncommitted row is invisible to
+        // other sessions whether the tx is open or rolled back); lock contention
+        // is what distinguishes the two.
+        let key = self.lock_key;
+        let acquired = std::thread::spawn(move || {
+            let pg_con = std::env::var("PG_CON").expect("PG_CON must be set");
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build probe runtime");
+            rt.block_on(async move {
+                let mut conn = sqlx::PgConnection::connect(&pg_con)
+                    .await
+                    .expect("probe connection");
+                let got: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+                    .bind(key)
+                    .fetch_one(&mut conn)
+                    .await
+                    .expect("advisory lock probe");
+                // `conn` drops at scope end, releasing any session lock acquired.
+                got
+            })
+        })
+        .join()
+        .expect("probe thread panicked");
+
+        *self.acquired_after_rollback.lock().unwrap() = Some(acquired);
+    }
+}
+
+#[tokio::test]
+async fn on_rollback_runs_after_transaction_is_rolled_back() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    // A distinctive key unlikely to collide with concurrent tests.
+    let lock_key: i64 = 728_192_374_651;
+    let acquired = Arc::new(Mutex::new(None));
+
+    op.add_commit_hook(AdvisoryLockProbe {
+        lock_key,
+        acquired_after_rollback: acquired.clone(),
+    })
+    .unwrap();
+
+    // A later hook fails, forcing the rollback-then-notify path for the probe.
+    let sink = Arc::new(Mutex::new(Vec::new()));
+    op.add_commit_hook(RollbackProbe {
+        label: "boom",
+        fail_pre: true,
+        pre_order: sink.clone(),
+        post_order: sink.clone(),
+        rollback_order: sink.clone(),
+    })
+    .unwrap();
+
+    let result = op.commit().await;
+    assert!(
+        result.is_err(),
+        "commit must fail due to the later failing hook"
+    );
+
+    let acquired = acquired
+        .lock()
+        .unwrap()
+        .expect("on_rollback should have run and probed the advisory lock");
+    assert!(
+        acquired,
+        "the second connection must acquire the advisory lock inside on_rollback — \
+         proving the operation's transaction had already rolled back (releasing the lock) \
+         before on_rollback fired"
+    );
 
     Ok(())
 }

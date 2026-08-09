@@ -27,6 +27,14 @@ pub trait CommitHook: Send + 'static + Sized {
         // Default: do nothing
     }
 
+    /// Called when a failed commit rolls the transaction back, after this
+    /// hook's `pre_commit` had already completed. Synchronous, infallible and
+    /// signal-only (mirrors `post_commit`) — the transaction is already gone,
+    /// so signal an out-of-band worker here rather than doing database work.
+    fn on_rollback(self) {
+        // Default: do nothing
+    }
+
     /// Try to merge `other` into `self`.
     /// Returns true if merged (other will be dropped).
     /// Returns false if not merged (both will execute separately).
@@ -43,6 +51,10 @@ pub trait CommitHook: Send + 'static + Sized {
 3. **Pre-commit**: All `pre_commit()` methods are called sequentially before the transaction commits
 4. **Commit**: The underlying transaction is committed
 5. **Post-commit**: All `post_commit()` methods are called sequentially after successful commit
+
+If the commit **fails** instead, `on_rollback()` is called — in place of `post_commit()` —
+on every hook whose `pre_commit()` had already completed. See
+[Rollback Notification](#rollback-notification) below.
 
 ```rust,ignore
 let mut op = DbOp::init(&pool).await?;
@@ -75,6 +87,59 @@ impl CommitHook for MyHook {
 ```
 
 `HookOperation` implements `AtomicOperation` so it can be passed to any function expecting that trait.
+
+## Rollback Notification
+
+When a commit **fails**, `on_rollback()` is called — in place of `post_commit()` — on every
+hook whose `pre_commit()` had already completed. It is the failure-path counterpart of
+`post_commit()`: **synchronous, infallible, and signal-only**.
+
+Two situations trigger it:
+
+1. **A later hook's `pre_commit()` errors.** The transaction is rolled back *first*, and only
+   then are the earlier hooks notified. This ordering is the point: a hook's compensating work
+   (for example, writing a placeholder row) runs after the failed transaction is gone, so it
+   never contends with that transaction's own locks.
+2. **The `COMMIT` itself errors.** The transaction is over server-side either way — it may have
+   landed despite the client error, or aborted — so `on_rollback()` runs directly. Any side
+   effect it triggers must therefore be idempotent against a possibly-landed commit.
+
+`on_rollback()` fires in registration order, the same as `post_commit()`. Because it is
+synchronous and the transaction is already gone, do **not** perform database work in it — hand
+the work to an out-of-band worker (for example, over a channel the hook holds).
+
+```rust,ignore
+impl CommitHook for EventPublisher {
+    async fn pre_commit(
+        self,
+        op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        // ... stage work inside the transaction ...
+        PreCommitRet::ok(self, op)
+    }
+
+    fn post_commit(self) {
+        // Commit succeeded: publish for real.
+        publish_events(self.events);
+    }
+
+    fn on_rollback(self) {
+        // Commit failed after pre_commit ran; the transaction is already gone.
+        // Signal an out-of-band worker rather than doing database work here:
+        // let _ = self.compensator_tx.send(self.events);
+    }
+}
+```
+
+### When `on_rollback()` does *not* fire
+
+- **On a successful commit** — `post_commit()` runs instead.
+- **For the hook whose own `pre_commit()` failed** — that hook is consumed by the failing call,
+  so it signals from its own error branch instead.
+- **For an operation dropped without `commit()`** — `pre_commit()` never ran, so there is
+  nothing to compensate.
+- **For a `commit()` future cancelled mid-flight** — there is no synchronous point at which to
+  run it; rely on an external backstop if you need coverage there.
 
 ## Hook Merging
 

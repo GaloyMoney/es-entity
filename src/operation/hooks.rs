@@ -16,6 +16,12 @@
 //! 4. **Commit**: The underlying database transaction is committed
 //! 5. **Post-commit**: [`CommitHook::post_commit()`] executes after successful commit
 //!
+//! If the commit **fails** instead — either a later hook's `pre_commit` errors (the
+//! transaction is rolled back first) or the `COMMIT` itself errors — then
+//! [`CommitHook::on_rollback()`] is fired on every hook whose `pre_commit` had already
+//! completed, in registration order, in place of `post_commit`. It is a synchronous,
+//! infallible, signal-only callback (see its docs).
+//!
 //! # Hook Ordering
 //!
 //! Hooks execute in **registration order** — per hook, not per type:
@@ -198,6 +204,32 @@ pub trait CommitHook: Send + 'static + Sized {
         // Default: do nothing
     }
 
+    /// Called when the operation's commit has **failed** after this hook's
+    /// [`pre_commit()`](Self::pre_commit) had already completed successfully.
+    ///
+    /// Two situations trigger it:
+    /// 1. A *later* hook's `pre_commit` returned an error. The transaction has
+    ///    been **rolled back before this runs** — so any downstream side effect
+    ///    the signal triggers never contends with the failed transaction's own
+    ///    locks.
+    /// 2. The `COMMIT` itself returned an error. The transaction is over
+    ///    server-side either way (it may have landed despite the client error,
+    ///    or aborted), so downstream side effects must be idempotent against a
+    ///    possibly-landed commit.
+    ///
+    /// Signal-only, synchronous and infallible — mirrors
+    /// [`post_commit()`](Self::post_commit). Do **not** perform database work
+    /// here (the transaction is gone and there is no async context); hand work
+    /// to an out-of-band task via a channel send / flag set instead.
+    ///
+    /// Not called when `pre_commit` never ran (an operation dropped without
+    /// `commit()` produced no effects to compensate), nor for the hook whose
+    /// own `pre_commit` failed — that hook is consumed by the failing call and
+    /// must signal from its own error branch.
+    fn on_rollback(self) {
+        // Default: do nothing
+    }
+
     /// Try to merge another hook of the same type into this one.
     ///
     /// Returns `true` if merged (other will be dropped), `false` if not (both execute separately).
@@ -271,6 +303,8 @@ trait DynHook: Send {
 
     fn post_commit_boxed(self: Box<Self>);
 
+    fn on_rollback_boxed(self: Box<Self>);
+
     fn try_merge(&mut self, other: &mut dyn DynHook) -> bool;
 
     fn as_any(&self) -> &dyn Any;
@@ -291,6 +325,10 @@ impl<H: CommitHook> DynHook for H {
 
     fn post_commit_boxed(self: Box<Self>) {
         (*self).post_commit()
+    }
+
+    fn on_rollback_boxed(self: Box<Self>) {
+        (*self).on_rollback()
     }
 
     fn try_merge(&mut self, other: &mut dyn DynHook) -> bool {
@@ -347,17 +385,30 @@ impl CommitHooks {
             .and_then(|(_, hook)| hook.as_any().downcast_ref::<H>())
     }
 
+    /// Runs each hook's `pre_commit` in registration order.
+    ///
+    /// On failure the already-executed hooks travel back **with** the error (as
+    /// a [`PostCommitHooks`]) instead of being dropped, so the caller can fire
+    /// their [`CommitHook::on_rollback`] after rolling the transaction back.
+    /// Hooks after the failing one never ran their `pre_commit`, produced no
+    /// effects, and are simply dropped.
     pub(super) async fn execute_pre(
         self,
         op: &mut impl AtomicOperation,
-    ) -> Result<PostCommitHooks, sqlx::Error> {
+    ) -> Result<PostCommitHooks, (sqlx::Error, PostCommitHooks)> {
         let mut op = HookOperation::new(op);
         let mut post_hooks = Vec::with_capacity(self.hooks.len());
 
         for (_, hook) in self.hooks {
-            let (new_op, hook) = hook.pre_commit_boxed(op).await?;
-            op = new_op;
-            post_hooks.push(hook);
+            match hook.pre_commit_boxed(op).await {
+                Ok((new_op, hook)) => {
+                    op = new_op;
+                    post_hooks.push(hook);
+                }
+                Err(error) => {
+                    return Err((error, PostCommitHooks { hooks: post_hooks }));
+                }
+            }
         }
 
         Ok(PostCommitHooks { hooks: post_hooks })
@@ -378,6 +429,15 @@ impl PostCommitHooks {
     pub(super) fn execute(self) {
         for hook in self.hooks {
             hook.post_commit_boxed();
+        }
+    }
+
+    /// Fires [`CommitHook::on_rollback`] on each already-pre_committed hook in
+    /// registration order (same order as [`execute`](Self::execute)). Sync and
+    /// infallible, mirroring `execute`.
+    pub(super) fn execute_rollback(self) {
+        for hook in self.hooks {
+            hook.on_rollback_boxed();
         }
     }
 }
