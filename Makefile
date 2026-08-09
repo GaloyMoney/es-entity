@@ -49,7 +49,7 @@ check-code:
 # `nix run .#fuzz` and the Concourse `fuzz` job. Runs both targets in parallel
 # for $(FUZZ_TIME)s; the corpus lives in fuzz/corpus/ (gitignored).
 fuzz:
-	FUZZ_SECONDS=$(FUZZ_TIME) bash ci/fuzz.sh
+	FUZZ_SECONDS=$(FUZZ_TIME) bash ci/vendor/tasks/fuzz.sh
 
 sqlx-prepare:
 	cargo sqlx prepare --workspace
