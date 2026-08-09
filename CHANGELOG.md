@@ -1,3 +1,24 @@
+# [cala release v0.12.4](https://github.com/GaloyMoney/cala/releases/tag/0.12.4)
+
+
+
+### Bug Fixes
+
+- Exercise load_n multi-entity path in fuzz_event_hydration (Bugbot #189) (#190)
+- Load_n(_,0) returns all entities & ManualClock::now() panics on huge advance() (#187)
+
+### Features
+
+- Add sync CommitHook::on_rollback (rollback-first-then-notify) (#193)
+
+### Refactor
+
+- Consume shared fuzz_job from galoy-concourse-shared (#192)
+
+### Testing
+
+- Cargo-fuzz targets + Concourse nightly fuzz job (GCS corpus) (#189)
+
 # [cala release v0.12.3](https://github.com/GaloyMoney/cala/releases/tag/0.12.3)
 
 
