@@ -34,7 +34,7 @@ FUZZ_SECONDS="${FUZZ_SECONDS:-60}"
 
 #! Restore the corpus (no-op unless CORPUS_TARBALL_IN is set and matches a file).
 mkdir -p fuzz/corpus
-if [ -n "${CORPUS_TARBALL_IN:-}" ] && compgen -G "$CORPUS_TARBALL_IN" >/dev/null; then
+if [ -n "${CORPUS_TARBALL_IN:-}" ] && ls -d $CORPUS_TARBALL_IN >/dev/null 2>&1; then
   echo "restoring corpus from $CORPUS_TARBALL_IN"
   tar -xzf $CORPUS_TARBALL_IN -C fuzz/
 fi

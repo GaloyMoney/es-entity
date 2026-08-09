@@ -21,7 +21,7 @@ directories:
   - path: .
     git:
       url: https://github.com/GaloyMoney/galoy-concourse-shared.git
-      ref: 4c9071e
+      ref: 26b38b4
     includePaths:
     - shared/ci/**/*
     excludePaths:
