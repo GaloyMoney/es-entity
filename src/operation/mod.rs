@@ -107,12 +107,49 @@ impl<'c> DbOp<'c> {
     }
 
     /// Commits the inner transaction.
+    ///
+    /// On the failure paths the commit hooks' [`on_rollback`] runs **after** the
+    /// transaction is definitively gone, so hook-side compensation never
+    /// contends with the dying transaction's own locks:
+    ///
+    /// - A later hook's `pre_commit` fails → the transaction is rolled back
+    ///   first, *then* the earlier (already-pre_committed) hooks are notified.
+    /// - The `COMMIT` itself fails → the transaction is over server-side either
+    ///   way, so the hooks are notified directly (their side effects must be
+    ///   idempotent against a possibly-landed commit).
+    ///
+    /// [`on_rollback`]: hooks::CommitHook::on_rollback
     pub async fn commit(mut self) -> Result<(), sqlx::Error> {
         let commit_hooks = self.commit_hooks.take().expect("no hooks");
-        let post_hooks = commit_hooks.execute_pre(&mut self).await?;
-        self.tx.commit().await?;
-        post_hooks.execute();
-        Ok(())
+        match commit_hooks.execute_pre(&mut self).await {
+            Ok(post_hooks) => match self.tx.commit().await {
+                Ok(()) => {
+                    post_hooks.execute();
+                    Ok(())
+                }
+                Err(error) => {
+                    // The commit attempt is definitively over server-side (it
+                    // may have landed despite the error, or aborted) — there is
+                    // no rollback to issue. Fire `on_rollback` so hooks can
+                    // signal; their side effects must be idempotent against a
+                    // possibly-landed commit.
+                    post_hooks.execute_rollback();
+                    Err(error)
+                }
+            },
+            Err((error, executed)) => {
+                // A later hook's `pre_commit` failed. Roll back BEFORE
+                // signalling: the rollback is awaited so it has landed
+                // server-side before any `on_rollback` fires, so a hook's
+                // downstream compensation never contends with this dying
+                // transaction's own locks. A rollback error means the
+                // connection is being torn down (which aborts the transaction
+                // anyway) — swallow it and surface the original hook error.
+                let _ = self.tx.rollback().await;
+                executed.execute_rollback();
+                Err(error)
+            }
+        }
     }
 
     /// Gets a mutable handle to the inner transaction
