@@ -42,6 +42,47 @@ There is deliberately **no** `From<Option<PartnerId>>`: mapping `None` to
 `All` would turn a stray `None` into silent all-scope access. All-scope reads
 must be written explicitly — `CustomerScope::All` is greppable and auditable.
 
+## Tenancy roots: `id(scope)`
+
+The tenancy-root entity itself — the `Partner` in a partner-scoped system —
+has no separate tenant column: its rows' scope value **is their own id**. For
+that case, mark the implicit id column:
+
+```rust,ignore
+#[derive(EsRepo)]
+#[es_repo(
+    entity = "Partner",
+    columns(
+        id(scope),
+        name(ty = "String", list_by),
+    )
+)]
+pub struct Partners {
+    pool: PgPool,
+}
+```
+
+The id column is macro-owned — its type comes from the repo-level `id`
+attribute and `find_by`/`list_by` are always on — so `id(scope)` is the only
+accepted entry; anything else (`ty`, `find_by = ...`) is a compile error.
+
+The generated surface is the ordinary scoped one: a `PartnerScope` enum and a
+leading scope argument on every read. Under `Only(p)` every query carries an
+`id = p` conjunct, so reads collapse to **self-or-nothing**:
+`find_by_id(Only(a), b)` is `NotFound` unless `a == b`, `find_all` intersects
+down to at most the own row, and every list returns the own row or nothing.
+Unlike ordinary scope columns, the id column keeps its point-read — under
+`Only` it is simply double-specified, composing exactly like a caller filter
+on the scope column (see below). No scope-led composite index is needed: the
+primary key already serves the `Only` arm.
+
+```rust,ignore
+// authz-derived scope: a tenant subject reads itself or nothing,
+// an all-access subject reads any row
+let scope: PartnerScope = self.authz.enforce_permission(sub, obj, act).await?.into();
+self.partners.maybe_find_by_id(scope, id).await?
+```
+
 ## The scoped read surface
 
 Every generated read function gains a leading `scope: impl Into<{Entity}Scope>`
