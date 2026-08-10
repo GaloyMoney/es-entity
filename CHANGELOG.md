@@ -1,3 +1,16 @@
+# [cala release v0.12.5](https://github.com/GaloyMoney/cala/releases/tag/0.12.5)
+
+
+
+### Features
+
+- Id(scope) — scope a repo by its own id column (#182)
+
+### Miscellaneous Tasks
+
+- Bump vendir (ci) to galoy-concourse-shared 26b38b4
+- Re-vendor for fuzz_job path fix (#21) (#194)
+
 # [cala release v0.12.4](https://github.com/GaloyMoney/cala/releases/tag/0.12.4)
 
 
