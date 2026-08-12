@@ -10,8 +10,10 @@ pub struct ForgetFn<'a> {
     event: &'a syn::Ident,
     error: syn::Ident,
     table_name: &'a str,
+    events_table_name: &'a str,
     forgettable_table_name: &'a str,
     forgettable_columns: Vec<&'a syn::Ident>,
+    post_persist_error: Option<&'a syn::Type>,
 }
 
 impl<'a> ForgetFn<'a> {
@@ -22,10 +24,12 @@ impl<'a> ForgetFn<'a> {
             event: opts.event(),
             error: opts.forget_error(),
             table_name: opts.table_name(),
+            events_table_name: opts.events_table_name(),
             forgettable_table_name: opts
                 .forgettable_table_name()
                 .expect("forgettable must be enabled"),
             forgettable_columns: opts.columns.forgettable_column_names(),
+            post_persist_error: opts.post_persist_hook.as_ref().map(|h| &h.error),
         }
     }
 }
@@ -67,6 +71,45 @@ impl ToTokens for ForgetFn<'_> {
             }
         };
 
+        // Persist staged events, capturing how many were persisted so the
+        // post-persist hook can be handed exactly those events (in their
+        // forgotten, rebuilt form) after the payload delete.
+        let (persist_staged, post_persist_check) = if self.post_persist_error.is_some() {
+            (
+                quote! {
+                    let n_events = if entity.events().any_new() {
+                        Self::extract_concurrent_modification(
+                            self.persist_events(op, entity.events_mut()).await,
+                            #error::ConcurrentModification,
+                        )?
+                    } else {
+                        0
+                    };
+                },
+                quote! {
+                    if n_events > 0 {
+                        self.execute_post_persist_hook(
+                            op,
+                            &entity,
+                            entity.events().last_persisted(n_events)
+                        ).await.map_err(#error::PostPersistHookError)?;
+                    }
+                },
+            )
+        } else {
+            (
+                quote! {
+                    if entity.events().any_new() {
+                        Self::extract_concurrent_modification(
+                            self.persist_events(op, entity.events_mut()).await,
+                            #error::ConcurrentModification,
+                        )?;
+                    }
+                },
+                quote! {},
+            )
+        };
+
         tokens.append_all(quote! {
             /// Permanently forgets the entity's forgettable data. Consumes the
             /// entity and returns the rebuilt (forgotten) entity. On any error
@@ -105,6 +148,14 @@ impl ToTokens for ForgetFn<'_> {
             /// `forget` itself can fail with `ConcurrentModification` if
             /// another writer got there first — reload and re-forget (repeat
             /// forgets are legitimate).
+            ///
+            /// If the repository configures a `post_persist_hook`, it runs for
+            /// the staged events persisted by this call — exactly once, after
+            /// the payload delete and entity rebuild, so the hook observes the
+            /// forgotten representation (never the raw payloads being erased)
+            /// while still running inside the erasure transaction. When no
+            /// staged events are persisted the hook is not invoked, matching
+            /// `update`'s no-op semantics.
             pub async fn forget_in_op<OP>(
                 &self,
                 op: &mut OP,
@@ -113,12 +164,7 @@ impl ToTokens for ForgetFn<'_> {
             where
                 OP: es_entity::AtomicOperation
             {
-                if entity.events().any_new() {
-                    Self::extract_concurrent_modification(
-                        self.persist_events(op, entity.events_mut()).await,
-                        #error::ConcurrentModification,
-                    )?;
-                }
+                #persist_staged
                 {
                     let id = &entity.id;
                     sqlx::query!(
@@ -132,7 +178,149 @@ impl ToTokens for ForgetFn<'_> {
                 let events = entity.events_mut().forget_and_take(
                     #event_type::forget_forgettable_payloads
                 );
-                Ok(es_entity::TryFromEvents::try_from_events(events)?)
+                let entity: #entity_type = es_entity::TryFromEvents::try_from_events(events)?;
+                #post_persist_check
+                Ok(entity)
+            }
+        });
+
+        self.verify_forgotten_tokens(tokens);
+    }
+}
+
+impl ForgetFn<'_> {
+    /// Generates `verify_forgotten` / `verify_forgotten_in_op`: a storage-level
+    /// check that all configured forgettable data for an entity is physically
+    /// absent — payload rows deleted, `Forgettable<..>` index columns NULL, and
+    /// (defense-in-depth) no forgettable field holding a non-null value in the
+    /// durable event JSON.
+    fn verify_forgotten_tokens(&self, tokens: &mut TokenStream) {
+        let id_type = &self.id;
+        let event_type = self.event;
+        let error = &self.error;
+
+        let payload_count_query = format!(
+            "SELECT COUNT(*) AS \"count!\" FROM {} WHERE entity_id = $1",
+            self.forgettable_table_name
+        );
+
+        let event_fields_query = format!(
+            "SELECT DISTINCT e.event_type AS \"event_type!\", f.field AS \"field!\" \
+             FROM {} e \
+             JOIN (SELECT UNNEST($2::text[]) AS event_type, UNNEST($3::text[]) AS field) f \
+             ON e.event_type = f.event_type \
+             WHERE e.id = $1 \
+             AND e.event -> f.field IS NOT NULL \
+             AND e.event -> f.field != 'null'::jsonb",
+            self.events_table_name
+        );
+
+        let check_columns = if self.forgettable_columns.is_empty() {
+            quote! {}
+        } else {
+            let selects = self
+                .forgettable_columns
+                .iter()
+                .map(|c| format!("{c} IS NOT NULL AS \"{c}!\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let columns_query =
+                format!("SELECT {} FROM {} WHERE id = $1", selects, self.table_name);
+            let column_checks = self.forgettable_columns.iter().map(|c| {
+                let name = c.to_string();
+                quote! {
+                    if row.#c {
+                        remnants.live_index_columns.push(#name);
+                    }
+                }
+            });
+            quote! {
+                if let Some(row) = sqlx::query!(
+                    #columns_query,
+                    id as &#id_type
+                )
+                .fetch_optional(op.as_executor())
+                .await?
+                {
+                    #(#column_checks)*
+                }
+            }
+        };
+
+        tokens.append_all(quote! {
+            /// Verifies at the **storage level** that all configured
+            /// forgettable data for `id` is physically absent — i.e. that
+            /// `forget()` has fully taken effect. Unlike inspecting a hydrated
+            /// entity (which merely reads back as forgotten), this checks the
+            /// database directly:
+            ///
+            /// 1. no rows remain in the forgettable payloads table,
+            /// 2. all `Forgettable<..>` index columns are NULL, and
+            /// 3. no forgettable field holds a non-null value in the durable
+            ///    event JSON (defense-in-depth: the framework always writes
+            ///    `null` there, so a hit indicates out-of-band writes).
+            ///
+            /// Returns `Err(NotForgotten(remnants))` describing anything still
+            /// present. An entity that was never persisted verifies trivially.
+            pub async fn verify_forgotten(
+                &self,
+                id: impl std::borrow::Borrow<#id_type>
+            ) -> Result<(), #error> {
+                let mut op = self.begin_op().await?;
+                self.verify_forgotten_in_op(&mut op, id).await
+            }
+
+            /// Same as [`Self::verify_forgotten`] but runs on an existing
+            /// operation, so the check can share the erasure (or a follow-up)
+            /// transaction.
+            pub async fn verify_forgotten_in_op<OP>(
+                &self,
+                op: &mut OP,
+                id: impl std::borrow::Borrow<#id_type>
+            ) -> Result<(), #error>
+            where
+                OP: es_entity::AtomicOperation
+            {
+                let id = id.borrow();
+                let mut remnants = es_entity::ForgettableRemnants::default();
+
+                let payload_rows = sqlx::query!(
+                    #payload_count_query,
+                    id as &#id_type
+                )
+                .fetch_one(op.as_executor())
+                .await?
+                .count;
+                remnants.payload_rows = payload_rows as usize;
+
+                #check_columns
+
+                let event_types: Vec<String> = #event_type::FORGETTABLE_JSON_FIELDS
+                    .iter()
+                    .map(|(t, _)| t.to_string())
+                    .collect();
+                let fields: Vec<String> = #event_type::FORGETTABLE_JSON_FIELDS
+                    .iter()
+                    .map(|(_, f)| f.to_string())
+                    .collect();
+                let rows = sqlx::query!(
+                    #event_fields_query,
+                    id as &#id_type,
+                    &event_types[..],
+                    &fields[..]
+                )
+                .fetch_all(op.as_executor())
+                .await?;
+                remnants.event_fields = rows
+                    .into_iter()
+                    .map(|r| (r.event_type, r.field))
+                    .collect();
+
+                if remnants.is_empty() {
+                    Ok(())
+                } else {
+                    Err(#error::NotForgotten(remnants))
+                }
             }
         });
     }
@@ -157,8 +345,10 @@ mod tests {
             event: &event,
             error,
             table_name: "entities",
+            events_table_name: "entity_events",
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: Vec::new(),
+            post_persist_error: None,
         };
 
         let mut tokens = TokenStream::new();
@@ -170,7 +360,10 @@ mod tests {
         assert!(output.contains("entity : Entity) -> Result < Entity , EntityForgetError >"));
         assert!(!output.contains("& mut Entity"));
         assert!(!output.contains("* entity ="));
-        assert!(output.contains("Ok (es_entity :: TryFromEvents :: try_from_events"));
+        assert!(output.contains("es_entity :: TryFromEvents :: try_from_events"));
+        assert!(output.contains("Ok (entity)"));
+        // No hook configured — no hook invocation is generated.
+        assert!(!output.contains("execute_post_persist_hook"));
         // Staged events are persisted (fencing + no laundering), BEFORE the
         // payload delete — assert the persist appears before the DELETE.
         let persist_at = output
@@ -201,8 +394,10 @@ mod tests {
             event: &event,
             error,
             table_name: "entities",
+            events_table_name: "entity_events",
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: vec![&email],
+            post_persist_error: None,
         };
 
         let mut tokens = TokenStream::new();
@@ -210,5 +405,47 @@ mod tests {
 
         let output = tokens.to_string();
         assert!(output.contains("UPDATE entities SET email = NULL WHERE id = $1"));
+    }
+
+    #[test]
+    fn forget_fn_runs_post_persist_hook() {
+        let id = Ident::new("EntityId", Span::call_site());
+        let entity = Ident::new("Entity", Span::call_site());
+        let event = Ident::new("EntityEvent", Span::call_site());
+        let error = Ident::new("EntityForgetError", Span::call_site());
+        let hook_error: syn::Type = syn::parse_str("MyHookError").unwrap();
+
+        let forget_fn = ForgetFn {
+            id: &id,
+            entity: &entity,
+            event: &event,
+            error,
+            table_name: "entities",
+            events_table_name: "entity_events",
+            forgettable_table_name: "entities_forgettable_payloads",
+            forgettable_columns: Vec::new(),
+            post_persist_error: Some(&hook_error),
+        };
+
+        let mut tokens = TokenStream::new();
+        forget_fn.to_tokens(&mut tokens);
+
+        let output = tokens.to_string();
+        // The hook runs once, with the just-persisted staged events...
+        assert!(output.contains("if n_events > 0"));
+        assert!(
+            output.contains(
+                "self . execute_post_persist_hook (op , & entity , entity . events () . last_persisted (n_events))"
+            ),
+            "hook must receive exactly the just-persisted events: {output}"
+        );
+        assert!(output.contains("EntityForgetError :: PostPersistHookError"));
+        // ...AFTER the rebuild (hook observes the forgotten representation):
+        // the hook invocation must come after try_from_events.
+        let rebuild_at = output.find("try_from_events").expect("rebuild present");
+        let hook_at = output
+            .find("execute_post_persist_hook")
+            .expect("hook invocation present");
+        assert!(rebuild_at < hook_at, "hook must run on the rebuilt entity");
     }
 }
