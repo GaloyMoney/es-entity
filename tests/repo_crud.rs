@@ -238,3 +238,68 @@ async fn update_all() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Two writers loading the same entity and both updating: the second write
+/// hits the events table's `UNIQUE(id, sequence)` and must surface as
+/// `ConcurrentModification`, not as an index `ConstraintViolation`. Pins the
+/// classification of the combined index+events statement, which can no longer
+/// tell the two apart positionally.
+#[tokio::test]
+async fn update_concurrent_modification() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool);
+
+    let new_user = NewUser::builder()
+        .id(UserId::new())
+        .name("Concurrent")
+        .build()
+        .unwrap();
+    let user = users.create(new_user).await?;
+
+    let mut first = users.find_by_id(user.id).await?;
+    let mut second = users.find_by_id(user.id).await?;
+
+    let _ = first.update_name("first_writer");
+    users.update(&mut first).await?;
+
+    let _ = second.update_name("second_writer");
+    match users.update(&mut second).await {
+        Err(UserModifyError::ConcurrentModification) => {}
+        other => panic!("expected ConcurrentModification, got: {other:?}"),
+    }
+
+    // The losing write left nothing behind.
+    let loaded = users.find_by_id(user.id).await?;
+    assert_eq!(loaded.name, "first_writer");
+
+    Ok(())
+}
+
+/// Same race through the bulk path: `update_all`'s combined statement must
+/// classify the events-table unique violation as `ConcurrentModification`.
+#[tokio::test]
+async fn update_all_concurrent_modification() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool);
+
+    let new_user = NewUser::builder()
+        .id(UserId::new())
+        .name("BulkConcurrent")
+        .build()
+        .unwrap();
+    let user = users.create(new_user).await?;
+
+    let mut first = vec![users.find_by_id(user.id).await?];
+    let mut second = vec![users.find_by_id(user.id).await?];
+
+    let _ = first[0].update_name("bulk_first");
+    users.update_all(&mut first).await?;
+
+    let _ = second[0].update_name("bulk_second");
+    match users.update_all(&mut second).await {
+        Err(UserModifyError::ConcurrentModification) => {}
+        other => panic!("expected ConcurrentModification, got: {other:?}"),
+    }
+
+    Ok(())
+}

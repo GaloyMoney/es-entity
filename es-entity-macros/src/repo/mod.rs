@@ -3,6 +3,7 @@ mod combo_cursor;
 mod create_all_fn;
 mod create_fn;
 mod delete_fn;
+mod error_classifier;
 mod error_types;
 mod find_all_fn;
 mod find_by_fn;
@@ -42,8 +43,8 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
 pub struct EsRepo<'a> {
     repo: &'a syn::Ident,
     generics: &'a syn::Generics,
-    persist_events_fn: persist_events_fn::PersistEventsFn<'a>,
-    persist_events_batch_fn: persist_events_batch_fn::PersistEventsBatchFn<'a>,
+    persist_events_fn: Option<persist_events_fn::PersistEventsFn<'a>>,
+    persist_events_batch_fn: Option<persist_events_batch_fn::PersistEventsBatchFn<'a>>,
     update_fn: update_fn::UpdateFn<'a>,
     update_all_fn: update_all_fn::UpdateAllFn<'a>,
     create_fn: create_fn::CreateFn<'a>,
@@ -111,11 +112,26 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             None
         };
 
+        // `create`/`update` (and their `_all` forms) write the index row and
+        // the events in one statement, so they no longer route through the
+        // shared persist helpers. Emitting a helper nothing calls would be
+        // dead code in consumers that build with `-D warnings`, so each is
+        // emitted only for the paths that still need it: `persist_events` for
+        // soft delete, forget, and column-less updates; `persist_events_batch`
+        // for column-less bulk updates. `extract_concurrent_modification`
+        // rides along with `persist_events`, which covers the remaining
+        // callers (the forgettable payload inserts in `create`/`create_all`).
+        let needs_persist_events =
+            !opts.columns.updates_needed() || opts.delete.is_soft() || opts.forgettable_enabled();
+        let needs_persist_events_batch = !opts.columns.updates_needed();
+
         Self {
             repo: &opts.ident,
             generics: &opts.generics,
-            persist_events_fn: persist_events_fn::PersistEventsFn::from(opts),
-            persist_events_batch_fn: persist_events_batch_fn::PersistEventsBatchFn::from(opts),
+            persist_events_fn: needs_persist_events
+                .then(|| persist_events_fn::PersistEventsFn::from(opts)),
+            persist_events_batch_fn: needs_persist_events_batch
+                .then(|| persist_events_batch_fn::PersistEventsBatchFn::from(opts)),
             update_fn: update_fn::UpdateFn::from(opts),
             update_all_fn: update_all_fn::UpdateAllFn::from(opts),
             create_fn: create_fn::CreateFn::from(opts),

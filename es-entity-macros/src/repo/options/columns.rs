@@ -174,7 +174,11 @@ impl Columns {
         }
     }
 
-    pub fn create_query_args(&self) -> Vec<proc_macro2::TokenStream> {
+    /// Eager-encoding `add` statements for the create columns, targeting a
+    /// `__query_args: PgArguments`. Used by the combined index+events insert,
+    /// where the event arrays require consuming the new entity before query
+    /// construction — the index args are encoded first, ending their borrows.
+    pub fn create_query_arg_adds(&self) -> Vec<proc_macro2::TokenStream> {
         self.all
             .iter()
             .filter(|c| c.opts.persist_on_create())
@@ -182,12 +186,17 @@ impl Columns {
                 let ident = &column.name;
                 let ty = &column.opts.ty;
                 quote! {
-                    #ident as &#ty,
+                    __query_args.add(#ident as &#ty).map_err(sqlx::Error::Encode)?;
                 }
             })
             .collect()
     }
 
+    /// Per-column collection vectors for the bulk create, plus the eager
+    /// `add` statements that encode them into a `__query_args: PgArguments`.
+    /// Encoding eagerly (rather than binding lazily) ends the collections'
+    /// borrows of the new entities, so the caller can consume them into the
+    /// event stream for the same statement.
     pub fn create_all_arg_collection(
         &self,
         ident: syn::Ident,
@@ -211,7 +220,7 @@ impl Columns {
                         #vec_ident.push(#ident);
                     },
                     quote! {
-                        .bind(#vec_ident)
+                        __query_args.add(#vec_ident).map_err(sqlx::Error::Encode)?;
                     },
                 )
             })
