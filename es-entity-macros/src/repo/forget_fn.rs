@@ -2,7 +2,7 @@ use darling::ToTokens;
 use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
-use super::options::*;
+use super::{error_classifier::concurrent_modification_classifier, options::*};
 
 pub struct ForgetFn<'a> {
     id: &'a syn::Ident,
@@ -10,6 +10,8 @@ pub struct ForgetFn<'a> {
     event: &'a syn::Ident,
     error: syn::Ident,
     table_name: &'a str,
+    events_table_name: &'a str,
+    event_ctx: bool,
     forgettable_table_name: &'a str,
     forgettable_columns: Vec<&'a syn::Ident>,
 }
@@ -22,6 +24,8 @@ impl<'a> ForgetFn<'a> {
             event: opts.event(),
             error: opts.forget_error(),
             table_name: opts.table_name(),
+            events_table_name: opts.events_table_name(),
+            event_ctx: opts.event_context_enabled(),
             forgettable_table_name: opts
                 .forgettable_table_name()
                 .expect("forgettable must be enabled"),
@@ -43,9 +47,27 @@ impl ToTokens for ForgetFn<'_> {
         );
 
         // Also NULL any `Forgettable<..>` index columns so the materialised
-        // lookup table stops exposing the forgotten value.
-        let forget_columns = if self.forgettable_columns.is_empty() {
-            quote! {}
+        // lookup table stops exposing the forgotten value. When there are such
+        // columns, that UPDATE and the staged-event insert go out as one
+        // statement; otherwise there is nothing to combine and the shared
+        // `persist_events` is used.
+        //
+        // The payload delete deliberately stays a *separate, later* statement:
+        // sub-statements of a data-modifying CTE cannot see each other's
+        // writes, so folding it in would let payload rows written by the same
+        // statement survive the erasure. Combining also makes the staged
+        // payload insert unnecessary — inserting rows the delete would remove
+        // in the same transaction is unobservable — so the combined path skips
+        // it, and a staged event still cannot smuggle a value past erasure.
+        let persist_and_forget_columns = if self.forgettable_columns.is_empty() {
+            quote! {
+                if entity.events().any_new() {
+                    Self::extract_concurrent_modification(
+                        self.persist_events(op, entity.events_mut()).await,
+                        #error::ConcurrentModification,
+                    )?;
+                }
+            }
         } else {
             let set_clause = self
                 .forgettable_columns
@@ -53,17 +75,79 @@ impl ToTokens for ForgetFn<'_> {
                 .map(|c| format!("{} = NULL", c))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let columns_query = format!(
-                "UPDATE {} SET {} WHERE id = $1",
-                self.table_name, set_clause
+            let combined_query = format!(
+                "WITH updated AS (UPDATE {} SET {} WHERE id = $1 RETURNING id) \
+                INSERT INTO {} (id, recorded_at, sequence, event_type, event{}) \
+                SELECT updated.id, COALESCE($2, NOW()), ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event{} \
+                FROM updated CROSS JOIN UNNEST($4::TEXT[], $5::JSONB[]{}) AS unnested(event_type, event{}) \
+                RETURNING recorded_at",
+                self.table_name,
+                set_clause,
+                self.events_table_name,
+                if self.event_ctx { ", context" } else { "" },
+                if self.event_ctx {
+                    ", unnested.context"
+                } else {
+                    ""
+                },
+                if self.event_ctx { ", $6::JSONB[]" } else { "" },
+                if self.event_ctx { ", context" } else { "" },
             );
-            quote! {
-                sqlx::query!(
-                    #columns_query,
-                    id as &#id_type
+
+            let classifier = concurrent_modification_classifier(error, self.events_table_name);
+
+            let (ctx_var, ctx_arg) = if self.event_ctx {
+                (
+                    quote! { let contexts = entity.events().serialize_new_event_contexts(); },
+                    quote! {
+                        , contexts.as_deref() as Option<&[es_entity::ContextData]>
+                    },
                 )
-                .execute(op.as_executor())
-                .await?;
+            } else {
+                (quote! {}, quote! {})
+            };
+
+            quote! {
+                let has_new_events = entity.events().any_new();
+                let offset = entity.events().len_persisted();
+                let events_types = entity.events().new_event_types();
+                let serialized_events = entity.events().serialize_new_events();
+                #ctx_var
+
+                let rows = {
+                    let id = &entity.id;
+                    sqlx::query!(
+                        #combined_query,
+                        id as &#id_type,
+                        op.maybe_now(),
+                        offset as i32,
+                        &events_types,
+                        &serialized_events
+                        #ctx_arg
+                    )
+                    .fetch_all(op.as_executor())
+                    .await
+                    .map_err(#classifier)?
+                };
+            }
+        };
+
+        // Marking has to wait until the payload delete has had its turn with
+        // `&entity.id`, since it needs the events mutably.
+        let mark_persisted = if self.forgettable_columns.is_empty() {
+            quote! {}
+        } else {
+            quote! {
+                if has_new_events {
+                    // No row means the CTE's UPDATE matched nothing — the
+                    // entity was hard-deleted underneath us. Report the lost
+                    // race rather than an internal error.
+                    let recorded_at = rows
+                        .first()
+                        .map(|row| row.recorded_at)
+                        .ok_or(#error::ConcurrentModification)?;
+                    entity.events_mut().mark_new_events_persisted_at(recorded_at);
+                }
             }
         };
 
@@ -113,12 +197,7 @@ impl ToTokens for ForgetFn<'_> {
             where
                 OP: es_entity::AtomicOperation
             {
-                if entity.events().any_new() {
-                    Self::extract_concurrent_modification(
-                        self.persist_events(op, entity.events_mut()).await,
-                        #error::ConcurrentModification,
-                    )?;
-                }
+                #persist_and_forget_columns
                 {
                     let id = &entity.id;
                     sqlx::query!(
@@ -127,8 +206,8 @@ impl ToTokens for ForgetFn<'_> {
                     )
                     .execute(op.as_executor())
                     .await?;
-                    #forget_columns
                 }
+                #mark_persisted
                 let events = entity.events_mut().forget_and_take(
                     #event_type::forget_forgettable_payloads
                 );
@@ -157,6 +236,8 @@ mod tests {
             event: &event,
             error,
             table_name: "entities",
+            events_table_name: "entity_events",
+            event_ctx: false,
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: Vec::new(),
         };
@@ -201,6 +282,8 @@ mod tests {
             event: &event,
             error,
             table_name: "entities",
+            events_table_name: "entity_events",
+            event_ctx: false,
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: vec![&email],
         };
@@ -209,6 +292,23 @@ mod tests {
         forget_fn.to_tokens(&mut tokens);
 
         let output = tokens.to_string();
-        assert!(output.contains("UPDATE entities SET email = NULL WHERE id = $1"));
+        // The index-column NULLing is now the CTE of the combined statement
+        // that also inserts any staged events.
+        assert!(output.contains(
+            "WITH updated AS (UPDATE entities SET email = NULL WHERE id = $1 RETURNING id) INSERT INTO entity_events"
+        ));
+        // No laundering: the payload delete must still come after the statement
+        // that persists staged events, and must not be folded into it (CTE
+        // sub-statements cannot see each other's writes).
+        let insert_at = output
+            .find("INSERT INTO entity_events")
+            .expect("staged events must be persisted");
+        let delete_at = output
+            .find("DELETE FROM entities_forgettable_payloads WHERE entity_id = $1")
+            .expect("payload delete present");
+        assert!(insert_at < delete_at, "must persist BEFORE payload delete");
+        // The combined path skips the staged payload insert entirely — the
+        // delete would remove those rows in the same transaction anyway.
+        assert!(!output.contains("INSERT INTO entities_forgettable_payloads"));
     }
 }

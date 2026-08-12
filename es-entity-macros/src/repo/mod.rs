@@ -43,6 +43,7 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
 pub struct EsRepo<'a> {
     repo: &'a syn::Ident,
     generics: &'a syn::Generics,
+    extract_concurrent_modification_fn: Option<TokenStream>,
     persist_events_fn: Option<persist_events_fn::PersistEventsFn<'a>>,
     persist_events_batch_fn: Option<persist_events_batch_fn::PersistEventsBatchFn<'a>>,
     update_fn: update_fn::UpdateFn<'a>,
@@ -112,22 +113,26 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             None
         };
 
-        // `create`/`update` (and their `_all` forms) write the index row and
-        // the events in one statement, so they no longer route through the
-        // shared persist helpers. Emitting a helper nothing calls would be
-        // dead code in consumers that build with `-D warnings`, so each is
-        // emitted only for the paths that still need it: `persist_events` for
-        // soft delete, forget, and column-less updates; `persist_events_batch`
-        // for column-less bulk updates. `extract_concurrent_modification`
-        // rides along with `persist_events`, which covers the remaining
-        // callers (the forgettable payload inserts in `create`/`create_all`).
-        let needs_persist_events =
-            !opts.columns.updates_needed() || opts.delete.is_soft() || opts.forgettable_enabled();
+        // Every write path now folds its index write and its event insert into
+        // one statement, so the shared persist helpers are only reachable
+        // where there is no index write to fold into. Emitting a helper
+        // nothing calls would be dead code in consumers that build with
+        // `-D warnings`, so each is gated to its remaining callers:
+        // `persist_events` for column-less updates and for `forget` on repos
+        // with no forgettable index columns; `persist_events_batch` for
+        // column-less bulk updates. `extract_concurrent_modification` outlives
+        // both — the follow-up forgettable payload inserts still use it.
+        let needs_persist_events = !opts.columns.updates_needed()
+            || (opts.forgettable_enabled() && opts.columns.forgettable_column_names().is_empty());
         let needs_persist_events_batch = !opts.columns.updates_needed();
+        let extract_concurrent_modification_fn = (!opts.columns.updates_needed()
+            || opts.forgettable_enabled())
+        .then(error_classifier::extract_concurrent_modification_fn);
 
         Self {
             repo: &opts.ident,
             generics: &opts.generics,
+            extract_concurrent_modification_fn,
             persist_events_fn: needs_persist_events
                 .then(|| persist_events_fn::PersistEventsFn::from(opts)),
             persist_events_batch_fn: needs_persist_events_batch
@@ -158,6 +163,7 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
 impl ToTokens for EsRepo<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let repo = &self.repo;
+        let extract_concurrent_modification_fn = &self.extract_concurrent_modification_fn;
         let persist_events_fn = &self.persist_events_fn;
         let persist_events_batch_fn = &self.persist_events_batch_fn;
         let update_fn = &self.update_fn;
@@ -368,6 +374,7 @@ impl ToTokens for EsRepo<'_> {
                 #begin
                 #post_hydrate_hook
                 #post_persist_hook
+                #extract_concurrent_modification_fn
                 #persist_events_fn
                 #persist_events_batch_fn
                 #create_fn

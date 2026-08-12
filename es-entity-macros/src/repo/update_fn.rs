@@ -171,10 +171,15 @@ impl ToTokens for UpdateFn<'_> {
 
                 #forgettable_code
 
+                // There are new events (checked above), so the events insert
+                // produced a row unless the CTE's UPDATE matched nothing —
+                // i.e. the index row was deleted underneath us. Report that as
+                // a lost race, matching `update_all`, rather than leaking it as
+                // an internal `Sqlx(RowNotFound)`.
                 let recorded_at = rows
                     .first()
                     .map(|row| row.recorded_at)
-                    .ok_or(sqlx::Error::RowNotFound)?;
+                    .ok_or(#modify_error::ConcurrentModification)?;
                 let n_events = Self::extract_events(entity).mark_new_events_persisted_at(recorded_at);
             }
         } else {
@@ -389,7 +394,7 @@ mod tests {
                     let recorded_at = rows
                         .first()
                         .map(|row| row.recorded_at)
-                        .ok_or(sqlx::Error::RowNotFound)?;
+                        .ok_or(EntityModifyError::ConcurrentModification)?;
                     let n_events = Self::extract_events(entity).mark_new_events_persisted_at(recorded_at);
 
                     Ok(n_events)
