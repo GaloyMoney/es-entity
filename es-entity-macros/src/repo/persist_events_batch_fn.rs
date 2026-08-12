@@ -2,7 +2,10 @@ use darling::ToTokens;
 use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
-use super::options::*;
+use super::{
+    events_write::{EventSource, EventsInsert},
+    options::*,
+};
 
 pub struct PersistEventsBatchFn<'a> {
     id: &'a syn::Ident,
@@ -29,20 +32,12 @@ impl ToTokens for PersistEventsBatchFn<'_> {
         let id_type = &self.id;
         let event_type = &self.event;
 
-        let query = format!(
-            "INSERT INTO {} (id, recorded_at, sequence, event_type, event{}) \
-             SELECT unnested.id, COALESCE($1, NOW()), unnested.sequence, unnested.event_type, unnested.event{} \
-             FROM UNNEST($2, $3::INT[], $4::TEXT[], $5::JSONB[]{}) \
-             AS unnested(id, sequence, event_type, event{}) RETURNING recorded_at",
-            self.events_table_name,
-            if self.event_ctx { ", context" } else { "" },
-            if self.event_ctx {
-                ", unnested.context"
-            } else {
-                ""
-            },
-            if self.event_ctx { ", $6::JSONB[]" } else { "" },
-            if self.event_ctx { ", context" } else { "" }
+        // Same events-table tail as the combined bulk write statements, just
+        // without a CTE to join back to.
+        let query = EventsInsert::new(self.events_table_name, self.event_ctx).sql(
+            &EventSource::BatchStandalone,
+            1,
+            2,
         );
 
         let (ctx_var, ctx_extend, ctx_bind) = if self.event_ctx {

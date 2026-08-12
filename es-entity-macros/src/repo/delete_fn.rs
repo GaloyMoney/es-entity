@@ -2,7 +2,11 @@ use darling::ToTokens;
 use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
-use super::{error_classifier::write_error_classifier, options::*};
+use super::{
+    error_classifier::write_error_classifier,
+    events_write::{EventSource, EventsInsert, ForgettablePayloads},
+    options::*,
+};
 
 pub struct DeleteFn<'a> {
     id: &'a syn::Ident,
@@ -68,56 +72,27 @@ impl ToTokens for DeleteFn<'_> {
         let column_updates = self.columns.sql_updates_for_delete();
         let args = self.columns.update_query_args_for_delete();
 
-        let now_p = args.len() + 1;
-        let offset_p = now_p + 1;
-        let types_p = now_p + 2;
-        let events_p = now_p + 3;
-        let ctx_p = now_p + 4;
-
         // The soft-delete flag and the entity's staged events go out as one
         // statement; the events insert reads from the CTE so the index write
         // is ordered first. `delete` may have no staged events at all, in
         // which case the UNNEST is empty and only the CTE does work.
+        let events_insert = EventsInsert::new(self.events_table_name, self.event_ctx);
+        let now_p = args.len() + 1;
+        let source = EventSource::PerEntityCte {
+            cte: "updated",
+            offset_param: Some(now_p + 1),
+        };
         let query = format!(
-            "WITH updated AS (UPDATE {} SET {}{}deleted = TRUE WHERE id = $1 RETURNING id) \
-            INSERT INTO {} (id, recorded_at, sequence, event_type, event{}) \
-            SELECT updated.id, COALESCE(${}, NOW()), ROW_NUMBER() OVER () + ${}, unnested.event_type, unnested.event{} \
-            FROM updated CROSS JOIN UNNEST(${}::TEXT[], ${}::JSONB[]{}) AS unnested(event_type, event{}) \
-            RETURNING recorded_at",
+            "WITH updated AS (UPDATE {} SET {}{}deleted = TRUE WHERE id = $1 RETURNING id) {}",
             self.table_name,
             column_updates,
             if column_updates.is_empty() { "" } else { ", " },
-            self.events_table_name,
-            if self.event_ctx { ", context" } else { "" },
-            now_p,
-            offset_p,
-            if self.event_ctx {
-                ", unnested.context"
-            } else {
-                ""
-            },
-            types_p,
-            events_p,
-            if self.event_ctx {
-                format!(", ${ctx_p}::JSONB[]")
-            } else {
-                String::new()
-            },
-            if self.event_ctx { ", context" } else { "" },
+            events_insert.sql(&source, now_p, now_p + 2),
         );
 
         let classifier = write_error_classifier(modify_error, self.events_table_name);
-
-        let (ctx_var, ctx_arg) = if self.event_ctx {
-            (
-                quote! { let contexts = entity.events().serialize_new_event_contexts(); },
-                quote! {
-                    , contexts.as_deref() as Option<&[es_entity::ContextData]>
-                },
-            )
-        } else {
-            (quote! {}, quote! {})
-        };
+        let gather = events_insert.gather_per_entity(quote! { entity.events() });
+        let event_args = events_insert.arg_exprs(&source);
 
         #[cfg(feature = "instrument")]
         let (instrument_attr, record_id, error_recording) = {
@@ -170,36 +145,14 @@ impl ToTokens for DeleteFn<'_> {
             quote! {}
         };
 
-        let staged_payload_insert = if let Some(forgettable_tbl) = self.forgettable_table_name {
-            let payload_insert_query = format!(
-                "INSERT INTO {} (entity_id, sequence, payload) SELECT $1, unnested.sequence, unnested.payload FROM UNNEST($2::INT[], $3::JSONB[]) AS unnested(sequence, payload)",
-                forgettable_tbl
-            );
-            quote! {
-                let mut payload_sequences: Vec<i32> = Vec::new();
-                let mut payload_values: Vec<es_entity::prelude::serde_json::Value> = Vec::new();
-                for (idx, event_with_ctx) in entity.events().iter_new_events().enumerate() {
-                    if let Some(payload) = #event_type::extract_forgettable_payloads(&event_with_ctx.event) {
-                        payload_sequences.push((offset + 1 + idx) as i32);
-                        payload_values.push(payload);
-                    }
-                }
-                if !payload_sequences.is_empty() {
-                    Self::extract_concurrent_modification(
-                        sqlx::query!(
-                            #payload_insert_query,
-                            id as &#id_type,
-                            &payload_sequences,
-                            &payload_values,
-                        )
-                        .execute(op.as_executor())
-                        .await,
-                        #modify_error::ConcurrentModification,
-                    )?;
-                }
+        let staged_payload_insert = match self.forgettable_table_name {
+            Some(table) => ForgettablePayloads {
+                table,
+                id_type,
+                event_type,
             }
-        } else {
-            quote! {}
+            .insert_per_entity(quote! { entity.events() }, modify_error),
+            None => quote! {},
         };
 
         tokens.append_all(quote! {
@@ -229,19 +182,12 @@ impl ToTokens for DeleteFn<'_> {
                     #forget_payloads
 
                     let new_events = entity.events().any_new();
-                    let offset = entity.events().len_persisted();
-                    let events_types = entity.events().new_event_types();
-                    let serialized_events = entity.events().serialize_new_events();
-                    #ctx_var
+                    #gather
 
                     let rows = sqlx::query!(
                         #query,
                         #(#args,)*
-                        op.maybe_now(),
-                        offset as i32,
-                        &events_types,
-                        &serialized_events
-                        #ctx_arg
+                        #(#event_args),*
                     )
                         .fetch_all(op.as_executor())
                         .await

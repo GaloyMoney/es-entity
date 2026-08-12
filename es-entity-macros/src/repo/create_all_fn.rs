@@ -2,7 +2,11 @@ use darling::ToTokens;
 use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
-use super::{error_classifier::write_error_classifier, options::*};
+use super::{
+    error_classifier::write_error_classifier,
+    events_write::{EventSource, EventsInsert, ForgettablePayloads},
+    options::*,
+};
 
 pub struct CreateAllFn<'a> {
     entity: &'a syn::Ident,
@@ -69,119 +73,59 @@ impl ToTokens for CreateAllFn<'_> {
             .columns
             .create_all_arg_collection(syn::parse_quote! { new_entity });
 
-        let ids_p = column_names.len() + 2;
-        let sequences_p = ids_p + 1;
-        let types_p = ids_p + 2;
-        let events_p = ids_p + 3;
-        let ctx_p = ids_p + 4;
-
         // Both inserts in one statement. The events insert joins the `new_rows`
         // CTE, which forces the index rows to be written first — so a duplicate
         // id surfaces as the index constraint violation rather than as a unique
         // violation on the events table.
+        let events_insert = EventsInsert::new(self.events_table_name, self.event_ctx);
+        let source = EventSource::BatchCte { cte: "new_rows" };
         let query = format!(
             "WITH new_rows AS (INSERT INTO {} (created_at, {}) \
             SELECT COALESCE($1, NOW()), unnested.{} \
             FROM UNNEST({}) \
-            AS unnested({}) RETURNING id) \
-            INSERT INTO {} (id, recorded_at, sequence, event_type, event{}) \
-            SELECT unnested.id, COALESCE($1, NOW()), unnested.sequence, unnested.event_type, unnested.event{} \
-            FROM UNNEST(${}, ${}::INT[], ${}::TEXT[], ${}::JSONB[]{}) \
-            AS unnested(id, sequence, event_type, event{}) \
-            JOIN new_rows ON new_rows.id = unnested.id \
-            RETURNING recorded_at",
+            AS unnested({}) RETURNING id) {}",
             table_name,
             column_names.join(", "),
             column_names.join(", unnested."),
             placeholders,
             column_names.join(", "),
-            self.events_table_name,
-            if self.event_ctx { ", context" } else { "" },
-            if self.event_ctx {
-                ", unnested.context"
-            } else {
-                ""
-            },
-            ids_p,
-            sequences_p,
-            types_p,
-            events_p,
-            if self.event_ctx {
-                format!(", ${ctx_p}::JSONB[]")
-            } else {
-                String::new()
-            },
-            if self.event_ctx { ", context" } else { "" },
+            events_insert.sql(&source, 1, column_names.len() + 2),
         );
 
         let classifier = write_error_classifier(create_error, self.events_table_name);
 
         let id_type = self.id;
-        let event_type = self.event;
 
-        let (ctx_var, ctx_extend, ctx_add) = if self.event_ctx {
-            (
-                quote! {
-                    let mut all_contexts: Vec<es_entity::ContextData> = Vec::new();
-                },
-                quote! {
-                    if let Some(contexts) = events.serialize_new_event_contexts() {
-                        all_contexts.extend(contexts);
-                    }
-                },
-                quote! {
-                    __query_args.add(if all_contexts.is_empty() {
-                        None
-                    } else {
-                        Some(&all_contexts)
-                    }).map_err(sqlx::Error::Encode)?;
-                },
-            )
-        } else {
-            (quote! {}, quote! {}, quote! {})
-        };
+        let batch_declarations = events_insert.batch_declarations(id_type);
+        let gather = events_insert.gather_batch(quote! { events }, quote! { id });
+        // The index columns are encoded first (their borrows on the new
+        // entities must end before those are consumed), so the event arrays
+        // follow — hence skipping the shared `now` argument here.
+        let event_arg_adds = events_insert
+            .arg_exprs(&source)
+            .into_iter()
+            .skip(1)
+            .map(|expr| quote! { __query_args.add(#expr).map_err(sqlx::Error::Encode)?; });
 
-        let (forgettable_vars, forgettable_extract, forgettable_insert) = if let Some(
-            forgettable_tbl,
-        ) =
-            self.forgettable_table_name
-        {
-            let payload_insert_query = format!(
-                "INSERT INTO {} (entity_id, sequence, payload) SELECT unnested.entity_id, unnested.sequence, unnested.payload FROM UNNEST($1, $2::INT[], $3::JSONB[]) AS unnested(entity_id, sequence, payload)",
-                forgettable_tbl
-            );
-            (
-                quote! {
-                    let mut payload_ids: Vec<&#id_type> = Vec::new();
-                    let mut payload_sequences: Vec<i32> = Vec::new();
-                    let mut payload_values: Vec<es_entity::prelude::serde_json::Value> = Vec::new();
-                },
-                quote! {
-                    for (idx, event_with_ctx) in events.iter_new_events().enumerate() {
-                        if let Some(payload) = #event_type::extract_forgettable_payloads(&event_with_ctx.event) {
-                            payload_ids.push(id);
-                            payload_sequences.push((offset + idx) as i32);
-                            payload_values.push(payload);
-                        }
-                    }
-                },
-                quote! {
-                    if !payload_sequences.is_empty() {
-                        Self::extract_concurrent_modification(
-                            sqlx::query(#payload_insert_query)
-                                .bind(&payload_ids)
-                                .bind(&payload_sequences)
-                                .bind(&payload_values)
-                                .execute(op.as_executor())
-                                .await,
-                            #create_error::ConcurrentModification,
-                        )?;
-                    }
-                },
-            )
-        } else {
-            (quote! {}, quote! {}, quote! {})
-        };
+        let payloads = self
+            .forgettable_table_name
+            .map(|table| ForgettablePayloads {
+                table,
+                id_type,
+                event_type: self.event,
+            });
+        let forgettable_vars = payloads
+            .as_ref()
+            .map(|p| p.batch_declarations())
+            .unwrap_or_default();
+        let forgettable_extract = payloads
+            .as_ref()
+            .map(|p| p.gather_batch(quote! { events }, quote! { id }))
+            .unwrap_or_default();
+        let forgettable_insert = payloads
+            .as_ref()
+            .map(|p| p.insert_batch(create_error))
+            .unwrap_or_default();
 
         #[cfg(feature = "instrument")]
         let (instrument_attr, error_recording) = {
@@ -259,35 +203,18 @@ impl ToTokens for CreateAllFn<'_> {
 
                     let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event>> = new_entities.into_iter().map(Self::convert_new).collect();
 
-                    let mut all_ids: Vec<&#id_type> = Vec::new();
-                    let mut all_sequences: Vec<i32> = Vec::new();
-                    let mut all_types = Vec::new();
-                    let mut all_serialized = Vec::new();
+                    #batch_declarations
                     let mut n_persisted: Vec<usize> = Vec::new();
-                    #ctx_var
                     #forgettable_vars
 
                     for events in all_events.iter() {
                         let id = events.id();
-                        let offset = events.len_persisted() + 1;
-                        let types = events.new_event_types();
-                        let serialized = events.serialize_new_events();
-                        #ctx_extend
+                        #gather
                         #forgettable_extract
-
-                        let n_events = serialized.len();
-                        all_types.extend(types);
-                        all_serialized.extend(serialized);
-                        all_ids.extend(std::iter::repeat(id).take(n_events));
-                        all_sequences.extend((offset..).take(n_events).map(|i| i as i32));
-                        n_persisted.push(n_events);
+                        n_persisted.push(n_new);
                     }
 
-                    __query_args.add(&all_ids).map_err(sqlx::Error::Encode)?;
-                    __query_args.add(&all_sequences).map_err(sqlx::Error::Encode)?;
-                    __query_args.add(&all_types).map_err(sqlx::Error::Encode)?;
-                    __query_args.add(&all_serialized).map_err(sqlx::Error::Encode)?;
-                    #ctx_add
+                    #(#event_arg_adds)*
 
                     let expected_events = all_ids.len();
                     let rows = sqlx::query_with(#query, __query_args)
@@ -429,12 +356,12 @@ mod tests {
                         let types = events.new_event_types();
                         let serialized = events.serialize_new_events();
 
-                        let n_events = serialized.len();
+                        let n_new = serialized.len();
                         all_types.extend(types);
                         all_serialized.extend(serialized);
-                        all_ids.extend(std::iter::repeat(id).take(n_events));
-                        all_sequences.extend((offset..).take(n_events).map(|i| i as i32));
-                        n_persisted.push(n_events);
+                        all_ids.extend(std::iter::repeat(id).take(n_new));
+                        all_sequences.extend((offset..).take(n_new).map(|i| i as i32));
+                        n_persisted.push(n_new);
                     }
 
                     __query_args.add(&all_ids).map_err(sqlx::Error::Encode)?;

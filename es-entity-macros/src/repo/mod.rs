@@ -5,6 +5,7 @@ mod create_fn;
 mod delete_fn;
 mod error_classifier;
 mod error_types;
+mod events_write;
 mod find_all_fn;
 mod find_by_fn;
 mod forget_fn;

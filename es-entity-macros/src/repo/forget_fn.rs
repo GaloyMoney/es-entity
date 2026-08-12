@@ -2,7 +2,11 @@ use darling::ToTokens;
 use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
-use super::{error_classifier::concurrent_modification_classifier, options::*};
+use super::{
+    error_classifier::concurrent_modification_classifier,
+    events_write::{EventSource, EventsInsert},
+    options::*,
+};
 
 pub struct ForgetFn<'a> {
     id: &'a syn::Ident,
@@ -75,55 +79,32 @@ impl ToTokens for ForgetFn<'_> {
                 .map(|c| format!("{} = NULL", c))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let events_insert = EventsInsert::new(self.events_table_name, self.event_ctx);
+            let source = EventSource::PerEntityCte {
+                cte: "updated",
+                offset_param: Some(3),
+            };
             let combined_query = format!(
-                "WITH updated AS (UPDATE {} SET {} WHERE id = $1 RETURNING id) \
-                INSERT INTO {} (id, recorded_at, sequence, event_type, event{}) \
-                SELECT updated.id, COALESCE($2, NOW()), ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event{} \
-                FROM updated CROSS JOIN UNNEST($4::TEXT[], $5::JSONB[]{}) AS unnested(event_type, event{}) \
-                RETURNING recorded_at",
+                "WITH updated AS (UPDATE {} SET {} WHERE id = $1 RETURNING id) {}",
                 self.table_name,
                 set_clause,
-                self.events_table_name,
-                if self.event_ctx { ", context" } else { "" },
-                if self.event_ctx {
-                    ", unnested.context"
-                } else {
-                    ""
-                },
-                if self.event_ctx { ", $6::JSONB[]" } else { "" },
-                if self.event_ctx { ", context" } else { "" },
+                events_insert.sql(&source, 2, 4),
             );
 
             let classifier = concurrent_modification_classifier(error, self.events_table_name);
-
-            let (ctx_var, ctx_arg) = if self.event_ctx {
-                (
-                    quote! { let contexts = entity.events().serialize_new_event_contexts(); },
-                    quote! {
-                        , contexts.as_deref() as Option<&[es_entity::ContextData]>
-                    },
-                )
-            } else {
-                (quote! {}, quote! {})
-            };
+            let gather = events_insert.gather_per_entity(quote! { entity.events() });
+            let event_args = events_insert.arg_exprs(&source);
 
             quote! {
                 let has_new_events = entity.events().any_new();
-                let offset = entity.events().len_persisted();
-                let events_types = entity.events().new_event_types();
-                let serialized_events = entity.events().serialize_new_events();
-                #ctx_var
+                #gather
 
                 let rows = {
                     let id = &entity.id;
                     sqlx::query!(
                         #combined_query,
                         id as &#id_type,
-                        op.maybe_now(),
-                        offset as i32,
-                        &events_types,
-                        &serialized_events
-                        #ctx_arg
+                        #(#event_args),*
                     )
                     .fetch_all(op.as_executor())
                     .await
