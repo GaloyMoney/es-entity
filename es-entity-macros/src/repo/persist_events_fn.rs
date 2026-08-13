@@ -2,7 +2,10 @@ use darling::ToTokens;
 use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
-use super::options::*;
+use super::{
+    events_write::{EventSource, EventsInsert},
+    options::*,
+};
 
 pub struct PersistEventsFn<'a> {
     id: &'a syn::Ident,
@@ -26,18 +29,14 @@ impl<'a> From<&'a RepositoryOptions> for PersistEventsFn<'a> {
 
 impl ToTokens for PersistEventsFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let query = format!(
-            "INSERT INTO {} (id, recorded_at, sequence, event_type, event{}) SELECT $1, COALESCE($2, NOW()), ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event{} FROM UNNEST($4::TEXT[], $5::JSONB[]{}) AS unnested(event_type, event{}) RETURNING recorded_at",
-            self.events_table_name,
-            if self.event_ctx { ", context" } else { "" },
-            if self.event_ctx {
-                ", unnested.context"
-            } else {
-                ""
-            },
-            if self.event_ctx { ", $6::JSONB[]" } else { "" },
-            if self.event_ctx { ", context" } else { "" }
-        );
+        // Same events-table tail as the combined write statements, just with
+        // the id bound directly instead of read from a CTE.
+        let events_insert = EventsInsert::new(self.events_table_name, self.event_ctx);
+        let source = EventSource::PerEntityStandalone {
+            id_param: 1,
+            offset_param: 3,
+        };
+        let query = events_insert.sql(&source, 2, 4);
 
         let (ctx_var, ctx_arg) = if self.event_ctx {
             (
@@ -85,19 +84,6 @@ impl ToTokens for PersistEventsFn<'_> {
         };
 
         tokens.append_all(quote! {
-            fn extract_concurrent_modification<T, __EsErr: From<sqlx::Error>>(
-                res: Result<T, sqlx::Error>,
-                concurrent_modification: __EsErr,
-            ) -> Result<T, __EsErr> {
-                match res {
-                    Ok(v) => Ok(v),
-                    Err(sqlx::Error::Database(ref db_err)) if db_err.is_unique_violation() => {
-                        Err(concurrent_modification)
-                    }
-                    Err(e) => Err(__EsErr::from(e)),
-                }
-            }
-
             async fn persist_events<OP>(
                 &self,
                 op: &mut OP,
@@ -159,19 +145,6 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            fn extract_concurrent_modification<T, __EsErr: From<sqlx::Error>>(
-                res: Result<T, sqlx::Error>,
-                concurrent_modification: __EsErr,
-            ) -> Result<T, __EsErr> {
-                match res {
-                    Ok(v) => Ok(v),
-                    Err(sqlx::Error::Database(ref db_err)) if db_err.is_unique_violation() => {
-                        Err(concurrent_modification)
-                    }
-                    Err(e) => Err(__EsErr::from(e)),
-                }
-            }
-
             async fn persist_events<OP>(
                 &self,
                 op: &mut OP,
@@ -229,19 +202,6 @@ mod tests {
         persist_fn.to_tokens(&mut tokens);
 
         let expected = quote! {
-            fn extract_concurrent_modification<T, __EsErr: From<sqlx::Error>>(
-                res: Result<T, sqlx::Error>,
-                concurrent_modification: __EsErr,
-            ) -> Result<T, __EsErr> {
-                match res {
-                    Ok(v) => Ok(v),
-                    Err(sqlx::Error::Database(ref db_err)) if db_err.is_unique_violation() => {
-                        Err(concurrent_modification)
-                    }
-                    Err(e) => Err(__EsErr::from(e)),
-                }
-            }
-
             async fn persist_events<OP>(
                 &self,
                 op: &mut OP,

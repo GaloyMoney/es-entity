@@ -17,7 +17,7 @@ pub struct EsEvent {
 struct ForgettableInfo {
     /// Whether any variant has forgettable fields.
     has_forgettable: bool,
-    /// Per-variant: (variant_ident, serde_tag_value, list_of_forgettable_field_idents)
+    /// Per-variant: (variant_ident, event_type_value, list_of_forgettable_field_idents)
     variants: Vec<(syn::Ident, String, Vec<syn::Ident>)>,
 }
 
@@ -93,10 +93,29 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
         })
         .collect();
 
+    // (event_type column value, forgettable field JSON key) pairs across all
+    // variants — consumed by the repo's generated `verify_forgotten` storage
+    // check, which joins the first element against the `event_type` column.
+    let forgettable_json_fields: Vec<_> = forgettable_info
+        .variants
+        .iter()
+        .flat_map(|(_, event_type_value, field_idents)| {
+            field_idents.iter().map(move |field_id| {
+                let field_name = field_id.to_string();
+                quote! { (#event_type_value, #field_name) }
+            })
+        })
+        .collect();
+
     tokens.append_all(quote! {
         impl #ident {
             #[doc(hidden)]
             pub const HAS_FORGETTABLE_FIELDS: bool = #has_forgettable;
+
+            #[doc(hidden)]
+            pub const FORGETTABLE_JSON_FIELDS: &'static [(&'static str, &'static str)] = &[
+                #(#forgettable_json_fields),*
+            ];
 
             #[doc(hidden)]
             pub fn extract_forgettable_payloads(&self) -> Option<es_entity::prelude::serde_json::Value> {
@@ -117,17 +136,26 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
     Ok(tokens)
 }
 
+/// The value written to the `event_type` column for a variant.
+///
+/// Deliberately the snake-cased *ident*, not the serde tag: the column is
+/// populated from the generated `EsEvent::event_type`, which knows nothing
+/// about serde renames, so anything matching against that column has to agree
+/// with it. Both emission sites go through here — the `event_type` arms and
+/// `FORGETTABLE_JSON_FIELDS` — so the two cannot drift apart.
+fn event_type_value(variant_ident: &syn::Ident) -> String {
+    variant_ident.to_string().to_case(Case::Snake)
+}
+
 /// Extract forgettable field information from the enum definition.
 fn extract_forgettable_info(ast: &syn::DeriveInput) -> ForgettableInfo {
-    let rename_rule = parse_serde_rename_all(ast);
-
     let variants = match &ast.data {
         syn::Data::Enum(data) => data
             .variants
             .iter()
             .map(|variant| {
                 let variant_ident = variant.ident.clone();
-                let tag_value = serde_variant_name(variant, &rename_rule);
+                let event_type_value = event_type_value(&variant_ident);
                 let forgettable_fields = variant
                     .fields
                     .iter()
@@ -139,7 +167,7 @@ fn extract_forgettable_info(ast: &syn::DeriveInput) -> ForgettableInfo {
                         }
                     })
                     .collect::<Vec<_>>();
-                (variant_ident, tag_value, forgettable_fields)
+                (variant_ident, event_type_value, forgettable_fields)
             })
             .collect(),
         _ => Vec::new(),
@@ -163,79 +191,6 @@ fn is_forgettable_type(ty: &syn::Type) -> bool {
     false
 }
 
-/// Parse the `rename_all` value from `#[serde(tag = "type", rename_all = "...")]`.
-fn parse_serde_rename_all(ast: &syn::DeriveInput) -> Option<String> {
-    for attr in &ast.attrs {
-        if !attr.path().is_ident("serde") {
-            continue;
-        }
-        let mut rename_all_str = None;
-        let _ = attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("rename_all") {
-                let value = meta.value()?;
-                let lit: syn::LitStr = value.parse()?;
-                rename_all_str = Some(lit.value());
-            } else {
-                // Consume any value so parse_nested_meta can continue to the next item
-                let _ = meta.value().and_then(|v| v.parse::<syn::LitStr>());
-            }
-            Ok(())
-        });
-        if rename_all_str.is_some() {
-            return rename_all_str;
-        }
-    }
-    None
-}
-
-/// Convert a serde rename_all string to a convert_case::Case.
-fn serde_rename_to_case(s: &str) -> Option<Case<'static>> {
-    match s {
-        "lowercase" => Some(Case::Lower),
-        "UPPERCASE" => Some(Case::Upper),
-        "PascalCase" => Some(Case::Pascal),
-        "camelCase" => Some(Case::Camel),
-        "snake_case" => Some(Case::Snake),
-        "SCREAMING_SNAKE_CASE" => Some(Case::Constant),
-        "kebab-case" => Some(Case::Kebab),
-        "SCREAMING-KEBAB-CASE" => Some(Case::Cobol),
-        _ => None,
-    }
-}
-
-/// Get the serde tag name for a variant, considering rename_all and per-variant rename.
-fn serde_variant_name(variant: &syn::Variant, rename_rule: &Option<String>) -> String {
-    // Check for explicit #[serde(rename = "...")]
-    for attr in &variant.attrs {
-        if !attr.path().is_ident("serde") {
-            continue;
-        }
-        let mut explicit_rename = None;
-        let _ = attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("rename") {
-                let value = meta.value()?;
-                let lit: syn::LitStr = value.parse()?;
-                explicit_rename = Some(lit.value());
-            }
-            Ok(())
-        });
-        if let Some(name) = explicit_rename {
-            return name;
-        }
-    }
-
-    let ident = variant.ident.to_string();
-    if let Some(rule) = rename_rule {
-        if let Some(case) = serde_rename_to_case(rule) {
-            ident.to_case(case)
-        } else {
-            ident
-        }
-    } else {
-        ident
-    }
-}
-
 impl ToTokens for EsEvent {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let ident = &self.ident;
@@ -257,9 +212,9 @@ impl ToTokens for EsEvent {
                     .iter()
                     .map(|v| {
                         let variant_ident = &v.ident;
-                        let snake_name = variant_ident.to_string().to_case(Case::Snake);
+                        let type_value = event_type_value(variant_ident);
                         quote! {
-                            Self::#variant_ident { .. } => #snake_name,
+                            Self::#variant_ident { .. } => #type_value,
                         }
                     })
                     .collect();
@@ -325,5 +280,40 @@ mod tests {
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    /// `verify_forgotten` joins `FORGETTABLE_JSON_FIELDS` against the
+    /// `event_type` column, which is written from `event_type()` — the
+    /// snake-cased ident, which knows nothing about serde renames. Keying
+    /// the const on the serde tag instead would make the join match nothing
+    /// and silently report a forgotten entity as clean. Every entity in this
+    /// repo happens to use `rename_all = "snake_case"`, where the two agree,
+    /// so this pins the case where they do not.
+    #[test]
+    fn forgettable_json_fields_key_on_the_event_type_column_not_the_serde_tag() {
+        let input: syn::DeriveInput = syn::parse_quote! {
+            #[es_event(id = "SubscriberId")]
+            #[serde(tag = "type", rename_all = "camelCase")]
+            enum SubscriberEvent {
+                #[serde(rename = "totally_custom")]
+                Initialized { id: SubscriberId, email: Forgettable<String> },
+                EmailChanged { email: Forgettable<String> },
+            }
+        };
+
+        let out = derive(input).unwrap().to_string();
+
+        // Both variants keyed by the snake_case ident, matching `event_type()`.
+        assert!(
+            out.contains(r#"("initialized" , "email")"#),
+            "expected snake_case ident key, got: {out}"
+        );
+        assert!(
+            out.contains(r#"("email_changed" , "email")"#),
+            "expected snake_case ident key, got: {out}"
+        );
+        // Never the serde tag or the rename_all casing.
+        assert!(!out.contains(r#""totally_custom""#));
+        assert!(!out.contains(r#""emailChanged""#));
     }
 }

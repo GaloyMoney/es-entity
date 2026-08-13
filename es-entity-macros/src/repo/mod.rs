@@ -3,7 +3,9 @@ mod combo_cursor;
 mod create_all_fn;
 mod create_fn;
 mod delete_fn;
+mod error_classifier;
 mod error_types;
+mod events_write;
 mod find_all_fn;
 mod find_by_fn;
 mod forget_fn;
@@ -42,8 +44,9 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
 pub struct EsRepo<'a> {
     repo: &'a syn::Ident,
     generics: &'a syn::Generics,
-    persist_events_fn: persist_events_fn::PersistEventsFn<'a>,
-    persist_events_batch_fn: persist_events_batch_fn::PersistEventsBatchFn<'a>,
+    extract_concurrent_modification_fn: Option<TokenStream>,
+    persist_events_fn: Option<persist_events_fn::PersistEventsFn<'a>>,
+    persist_events_batch_fn: Option<persist_events_batch_fn::PersistEventsBatchFn<'a>>,
     update_fn: update_fn::UpdateFn<'a>,
     update_all_fn: update_all_fn::UpdateAllFn<'a>,
     create_fn: create_fn::CreateFn<'a>,
@@ -111,11 +114,30 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             None
         };
 
+        // Every write path now folds its index write and its event insert into
+        // one statement, so the shared persist helpers are only reachable
+        // where there is no index write to fold into. Emitting a helper
+        // nothing calls would be dead code in consumers that build with
+        // `-D warnings`, so each is gated to its remaining callers:
+        // `persist_events` for column-less updates and for `forget` on repos
+        // with no forgettable index columns; `persist_events_batch` for
+        // column-less bulk updates. `extract_concurrent_modification` outlives
+        // both — the follow-up forgettable payload inserts still use it.
+        let needs_persist_events = !opts.columns.updates_needed()
+            || (opts.forgettable_enabled() && opts.columns.forgettable_column_names().is_empty());
+        let needs_persist_events_batch = !opts.columns.updates_needed();
+        let extract_concurrent_modification_fn = (!opts.columns.updates_needed()
+            || opts.forgettable_enabled())
+        .then(error_classifier::extract_concurrent_modification_fn);
+
         Self {
             repo: &opts.ident,
             generics: &opts.generics,
-            persist_events_fn: persist_events_fn::PersistEventsFn::from(opts),
-            persist_events_batch_fn: persist_events_batch_fn::PersistEventsBatchFn::from(opts),
+            extract_concurrent_modification_fn,
+            persist_events_fn: needs_persist_events
+                .then(|| persist_events_fn::PersistEventsFn::from(opts)),
+            persist_events_batch_fn: needs_persist_events_batch
+                .then(|| persist_events_batch_fn::PersistEventsBatchFn::from(opts)),
             update_fn: update_fn::UpdateFn::from(opts),
             update_all_fn: update_all_fn::UpdateAllFn::from(opts),
             create_fn: create_fn::CreateFn::from(opts),
@@ -142,6 +164,7 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
 impl ToTokens for EsRepo<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let repo = &self.repo;
+        let extract_concurrent_modification_fn = &self.extract_concurrent_modification_fn;
         let persist_events_fn = &self.persist_events_fn;
         let persist_events_batch_fn = &self.persist_events_batch_fn;
         let update_fn = &self.update_fn;
@@ -352,6 +375,7 @@ impl ToTokens for EsRepo<'_> {
                 #begin
                 #post_hydrate_hook
                 #post_persist_hook
+                #extract_concurrent_modification_fn
                 #persist_events_fn
                 #persist_events_batch_fn
                 #create_fn

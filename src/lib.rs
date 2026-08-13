@@ -66,7 +66,7 @@ pub use es_entity_macros::retry_on_concurrent_modification;
 #[doc(inline)]
 pub use events::*;
 #[doc(inline)]
-pub use forgettable::{Forgettable, ForgettableRef};
+pub use forgettable::{Forgettable, ForgettableRef, ForgettableRemnants};
 #[doc(inline)]
 pub use idempotent::*;
 #[doc(inline)]

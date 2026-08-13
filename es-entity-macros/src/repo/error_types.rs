@@ -324,12 +324,29 @@ impl<'a> ErrorTypes<'a> {
         let forget_error = &self.forget_error;
         let entity_name = self.entity.to_string();
 
+        let (pp_variant, pp_display_arm, pp_source_arm) = if let Some(config) =
+            &self.post_persist_hook
+        {
+            let error_ty = &config.error;
+            (
+                quote! { PostPersistHookError(#error_ty), },
+                quote! { Self::PostPersistHookError(e) => write!(f, "{}ForgetError - PostPersistHookError: {}", #entity_name, e), },
+                quote! { Self::PostPersistHookError(e) => Some(e), },
+            )
+        } else {
+            (quote! {}, quote! {}, quote! {})
+        };
+
         quote! {
             #[derive(Debug)]
             pub enum #forget_error {
                 Sqlx(sqlx::Error),
                 HydrationError(es_entity::EntityHydrationError),
                 ConcurrentModification,
+                /// `verify_forgotten` found forgettable data still present at
+                /// the storage level.
+                NotForgotten(es_entity::ForgettableRemnants),
+                #pp_variant
             }
 
             impl std::fmt::Display for #forget_error {
@@ -338,6 +355,8 @@ impl<'a> ErrorTypes<'a> {
                         Self::Sqlx(e) => write!(f, "{}ForgetError - Sqlx: {}", #entity_name, e),
                         Self::HydrationError(e) => write!(f, "{}ForgetError - HydrationError: {}", #entity_name, e),
                         Self::ConcurrentModification => write!(f, "{}ForgetError - ConcurrentModification: another writer persisted events concurrently; reload the entity and re-forget", #entity_name),
+                        Self::NotForgotten(remnants) => write!(f, "{}ForgetError - NotForgotten: {}", #entity_name, remnants),
+                        #pp_display_arm
                     }
                 }
             }
@@ -348,6 +367,8 @@ impl<'a> ErrorTypes<'a> {
                         Self::Sqlx(e) => Some(e),
                         Self::HydrationError(e) => Some(e),
                         Self::ConcurrentModification => None,
+                        Self::NotForgotten(_) => None,
+                        #pp_source_arm
                     }
                 }
             }
@@ -367,6 +388,15 @@ impl<'a> ErrorTypes<'a> {
             impl #forget_error {
                 pub fn was_concurrent_modification(&self) -> bool {
                     matches!(self, Self::ConcurrentModification)
+                }
+
+                /// Returns the remnants report when `verify_forgotten` found
+                /// forgettable data still present at the storage level.
+                pub fn not_forgotten_remnants(&self) -> Option<&es_entity::ForgettableRemnants> {
+                    match self {
+                        Self::NotForgotten(remnants) => Some(remnants),
+                        _ => None,
+                    }
                 }
             }
         }

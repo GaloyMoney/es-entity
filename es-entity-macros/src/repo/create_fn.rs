@@ -2,11 +2,20 @@ use darling::ToTokens;
 use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
-use super::options::*;
+use super::{
+    error_classifier::write_error_classifier,
+    events_write::{EventSource, EventsInsert, ForgettablePayloads},
+    options::*,
+};
 
 pub struct CreateFn<'a> {
     entity: &'a syn::Ident,
+    id: &'a syn::Ident,
+    event: &'a syn::Ident,
     table_name: &'a str,
+    events_table_name: &'a str,
+    event_ctx: bool,
+    forgettable_table_name: Option<&'a str>,
     columns: &'a Columns,
     create_error: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
@@ -21,6 +30,11 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
         Self {
             table_name: opts.table_name(),
             entity: opts.entity(),
+            id: opts.id(),
+            event: opts.event(),
+            events_table_name: opts.events_table_name(),
+            event_ctx: opts.event_context_enabled(),
+            forgettable_table_name: opts.forgettable_table_name(),
             create_error: opts.create_error(),
             nested_fn_names: opts
                 .all_nested()
@@ -58,15 +72,62 @@ impl ToTokens for CreateFn<'_> {
 
         let column_names = self.columns.insert_column_names();
         let placeholders = self.columns.insert_placeholders(0);
-        let args = self.columns.create_query_args();
+        let arg_adds = self.columns.create_query_arg_adds();
 
+        // Index insert and events insert combined into one statement. The
+        // outer insert reads from the CTE, which forces the index row to be
+        // written first — preserving error precedence (a duplicate id
+        // surfaces as the index pkey violation, not as a unique violation on
+        // the events table) and providing the id without a second bind.
+        //
+        // A brand-new entity has no persisted events, so sequences start at 1
+        // and no offset parameter is needed.
+        let events_insert = EventsInsert::new(self.events_table_name, self.event_ctx);
+        let now_p = column_names.len() + 1;
+        let source = EventSource::PerEntityCte {
+            cte: "new_row",
+            offset_param: None,
+        };
         let query = format!(
-            "INSERT INTO {} ({}, created_at) VALUES ({}, COALESCE(${}, NOW()))",
+            "WITH new_row AS (INSERT INTO {} ({}, created_at) VALUES ({}, COALESCE(${}, NOW())) RETURNING id) {}",
             table_name,
             column_names.join(", "),
             placeholders,
-            column_names.len() + 1,
+            now_p,
+            events_insert.sql(&source, now_p, now_p + 1),
         );
+
+        let classifier = write_error_classifier(create_error, self.events_table_name);
+
+        // The event arrays are encoded after the index columns, whose borrows
+        // on the new entity must end before it is consumed into events.
+        let event_arg_adds = events_insert
+            .arg_exprs(&source)
+            .into_iter()
+            .skip(1)
+            .map(|expr| quote! { __query_args.add(#expr).map_err(sqlx::Error::Encode)?; });
+        let ctx_var = if self.event_ctx {
+            quote! { let contexts = events.serialize_new_event_contexts(); }
+        } else {
+            quote! {}
+        };
+
+        let forgettable_code = match self.forgettable_table_name {
+            Some(table) => {
+                let payloads = ForgettablePayloads {
+                    table,
+                    id_type: self.id,
+                    event_type: self.event,
+                }
+                .insert_per_entity(quote! { events }, create_error);
+                quote! {
+                    let offset = events.len_persisted();
+                    let id = events.id();
+                    #payloads
+                }
+            }
+            None => quote! {},
+        };
 
         #[cfg(feature = "instrument")]
         let (instrument_attr, record_id, error_recording) = {
@@ -147,32 +208,33 @@ impl ToTokens for CreateFn<'_> {
                 OP: es_entity::AtomicOperation
             {
                 let __result: Result<#entity, #create_error> = async {
+                    use es_entity::prelude::sqlx::{Arguments, Row};
+
                     #assignments
                     #record_id
 
-                     sqlx::query!(
-                         #query,
-                         #(#args)*
-                         op.maybe_now()
-                    )
-                    .execute(op.as_executor())
-                    .await
-                    .map_err(|e| match &e {
-                        sqlx::Error::Database(db_err) if es_entity::is_classified_constraint_violation(db_err.as_ref()) => {
-                            #create_error::ConstraintViolation {
-                                column: Self::map_constraint_column(db_err.constraint()),
-                                value: es_entity::extract_constraint_value(db_err.as_ref()),
-                                inner: e,
-                            }
-                        }
-                        _ => #create_error::Sqlx(e),
-                    })?;
+                    let mut __query_args = sqlx::postgres::PgArguments::default();
+                    #(#arg_adds)*
+                    __query_args.add(op.maybe_now()).map_err(sqlx::Error::Encode)?;
 
                     let mut events = Self::convert_new(new_entity);
-                    let n_events = Self::extract_concurrent_modification(
-                        self.persist_events(op, &mut events).await,
-                        #create_error::ConcurrentModification,
-                    )?;
+                    let events_types = events.new_event_types();
+                    let serialized_events = events.serialize_new_events();
+                    #ctx_var
+                    #(#event_arg_adds)*
+
+                    let rows = sqlx::query_with(#query, __query_args)
+                        .fetch_all(op.as_executor())
+                        .await
+                        .map_err(#classifier)?;
+
+                    #forgettable_code
+
+                    let recorded_at = rows
+                        .first()
+                        .ok_or(sqlx::Error::RowNotFound)
+                        .and_then(|row| row.try_get("recorded_at"))?;
+                    let n_events = events.mark_new_events_persisted_at(recorded_at);
                     let #maybe_mut_entity = Self::hydrate_entity(events)?;
 
                     #(#nested)*
@@ -200,12 +262,18 @@ mod tests {
         let entity = Ident::new("Entity", Span::call_site());
         let create_error = syn::Ident::new("EntityCreateError", Span::call_site());
         let id = Ident::new("EntityId", Span::call_site());
+        let event = Ident::new("EntityEvent", Span::call_site());
         let mut columns = Columns::default();
         columns.set_id_column(&id);
 
         let create_fn = CreateFn {
             table_name: "entities",
             entity: &entity,
+            id: &id,
+            event: &event,
+            events_table_name: "entity_events",
+            event_ctx: false,
+            forgettable_table_name: None,
             create_error,
             columns: &columns,
             nested_fn_names: Vec::new(),
@@ -256,30 +324,51 @@ mod tests {
                 OP: es_entity::AtomicOperation
             {
                 let __result: Result<Entity, EntityCreateError> = async {
+                    use es_entity::prelude::sqlx::{Arguments, Row};
+
                     let id = &new_entity.id;
 
-                    sqlx::query!("INSERT INTO entities (id, created_at) VALUES ($1, COALESCE($2, NOW()))",
-                        id as &EntityId,
-                        op.maybe_now()
-                    )
-                    .execute(op.as_executor())
-                    .await
-                    .map_err(|e| match &e {
-                        sqlx::Error::Database(db_err) if es_entity::is_classified_constraint_violation(db_err.as_ref()) => {
-                            EntityCreateError::ConstraintViolation {
-                                column: Self::map_constraint_column(db_err.constraint()),
-                                value: es_entity::extract_constraint_value(db_err.as_ref()),
-                                inner: e,
-                            }
-                        }
-                        _ => EntityCreateError::Sqlx(e),
-                    })?;
+                    let mut __query_args = sqlx::postgres::PgArguments::default();
+                    __query_args.add(id as &EntityId).map_err(sqlx::Error::Encode)?;
+                    __query_args.add(op.maybe_now()).map_err(sqlx::Error::Encode)?;
 
                     let mut events = Self::convert_new(new_entity);
-                    let n_events = Self::extract_concurrent_modification(
-                        self.persist_events(op, &mut events).await,
-                        EntityCreateError::ConcurrentModification,
-                    )?;
+                    let events_types = events.new_event_types();
+                    let serialized_events = events.serialize_new_events();
+                    __query_args.add(&events_types).map_err(sqlx::Error::Encode)?;
+                    __query_args.add(&serialized_events).map_err(sqlx::Error::Encode)?;
+
+                    let rows = sqlx::query_with(
+                        "WITH new_row AS (INSERT INTO entities (id, created_at) VALUES ($1, COALESCE($2, NOW())) RETURNING id) INSERT INTO entity_events (id, recorded_at, sequence, event_type, event) SELECT new_row.id, COALESCE($2, NOW()), ROW_NUMBER() OVER (), unnested.event_type, unnested.event FROM new_row CROSS JOIN UNNEST($3::TEXT[], $4::JSONB[]) AS unnested(event_type, event) RETURNING recorded_at",
+                        __query_args
+                    )
+                        .fetch_all(op.as_executor())
+                        .await
+                        .map_err(|e| match &e {
+                            sqlx::Error::Database(db_err)
+                                if db_err.is_unique_violation()
+                                    && db_err.table() == Some("entity_events") =>
+                            {
+                                EntityCreateError::ConcurrentModification
+                            }
+                            sqlx::Error::Database(db_err)
+                                if db_err.table() != Some("entity_events")
+                                    && es_entity::is_classified_constraint_violation(db_err.as_ref()) =>
+                            {
+                                EntityCreateError::ConstraintViolation {
+                                    column: Self::map_constraint_column(db_err.constraint()),
+                                    value: es_entity::extract_constraint_value(db_err.as_ref()),
+                                    inner: e,
+                                }
+                            }
+                            _ => EntityCreateError::Sqlx(e),
+                        })?;
+
+                    let recorded_at = rows
+                        .first()
+                        .ok_or(sqlx::Error::RowNotFound)
+                        .and_then(|row| row.try_get("recorded_at"))?;
+                    let n_events = events.mark_new_events_persisted_at(recorded_at);
                     let entity = Self::hydrate_entity(events)?;
 
                     Ok(entity)
@@ -296,16 +385,23 @@ mod tests {
     fn create_fn_with_columns() {
         let entity = Ident::new("Entity", Span::call_site());
         let create_error = syn::Ident::new("EntityCreateError", Span::call_site());
+        let id = Ident::new("EntityId", Span::call_site());
+        let event = Ident::new("EntityEvent", Span::call_site());
 
         use darling::FromMeta;
         let input: syn::Meta =
             syn::parse_quote!(columns(name(ty = "String", create(accessor = "name()"))));
         let mut columns = Columns::from_meta(&input).expect("Failed to parse Fields");
-        columns.set_id_column(&Ident::new("EntityId", Span::call_site()));
+        columns.set_id_column(&id);
 
         let create_fn = CreateFn {
             table_name: "entities",
             entity: &entity,
+            id: &id,
+            event: &event,
+            events_table_name: "entity_events",
+            event_ctx: false,
+            forgettable_table_name: None,
             create_error,
             columns: &columns,
             nested_fn_names: Vec::new(),
@@ -356,32 +452,53 @@ mod tests {
                 OP: es_entity::AtomicOperation
             {
                 let __result: Result<Entity, EntityCreateError> = async {
+                    use es_entity::prelude::sqlx::{Arguments, Row};
+
                     let id = &new_entity.id;
                     let name = &new_entity.name();
 
-                    sqlx::query!("INSERT INTO entities (id, name, created_at) VALUES ($1, $2, COALESCE($3, NOW()))",
-                        id as &EntityId,
-                        name as &String,
-                        op.maybe_now()
-                    )
-                    .execute(op.as_executor())
-                    .await
-                    .map_err(|e| match &e {
-                        sqlx::Error::Database(db_err) if es_entity::is_classified_constraint_violation(db_err.as_ref()) => {
-                            EntityCreateError::ConstraintViolation {
-                                column: Self::map_constraint_column(db_err.constraint()),
-                                value: es_entity::extract_constraint_value(db_err.as_ref()),
-                                inner: e,
-                            }
-                        }
-                        _ => EntityCreateError::Sqlx(e),
-                    })?;
+                    let mut __query_args = sqlx::postgres::PgArguments::default();
+                    __query_args.add(id as &EntityId).map_err(sqlx::Error::Encode)?;
+                    __query_args.add(name as &String).map_err(sqlx::Error::Encode)?;
+                    __query_args.add(op.maybe_now()).map_err(sqlx::Error::Encode)?;
 
                     let mut events = Self::convert_new(new_entity);
-                    let n_events = Self::extract_concurrent_modification(
-                        self.persist_events(op, &mut events).await,
-                        EntityCreateError::ConcurrentModification,
-                    )?;
+                    let events_types = events.new_event_types();
+                    let serialized_events = events.serialize_new_events();
+                    __query_args.add(&events_types).map_err(sqlx::Error::Encode)?;
+                    __query_args.add(&serialized_events).map_err(sqlx::Error::Encode)?;
+
+                    let rows = sqlx::query_with(
+                        "WITH new_row AS (INSERT INTO entities (id, name, created_at) VALUES ($1, $2, COALESCE($3, NOW())) RETURNING id) INSERT INTO entity_events (id, recorded_at, sequence, event_type, event) SELECT new_row.id, COALESCE($3, NOW()), ROW_NUMBER() OVER (), unnested.event_type, unnested.event FROM new_row CROSS JOIN UNNEST($4::TEXT[], $5::JSONB[]) AS unnested(event_type, event) RETURNING recorded_at",
+                        __query_args
+                    )
+                        .fetch_all(op.as_executor())
+                        .await
+                        .map_err(|e| match &e {
+                            sqlx::Error::Database(db_err)
+                                if db_err.is_unique_violation()
+                                    && db_err.table() == Some("entity_events") =>
+                            {
+                                EntityCreateError::ConcurrentModification
+                            }
+                            sqlx::Error::Database(db_err)
+                                if db_err.table() != Some("entity_events")
+                                    && es_entity::is_classified_constraint_violation(db_err.as_ref()) =>
+                            {
+                                EntityCreateError::ConstraintViolation {
+                                    column: Self::map_constraint_column(db_err.constraint()),
+                                    value: es_entity::extract_constraint_value(db_err.as_ref()),
+                                    inner: e,
+                                }
+                            }
+                            _ => EntityCreateError::Sqlx(e),
+                        })?;
+
+                    let recorded_at = rows
+                        .first()
+                        .ok_or(sqlx::Error::RowNotFound)
+                        .and_then(|row| row.try_get("recorded_at"))?;
+                    let n_events = events.mark_new_events_persisted_at(recorded_at);
                     let entity = Self::hydrate_entity(events)?;
 
                     Ok(entity)

@@ -238,3 +238,136 @@ async fn update_all() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Two writers loading the same entity and both updating: the second write
+/// hits the events table's `UNIQUE(id, sequence)` and must surface as
+/// `ConcurrentModification`, not as an index `ConstraintViolation`. Pins the
+/// classification of the combined index+events statement, which can no longer
+/// tell the two apart positionally.
+#[tokio::test]
+async fn update_concurrent_modification() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool);
+
+    let new_user = NewUser::builder()
+        .id(UserId::new())
+        .name("Concurrent")
+        .build()
+        .unwrap();
+    let user = users.create(new_user).await?;
+
+    let mut first = users.find_by_id(user.id).await?;
+    let mut second = users.find_by_id(user.id).await?;
+
+    let _ = first.update_name("first_writer");
+    users.update(&mut first).await?;
+
+    let _ = second.update_name("second_writer");
+    match users.update(&mut second).await {
+        Err(UserModifyError::ConcurrentModification) => {}
+        other => panic!("expected ConcurrentModification, got: {other:?}"),
+    }
+
+    // The losing write left nothing behind.
+    let loaded = users.find_by_id(user.id).await?;
+    assert_eq!(loaded.name, "first_writer");
+
+    Ok(())
+}
+
+/// Same race through the bulk path: `update_all`'s combined statement must
+/// classify the events-table unique violation as `ConcurrentModification`.
+#[tokio::test]
+async fn update_all_concurrent_modification() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool);
+
+    let new_user = NewUser::builder()
+        .id(UserId::new())
+        .name("BulkConcurrent")
+        .build()
+        .unwrap();
+    let user = users.create(new_user).await?;
+
+    let mut first = vec![users.find_by_id(user.id).await?];
+    let mut second = vec![users.find_by_id(user.id).await?];
+
+    let _ = first[0].update_name("bulk_first");
+    users.update_all(&mut first).await?;
+
+    let _ = second[0].update_name("bulk_second");
+    match users.update_all(&mut second).await {
+        Err(UserModifyError::ConcurrentModification) => {}
+        other => panic!("expected ConcurrentModification, got: {other:?}"),
+    }
+
+    Ok(())
+}
+
+/// Hard-deletes an entity's index and event rows out from under a loaded copy.
+async fn vanish(pool: &PgPool, id: UserId) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM user_events WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// A concurrent hard delete of the index row makes the combined statement's
+/// CTE match nothing, so no event row comes back. That is a lost race and must
+/// surface as `ConcurrentModification` on the single-entity path, exactly as it
+/// does on the bulk path — not as an internal `Sqlx(RowNotFound)`.
+#[tokio::test]
+async fn update_of_vanished_row_is_concurrent_modification() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool.clone());
+
+    let mut user = users
+        .create(
+            NewUser::builder()
+                .id(UserId::new())
+                .name("Vanishing")
+                .build()
+                .unwrap(),
+        )
+        .await?;
+    vanish(&pool, user.id).await?;
+
+    let _ = user.update_name("never_lands");
+    match users.update(&mut user).await {
+        Err(UserModifyError::ConcurrentModification) => {}
+        other => panic!("expected ConcurrentModification, got: {other:?}"),
+    }
+
+    Ok(())
+}
+
+/// The bulk path's row-count guard classifies the same vanished-row race.
+#[tokio::test]
+async fn update_all_of_vanished_row_is_concurrent_modification() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool.clone());
+
+    let mut batch = users
+        .create_all(vec![
+            NewUser::builder()
+                .id(UserId::new())
+                .name("BulkVanishing")
+                .build()
+                .unwrap(),
+        ])
+        .await?;
+    vanish(&pool, batch[0].id).await?;
+
+    let _ = batch[0].update_name("never_lands");
+    match users.update_all(&mut batch).await {
+        Err(UserModifyError::ConcurrentModification) => {}
+        other => panic!("expected ConcurrentModification, got: {other:?}"),
+    }
+
+    Ok(())
+}

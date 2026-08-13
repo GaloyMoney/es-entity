@@ -2,11 +2,20 @@ use darling::ToTokens;
 use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
-use super::options::*;
+use super::{
+    error_classifier::write_error_classifier,
+    events_write::{EventSource, EventsInsert, ForgettablePayloads},
+    options::*,
+};
 
 pub struct UpdateAllFn<'a> {
     entity: &'a syn::Ident,
+    id: &'a syn::Ident,
+    event: &'a syn::Ident,
     table_name: &'a str,
+    events_table_name: &'a str,
+    event_ctx: bool,
+    forgettable_table_name: Option<&'a str>,
     columns: &'a Columns,
     modify_error: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
@@ -19,9 +28,14 @@ impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
             entity: opts.entity(),
+            id: opts.id(),
+            event: opts.event(),
             modify_error: opts.modify_error(),
             columns: &opts.columns,
             table_name: opts.table_name(),
+            events_table_name: opts.events_table_name(),
+            event_ctx: opts.event_context_enabled(),
+            forgettable_table_name: opts.forgettable_table_name(),
             nested_fn_names: opts
                 .all_nested()
                 .map(|f| f.update_nested_fn_name())
@@ -55,7 +69,35 @@ impl ToTokens for UpdateAllFn<'_> {
             })
         };
 
-        let (vec_declarations, per_entity_pushes, update_tokens) = if self.columns.updates_needed()
+        let id_type = self.id;
+
+        let events_insert = EventsInsert::new(self.events_table_name, self.event_ctx);
+
+        let payloads = self
+            .forgettable_table_name
+            .map(|table| ForgettablePayloads {
+                table,
+                id_type,
+                event_type: self.event,
+            });
+        let forgettable_vars = payloads
+            .as_ref()
+            .map(|p| p.batch_declarations())
+            .unwrap_or_default();
+        let forgettable_extract = payloads
+            .as_ref()
+            .map(|p| p.gather_batch(quote! { entity.events() }, quote! { &entity.id }))
+            .unwrap_or_default();
+        let forgettable_insert = payloads
+            .as_ref()
+            .map(|p| p.insert_batch(modify_error))
+            .unwrap_or_default();
+
+        // Every entity in the batch is only borrowed here, so the index columns
+        // and the event arrays can be gathered in the same pass and written by
+        // a single statement; the events insert joins the `updated` CTE, which
+        // orders the index write first and detects rows that vanished.
+        let (vec_declarations, per_entity_pushes, persist_tokens) = if self.columns.updates_needed()
         {
             let (vecs, pushes, bind_tokens) = self
                 .columns
@@ -69,34 +111,95 @@ impl ToTokens for UpdateAllFn<'_> {
                 .join(", ");
             let column_list = column_names.join(", ");
             let table_name = self.table_name;
+
+            let now_p = n_columns + 1;
+            let source = EventSource::BatchCte { cte: "updated" };
             let query = format!(
-                "UPDATE {table_name} SET {set_clause} \
+                "WITH updated AS (UPDATE {table_name} SET {set_clause} \
                      FROM UNNEST({placeholders}) \
                      AS unnested({column_list}) \
-                     WHERE {table_name}.id = unnested.id",
+                     WHERE {table_name}.id = unnested.id RETURNING {table_name}.id) {}",
+                events_insert.sql(&source, now_p, now_p + 1),
             );
+
+            let classifier = write_error_classifier(modify_error, self.events_table_name);
+            let event_binds = events_insert
+                .arg_exprs(&source)
+                .into_iter()
+                .map(|expr| quote! { .bind(#expr) });
+
             (
                 Some(vecs),
                 Some(pushes),
-                Some(quote! {
-                    sqlx::query(#query)
+                quote! {
+                    let expected_events = all_ids.len();
+                    let rows = sqlx::query(#query)
                         #(#bind_tokens)*
-                        .execute(op.as_executor())
+                        #(#event_binds)*
+                        .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| match &e {
-                            sqlx::Error::Database(db_err) if es_entity::is_classified_constraint_violation(db_err.as_ref()) => {
-                                #modify_error::ConstraintViolation {
-                                    column: Self::map_constraint_column(db_err.constraint()),
-                                    value: es_entity::extract_constraint_value(db_err.as_ref()),
-                                    inner: e,
-                                }
-                            }
-                            _ => #modify_error::Sqlx(e),
-                        })?;
-                }),
+                        .map_err(#classifier)?;
+
+                    #forgettable_insert
+
+                    // Every event row joins an index row this same statement
+                    // updated, so a short count means a row went missing.
+                    if rows.len() != expected_events {
+                        return Err(#modify_error::ConcurrentModification);
+                    }
+
+                    let recorded_at = rows
+                        .first()
+                        .ok_or(sqlx::Error::RowNotFound)
+                        .and_then(|row| row.try_get("recorded_at"))?;
+                    for entity in entities.iter_mut() {
+                        let events = Self::extract_events(entity);
+                        if events.any_new() {
+                            events.mark_new_events_persisted_at(recorded_at);
+                        }
+                    }
+                },
             )
         } else {
-            (None, None, None)
+            (
+                None,
+                None,
+                quote! {
+                    let mut all_event_refs: Vec<_> = entities.iter_mut()
+                        .filter_map(|entity| {
+                            let events = Self::extract_events(entity);
+                            if events.any_new() { Some(events) } else { None }
+                        })
+                        .collect();
+                    let n_persisted = Self::extract_concurrent_modification(
+                        self.persist_events_batch(op, &mut all_event_refs).await,
+                        #modify_error::ConcurrentModification,
+                    )?;
+                    drop(all_event_refs);
+                },
+            )
+        };
+
+        // Gathering of the event arrays only happens for the combined path;
+        // the no-index-column path defers entirely to `persist_events_batch`.
+        let (event_collection_vars, event_collection_pushes) = if self.columns.updates_needed() {
+            let batch_declarations = events_insert.batch_declarations(id_type);
+            let gather =
+                events_insert.gather_batch(quote! { entity.events() }, quote! { &entity.id });
+            (
+                quote! {
+                    #batch_declarations
+                    let mut n_persisted: std::collections::HashMap<#id_type, usize> = std::collections::HashMap::new();
+                    #forgettable_vars
+                },
+                quote! {
+                    #gather
+                    #forgettable_extract
+                    n_persisted.insert(entity.id.clone(), n_new);
+                },
+            )
+        } else {
+            (quote! {}, quote! {})
         };
 
         #[cfg(feature = "instrument")]
@@ -149,6 +252,8 @@ impl ToTokens for UpdateAllFn<'_> {
                 OP: es_entity::AtomicOperation
             {
                 let __result: Result<usize, #modify_error> = async {
+                    use es_entity::prelude::sqlx::Row;
+
                     if entities.is_empty() {
                         return Ok(0);
                     }
@@ -156,6 +261,7 @@ impl ToTokens for UpdateAllFn<'_> {
                     #nested_phase
 
                     #vec_declarations
+                    #event_collection_vars
 
                     let mut has_new_events = false;
                     for entity in entities.iter() {
@@ -165,25 +271,14 @@ impl ToTokens for UpdateAllFn<'_> {
                         has_new_events = true;
 
                         #per_entity_pushes
+                        #event_collection_pushes
                     }
 
                     if !has_new_events {
                         return Ok(0);
                     }
 
-                    #update_tokens
-
-                    let mut all_event_refs: Vec<_> = entities.iter_mut()
-                        .filter_map(|entity| {
-                            let events = Self::extract_events(entity);
-                            if events.any_new() { Some(events) } else { None }
-                        })
-                        .collect();
-                    let n_persisted = Self::extract_concurrent_modification(
-                        self.persist_events_batch(op, &mut all_event_refs).await,
-                        #modify_error::ConcurrentModification,
-                    )?;
-                    drop(all_event_refs);
+                    #persist_tokens
 
                     let mut total_events = 0usize;
                     for entity in entities.iter_mut() {
@@ -224,9 +319,15 @@ mod tests {
             )],
         );
 
+        let event = Ident::new("EntityEvent", Span::call_site());
         let update_all_fn = UpdateAllFn {
             entity: &entity,
+            id: &id,
+            event: &event,
             table_name: "entities",
+            events_table_name: "entity_events",
+            event_ctx: false,
+            forgettable_table_name: None,
             modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
@@ -258,12 +359,20 @@ mod tests {
                 OP: es_entity::AtomicOperation
             {
                 let __result: Result<usize, EntityModifyError> = async {
+                    use es_entity::prelude::sqlx::Row;
+
                     if entities.is_empty() {
                         return Ok(0);
                     }
 
                     let mut id_collection = Vec::new();
                     let mut name_collection = Vec::new();
+
+                    let mut all_ids: Vec<&EntityId> = Vec::new();
+                    let mut all_sequences: Vec<i32> = Vec::new();
+                    let mut all_types = Vec::new();
+                    let mut all_serialized = Vec::new();
+                    let mut n_persisted: std::collections::HashMap<EntityId, usize> = std::collections::HashMap::new();
 
                     let mut has_new_events = false;
                     for entity in entities.iter() {
@@ -276,19 +385,44 @@ mod tests {
                         let name = &entity.name;
                         id_collection.push(id);
                         name_collection.push(name);
+                        let offset = entity.events().len_persisted() + 1;
+                        let types = entity.events().new_event_types();
+                        let serialized = entity.events().serialize_new_events();
+
+                        let n_new = serialized.len();
+                        all_types.extend(types);
+                        all_serialized.extend(serialized);
+                        all_ids.extend(std::iter::repeat(&entity.id).take(n_new));
+                        all_sequences.extend((offset..).take(n_new).map(|i| i as i32));
+                        n_persisted.insert(entity.id.clone(), n_new);
                     }
 
                     if !has_new_events {
                         return Ok(0);
                     }
 
-                    sqlx::query("UPDATE entities SET name = unnested.name FROM UNNEST($1, $2) AS unnested(id, name) WHERE entities.id = unnested.id")
+                    let expected_events = all_ids.len();
+                    let rows = sqlx::query("WITH updated AS (UPDATE entities SET name = unnested.name FROM UNNEST($1, $2) AS unnested(id, name) WHERE entities.id = unnested.id RETURNING entities.id) INSERT INTO entity_events (id, recorded_at, sequence, event_type, event) SELECT unnested.id, COALESCE($3, NOW()), unnested.sequence, unnested.event_type, unnested.event FROM UNNEST($4, $5::INT[], $6::TEXT[], $7::JSONB[]) AS unnested(id, sequence, event_type, event) JOIN updated ON updated.id = unnested.id RETURNING recorded_at")
                         .bind(id_collection)
                         .bind(name_collection)
-                        .execute(op.as_executor())
+                        .bind(op.maybe_now())
+                        .bind(&all_ids)
+                        .bind(&all_sequences)
+                        .bind(&all_types)
+                        .bind(&all_serialized)
+                        .fetch_all(op.as_executor())
                         .await
                         .map_err(|e| match &e {
-                            sqlx::Error::Database(db_err) if es_entity::is_classified_constraint_violation(db_err.as_ref()) => {
+                            sqlx::Error::Database(db_err)
+                                if db_err.is_unique_violation()
+                                    && db_err.table() == Some("entity_events") =>
+                            {
+                                EntityModifyError::ConcurrentModification
+                            }
+                            sqlx::Error::Database(db_err)
+                                if db_err.table() != Some("entity_events")
+                                    && es_entity::is_classified_constraint_violation(db_err.as_ref()) =>
+                            {
                                 EntityModifyError::ConstraintViolation {
                                     column: Self::map_constraint_column(db_err.constraint()),
                                     value: es_entity::extract_constraint_value(db_err.as_ref()),
@@ -298,17 +432,20 @@ mod tests {
                             _ => EntityModifyError::Sqlx(e),
                         })?;
 
-                    let mut all_event_refs: Vec<_> = entities.iter_mut()
-                        .filter_map(|entity| {
-                            let events = Self::extract_events(entity);
-                            if events.any_new() { Some(events) } else { None }
-                        })
-                        .collect();
-                    let n_persisted = Self::extract_concurrent_modification(
-                        self.persist_events_batch(op, &mut all_event_refs).await,
-                        EntityModifyError::ConcurrentModification,
-                    )?;
-                    drop(all_event_refs);
+                    if rows.len() != expected_events {
+                        return Err(EntityModifyError::ConcurrentModification);
+                    }
+
+                    let recorded_at = rows
+                        .first()
+                        .ok_or(sqlx::Error::RowNotFound)
+                        .and_then(|row| row.try_get("recorded_at"))?;
+                    for entity in entities.iter_mut() {
+                        let events = Self::extract_events(entity);
+                        if events.any_new() {
+                            events.mark_new_events_persisted_at(recorded_at);
+                        }
+                    }
 
                     let mut total_events = 0usize;
                     for entity in entities.iter_mut() {
@@ -337,9 +474,15 @@ mod tests {
         let mut columns = Columns::default();
         columns.set_id_column(&id);
 
+        let event = Ident::new("EntityEvent", Span::call_site());
         let update_all_fn = UpdateAllFn {
             entity: &entity,
+            id: &id,
+            event: &event,
             table_name: "entities",
+            events_table_name: "entity_events",
+            event_ctx: false,
+            forgettable_table_name: None,
             modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
@@ -371,6 +514,8 @@ mod tests {
                 OP: es_entity::AtomicOperation
             {
                 let __result: Result<usize, EntityModifyError> = async {
+                    use es_entity::prelude::sqlx::Row;
+
                     if entities.is_empty() {
                         return Ok(0);
                     }
