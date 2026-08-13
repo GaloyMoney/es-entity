@@ -57,6 +57,28 @@ pub fn extract_constraint_value(db_err: &dyn sqlx::error::DatabaseError) -> Opti
     parse_constraint_detail_value(pg_err.detail())
 }
 
+#[doc(hidden)]
+/// Extracts the conflicting id from an events-table primary-key violation.
+///
+/// The events tables' primary key is `(id, sequence)`, so the violation
+/// detail reads `Key (id, sequence)=(<id>, <seq>) already exists.` — the id
+/// is everything before the last `, `. The sequence is an integer and can
+/// never contain `, `, so splitting at the last occurrence is unambiguous
+/// even for ids that themselves contain commas.
+///
+/// **Security note:** see [`parse_constraint_detail_value`] — the returned
+/// value may be PII and must not be exposed to untrusted clients.
+pub fn extract_events_pkey_id_value(db_err: &dyn sqlx::error::DatabaseError) -> Option<String> {
+    events_pkey_id_from_value(extract_constraint_value(db_err)?)
+}
+
+fn events_pkey_id_from_value(value: String) -> Option<String> {
+    match value.rsplit_once(", ") {
+        Some((id, _sequence)) => Some(id.to_string()),
+        None => Some(value),
+    }
+}
+
 /// The kind of database constraint behind a classified `ConstraintViolation`.
 ///
 /// Returned by the generated `{Entity}Constraint::kind()` method.
@@ -147,6 +169,34 @@ mod tests {
         assert_eq!(
             parse_constraint_detail_value(detail),
             Some("foo (bar)".to_string())
+        );
+    }
+
+    #[test]
+    fn events_pkey_id_strips_the_sequence() {
+        let value = parse_constraint_detail_value(Some(
+            "Key (id, sequence)=(550e8400-e29b-41d4-a716-446655440000, 1) already exists.",
+        ))
+        .unwrap();
+        assert_eq!(
+            events_pkey_id_from_value(value),
+            Some("550e8400-e29b-41d4-a716-446655440000".to_string())
+        );
+    }
+
+    #[test]
+    fn events_pkey_id_keeps_commas_inside_the_id() {
+        assert_eq!(
+            events_pkey_id_from_value("a, b, 3".to_string()),
+            Some("a, b".to_string())
+        );
+    }
+
+    #[test]
+    fn events_pkey_id_without_separator_returns_value_as_is() {
+        assert_eq!(
+            events_pkey_id_from_value("plain".to_string()),
+            Some("plain".to_string())
         );
     }
 

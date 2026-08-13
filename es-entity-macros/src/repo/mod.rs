@@ -44,6 +44,7 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
 pub struct EsRepo<'a> {
     repo: &'a syn::Ident,
     generics: &'a syn::Generics,
+    error_classifier: error_classifier::ErrorClassifier<'a>,
     extract_concurrent_modification_fn: Option<TokenStream>,
     persist_events_fn: Option<persist_events_fn::PersistEventsFn<'a>>,
     persist_events_batch_fn: Option<persist_events_batch_fn::PersistEventsBatchFn<'a>>,
@@ -133,6 +134,7 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
         Self {
             repo: &opts.ident,
             generics: &opts.generics,
+            error_classifier: error_classifier::ErrorClassifier::from(opts),
             extract_concurrent_modification_fn,
             persist_events_fn: needs_persist_events
                 .then(|| persist_events_fn::PersistEventsFn::from(opts)),
@@ -164,6 +166,7 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
 impl ToTokens for EsRepo<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let repo = &self.repo;
+        let error_classifier = &self.error_classifier;
         let extract_concurrent_modification_fn = &self.extract_concurrent_modification_fn;
         let persist_events_fn = &self.persist_events_fn;
         let persist_events_batch_fn = &self.persist_events_batch_fn;
@@ -372,6 +375,7 @@ impl ToTokens for EsRepo<'_> {
                 #scoped_fn
 
                 #map_constraint_fn
+                #error_classifier
                 #begin
                 #post_hydrate_hook
                 #post_persist_hook
@@ -466,6 +470,55 @@ mod tests {
             }
         };
         assert!(derive(input).is_ok());
+    }
+
+    /// The combined-write classifiers are emitted once per repo, not rendered
+    /// into every write path. `classify_write_error` is gated to repos that
+    /// actually have a caller — an uncalled private helper is dead code, and
+    /// consumers build with `-D warnings`.
+    #[test]
+    fn error_classifiers_are_emitted_once_and_gated() {
+        let with_columns: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", columns(name(ty = "String")))]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = derive(with_columns).unwrap().to_string();
+        assert_eq!(
+            out.matches("fn classify_create_error").count(),
+            1,
+            "create classifier should be defined exactly once"
+        );
+        assert_eq!(
+            out.matches("fn classify_write_error").count(),
+            1,
+            "write classifier should be defined exactly once"
+        );
+        // Both create paths call the shared fn rather than inlining a match.
+        assert_eq!(
+            out.matches("Self :: classify_create_error").count(),
+            2,
+            "create and create_all should both call the shared classifier"
+        );
+
+        // No index columns to persist and no soft delete → nothing calls the
+        // write classifier, so it must not be emitted.
+        let no_columns: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User")]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = derive(no_columns).unwrap().to_string();
+        assert!(
+            !out.contains("fn classify_write_error"),
+            "write classifier must not be emitted without a caller"
+        );
+        assert!(
+            out.contains("fn classify_create_error"),
+            "create classifier always has callers"
+        );
     }
 
     // Guard 1 (event has Forgettable fields but the repo omits `forgettable`)

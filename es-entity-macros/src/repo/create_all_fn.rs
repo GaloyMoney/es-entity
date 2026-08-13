@@ -3,7 +3,6 @@ use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
 use super::{
-    error_classifier::write_error_classifier,
     events_write::{EventSource, EventsInsert, ForgettablePayloads},
     options::*,
 };
@@ -74,9 +73,11 @@ impl ToTokens for CreateAllFn<'_> {
             .create_all_arg_collection(syn::parse_quote! { new_entity });
 
         // Both inserts in one statement. The events insert joins the `new_rows`
-        // CTE, which forces the index rows to be written first — so a duplicate
-        // id surfaces as the index constraint violation rather than as a unique
-        // violation on the events table.
+        // CTE, which reveals index rows that vanished (a short RETURNING
+        // count). Postgres interleaves the CTE and main inserts with no
+        // guaranteed ordering, so a duplicate id (including an intra-batch
+        // one) may surface as either table's constraint — the classifier maps
+        // both to the same `ConstraintViolation`.
         let events_insert = EventsInsert::new(self.events_table_name, self.event_ctx);
         let source = EventSource::BatchCte { cte: "new_rows" };
         let query = format!(
@@ -91,8 +92,6 @@ impl ToTokens for CreateAllFn<'_> {
             column_names.join(", "),
             events_insert.sql(&source, 1, column_names.len() + 2),
         );
-
-        let classifier = write_error_classifier(create_error, self.events_table_name);
 
         let id_type = self.id;
 
@@ -220,7 +219,7 @@ impl ToTokens for CreateAllFn<'_> {
                     let rows = sqlx::query_with(#query, __query_args)
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(#classifier)?;
+                        .map_err(Self::classify_create_error)?;
 
                     #forgettable_insert
 
@@ -376,25 +375,7 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| match &e {
-                            sqlx::Error::Database(db_err)
-                                if db_err.is_unique_violation()
-                                    && db_err.table() == Some("entity_events") =>
-                            {
-                                EntityCreateError::ConcurrentModification
-                            }
-                            sqlx::Error::Database(db_err)
-                                if db_err.table() != Some("entity_events")
-                                    && es_entity::is_classified_constraint_violation(db_err.as_ref()) =>
-                            {
-                                EntityCreateError::ConstraintViolation {
-                                    column: Self::map_constraint_column(db_err.constraint()),
-                                    value: es_entity::extract_constraint_value(db_err.as_ref()),
-                                    inner: e,
-                                }
-                            }
-                            _ => EntityCreateError::Sqlx(e),
-                        })?;
+                        .map_err(Self::classify_create_error)?;
 
                     if expected_events > 0 {
                         if rows.len() != expected_events {

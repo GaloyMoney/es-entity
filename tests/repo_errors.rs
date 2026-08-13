@@ -137,6 +137,93 @@ async fn create_duplicate_id_returns_constraint_violation_with_value() -> anyhow
     Ok(())
 }
 
+/// Regression test for the #196 combined index+events write: Postgres
+/// interleaves the CTE (index insert) and main statement (events insert), so
+/// for an intra-batch duplicate id either the index-table pkey or the
+/// events-table `(id, sequence)` pkey may fire first. Both must classify as
+/// the duplicate-id `ConstraintViolation` — never `ConcurrentModification`.
+#[tokio::test]
+async fn create_all_intra_batch_duplicate_id_classifies_as_duplicate() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool);
+
+    // Duplicate in different positions and batch sizes, in case the chosen
+    // plan (and therefore which constraint fires first) varies with shape.
+    for batch_size in [2usize, 5] {
+        for dup_pos in [0usize, batch_size - 1] {
+            let dup_id = UserId::new();
+            let new_users: Vec<_> = (0..=batch_size)
+                .map(|i| {
+                    let id = if i == dup_pos || i == batch_size {
+                        dup_id
+                    } else {
+                        UserId::new()
+                    };
+                    NewUser::builder()
+                        .id(id)
+                        .name(format!("User{i}"))
+                        .build()
+                        .unwrap()
+                })
+                .collect();
+
+            let err = match users.create_all(new_users).await {
+                Err(e) => e,
+                Ok(_) => panic!("expected constraint violation"),
+            };
+
+            assert!(
+                !err.was_concurrent_modification(),
+                "duplicate id must not classify as ConcurrentModification: {err:?}"
+            );
+            assert!(err.was_duplicate(), "expected duplicate: {err:?}");
+            assert!(
+                err.was_duplicate_by(UserColumn::Id),
+                "wrong column: {err:?}"
+            );
+            assert_eq!(err.duplicate_value(), Some(dup_id.to_string().as_str()));
+
+            // The whole batch rolls back.
+            assert!(users.find_by_id(dup_id).await.is_err());
+        }
+    }
+
+    Ok(())
+}
+
+/// A `create_all` batch containing an id that already exists in the database
+/// must classify the same way as the intra-batch case.
+#[tokio::test]
+async fn create_all_preexisting_duplicate_id_classifies_as_duplicate() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool);
+
+    let id = UserId::new();
+    users
+        .create(NewUser::builder().id(id).name("First").build().unwrap())
+        .await?;
+
+    let new_users = vec![
+        NewUser::builder()
+            .id(UserId::new())
+            .name("Fresh")
+            .build()
+            .unwrap(),
+        NewUser::builder().id(id).name("Dup").build().unwrap(),
+    ];
+    let err = match users.create_all(new_users).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected constraint violation"),
+    };
+
+    assert!(!err.was_concurrent_modification());
+    assert!(err.was_duplicate());
+    assert!(err.was_duplicate_by(UserColumn::Id));
+    assert_eq!(err.duplicate_value(), Some(id.to_string().as_str()));
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn update_to_duplicate_email_returns_constraint_violation_with_value() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
