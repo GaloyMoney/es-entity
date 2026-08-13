@@ -320,3 +320,30 @@ async fn soft_delete_auto_forgets_the_index_column() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn verify_forgotten_reports_live_index_columns() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let subscribers = Subscribers::new(pool);
+
+    let (mut subscriber, _email) = new_subscriber(&subscribers).await?;
+    let id = subscriber.id;
+
+    // Live entity: both the payload row and the materialised index column
+    // still hold the value.
+    let err = subscribers
+        .verify_forgotten(id)
+        .await
+        .expect_err("live entity must not verify as forgotten");
+    let remnants = err.not_forgotten_remnants().expect("NotForgotten");
+    assert_eq!(remnants.payload_rows, 1);
+    assert_eq!(remnants.live_index_columns, vec!["email"]);
+    assert!(remnants.event_fields.is_empty());
+
+    // After a fenced forget everything is physically absent.
+    subscriber.record_erasure();
+    subscribers.forget(subscriber).await?;
+    subscribers.verify_forgotten(id).await?;
+
+    Ok(())
+}

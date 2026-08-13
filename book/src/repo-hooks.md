@@ -45,9 +45,13 @@ impl Users {
 }
 ```
 
+### Which operations run it
+
+The hook runs on every generated operation that persists events: `create`, `create_all`, `update`, `update_all`, soft `delete`, and — for [forgettable](forgettable.md) repos — `forget`. On `forget` it runs after the payload delete and entity rebuild, so it observes the forgotten representation; when an operation persists no events the hook is not invoked.
+
 ### Error propagation
 
-When the hook returns an error it is wrapped in the `PostPersistHookError` variant of `CreateError` or `ModifyError`:
+When the hook returns an error it is wrapped in the `PostPersistHookError` variant of `CreateError`, `ModifyError`, or `ForgetError`:
 
 ```rust,ignore
 match users.create(new_user).await {

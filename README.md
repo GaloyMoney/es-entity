@@ -254,9 +254,14 @@ pub enum CustomerEvent {
     },
 }
 
-// Repos marked `forgettable` generate a `forget` fn
-customers.forget(&mut customer).await?;
+// Repos marked `forgettable` generate a `forget` fn — it consumes the
+// entity and returns the rebuilt (forgotten) one, running any configured
+// `post_persist_hook` for staged events it persists.
+let customer = customers.forget(customer).await?;
 assert!(customer.name.is_forgotten());
+
+// And a storage-level check that the data is physically absent
+customers.verify_forgotten(customer.id).await?;
 ```
 
 See the [Forgettable Data](https://galoymoney.github.io/es-entity/forgettable.html) chapter in the book for details.
