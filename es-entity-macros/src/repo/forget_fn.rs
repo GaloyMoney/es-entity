@@ -338,7 +338,9 @@ impl ForgetFn<'_> {
                 id: impl std::borrow::Borrow<#id_type>
             ) -> Result<(), #error> {
                 let mut op = self.begin_op().await?;
-                self.verify_forgotten_in_op(&mut op, id).await
+                let res = self.verify_forgotten_in_op(&mut op, id).await?;
+                op.commit().await?;
+                Ok(res)
             }
 
             /// Same as [`Self::verify_forgotten`] but runs on an existing
