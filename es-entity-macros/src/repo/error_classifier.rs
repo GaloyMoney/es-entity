@@ -1,5 +1,8 @@
+use darling::ToTokens;
 use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
+
+use super::options::*;
 
 /// Postgres reports the bare table name in errors, so a schema-qualified
 /// events table from the repo options is reduced to its last path component
@@ -83,27 +86,43 @@ fn index_violation_arm(error: &syn::Ident, events_table: &str) -> TokenStream {
 /// The classifier helpers for the combined index+events write statements,
 /// emitted once per repo so the call sites are a bare `map_err` function
 /// reference instead of a match rendered into every write path.
-///
-/// `classify_write_error` is only emitted when a write path actually calls it
-/// — an uncalled private helper is dead code, and consumers build with
-/// `-D warnings`. `classify_create_error` has unconditional callers
-/// (`create` and `create_all` both always issue the combined statement).
-pub fn error_classifier_fns(
-    create_error: &syn::Ident,
-    modify_error: &syn::Ident,
-    events_table_name: &str,
-    table_name: &str,
+pub struct ErrorClassifier<'a> {
+    create_error: syn::Ident,
+    modify_error: syn::Ident,
+    events_table_name: &'a str,
+    table_name: &'a str,
+    /// `classify_write_error` is emitted only where a write path actually
+    /// calls it — an uncalled private helper is dead code, and consumers build
+    /// with `-D warnings`. `classify_create_error` needs no such gate:
+    /// `create` and `create_all` always issue the combined statement.
     needs_write_classifier: bool,
-) -> TokenStream {
-    let create = create_error_classifier_fn(create_error, events_table_name, table_name);
-    let write = if needs_write_classifier {
-        write_error_classifier_fn(modify_error, events_table_name)
-    } else {
-        TokenStream::new()
-    };
-    quote! {
-        #create
-        #write
+}
+
+impl<'a> From<&'a RepositoryOptions> for ErrorClassifier<'a> {
+    fn from(opts: &'a RepositoryOptions) -> Self {
+        Self {
+            create_error: opts.create_error(),
+            modify_error: opts.modify_error(),
+            events_table_name: opts.events_table_name(),
+            table_name: opts.table_name(),
+            needs_write_classifier: opts.columns.updates_needed() || opts.delete.is_soft(),
+        }
+    }
+}
+
+impl ToTokens for ErrorClassifier<'_> {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.append_all(create_error_classifier_fn(
+            &self.create_error,
+            self.events_table_name,
+            self.table_name,
+        ));
+        if self.needs_write_classifier {
+            tokens.append_all(write_error_classifier_fn(
+                &self.modify_error,
+                self.events_table_name,
+            ));
+        }
     }
 }
 

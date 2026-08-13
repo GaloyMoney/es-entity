@@ -44,7 +44,7 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
 pub struct EsRepo<'a> {
     repo: &'a syn::Ident,
     generics: &'a syn::Generics,
-    error_classifier: TokenStream,
+    error_classifier: error_classifier::ErrorClassifier<'a>,
     extract_concurrent_modification_fn: Option<TokenStream>,
     persist_events_fn: Option<persist_events_fn::PersistEventsFn<'a>>,
     persist_events_batch_fn: Option<persist_events_batch_fn::PersistEventsBatchFn<'a>>,
@@ -131,23 +131,10 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             || opts.forgettable_enabled())
         .then(error_classifier::extract_concurrent_modification_fn);
 
-        // The combined-write classifiers are emitted once per repo and called
-        // by every write path, rather than rendered inline at each call site.
-        // `classify_write_error` only has callers when a write path actually
-        // issues the combined statement: `update`/`update_all` when there are
-        // index columns to persist, and soft `delete` always.
-        let error_classifier = error_classifier::error_classifier_fns(
-            &opts.create_error(),
-            &opts.modify_error(),
-            opts.events_table_name(),
-            opts.table_name(),
-            opts.columns.updates_needed() || opts.delete.is_soft(),
-        );
-
         Self {
             repo: &opts.ident,
             generics: &opts.generics,
-            error_classifier,
+            error_classifier: error_classifier::ErrorClassifier::from(opts),
             extract_concurrent_modification_fn,
             persist_events_fn: needs_persist_events
                 .then(|| persist_events_fn::PersistEventsFn::from(opts)),
