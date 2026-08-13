@@ -225,6 +225,50 @@ pub fn inject_forgettable_payload(event_json: &mut serde_json::Value, payload: s
     }
 }
 
+/// Storage-level remnants of forgettable data found by a repository's
+/// generated `verify_forgotten` check.
+///
+/// `verify_forgotten` inspects the database directly — not hydrated entity
+/// state — and reports anything that should have been erased by `forget()`:
+///
+/// - `payload_rows`: rows still present in the `_forgettable_payloads` table
+/// - `live_index_columns`: `Forgettable<..>` index columns that are non-NULL
+///   in the lookup table
+/// - `event_fields`: `(event_type, field)` pairs of forgettable fields whose
+///   durable event JSON holds a non-null value (defense-in-depth — the
+///   framework always writes `null` there, so any hit indicates data written
+///   outside the framework's serialization path)
+///
+/// An empty report means all configured forgettable data is physically absent
+/// at the storage level.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ForgettableRemnants {
+    /// Number of rows remaining in the forgettable payloads table.
+    pub payload_rows: usize,
+    /// Names of `Forgettable<..>` index columns that are still non-NULL.
+    pub live_index_columns: Vec<&'static str>,
+    /// `(event_type, field)` pairs with non-null forgettable values in the
+    /// durable event JSON.
+    pub event_fields: Vec<(String, String)>,
+}
+
+impl ForgettableRemnants {
+    /// True when no forgettable data remains at the storage level.
+    pub fn is_empty(&self) -> bool {
+        self.payload_rows == 0 && self.live_index_columns.is_empty() && self.event_fields.is_empty()
+    }
+}
+
+impl fmt::Display for ForgettableRemnants {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "forgettable data still present at storage level: {} payload row(s), non-NULL index columns {:?}, non-null event fields {:?}",
+            self.payload_rows, self.live_index_columns, self.event_fields
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

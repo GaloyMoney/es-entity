@@ -286,6 +286,96 @@ async fn forget_persists_staged_events_without_laundering() -> anyhow::Result<()
 }
 
 #[tokio::test]
+async fn verify_forgotten_reports_remnants_before_and_passes_after_forget() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let customers = Customers::new(pool);
+
+    let id = CustomerId::new();
+    let new_customer = NewCustomer::builder()
+        .id(id)
+        .name("Verify Vera")
+        .email("verify@example.com")
+        .build()
+        .unwrap();
+    let mut customer = customers.create(new_customer).await?;
+    let _ = customer.update_name("Vera Verified");
+    customers.update(&mut customer).await?;
+
+    // Live entity: the storage-level check reports the payload rows.
+    let err = customers
+        .verify_forgotten(id)
+        .await
+        .expect_err("live entity must not verify as forgotten");
+    let remnants = err
+        .not_forgotten_remnants()
+        .expect("expected NotForgotten error");
+    assert_eq!(remnants.payload_rows, 2);
+    assert!(remnants.live_index_columns.is_empty());
+    assert!(remnants.event_fields.is_empty());
+
+    // After forget: physically absent.
+    let mut customer = customers.find_by_id(id).await?;
+    customer.record_erasure();
+    customers.forget(customer).await?;
+    customers.verify_forgotten(id).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn verify_forgotten_detects_out_of_band_event_json_writes() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let customers = Customers::new(pool.clone());
+
+    let id = CustomerId::new();
+    let new_customer = NewCustomer::builder()
+        .id(id)
+        .name("Tampered Tim")
+        .email("tampered@example.com")
+        .build()
+        .unwrap();
+    let mut customer = customers.create(new_customer).await?;
+    customer.record_erasure();
+    customers.forget(customer).await?;
+    customers.verify_forgotten(id).await?;
+
+    // Simulate an out-of-band write leaking a raw value into the durable
+    // event JSON (the framework itself always writes null there).
+    sqlx::query!(
+        r#"UPDATE customer_events
+           SET event = jsonb_set(event, '{name}', '"leaked"')
+           WHERE id = $1 AND event_type = 'initialized'"#,
+        id as CustomerId
+    )
+    .execute(&pool)
+    .await?;
+
+    let err = customers
+        .verify_forgotten(id)
+        .await
+        .expect_err("leaked event JSON must fail verification");
+    let remnants = err.not_forgotten_remnants().expect("NotForgotten");
+    assert_eq!(remnants.payload_rows, 0);
+    assert_eq!(
+        remnants.event_fields,
+        vec![("initialized".to_string(), "name".to_string())]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn verify_forgotten_passes_trivially_for_unknown_id() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let customers = Customers::new(pool);
+
+    // An id that was never persisted has nothing to erase.
+    customers.verify_forgotten(CustomerId::new()).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn events_table_stores_null_for_live_forgettable_fields() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let customers = Customers::new(pool.clone());

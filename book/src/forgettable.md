@@ -197,22 +197,75 @@ pub struct Customers {
 }
 ```
 
-This generates a `forget` method on the repository that:
-1. Deletes all forgettable payloads for the entity from the database
-2. Sets any [forgettable index columns](#forgettable-index-columns) to `NULL`
-3. Rebuilds the entity in-place with forgotten fields set to `Forgettable::forgotten()`
+This generates a `forget` method (and `forget_in_op` for use inside an
+existing transaction) on the repository that:
+1. Persists any staged (unpersisted) events — consuming sequence numbers,
+   which is the concurrency fence against stale writers
+2. Deletes all forgettable payloads for the entity from the database
+3. Sets any [forgettable index columns](#forgettable-index-columns) to `NULL`
+4. Rebuilds and returns the entity with forgotten fields set to
+   `Forgettable::forgotten()`
 
 ```rust,ignore
 // Load the entity
-let mut customer = customers.find_by_id(id).await?;
+let customer = customers.find_by_id(id).await?;
 assert_eq!(customer.name.value().map(|v| v.clone()), Some("Alice".to_string()));
 
-// Forget personal data — updates `customer` in place
-customers.forget(&mut customer).await?;
+// Forget personal data — consumes the entity and returns the rebuilt,
+// forgotten one
+let customer = customers.forget(customer).await?;
 
 // The entity immediately reflects the forgotten state
 assert!(customer.name.is_forgotten());
 ```
+
+## Post-Persist Hooks and Forget
+
+If the repository configures a
+[`post_persist_hook`](repo-hooks.md) (e.g. an outbox
+publisher), `forget` runs it through the same channel as `create` and
+`update` — no separate publish path is needed for erasure events. The hook
+runs:
+
+- **exactly once**, for the staged events the forget persisted (by
+  convention, the domain erasure event — e.g. an empty `Forgot {}`);
+- **after** the payload delete and entity rebuild, so it observes the
+  forgotten representation — a raw payload being erased can never reach a
+  publisher;
+- **inside the erasure transaction**, so outbox-style publishers never
+  publish uncommitted data, and a failing hook rolls the entire erasure
+  back (the forget is retryable).
+
+If no staged events are persisted the hook is not invoked, matching
+`update`'s no-op semantics. A hook failure surfaces as
+`{Entity}ForgetError::PostPersistHookError`.
+
+## Verifying Erasure at the Storage Level
+
+Auditing an erasure by reloading the entity only proves the *hydrated* state
+reads back as forgotten. The generated `verify_forgotten` (and
+`verify_forgotten_in_op`) checks the **database** directly, so callers can
+trust physical absence without hand-maintaining a list of PII fields:
+
+1. no rows remain in the `_forgettable_payloads` table,
+2. all `Forgettable<..>` index columns are `NULL`, and
+3. no forgettable field holds a non-null value in the durable event JSON
+   (defense-in-depth: the framework always writes `null` there, so a hit
+   indicates out-of-band writes).
+
+```rust,ignore
+let customer = customers.forget(customer).await?;
+
+// Fails with `CustomerForgetError::NotForgotten(remnants)` if anything
+// forgettable is still physically present.
+customers.verify_forgotten(customer.id).await?;
+```
+
+The `NotForgotten` error carries a
+[`ForgettableRemnants`](https://docs.rs/es-entity) report describing exactly
+what survived (`payload_rows`, `live_index_columns`, `event_fields`),
+accessible via `err.not_forgotten_remnants()`. An id that was never persisted
+verifies trivially.
 
 ## Custom Queries with `es_query!`
 

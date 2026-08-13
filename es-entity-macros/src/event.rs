@@ -93,10 +93,28 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
         })
         .collect();
 
+    // (serde tag value, forgettable field JSON key) pairs across all variants —
+    // consumed by the repo's generated `verify_forgotten` storage check.
+    let forgettable_json_fields: Vec<_> = forgettable_info
+        .variants
+        .iter()
+        .flat_map(|(_, tag_value, field_idents)| {
+            field_idents.iter().map(move |field_id| {
+                let field_name = field_id.to_string();
+                quote! { (#tag_value, #field_name) }
+            })
+        })
+        .collect();
+
     tokens.append_all(quote! {
         impl #ident {
             #[doc(hidden)]
             pub const HAS_FORGETTABLE_FIELDS: bool = #has_forgettable;
+
+            #[doc(hidden)]
+            pub const FORGETTABLE_JSON_FIELDS: &'static [(&'static str, &'static str)] = &[
+                #(#forgettable_json_fields),*
+            ];
 
             #[doc(hidden)]
             pub fn extract_forgettable_payloads(&self) -> Option<es_entity::prelude::serde_json::Value> {
