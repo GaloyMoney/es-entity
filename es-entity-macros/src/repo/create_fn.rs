@@ -3,7 +3,6 @@ use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
 use super::{
-    error_classifier::create_error_classifier,
     events_write::{EventSource, EventsInsert, ForgettablePayloads},
     options::*,
 };
@@ -97,8 +96,6 @@ impl ToTokens for CreateFn<'_> {
             now_p,
             events_insert.sql(&source, now_p, now_p + 1),
         );
-
-        let classifier = create_error_classifier(create_error, self.events_table_name, table_name);
 
         // The event arrays are encoded after the index columns, whose borrows
         // on the new entity must end before it is consumed into events.
@@ -227,7 +224,7 @@ impl ToTokens for CreateFn<'_> {
                     let rows = sqlx::query_with(#query, __query_args)
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(#classifier)?;
+                        .map_err(Self::classify_create_error)?;
 
                     #forgettable_code
 
@@ -345,29 +342,7 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| match &e {
-                            sqlx::Error::Database(db_err)
-                                if db_err.is_unique_violation()
-                                    && db_err.table() == Some("entity_events") =>
-                            {
-                                EntityCreateError::ConstraintViolation {
-                                    column: Self::map_constraint_column(Some("entities_pkey")),
-                                    value: es_entity::extract_events_pkey_id_value(db_err.as_ref()),
-                                    inner: e,
-                                }
-                            }
-                            sqlx::Error::Database(db_err)
-                                if db_err.table() != Some("entity_events")
-                                    && es_entity::is_classified_constraint_violation(db_err.as_ref()) =>
-                            {
-                                EntityCreateError::ConstraintViolation {
-                                    column: Self::map_constraint_column(db_err.constraint()),
-                                    value: es_entity::extract_constraint_value(db_err.as_ref()),
-                                    inner: e,
-                                }
-                            }
-                            _ => EntityCreateError::Sqlx(e),
-                        })?;
+                        .map_err(Self::classify_create_error)?;
 
                     let recorded_at = rows
                         .first()
@@ -479,29 +454,7 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| match &e {
-                            sqlx::Error::Database(db_err)
-                                if db_err.is_unique_violation()
-                                    && db_err.table() == Some("entity_events") =>
-                            {
-                                EntityCreateError::ConstraintViolation {
-                                    column: Self::map_constraint_column(Some("entities_pkey")),
-                                    value: es_entity::extract_events_pkey_id_value(db_err.as_ref()),
-                                    inner: e,
-                                }
-                            }
-                            sqlx::Error::Database(db_err)
-                                if db_err.table() != Some("entity_events")
-                                    && es_entity::is_classified_constraint_violation(db_err.as_ref()) =>
-                            {
-                                EntityCreateError::ConstraintViolation {
-                                    column: Self::map_constraint_column(db_err.constraint()),
-                                    value: es_entity::extract_constraint_value(db_err.as_ref()),
-                                    inner: e,
-                                }
-                            }
-                            _ => EntityCreateError::Sqlx(e),
-                        })?;
+                        .map_err(Self::classify_create_error)?;
 
                     let recorded_at = rows
                         .first()

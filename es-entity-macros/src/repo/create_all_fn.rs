@@ -3,7 +3,6 @@ use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
 use super::{
-    error_classifier::create_error_classifier,
     events_write::{EventSource, EventsInsert, ForgettablePayloads},
     options::*,
 };
@@ -93,8 +92,6 @@ impl ToTokens for CreateAllFn<'_> {
             column_names.join(", "),
             events_insert.sql(&source, 1, column_names.len() + 2),
         );
-
-        let classifier = create_error_classifier(create_error, self.events_table_name, table_name);
 
         let id_type = self.id;
 
@@ -222,7 +219,7 @@ impl ToTokens for CreateAllFn<'_> {
                     let rows = sqlx::query_with(#query, __query_args)
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(#classifier)?;
+                        .map_err(Self::classify_create_error)?;
 
                     #forgettable_insert
 
@@ -378,29 +375,7 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| match &e {
-                            sqlx::Error::Database(db_err)
-                                if db_err.is_unique_violation()
-                                    && db_err.table() == Some("entity_events") =>
-                            {
-                                EntityCreateError::ConstraintViolation {
-                                    column: Self::map_constraint_column(Some("entities_pkey")),
-                                    value: es_entity::extract_events_pkey_id_value(db_err.as_ref()),
-                                    inner: e,
-                                }
-                            }
-                            sqlx::Error::Database(db_err)
-                                if db_err.table() != Some("entity_events")
-                                    && es_entity::is_classified_constraint_violation(db_err.as_ref()) =>
-                            {
-                                EntityCreateError::ConstraintViolation {
-                                    column: Self::map_constraint_column(db_err.constraint()),
-                                    value: es_entity::extract_constraint_value(db_err.as_ref()),
-                                    inner: e,
-                                }
-                            }
-                            _ => EntityCreateError::Sqlx(e),
-                        })?;
+                        .map_err(Self::classify_create_error)?;
 
                     if expected_events > 0 {
                         if rows.len() != expected_events {

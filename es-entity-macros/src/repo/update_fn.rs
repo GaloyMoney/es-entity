@@ -3,7 +3,6 @@ use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
 use super::{
-    error_classifier::write_error_classifier,
     events_write::{EventSource, EventsInsert, ForgettablePayloads},
     options::*,
 };
@@ -84,7 +83,6 @@ impl ToTokens for UpdateFn<'_> {
                 events_insert.sql(&source, now_p, now_p + 2),
             );
 
-            let classifier = write_error_classifier(modify_error, self.events_table_name);
             let gather = events_insert.gather_per_entity(quote! { entity.events() });
             let event_args = events_insert.arg_exprs(&source);
 
@@ -112,7 +110,7 @@ impl ToTokens for UpdateFn<'_> {
                 )
                     .fetch_all(op.as_executor())
                     .await
-                    .map_err(#classifier)?;
+                    .map_err(Self::classify_write_error)?;
 
                 #forgettable_code
 
@@ -316,25 +314,7 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| match &e {
-                            sqlx::Error::Database(db_err)
-                                if db_err.is_unique_violation()
-                                    && db_err.table() == Some("entity_events") =>
-                            {
-                                EntityModifyError::ConcurrentModification
-                            }
-                            sqlx::Error::Database(db_err)
-                                if db_err.table() != Some("entity_events")
-                                    && es_entity::is_classified_constraint_violation(db_err.as_ref()) =>
-                            {
-                                EntityModifyError::ConstraintViolation {
-                                    column: Self::map_constraint_column(db_err.constraint()),
-                                    value: es_entity::extract_constraint_value(db_err.as_ref()),
-                                    inner: e,
-                                }
-                            }
-                            _ => EntityModifyError::Sqlx(e),
-                        })?;
+                        .map_err(Self::classify_write_error)?;
 
                     let recorded_at = rows
                         .first()

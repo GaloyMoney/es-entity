@@ -58,8 +58,57 @@ pub fn concurrent_modification_classifier(
     }
 }
 
-/// The `map_err` closure for the create paths' combined index+events write
-/// statement (`create` / `create_all`).
+/// The match arm shared by both combined-write classifiers: a classified
+/// violation reported against any table other than the events table is the
+/// index table's, and maps straight from the constraint Postgres named.
+///
+/// The events table name may be schema-qualified in the repo options;
+/// Postgres reports the bare table name in errors, so only the last path
+/// component is compared.
+fn index_violation_arm(error: &syn::Ident, events_table: &str) -> TokenStream {
+    quote! {
+        sqlx::Error::Database(db_err)
+            if db_err.table() != Some(#events_table)
+                && es_entity::is_classified_constraint_violation(db_err.as_ref()) =>
+        {
+            #error::ConstraintViolation {
+                column: Self::map_constraint_column(db_err.constraint()),
+                value: es_entity::extract_constraint_value(db_err.as_ref()),
+                inner: e,
+            }
+        }
+    }
+}
+
+/// The classifier helpers for the combined index+events write statements,
+/// emitted once per repo so the call sites are a bare `map_err` function
+/// reference instead of a match rendered into every write path.
+///
+/// `classify_write_error` is only emitted when a write path actually calls it
+/// — an uncalled private helper is dead code, and consumers build with
+/// `-D warnings`. `classify_create_error` has unconditional callers
+/// (`create` and `create_all` both always issue the combined statement).
+pub fn error_classifier_fns(
+    create_error: &syn::Ident,
+    modify_error: &syn::Ident,
+    events_table_name: &str,
+    table_name: &str,
+    needs_write_classifier: bool,
+) -> TokenStream {
+    let create = create_error_classifier_fn(create_error, events_table_name, table_name);
+    let write = if needs_write_classifier {
+        write_error_classifier_fn(modify_error, events_table_name)
+    } else {
+        TokenStream::new()
+    };
+    quote! {
+        #create
+        #write
+    }
+}
+
+/// Classifier for the create paths' combined index+events write statement
+/// (`create` / `create_all`).
 ///
 /// A brand-new entity's events always start at sequence 1, so a unique
 /// violation on the events-table `(id, sequence)` primary key can only mean
@@ -79,7 +128,7 @@ pub fn concurrent_modification_classifier(
 /// - classified violation elsewhere (the index table) → `ConstraintViolation`
 ///   mapped from the reported constraint
 /// - anything else → `Sqlx`
-pub fn create_error_classifier(
+fn create_error_classifier_fn(
     error: &syn::Ident,
     events_table_name: &str,
     table_name: &str,
@@ -88,34 +137,29 @@ pub fn create_error_classifier(
     // Must match the id column's constraint name in `ErrorTypes::new`, which
     // formats it from the un-shortened table name.
     let index_pkey = format!("{table_name}_pkey");
+    let index_arm = index_violation_arm(error, events_table);
     quote! {
-        |e| match &e {
-            sqlx::Error::Database(db_err)
-                if db_err.is_unique_violation()
-                    && db_err.table() == Some(#events_table) =>
-            {
-                #error::ConstraintViolation {
-                    column: Self::map_constraint_column(Some(#index_pkey)),
-                    value: es_entity::extract_events_pkey_id_value(db_err.as_ref()),
-                    inner: e,
+        #[inline(always)]
+        fn classify_create_error(e: sqlx::Error) -> #error {
+            match &e {
+                sqlx::Error::Database(db_err)
+                    if db_err.is_unique_violation()
+                        && db_err.table() == Some(#events_table) =>
+                {
+                    #error::ConstraintViolation {
+                        column: Self::map_constraint_column(Some(#index_pkey)),
+                        value: es_entity::extract_events_pkey_id_value(db_err.as_ref()),
+                        inner: e,
+                    }
                 }
+                #index_arm
+                _ => #error::Sqlx(e),
             }
-            sqlx::Error::Database(db_err)
-                if db_err.table() != Some(#events_table)
-                    && es_entity::is_classified_constraint_violation(db_err.as_ref()) =>
-            {
-                #error::ConstraintViolation {
-                    column: Self::map_constraint_column(db_err.constraint()),
-                    value: es_entity::extract_constraint_value(db_err.as_ref()),
-                    inner: e,
-                }
-            }
-            _ => #error::Sqlx(e),
         }
     }
 }
 
-/// The `map_err` closure for a combined index+events write statement on the
+/// Classifier for a combined index+events write statement on the
 /// update/delete paths.
 ///
 /// A single statement can fail from either table, so classification switches
@@ -125,30 +169,25 @@ pub fn create_error_classifier(
 /// - classified violation elsewhere (the index table) → `ConstraintViolation`
 /// - anything else (including events-table FK violations) → `Sqlx`
 ///
-/// The events table name may be schema-qualified in the repo options;
-/// Postgres reports the bare table name in errors, so only the last path
-/// component is compared.
-pub fn write_error_classifier(error: &syn::Ident, events_table_name: &str) -> TokenStream {
+/// Unlike the create paths, the entity here already has persisted events, so
+/// an events-table `(id, sequence)` conflict genuinely means another writer
+/// claimed the next sequence first.
+fn write_error_classifier_fn(error: &syn::Ident, events_table_name: &str) -> TokenStream {
     let events_table = bare_table_name(events_table_name);
+    let index_arm = index_violation_arm(error, events_table);
     quote! {
-        |e| match &e {
-            sqlx::Error::Database(db_err)
-                if db_err.is_unique_violation()
-                    && db_err.table() == Some(#events_table) =>
-            {
-                #error::ConcurrentModification
-            }
-            sqlx::Error::Database(db_err)
-                if db_err.table() != Some(#events_table)
-                    && es_entity::is_classified_constraint_violation(db_err.as_ref()) =>
-            {
-                #error::ConstraintViolation {
-                    column: Self::map_constraint_column(db_err.constraint()),
-                    value: es_entity::extract_constraint_value(db_err.as_ref()),
-                    inner: e,
+        #[inline(always)]
+        fn classify_write_error(e: sqlx::Error) -> #error {
+            match &e {
+                sqlx::Error::Database(db_err)
+                    if db_err.is_unique_violation()
+                        && db_err.table() == Some(#events_table) =>
+                {
+                    #error::ConcurrentModification
                 }
+                #index_arm
+                _ => #error::Sqlx(e),
             }
-            _ => #error::Sqlx(e),
         }
     }
 }
