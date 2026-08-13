@@ -1,3 +1,11 @@
+# [cala release v0.12.7](https://github.com/GaloyMoney/cala/releases/tag/0.12.7)
+
+
+
+### Bug Fixes
+
+- Classify duplicate-id create violations deterministically (#198)
+
 # [cala release v0.12.6](https://github.com/GaloyMoney/cala/releases/tag/0.12.6)
 
 
