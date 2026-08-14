@@ -1,3 +1,11 @@
+# [cala release v0.12.9](https://github.com/GaloyMoney/cala/releases/tag/0.12.9)
+
+
+
+### Features
+
+- Re-entrant commit-hook registration in HookOperation (#200)
+
 # [cala release v0.12.8](https://github.com/GaloyMoney/cala/releases/tag/0.12.8)
 
 
