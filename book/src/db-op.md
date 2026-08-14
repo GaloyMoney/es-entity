@@ -43,6 +43,19 @@ let op_with_time = op.with_system_time();
 let op_with_time = op.with_db_time().await?;
 ```
 
+## Savepoints
+
+`DbOp` can scope part of its work to a `SAVEPOINT`, so a failure undoes only that part instead of poisoning the whole transaction:
+
+```rust,ignore
+// Ok keeps the work (and its staged hooks), Err undoes it
+let res: Result<(), MyError> = op
+    .with_savepoint(async |op| self.process_in_op(op, item).await)
+    .await?;
+```
+
+See [Savepoints](./savepoints.md) for the full semantics, including how commit hooks are staged.
+
 ## DbOpWithTime
 
 `DbOpWithTime` is equivalent to `DbOp` but guarantees that a timestamp is cached:

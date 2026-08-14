@@ -24,6 +24,8 @@ See [Connection Types and Traits](./connection-traits.md) for details on these t
 
 - **[Commit Hooks](./commit-hooks.md)**: Execute custom logic before and after transaction commits, with support for hook merging and database operations during pre-commit.
 
+- **[Savepoints](./savepoints.md)**: Isolate each item of a batch inside a single transaction, so one item's failure rolls back only its own writes and hooks.
+
 ## Basic Example
 
 ```rust

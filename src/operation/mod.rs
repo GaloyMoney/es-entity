@@ -1,12 +1,14 @@
 //! Handle execution of database operations and transactions.
 
 pub mod hooks;
+mod savepoint;
 mod with_time;
 
 use sqlx::{Acquire, Transaction};
 
 use crate::{clock::ClockHandle, db, one_time_executor::OneTimeExecutor};
 
+pub use savepoint::*;
 pub use with_time::*;
 
 /// Default return type of the derived EsRepo::begin_op().
@@ -104,6 +106,86 @@ impl<'c> DbOp<'c> {
             self.clock.clone(),
             self.now,
         ))
+    }
+
+    /// Runs `f` inside a `SAVEPOINT`, keeping its work on `Ok` and undoing it on `Err`.
+    ///
+    /// This is the building block for processing a batch of items in **one**
+    /// transaction — one `COMMIT`, one WAL flush — while still isolating each
+    /// item's failure. An item that errors unwinds only its own writes and
+    /// staged commit hooks; the transaction stays usable, so the loop continues
+    /// and its healthy items still commit.
+    ///
+    /// # Two layers of `Result`
+    ///
+    /// - The **outer** `Err(sqlx::Error)` means the savepoint machinery itself
+    ///   failed (or the error was never savepoint-recoverable, e.g. the
+    ///   connection died). The parent operation is in an indeterminate state:
+    ///   abandon it, don't commit.
+    /// - The **inner** `Err(E)` is the item's own failure, already rolled back
+    ///   cleanly. Record the outcome and keep going.
+    ///
+    /// If the closure fails *and* the rollback fails, the rollback error is
+    /// returned as the outer `Err` and the item's error is dropped — the
+    /// poisoned-transaction signal is what the caller must act on.
+    ///
+    /// # Collecting per-item outcomes
+    ///
+    /// The closure may borrow from its environment, but host-side mutations do
+    /// **not** unwind with the savepoint. Return the item's verdict through
+    /// `Ok`/`Err` and record it outside, where the outcome is authoritative:
+    ///
+    /// ```rust,ignore
+    /// let mut op = DbOp::init(&pool).await?;
+    /// let mut outcomes = Vec::with_capacity(items.len());
+    ///
+    /// for item in items {
+    ///     // `?` here: infra failure — abandon the whole batch.
+    ///     let res = op
+    ///         .with_savepoint(async |op| self.process_in_op(op, item).await)
+    ///         .await?;
+    ///
+    ///     outcomes.push(match res {
+    ///         Ok(()) => Outcome::Complete,
+    ///         Err(e) => Outcome::Retry(e),
+    ///     });
+    /// }
+    ///
+    /// op.commit().await?;
+    /// ```
+    ///
+    /// See [`SavepointOp`] for how commit hooks are staged and folded in.
+    pub async fn with_savepoint<T, E, F>(&mut self, f: F) -> Result<Result<T, E>, sqlx::Error>
+    where
+        F: AsyncFnOnce(&mut SavepointOp<'_>) -> Result<T, E>,
+    {
+        let mut op = self.begin_savepoint().await?;
+        match f(&mut op).await {
+            Ok(value) => {
+                op.release().await?;
+                Ok(Ok(value))
+            }
+            Err(error) => {
+                op.rollback().await?;
+                Ok(Err(error))
+            }
+        }
+    }
+
+    /// Begins a `SAVEPOINT` scope explicitly.
+    ///
+    /// The escape hatch for when [`with_savepoint`](Self::with_savepoint)'s
+    /// closure form doesn't fit — the returned [`SavepointOp`] must be finished
+    /// with [`release`](SavepointOp::release) or
+    /// [`rollback`](SavepointOp::rollback). Dropping it rolls back.
+    pub async fn begin_savepoint(&mut self) -> Result<SavepointOp<'_>, sqlx::Error> {
+        SavepointOp::begin(
+            &mut self.tx,
+            self.clock.clone(),
+            self.now,
+            &mut self.commit_hooks,
+        )
+        .await
     }
 
     /// Commits the inner transaction.
@@ -207,6 +289,23 @@ impl<'c> DbOpWithTime<'c> {
     /// Begins a nested transaction.
     pub async fn begin(&mut self) -> Result<DbOpWithTime<'_>, sqlx::Error> {
         Ok(DbOpWithTime::new(self.inner.begin().await?, self.now))
+    }
+
+    /// Runs `f` inside a `SAVEPOINT` — see [`DbOp::with_savepoint`].
+    ///
+    /// The cached time is propagated, so the [`SavepointOp`] reports it from
+    /// [`maybe_now`](AtomicOperation::maybe_now) and wrapping it in
+    /// [`OpWithTime`] is free.
+    pub async fn with_savepoint<T, E, F>(&mut self, f: F) -> Result<Result<T, E>, sqlx::Error>
+    where
+        F: AsyncFnOnce(&mut SavepointOp<'_>) -> Result<T, E>,
+    {
+        self.inner.with_savepoint(f).await
+    }
+
+    /// Begins a `SAVEPOINT` scope explicitly — see [`DbOp::begin_savepoint`].
+    pub async fn begin_savepoint(&mut self) -> Result<SavepointOp<'_>, sqlx::Error> {
+        self.inner.begin_savepoint().await
     }
 
     /// Commits the inner transaction.
