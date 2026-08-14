@@ -2,7 +2,7 @@ mod helpers;
 
 use es_entity::operation::{
     AtomicOperation, DbOp, OpWithTime,
-    hooks::{CommitHook, HookOperation, PreCommitRet},
+    hooks::{CommitHook, HookOperation, MAX_HOOK_GENERATIONS, PreCommitRet},
 };
 use sqlx::Connection;
 use std::sync::{Arc, Mutex};
@@ -900,6 +900,421 @@ async fn on_rollback_runs_after_transaction_is_rolled_back() -> anyhow::Result<(
          proving the operation's transaction had already rolled back (releasing the lock) \
          before on_rollback fired"
     );
+
+    Ok(())
+}
+
+// ===========================================================================
+// Re-entrant registration tests
+// ===========================================================================
+
+/// A hook whose `pre_commit` registers a fresh [`NonMergingGetterHook`]-shaped
+/// child (non-mergeable) via [`AtomicOperation::add_commit_hook`] on the
+/// [`HookOperation`] it is handed.
+#[derive(Debug)]
+struct ChildHook {
+    label: &'static str,
+    pre_order: Arc<Mutex<Vec<&'static str>>>,
+    post_order: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl CommitHook for ChildHook {
+    async fn pre_commit(
+        self,
+        op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        self.pre_order.lock().unwrap().push(self.label);
+        PreCommitRet::ok(self, op)
+    }
+
+    fn post_commit(self) {
+        self.post_order.lock().unwrap().push(self.label);
+    }
+}
+
+#[derive(Debug)]
+struct RegistersChild {
+    label: &'static str,
+    child_label: &'static str,
+    pre_order: Arc<Mutex<Vec<&'static str>>>,
+    post_order: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl CommitHook for RegistersChild {
+    async fn pre_commit(
+        self,
+        mut op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        self.pre_order.lock().unwrap().push(self.label);
+        op.add_commit_hook(ChildHook {
+            label: self.child_label,
+            pre_order: self.pre_order.clone(),
+            post_order: self.post_order.clone(),
+        })
+        .expect("a real commit pass must accept re-entrant registration");
+        PreCommitRet::ok(self, op)
+    }
+
+    fn post_commit(self) {
+        self.post_order.lock().unwrap().push(self.label);
+    }
+}
+
+#[tokio::test]
+async fn reentrant_hook_runs_pre_and_post_commit_in_the_same_pass() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let pre_order = Arc::new(Mutex::new(Vec::new()));
+    let post_order = Arc::new(Mutex::new(Vec::new()));
+
+    op.add_commit_hook(RegistersChild {
+        label: "parent",
+        child_label: "child",
+        pre_order: pre_order.clone(),
+        post_order: post_order.clone(),
+    })
+    .unwrap();
+
+    op.commit().await?;
+
+    // The re-entrantly registered child joins the tail of the same pass: it
+    // runs its own pre_commit before the single COMMIT, and its post_commit
+    // after — exactly like a hook registered on the operation directly.
+    assert_eq!(*pre_order.lock().unwrap(), vec!["parent", "child"]);
+    assert_eq!(*post_order.lock().unwrap(), vec!["parent", "child"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn reentrant_hook_merges_into_a_still_pending_same_type_hook() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let pre_order = Arc::new(Mutex::new(Vec::new()));
+    let post_order = Arc::new(Mutex::new(Vec::new()));
+
+    #[derive(Debug)]
+    struct RegistersMergeable {
+        label: &'static str,
+        staged_labels: Vec<&'static str>,
+        pre_order: Arc<Mutex<Vec<&'static str>>>,
+        post_order: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl CommitHook for RegistersMergeable {
+        async fn pre_commit(
+            self,
+            mut op: HookOperation<'_>,
+        ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+            self.pre_order.lock().unwrap().push(self.label);
+            op.add_commit_hook(MergingOrderProbe {
+                labels: self.staged_labels.clone(),
+                pre_order: self.pre_order.clone(),
+                post_order: self.post_order.clone(),
+            })
+            .expect("a real commit pass must accept re-entrant registration");
+            PreCommitRet::ok(self, op)
+        }
+
+        fn post_commit(self) {
+            self.post_order.lock().unwrap().push(self.label);
+        }
+    }
+
+    // "first" runs before the native MergingOrderProbe and re-entrantly stages
+    // one of the same type. The native one is still pending at that point, so
+    // the staged instance merges into it — one execution, at the native
+    // hook's own (later) queue position — instead of a second, separate one.
+    op.add_commit_hook(RegistersMergeable {
+        label: "first",
+        staged_labels: vec!["staged"],
+        pre_order: pre_order.clone(),
+        post_order: post_order.clone(),
+    })
+    .unwrap();
+    op.add_commit_hook(MergingOrderProbe {
+        labels: vec!["native"],
+        pre_order: pre_order.clone(),
+        post_order: post_order.clone(),
+    })
+    .unwrap();
+
+    op.commit().await?;
+
+    assert_eq!(
+        *pre_order.lock().unwrap(),
+        vec!["first", "native", "staged"]
+    );
+    assert_eq!(
+        *post_order.lock().unwrap(),
+        vec!["first", "native", "staged"]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn reentrant_hook_of_an_already_executed_type_appends_a_fresh_instance() -> anyhow::Result<()>
+{
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let pre_order = Arc::new(Mutex::new(Vec::new()));
+    let post_order = Arc::new(Mutex::new(Vec::new()));
+
+    #[derive(Debug)]
+    struct RegistersMergeable {
+        label: &'static str,
+        staged_labels: Vec<&'static str>,
+        pre_order: Arc<Mutex<Vec<&'static str>>>,
+        post_order: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl CommitHook for RegistersMergeable {
+        async fn pre_commit(
+            self,
+            mut op: HookOperation<'_>,
+        ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+            self.pre_order.lock().unwrap().push(self.label);
+            op.add_commit_hook(MergingOrderProbe {
+                labels: self.staged_labels.clone(),
+                pre_order: self.pre_order.clone(),
+                post_order: self.post_order.clone(),
+            })
+            .expect("a real commit pass must accept re-entrant registration");
+            PreCommitRet::ok(self, op)
+        }
+
+        fn post_commit(self) {
+            self.post_order.lock().unwrap().push(self.label);
+        }
+    }
+
+    // The native MergingOrderProbe now runs FIRST and has already executed
+    // by the time "second" re-entrantly stages one of the same type — an
+    // already-executed hook is never a merge target, so the staged instance
+    // starts a fresh execution of its own at the tail instead of vanishing
+    // into (or reopening) the one that already ran.
+    op.add_commit_hook(MergingOrderProbe {
+        labels: vec!["native"],
+        pre_order: pre_order.clone(),
+        post_order: post_order.clone(),
+    })
+    .unwrap();
+    op.add_commit_hook(RegistersMergeable {
+        label: "second",
+        staged_labels: vec!["staged"],
+        pre_order: pre_order.clone(),
+        post_order: post_order.clone(),
+    })
+    .unwrap();
+
+    op.commit().await?;
+
+    assert_eq!(
+        *pre_order.lock().unwrap(),
+        vec!["native", "second", "staged"]
+    );
+    assert_eq!(
+        *post_order.lock().unwrap(),
+        vec!["native", "second", "staged"]
+    );
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct ForcePathProbe {
+    supports_hooks_result: Arc<Mutex<Option<bool>>>,
+    add_hook_result: Arc<Mutex<Option<bool>>>,
+}
+
+impl CommitHook for ForcePathProbe {
+    async fn pre_commit(
+        self,
+        mut op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        *self.supports_hooks_result.lock().unwrap() = Some(op.supports_hooks());
+        let registered = op
+            .add_commit_hook(NonMergingGetterHook { label: "child" })
+            .is_ok();
+        *self.add_hook_result.lock().unwrap() = Some(registered);
+        PreCommitRet::ok(self, op)
+    }
+}
+
+#[tokio::test]
+async fn force_execute_path_still_refuses_reentrant_registration() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut tx = pool.begin().await?; // bare sqlx::Transaction: no hook support at all
+
+    let supports_hooks_result = Arc::new(Mutex::new(None));
+    let add_hook_result = Arc::new(Mutex::new(None));
+
+    ForcePathProbe {
+        supports_hooks_result: supports_hooks_result.clone(),
+        add_hook_result: add_hook_result.clone(),
+    }
+    .force_execute_pre_commit(&mut tx)
+    .await?;
+
+    // The force-execute escape hatch has no commit pass for a registered
+    // hook to join, so it must keep refusing — a caller that gets `Err` from
+    // `add_commit_hook` needs to take its own immediate-execution fallback,
+    // not have the hook silently accepted and its post_commit/on_rollback
+    // never run.
+    assert_eq!(*supports_hooks_result.lock().unwrap(), Some(false));
+    assert_eq!(*add_hook_result.lock().unwrap(), Some(false));
+
+    tx.rollback().await?;
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct StagesFailingChild {
+    label: &'static str,
+    child_label: &'static str,
+    pre_order: Arc<Mutex<Vec<&'static str>>>,
+    post_order: Arc<Mutex<Vec<&'static str>>>,
+    rollback_order: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl CommitHook for StagesFailingChild {
+    async fn pre_commit(
+        self,
+        mut op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        self.pre_order.lock().unwrap().push(self.label);
+        op.add_commit_hook(RollbackProbe {
+            label: self.child_label,
+            fail_pre: true,
+            pre_order: self.pre_order.clone(),
+            post_order: self.post_order.clone(),
+            rollback_order: self.rollback_order.clone(),
+        })
+        .expect("a real commit pass must accept re-entrant registration");
+        PreCommitRet::ok(self, op)
+    }
+
+    fn post_commit(self) {
+        self.post_order.lock().unwrap().push(self.label);
+    }
+
+    fn on_rollback(self) {
+        self.rollback_order.lock().unwrap().push(self.label);
+    }
+}
+
+#[tokio::test]
+async fn reentrant_failure_rolls_back_and_notifies_the_staging_parent() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let pre = Arc::new(Mutex::new(Vec::new()));
+    let post = Arc::new(Mutex::new(Vec::new()));
+    let rollback = Arc::new(Mutex::new(Vec::new()));
+
+    op.add_commit_hook(RollbackProbe {
+        label: "a",
+        fail_pre: false,
+        pre_order: pre.clone(),
+        post_order: post.clone(),
+        rollback_order: rollback.clone(),
+    })
+    .unwrap();
+    // "parent" re-entrantly stages "child", whose pre_commit fails.
+    op.add_commit_hook(StagesFailingChild {
+        label: "parent",
+        child_label: "child",
+        pre_order: pre.clone(),
+        post_order: post.clone(),
+        rollback_order: rollback.clone(),
+    })
+    .unwrap();
+
+    let result = op.commit().await;
+    assert!(
+        result.is_err(),
+        "commit must fail because the re-entrantly staged child fails pre_commit"
+    );
+
+    // 'a' and 'parent' ran pre_commit natively; 'child' ran too (re-entrantly
+    // staged, at the tail) and is the one whose pre_commit failed.
+    assert_eq!(*pre.lock().unwrap(), vec!["a", "parent", "child"]);
+    // Everyone whose pre_commit already completed is notified of the
+    // rollback — including 'parent', the hook that staged the failing
+    // child, exactly as it would be for a hook registered on the operation
+    // directly. 'child' is consumed by its own failure and signals (or, here,
+    // doesn't) from that branch instead.
+    assert_eq!(*rollback.lock().unwrap(), vec!["a", "parent"]);
+    assert!(post.lock().unwrap().is_empty());
+
+    Ok(())
+}
+
+/// Stages a fresh instance of itself, one generation deeper, every time it
+/// runs — an unbroken re-registration cycle.
+#[derive(Debug)]
+struct CyclicHook {
+    generation: u8,
+    executions: Arc<Mutex<Vec<u8>>>,
+    rollback_order: Arc<Mutex<Vec<u8>>>,
+}
+
+impl CommitHook for CyclicHook {
+    async fn pre_commit(
+        self,
+        mut op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        self.executions.lock().unwrap().push(self.generation);
+        // Not `.expect(..)`: past the generation bound this returns `Err`
+        // instead, which is fine to ignore here — `commit()` itself is what
+        // surfaces the failure.
+        let _ = op.add_commit_hook(CyclicHook {
+            generation: self.generation + 1,
+            executions: self.executions.clone(),
+            rollback_order: self.rollback_order.clone(),
+        });
+        PreCommitRet::ok(self, op)
+    }
+
+    fn on_rollback(self) {
+        self.rollback_order.lock().unwrap().push(self.generation);
+    }
+}
+
+#[tokio::test]
+async fn reentrant_registration_cycle_is_bounded_and_rolls_back() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let executions = Arc::new(Mutex::new(Vec::new()));
+    let rollback_order = Arc::new(Mutex::new(Vec::new()));
+
+    op.add_commit_hook(CyclicHook {
+        generation: 0,
+        executions: executions.clone(),
+        rollback_order: rollback_order.clone(),
+    })
+    .unwrap();
+
+    let result = op.commit().await;
+    assert!(
+        result.is_err(),
+        "an unbroken re-registration cycle must fail loudly instead of hanging"
+    );
+
+    // Generations 0..=MAX_HOOK_GENERATIONS all executed (each stages the
+    // next); the one that would exceed the bound is rejected at registration
+    // time and never gets a chance to run.
+    let expected_generations: Vec<u8> = (0..=MAX_HOOK_GENERATIONS).collect();
+    assert_eq!(*executions.lock().unwrap(), expected_generations);
+    // Every generation that did execute is notified of the rollback, in the
+    // same (registration/execution) order.
+    assert_eq!(*rollback_order.lock().unwrap(), expected_generations);
 
     Ok(())
 }
