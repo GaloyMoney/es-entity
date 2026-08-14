@@ -34,6 +34,7 @@
   - [Connection Traits](./connection-traits.md)
   - [DbOp](./db-op.md)
   - [Commit Hooks](./commit-hooks.md)
+  - [Savepoints](./savepoints.md)
 
 - [Aggregates](./aggregates.md)
   - [Nesting](./nesting.md)

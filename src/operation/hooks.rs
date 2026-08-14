@@ -42,6 +42,17 @@
 //! Registration order is a determinism guarantee, not a priority mechanism — there
 //! is no way to reorder hooks independently of the order in which they were added.
 //!
+//! # Savepoints
+//!
+//! Hooks registered on a [`SavepointOp`] are staged and only enter the parent
+//! operation's set — through the same registration/merge path — when the savepoint
+//! is released; a rolled-back savepoint discards them. No callback runs at a
+//! savepoint boundary, so the lifecycle above is unchanged: one `pre_commit` pass at
+//! the parent's commit, `post_commit` only after a durable `COMMIT`. See
+//! [`SavepointOp`] for details.
+//!
+//! [`SavepointOp`]: super::SavepointOp
+//!
 //! # Examples
 //!
 //! ## Hook with Database Operations and Channel-Based Publishing
@@ -362,10 +373,24 @@ impl CommitHooks {
     }
 
     pub(super) fn add<H: CommitHook>(&mut self, hook: H) {
-        let type_id = TypeId::of::<H>();
+        self.push_or_merge(TypeId::of::<H>(), Box::new(hook));
+    }
 
-        let mut new_hook: Box<dyn DynHook> = Box::new(hook);
+    /// Folds the hooks staged by a released [`SavepointOp`] into this buffer.
+    ///
+    /// Replays them through the same path as [`add`](Self::add), in their
+    /// staging order, so the result is indistinguishable from having registered
+    /// them on this operation directly: mergeable types accumulate into the
+    /// earlier instance (keeping its position), non-mergeable ones append.
+    ///
+    /// [`SavepointOp`]: super::SavepointOp
+    pub(super) fn absorb_staged(&mut self, staged: Self) {
+        for (type_id, hook) in staged.hooks {
+            self.push_or_merge(type_id, hook);
+        }
+    }
 
+    fn push_or_merge(&mut self, type_id: TypeId, mut new_hook: Box<dyn DynHook>) {
         // Merge with the most recently added hook of the same type, keeping the
         // existing hook's original (earlier) position in the execution order.
         if let Some((_, existing)) = self.hooks.iter_mut().rev().find(|(t, _)| *t == type_id)
