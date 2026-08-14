@@ -36,11 +36,35 @@
 //!    registrations fold into that position.
 //! 3. [`CommitHook::post_commit()`] hooks run in the same order as their
 //!    [`CommitHook::pre_commit()`] counterparts (registration order).
-//! 4. The hook set is frozen when `commit()` starts (hooks cannot register further
-//!    hooks), so ordering is fully determined before the first `pre_commit` runs.
+//! 4. A hook's `pre_commit` may itself register further hooks — see
+//!    [`AtomicOperation::add_commit_hook()`] on the [`HookOperation`] it is handed.
+//!    Those join the **tail of the same commit pass** rather than freezing the set
+//!    before the first `pre_commit` runs. See "Re-entrant Registration" below.
 //!
 //! Registration order is a determinism guarantee, not a priority mechanism — there
 //! is no way to reorder hooks independently of the order in which they were added.
+//!
+//! # Re-entrant Registration
+//!
+//! [`AtomicOperation::add_commit_hook()`] succeeds on the [`HookOperation`] passed to
+//! a `pre_commit` that is running as part of a real commit pass — a hook can register
+//! more hooks, and they join the pass instead of being silently dropped or forced to
+//! run outside the commit lifecycle:
+//!
+//! - A newly-registered hook merges into a **still-pending** hook of the same type,
+//!   keeping that hook's queue position — indistinguishable from having registered it
+//!   there directly. An **already-executed** hook of that type is never a merge
+//!   target (its `pre_commit` already ran), so registering that type again after its
+//!   own execution always starts a fresh instance, which runs its own `pre_commit`
+//!   later in the same pass.
+//! - A bound ([`MAX_HOOK_GENERATIONS`] re-entrant generations) guards against a
+//!   registration cycle (A registers B, B registers A, …), which would otherwise grow
+//!   the queue forever inside an open transaction. Exceeding it fails the commit
+//!   loudly instead of hanging.
+//! - This only applies to a real commit pass. [`CommitHook::force_execute_pre_commit()`]
+//!   — the escape hatch for ops that don't support hooks at all — still returns
+//!   `Err` from `add_commit_hook`, because there is no pass for a registered hook to
+//!   join; its `post_commit`/`on_rollback` would simply never run.
 //!
 //! # Savepoints
 //!
@@ -180,6 +204,7 @@
 
 use std::{
     any::{Any, TypeId},
+    collections::VecDeque,
     future::Future,
     pin::Pin,
 };
@@ -264,18 +289,53 @@ pub trait CommitHook: Send + 'static + Sized {
 
 /// Wrapper around a database connection passed to [`CommitHook::pre_commit()`].
 ///
-/// Implements [`AtomicOperation`] to allow executing database queries within the transaction.
+/// Implements [`AtomicOperation`] to allow executing database queries within the
+/// transaction. Whether it also supports registering *further* commit hooks depends
+/// on how it was constructed — see the `staged` field below and "Re-entrant
+/// Registration" in the [module docs](self).
 pub struct HookOperation<'c> {
     now: Option<chrono::DateTime<chrono::Utc>>,
     conn: &'c mut db::Connection,
+    /// Hooks registered by the `pre_commit` currently holding this op, staged for
+    /// the enclosing commit pass to fold into its own not-yet-executed tail once
+    /// that `pre_commit` returns.
+    ///
+    /// `Some` when this op was constructed by [`CommitHooks::execute_pre`] (a real
+    /// commit pass is running and can fold staged hooks in). `None` on the
+    /// [`force_execute_pre_commit`] path — there is no pass to fold into, so
+    /// registration there must keep failing, so callers take their
+    /// immediate-execution fallback instead of silently losing a hook's
+    /// `post_commit`/`on_rollback`.
+    ///
+    /// [`force_execute_pre_commit`]: CommitHook::force_execute_pre_commit
+    staged: Option<CommitHooks>,
 }
 
 impl<'c> HookOperation<'c> {
+    /// Force-execute path: no commit pass to fold into, so registering further
+    /// hooks stays unsupported.
     fn new(op: &'c mut impl AtomicOperation) -> Self {
         Self {
             now: op.maybe_now(),
             conn: op.connection(),
+            staged: None,
         }
+    }
+
+    /// Commit-pass path: hooks registered while this op is threaded through
+    /// [`CommitHooks::execute_pre`] accumulate here.
+    fn staging(op: &'c mut impl AtomicOperation) -> Self {
+        Self {
+            now: op.maybe_now(),
+            conn: op.connection(),
+            staged: Some(CommitHooks::new()),
+        }
+    }
+
+    /// Takes whatever the `pre_commit` that just returned staged, leaving a fresh
+    /// empty buffer behind for the next hook. `None` on the force-execute path.
+    fn drain_staged(&mut self) -> Option<CommitHooks> {
+        Some(std::mem::take(self.staged.as_mut()?))
     }
 }
 
@@ -286,6 +346,24 @@ impl<'c> AtomicOperation for HookOperation<'c> {
 
     fn connection(&mut self) -> &mut db::Connection {
         self.conn
+    }
+
+    fn add_commit_hook<H: CommitHook>(&mut self, hook: H) -> Result<(), H> {
+        match self.staged.as_mut() {
+            Some(staged) => {
+                staged.add(hook);
+                Ok(())
+            }
+            None => Err(hook),
+        }
+    }
+
+    fn commit_hook<H: CommitHook>(&self) -> Option<&H> {
+        self.staged.as_ref()?.get_last::<H>()
+    }
+
+    fn supports_hooks(&self) -> bool {
+        self.staged.is_some()
     }
 }
 
@@ -412,23 +490,54 @@ impl CommitHooks {
 
     /// Runs each hook's `pre_commit` in registration order.
     ///
+    /// Re-entrant: a hook may register further hooks via
+    /// [`AtomicOperation::add_commit_hook`] on the [`HookOperation`] it is handed.
+    /// Those join the **tail of this same pass** — merged into a still-pending hook
+    /// of the same type (keeping that hook's position), or appended fresh if no
+    /// pending hook of that type remains (an already-executed hook is never a merge
+    /// target). [`MAX_HOOK_GENERATIONS`] bounds the resulting chain against a
+    /// registration cycle. See the [module docs](self#re-entrant-registration).
+    ///
     /// On failure the already-executed hooks travel back **with** the error (as
     /// a [`PostCommitHooks`]) instead of being dropped, so the caller can fire
     /// their [`CommitHook::on_rollback`] after rolling the transaction back.
-    /// Hooks after the failing one never ran their `pre_commit`, produced no
-    /// effects, and are simply dropped.
+    /// Hooks after the failing one — pending or not yet staged — never ran their
+    /// `pre_commit`, produced no effects, and are simply dropped.
     pub(super) async fn execute_pre(
         self,
         op: &mut impl AtomicOperation,
     ) -> Result<PostCommitHooks, (sqlx::Error, PostCommitHooks)> {
-        let mut op = HookOperation::new(op);
-        let mut post_hooks = Vec::with_capacity(self.hooks.len());
+        let mut op = HookOperation::staging(op);
+        let mut pending: VecDeque<(TypeId, Box<dyn DynHook>, u8)> = self
+            .hooks
+            .into_iter()
+            .map(|(type_id, hook)| (type_id, hook, 0))
+            .collect();
+        let mut post_hooks = Vec::with_capacity(pending.len());
 
-        for (_, hook) in self.hooks {
+        while let Some((_, hook, generation)) = pending.pop_front() {
             match hook.pre_commit_boxed(op).await {
-                Ok((new_op, hook)) => {
-                    op = new_op;
+                Ok((mut new_op, hook)) => {
                     post_hooks.push(hook);
+
+                    // Fold whatever that `pre_commit` staged into the tail of this
+                    // same pass, through the same registration/merge path
+                    // `absorb_staged` uses for released savepoints.
+                    if let Some(staged) = new_op.drain_staged() {
+                        let next_generation = generation.saturating_add(1);
+                        for (type_id, staged_hook) in staged.hooks {
+                            if let Err(error) = push_or_merge_pending(
+                                &mut pending,
+                                type_id,
+                                staged_hook,
+                                next_generation,
+                            ) {
+                                return Err((error, PostCommitHooks { hooks: post_hooks }));
+                            }
+                        }
+                    }
+
+                    op = new_op;
                 }
                 Err(error) => {
                     return Err((error, PostCommitHooks { hooks: post_hooks }));
@@ -444,6 +553,47 @@ impl Default for CommitHooks {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Maximum number of re-entrant "generations" a single commit pass will execute.
+/// Generation 0 is the hook set registered on the operation before `commit()`
+/// starts; a hook staged by a generation-*N* hook's `pre_commit` is generation
+/// *N*+1. Bounds a registration cycle (A registers B, B registers A, …), which
+/// would otherwise grow the queue forever inside an open transaction — see the
+/// [module docs](self#re-entrant-registration).
+pub const MAX_HOOK_GENERATIONS: u8 = 8;
+
+/// Merges `hook` into a still-pending hook of the same type — keeping that hook's
+/// queue position and generation — or appends it fresh at `generation`. The
+/// deferred-execution counterpart of [`CommitHooks::push_or_merge`]: only hooks that
+/// have not yet run their `pre_commit` are eligible merge targets, so a type that
+/// already executed this pass always gets a fresh instance rather than retroactively
+/// absorbing new work into a hook whose `pre_commit` already returned.
+///
+/// Errors if the fresh instance would exceed [`MAX_HOOK_GENERATIONS`] — the loud,
+/// bounded failure mode for a registration cycle instead of an unbounded queue
+/// inside an open transaction.
+fn push_or_merge_pending(
+    pending: &mut VecDeque<(TypeId, Box<dyn DynHook>, u8)>,
+    type_id: TypeId,
+    mut hook: Box<dyn DynHook>,
+    generation: u8,
+) -> Result<(), sqlx::Error> {
+    if let Some((_, existing, _)) = pending.iter_mut().rev().find(|(t, _, _)| *t == type_id)
+        && existing.try_merge(hook.as_mut())
+    {
+        return Ok(());
+    }
+
+    if generation > MAX_HOOK_GENERATIONS {
+        return Err(sqlx::Error::Protocol(format!(
+            "commit hook registration exceeded the maximum of {MAX_HOOK_GENERATIONS} \
+             re-entrant generations in one commit pass — likely a registration cycle"
+        )));
+    }
+
+    pending.push_back((type_id, hook, generation));
+    Ok(())
 }
 
 pub struct PostCommitHooks {
