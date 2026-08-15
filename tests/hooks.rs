@@ -5,7 +5,10 @@ use es_entity::operation::{
     hooks::{CommitHook, HookOperation, MAX_HOOK_GENERATIONS, PreCommitRet},
 };
 use sqlx::Connection;
-use std::sync::{Arc, Mutex};
+use std::{
+    any::TypeId,
+    sync::{Arc, Mutex},
+};
 
 #[derive(Debug)]
 struct FullCommitHook {
@@ -1315,6 +1318,373 @@ async fn reentrant_registration_cycle_is_bounded_and_rolls_back() -> anyhow::Res
     // Every generation that did execute is notified of the rollback, in the
     // same (registration/execution) order.
     assert_eq!(*rollback_order.lock().unwrap(), expected_generations);
+
+    Ok(())
+}
+
+// ===========================================================================
+// runs_after ordering tests
+// ===========================================================================
+//
+// `runs_after` matches on `TypeId`, so each test hook kind below is its own
+// struct (HookA / HookB / HookC) rather than a shared parameterized type —
+// `deps` is built at construction time (`vec![TypeId::of::<HookA>()]`), never
+// relied on as a `const`. `pre_commit` pushes `"pre:X"`, `post_commit` pushes
+// `"post:X"`, `on_rollback` pushes `"rollback:X"` onto a shared log.
+
+#[derive(Debug)]
+struct HookA {
+    log: Arc<Mutex<Vec<&'static str>>>,
+    deps: Vec<TypeId>,
+}
+
+impl CommitHook for HookA {
+    async fn pre_commit(
+        self,
+        op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        self.log.lock().unwrap().push("pre:A");
+        PreCommitRet::ok(self, op)
+    }
+
+    fn post_commit(self) {
+        self.log.lock().unwrap().push("post:A");
+    }
+
+    fn on_rollback(self) {
+        self.log.lock().unwrap().push("rollback:A");
+    }
+
+    fn runs_after(&self) -> &[TypeId] {
+        &self.deps
+    }
+}
+
+#[derive(Debug)]
+struct HookB {
+    log: Arc<Mutex<Vec<&'static str>>>,
+    deps: Vec<TypeId>,
+}
+
+impl CommitHook for HookB {
+    async fn pre_commit(
+        self,
+        op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        self.log.lock().unwrap().push("pre:B");
+        PreCommitRet::ok(self, op)
+    }
+
+    fn post_commit(self) {
+        self.log.lock().unwrap().push("post:B");
+    }
+
+    fn on_rollback(self) {
+        self.log.lock().unwrap().push("rollback:B");
+    }
+
+    fn runs_after(&self) -> &[TypeId] {
+        &self.deps
+    }
+}
+
+#[derive(Debug)]
+struct HookC {
+    log: Arc<Mutex<Vec<&'static str>>>,
+    deps: Vec<TypeId>,
+}
+
+impl CommitHook for HookC {
+    async fn pre_commit(
+        self,
+        op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        self.log.lock().unwrap().push("pre:C");
+        PreCommitRet::ok(self, op)
+    }
+
+    fn post_commit(self) {
+        self.log.lock().unwrap().push("post:C");
+    }
+
+    fn on_rollback(self) {
+        self.log.lock().unwrap().push("rollback:C");
+    }
+
+    fn runs_after(&self) -> &[TypeId] {
+        &self.deps
+    }
+}
+
+#[tokio::test]
+async fn runs_after_defers_until_dependency_executes() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let log = Arc::new(Mutex::new(Vec::new()));
+
+    // B is registered first but declares runs_after A: it must defer until
+    // A's still-pending instance executes, even though A registered later.
+    op.add_commit_hook(HookB {
+        log: log.clone(),
+        deps: vec![TypeId::of::<HookA>()],
+    })
+    .unwrap();
+    op.add_commit_hook(HookA {
+        log: log.clone(),
+        deps: vec![],
+    })
+    .unwrap();
+
+    op.commit().await?;
+
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec!["pre:A", "pre:B", "post:A", "post:B"]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn runs_after_vacuous_when_dependency_absent() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let log = Arc::new(Mutex::new(Vec::new()));
+
+    // B declares runs_after A, but A is never registered on this operation —
+    // the dependency imposes no constraint and registration order holds.
+    op.add_commit_hook(HookB {
+        log: log.clone(),
+        deps: vec![TypeId::of::<HookA>()],
+    })
+    .unwrap();
+    op.add_commit_hook(HookC {
+        log: log.clone(),
+        deps: vec![],
+    })
+    .unwrap();
+
+    op.commit().await?;
+
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec!["pre:B", "pre:C", "post:B", "post:C"]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn runs_after_dependency_already_executed_does_not_defer() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let log = Arc::new(Mutex::new(Vec::new()));
+
+    // A registers (and executes) first; B's dependency is already satisfied
+    // by the time B reaches the front of the queue, so no deferral occurs.
+    op.add_commit_hook(HookA {
+        log: log.clone(),
+        deps: vec![],
+    })
+    .unwrap();
+    op.add_commit_hook(HookB {
+        log: log.clone(),
+        deps: vec![TypeId::of::<HookA>()],
+    })
+    .unwrap();
+
+    op.commit().await?;
+
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec!["pre:A", "pre:B", "post:A", "post:B"]
+    );
+
+    Ok(())
+}
+
+/// Mergeable hook that declares `runs_after` a `Producer`. Records the event
+/// list it saw at each `pre_commit` call so the test can assert it ran
+/// exactly once (merged) rather than as two separate generations.
+#[derive(Debug)]
+struct Consumer {
+    events: Vec<&'static str>,
+    deps: Vec<TypeId>,
+    pre_commit_calls: Arc<Mutex<Vec<Vec<&'static str>>>>,
+}
+
+impl CommitHook for Consumer {
+    async fn pre_commit(
+        self,
+        op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        self.pre_commit_calls
+            .lock()
+            .unwrap()
+            .push(self.events.clone());
+        PreCommitRet::ok(self, op)
+    }
+
+    fn merge(&mut self, other: &mut Self) -> bool {
+        self.events.append(&mut other.events);
+        true
+    }
+
+    fn runs_after(&self) -> &[TypeId] {
+        &self.deps
+    }
+}
+
+/// Stages a fresh `Consumer` from its own `pre_commit` — the obix cross-outbox
+/// repost shape this design exists for.
+#[derive(Debug)]
+struct Producer {
+    log: Arc<Mutex<Vec<&'static str>>>,
+    consumer_deps: Vec<TypeId>,
+    consumer_calls: Arc<Mutex<Vec<Vec<&'static str>>>>,
+}
+
+impl CommitHook for Producer {
+    async fn pre_commit(
+        self,
+        mut op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        self.log.lock().unwrap().push("pre:Producer");
+        op.add_commit_hook(Consumer {
+            events: vec!["staged"],
+            deps: self.consumer_deps.clone(),
+            pre_commit_calls: self.consumer_calls.clone(),
+        })
+        .expect("a real commit pass must accept re-entrant registration");
+        PreCommitRet::ok(self, op)
+    }
+}
+
+#[tokio::test]
+async fn reentrant_stage_merges_into_deferred_pending_hook() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let consumer_calls = Arc::new(Mutex::new(Vec::new()));
+    let consumer_deps = vec![TypeId::of::<Producer>()];
+
+    // Consumer registers FIRST (deps=[Producer]) and so defers; Producer
+    // registers second and, from its own pre_commit, re-entrantly stages
+    // another Consumer instance. Because the original Consumer is deferred
+    // (not yet executed), it is still a merge target: the staged instance
+    // folds into it instead of starting a fresh generation.
+    op.add_commit_hook(Consumer {
+        events: vec!["own"],
+        deps: consumer_deps.clone(),
+        pre_commit_calls: consumer_calls.clone(),
+    })
+    .unwrap();
+    op.add_commit_hook(Producer {
+        log: log.clone(),
+        consumer_deps,
+        consumer_calls: consumer_calls.clone(),
+    })
+    .unwrap();
+
+    op.commit().await?;
+
+    assert_eq!(*log.lock().unwrap(), vec!["pre:Producer"]);
+
+    let calls = consumer_calls.lock().unwrap();
+    assert_eq!(
+        calls.len(),
+        1,
+        "Consumer's pre_commit must run exactly once — merged into the \
+         deferred pending instance, not a fresh generation"
+    );
+    assert_eq!(calls[0], vec!["own", "staged"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn runs_after_cycle_errors_loudly() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let log = Arc::new(Mutex::new(Vec::new()));
+
+    // C has no dependency and runs to completion. A and B mutually depend on
+    // each other and can never both be satisfied.
+    op.add_commit_hook(HookC {
+        log: log.clone(),
+        deps: vec![],
+    })
+    .unwrap();
+    op.add_commit_hook(HookA {
+        log: log.clone(),
+        deps: vec![TypeId::of::<HookB>()],
+    })
+    .unwrap();
+    op.add_commit_hook(HookB {
+        log: log.clone(),
+        deps: vec![TypeId::of::<HookA>()],
+    })
+    .unwrap();
+
+    let result = op.commit().await;
+    match result {
+        Err(sqlx::Error::Protocol(msg)) => {
+            assert!(
+                msg.contains("cycle"),
+                "error message should mention the cycle, got: {msg}"
+            );
+        }
+        other => panic!("expected sqlx::Error::Protocol, got: {other:?}"),
+    }
+
+    // C's pre_commit had already completed, so it is notified of the
+    // rollback. A and B never ran their pre_commit (they were only ever
+    // popped for the (failed) deferral check), so they log nothing at all —
+    // no pre, no rollback, per the existing on_rollback contract.
+    assert_eq!(*log.lock().unwrap(), vec!["pre:C", "rollback:C"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn runs_after_chain_orders_transitively() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let log = Arc::new(Mutex::new(Vec::new()));
+
+    // C -> B -> A, registered in reverse dependency order.
+    op.add_commit_hook(HookC {
+        log: log.clone(),
+        deps: vec![TypeId::of::<HookB>()],
+    })
+    .unwrap();
+    op.add_commit_hook(HookB {
+        log: log.clone(),
+        deps: vec![TypeId::of::<HookA>()],
+    })
+    .unwrap();
+    op.add_commit_hook(HookA {
+        log: log.clone(),
+        deps: vec![],
+    })
+    .unwrap();
+
+    op.commit().await?;
+
+    let pre: Vec<&'static str> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry.starts_with("pre:"))
+        .copied()
+        .collect();
+    assert_eq!(pre, vec!["pre:A", "pre:B", "pre:C"]);
 
     Ok(())
 }
