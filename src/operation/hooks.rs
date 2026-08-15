@@ -41,8 +41,23 @@
 //!    Those join the **tail of the same commit pass** rather than freezing the set
 //!    before the first `pre_commit` runs. See "Re-entrant Registration" below.
 //!
-//! Registration order is a determinism guarantee, not a priority mechanism — there
-//! is no way to reorder hooks independently of the order in which they were added.
+//! Registration order is the base order; [`CommitHook::runs_after()`] is the one
+//! sanctioned refinement — it can only *delay* a hook until still-pending instances
+//! of its declared dependency types have executed, never advance it:
+//!
+//! 5. A hook may declare hook **types** it must run after via
+//!    [`CommitHook::runs_after()`]. While any still-pending instance of a declared
+//!    type remains in the queue, the hook is deferred to the back and re-checked
+//!    later; once no declared type is still pending it runs. This is evaluated
+//!    dynamically on every attempt, so it composes with re-entrant staging — a
+//!    dependency staged mid-pass re-blocks a hook that already deferred past it.
+//! 6. Among hooks with no unsatisfied `runs_after` dependency, registration order
+//!    (points 1-3 above) is preserved. Execution remains fully deterministic.
+//! 7. A dependency type that never registers, or whose instances have all already
+//!    executed, imposes no constraint — deferral is vacuous in both cases.
+//! 8. Declared dependencies that cannot all be satisfied (a cycle, direct or
+//!    transitive) fail the commit loudly with a protocol error instead of hanging —
+//!    see [`CommitHook::runs_after()`].
 //!
 //! # Re-entrant Registration
 //!
@@ -65,6 +80,12 @@
 //!   — the escape hatch for ops that don't support hooks at all — still returns
 //!   `Err` from `add_commit_hook`, because there is no pass for a registered hook to
 //!   join; its `post_commit`/`on_rollback` would simply never run.
+//! - A hook deferred by [`CommitHook::runs_after()`] is still **pending**, so it
+//!   remains a merge target for re-entrant staging exactly like any other
+//!   not-yet-executed hook. This is what lets a producer's `pre_commit` stage work
+//!   into a consumer hook that declared `runs_after` the producer's type: the
+//!   consumer is waiting (deferred) rather than gone, so the staged instance merges
+//!   into it — one execution — instead of starting a fresh generation.
 //!
 //! # Savepoints
 //!
@@ -223,7 +244,8 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 ///
 /// Hooks registered on the same operation execute in registration order — see the
 /// [module-level documentation](self#hook-ordering) for the full ordering contract
-/// and a complete example.
+/// and a complete example. [`runs_after()`](Self::runs_after) lets a hook refine
+/// that order by declaring dependency types it must run after.
 pub trait CommitHook: Send + 'static + Sized {
     /// Called before the transaction commits. Can perform database operations.
     ///
@@ -271,6 +293,27 @@ pub trait CommitHook: Send + 'static + Sized {
     /// Returns `true` if merged (other will be dropped), `false` if not (both execute separately).
     fn merge(&mut self, _other: &mut Self) -> bool {
         false
+    }
+
+    /// Hook types (by `TypeId`) whose still-pending instances must run their
+    /// [`pre_commit`](Self::pre_commit) before this hook's.
+    ///
+    /// Consulted each time this hook reaches the front of the commit pass's
+    /// queue: if any *still-pending* hook in the pass has a type in this list,
+    /// this hook is deferred behind it and retried after other hooks execute.
+    /// A listed type that never registered on the operation — or whose
+    /// instances have all already executed — imposes no constraint.
+    ///
+    /// Declared per instance but effectively per type: instances that merge
+    /// keep the merge target's list, so all instances of one logical hook
+    /// should return the same list.
+    ///
+    /// Mutually-dependent hooks (A after B and B after A, directly or
+    /// transitively) cannot make progress; the commit fails loudly with a
+    /// protocol error and the transaction rolls back. Never list your own
+    /// type.
+    fn runs_after(&self) -> &[TypeId] {
+        &[]
     }
 
     /// Execute the hook immediately, bypassing the hook system.
@@ -396,6 +439,8 @@ trait DynHook: Send {
 
     fn try_merge(&mut self, other: &mut dyn DynHook) -> bool;
 
+    fn runs_after(&self) -> &[TypeId];
+
     fn as_any(&self) -> &dyn Any;
 
     fn as_any_mut(&mut self) -> &mut dyn Any;
@@ -426,6 +471,12 @@ impl<H: CommitHook> DynHook for H {
             .downcast_mut::<H>()
             .expect("hook type mismatch");
         self.merge(other_h)
+    }
+
+    fn runs_after(&self) -> &[TypeId] {
+        // UFCS is REQUIRED: `self.runs_after()` is ambiguous here because H
+        // implements both CommitHook and (this very) DynHook.
+        CommitHook::runs_after(self)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -503,6 +554,13 @@ impl CommitHooks {
     /// their [`CommitHook::on_rollback`] after rolling the transaction back.
     /// Hooks after the failing one — pending or not yet staged — never ran their
     /// `pre_commit`, produced no effects, and are simply dropped.
+    ///
+    /// A hook whose [`CommitHook::runs_after()`] names a still-pending type is
+    /// deferred to the back of the queue instead of executing — see the
+    /// [module docs](self#hook-ordering). Declared dependencies that can never
+    /// all be satisfied (a cycle) are detected when every remaining hook has been
+    /// deferred once in a row without any execution in between, and fail the
+    /// commit loudly instead of spinning inside an open transaction.
     pub(super) async fn execute_pre(
         self,
         op: &mut impl AtomicOperation,
@@ -514,8 +572,36 @@ impl CommitHooks {
             .map(|(type_id, hook)| (type_id, hook, 0))
             .collect();
         let mut post_hooks = Vec::with_capacity(pending.len());
+        let mut deferred_streak = 0usize;
 
-        while let Some((_, hook, generation)) = pending.pop_front() {
+        while let Some((type_id, hook, generation)) = pending.pop_front() {
+            // Deferral: a hook waits while any still-pending hook of a declared
+            // dependency type exists. Evaluated dynamically on every pop, so it
+            // composes with re-entrant staging (a dep staged mid-pass re-blocks
+            // a hook that already deferred past it).
+            let blocked = hook
+                .runs_after()
+                .iter()
+                .any(|dep| pending.iter().any(|(t, _, _)| t == dep));
+            if blocked {
+                pending.push_back((type_id, hook, generation));
+                deferred_streak += 1;
+                if deferred_streak >= pending.len() {
+                    // Every remaining hook deferred consecutively without any
+                    // execution in between → the declared dependencies form a
+                    // cycle. Fail loudly instead of spinning inside an open
+                    // transaction.
+                    let error = sqlx::Error::Protocol(format!(
+                        "commit hook runs_after dependencies form a cycle among \
+                         {} pending hooks — no hook can execute",
+                        pending.len()
+                    ));
+                    return Err((error, PostCommitHooks { hooks: post_hooks }));
+                }
+                continue;
+            }
+            deferred_streak = 0;
+
             match hook.pre_commit_boxed(op).await {
                 Ok((mut new_op, hook)) => {
                     post_hooks.push(hook);
