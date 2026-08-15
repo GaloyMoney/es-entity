@@ -1,3 +1,11 @@
+# [cala release v0.12.10](https://github.com/GaloyMoney/cala/releases/tag/0.12.10)
+
+
+
+### Features
+
+- Runs_after commit-hook ordering (#201)
+
 # [cala release v0.12.9](https://github.com/GaloyMoney/cala/releases/tag/0.12.9)
 
 
