@@ -1,3 +1,11 @@
+# [cala release v0.12.11](https://github.com/GaloyMoney/cala/releases/tag/0.12.11)
+
+
+
+### Features
+
+- Batch nested-child persistence across the whole parent batch (#203)
+
 # [cala release v0.12.10](https://github.com/GaloyMoney/cala/releases/tag/0.12.10)
 
 
