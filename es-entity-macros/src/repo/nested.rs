@@ -31,31 +31,57 @@ impl ToTokens for Nested<'_> {
         let find_include_deleted_fn_name = self.field.find_nested_include_deleted_fn_name();
 
         tokens.append_all(quote! {
-            async fn #create_fn_name<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), <#nested_repo_ty as es_entity::EsRepo>::CreateError>
+            // Batches every parent's new children into a single
+            // `create_all_in_op` call on the child repo — one statement for
+            // the whole parent batch, not one per parent — then redistributes
+            // the hydrated children back to their owning parent by count.
+            //
+            // Takes `&mut [&mut P]` rather than `&mut [P]` so a caller that
+            // already holds scattered `&mut P` borrows (this same fn one
+            // level up the nesting, recursing into grandchildren) can pass
+            // them straight through without needing contiguous storage.
+            async fn #create_fn_name<OP, P>(&self, op: &mut OP, entities: &mut [&mut P]) -> Result<(), <#nested_repo_ty as es_entity::EsRepo>::CreateError>
                 where
                     P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation
             {
-                let new_children = entity.new_children_mut();
-                if new_children.is_empty() {
+                let counts: Vec<usize> = entities
+                    .iter_mut()
+                    .map(|entity| entity.new_children_mut().len())
+                    .collect();
+                if counts.iter().all(|n| *n == 0) {
                     return Ok(());
                 }
 
-                let new_children = new_children.drain(..).collect();
-                let children = self.#repo_field.create_all_in_op(op, new_children).await?;
-                entity.inject_children(children);
+                let new_children: Vec<_> = entities
+                    .iter_mut()
+                    .flat_map(|entity| entity.new_children_mut().drain(..))
+                    .collect();
+
+                let mut children = self.#repo_field.create_all_in_op(op, new_children).await?.into_iter();
+                for (entity, n) in entities.iter_mut().zip(counts) {
+                    entity.inject_children(children.by_ref().take(n));
+                }
                 Ok(())
             }
 
-            async fn #update_fn_name<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), #parent_modify_error>
+            // Gathers every parent's already-persisted children into a single
+            // `update_all_mut_in_op` call on the child repo — one statement
+            // for the whole parent batch, not one per child per parent — then
+            // batches new children via `#create_fn_name`.
+            async fn #update_fn_name<OP, P>(&self, op: &mut OP, entities: &mut [&mut P]) -> Result<(), #parent_modify_error>
                 where
                     P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation
             {
-                for entity in entity.iter_persisted_children_mut() {
-                    self.#repo_field.update_in_op(op, entity).await?;
+                let persisted: Vec<_> = entities
+                    .iter_mut()
+                    .flat_map(|entity| entity.iter_persisted_children_mut())
+                    .collect();
+                if !persisted.is_empty() {
+                    self.#repo_field.update_all_mut_in_op(op, persisted).await?;
                 }
-                self.#create_fn_name(op, entity).await?;
+                self.#create_fn_name(op, entities).await?;
                 Ok(())
             }
 
@@ -126,31 +152,44 @@ mod tests {
         cursor.to_tokens(&mut tokens);
 
         let expected = quote! {
-            async fn create_nested_users_in_op<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), <UserRepo as es_entity::EsRepo>::CreateError>
+            async fn create_nested_users_in_op<OP, P>(&self, op: &mut OP, entities: &mut [&mut P]) -> Result<(), <UserRepo as es_entity::EsRepo>::CreateError>
                 where
                     P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation
             {
-                let new_children = entity.new_children_mut();
-                if new_children.is_empty() {
+                let counts: Vec<usize> = entities
+                    .iter_mut()
+                    .map(|entity| entity.new_children_mut().len())
+                    .collect();
+                if counts.iter().all(|n| *n == 0) {
                     return Ok(());
                 }
 
-                let new_children = new_children.drain(..).collect();
-                let children = self.users.create_all_in_op(op, new_children).await?;
-                entity.inject_children(children);
+                let new_children: Vec<_> = entities
+                    .iter_mut()
+                    .flat_map(|entity| entity.new_children_mut().drain(..))
+                    .collect();
+
+                let mut children = self.users.create_all_in_op(op, new_children).await?.into_iter();
+                for (entity, n) in entities.iter_mut().zip(counts) {
+                    entity.inject_children(children.by_ref().take(n));
+                }
                 Ok(())
             }
 
-            async fn update_nested_users_in_op<OP, P>(&self, op: &mut OP, entity: &mut P) -> Result<(), ParentModifyError>
+            async fn update_nested_users_in_op<OP, P>(&self, op: &mut OP, entities: &mut [&mut P]) -> Result<(), ParentModifyError>
                 where
                     P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation
             {
-                for entity in entity.iter_persisted_children_mut() {
-                    self.users.update_in_op(op, entity).await?;
+                let persisted: Vec<_> = entities
+                    .iter_mut()
+                    .flat_map(|entity| entity.iter_persisted_children_mut())
+                    .collect();
+                if !persisted.is_empty() {
+                    self.users.update_all_mut_in_op(op, persisted).await?;
                 }
-                self.create_nested_users_in_op(op, entity).await?;
+                self.create_nested_users_in_op(op, entities).await?;
                 Ok(())
             }
 

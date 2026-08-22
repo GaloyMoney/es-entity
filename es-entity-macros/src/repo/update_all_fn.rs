@@ -46,25 +46,82 @@ impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
     }
 }
 
+/// Which shape of parent collection a generated bulk-update function
+/// operates on.
+///
+/// `update_all_in_op` is the top-level, caller-facing batch API: it owns a
+/// contiguous `&mut [Entity]`. `update_all_mut_in_op` is the shape needed to
+/// batch *nested children across many parents*: each parent owns its own
+/// children (in its own `HashMap`), so gathering "every persisted child that
+/// needs updating, across the whole parent batch" can only ever produce a
+/// `Vec` of scattered `&mut Entity` borrows, never a contiguous slice.
+///
+/// Both variants share the exact same SQL-building logic below; only the
+/// outer signature and how `entities` is iterated differ, via `iter_ref` /
+/// `iter_mut_ref`. `Vec<&mut Entity>::iter_mut()` yields `&mut &mut Entity`
+/// (one level of indirection too many — it breaks the generic
+/// `Self::extract_events(entity)` call, which needs `Entity: EsEntity` to
+/// unify against a concrete `&mut Entity`, not `&mut &mut Entity`), so the
+/// `RefVec` adapters reborrow down to a single level with `.map(|e| &mut
+/// **e)` / `.map(|e| &**e)`, making the entity-loop bodies below identical
+/// text for both modes.
+enum BatchMode {
+    OwnedSlice,
+    RefVec,
+}
+
 impl ToTokens for UpdateAllFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.append_all(self.build(BatchMode::OwnedSlice));
+        tokens.append_all(self.build(BatchMode::RefVec));
+    }
+}
+
+impl UpdateAllFn<'_> {
+    fn build(&self, mode: BatchMode) -> TokenStream {
         let entity = self.entity;
         let modify_error = &self.modify_error;
 
-        let nested = self.nested_fn_names.iter().map(|f| {
-            quote! {
-                self.#f(op, entity).await?;
-            }
-        });
+        let (fn_name, entities_param, iter_ref, iter_mut_ref) = match mode {
+            BatchMode::OwnedSlice => (
+                quote::format_ident!("update_all_in_op"),
+                quote! { entities: &mut [#entity] },
+                quote! { entities.iter() },
+                quote! { entities.iter_mut() },
+            ),
+            BatchMode::RefVec => (
+                quote::format_ident!("update_all_mut_in_op"),
+                quote! { mut entities: Vec<&mut #entity> },
+                quote! { entities.iter().map(|e| &**e) },
+                quote! { entities.iter_mut().map(|e| &mut **e) },
+            ),
+        };
 
+        // Every nested field is batched once across the *whole* `entities`
+        // batch — not once per parent — so the whole nested phase is a
+        // handful of calls (one per nested field), never a loop over
+        // `entities`. `OwnedSlice` doesn't already hold `&mut` borrows, so it
+        // gathers them into a temporary `Vec` first; `RefVec` already is
+        // that `Vec` and is reused directly.
         let nested_phase = if self.nested_fn_names.is_empty() {
             None
         } else {
-            let nested = nested.collect::<Vec<_>>();
-            Some(quote! {
-                for entity in entities.iter_mut() {
-                    #(#nested)*
+            let nested_calls = self.nested_fn_names.iter().map(|f| match mode {
+                BatchMode::OwnedSlice => quote! {
+                    self.#f(op, &mut __nested_refs).await?;
+                },
+                BatchMode::RefVec => quote! {
+                    self.#f(op, &mut entities).await?;
+                },
+            });
+            let setup = matches!(mode, BatchMode::OwnedSlice).then(|| {
+                quote! {
+                    let mut __nested_refs: Vec<&mut #entity> = entities.iter_mut().collect();
                 }
+            });
+            Some(quote! {
+                #setup
+                #(#nested_calls)*
             })
         };
 
@@ -150,7 +207,7 @@ impl ToTokens for UpdateAllFn<'_> {
                         .first()
                         .ok_or(sqlx::Error::RowNotFound)
                         .and_then(|row| row.try_get("recorded_at"))?;
-                    for entity in entities.iter_mut() {
+                    for entity in #iter_mut_ref {
                         let events = Self::extract_events(entity);
                         if events.any_new() {
                             events.mark_new_events_persisted_at(recorded_at);
@@ -163,7 +220,7 @@ impl ToTokens for UpdateAllFn<'_> {
                 None,
                 None,
                 quote! {
-                    let mut all_event_refs: Vec<_> = entities.iter_mut()
+                    let mut all_event_refs: Vec<_> = #iter_mut_ref
                         .filter_map(|entity| {
                             let events = Self::extract_events(entity);
                             if events.any_new() { Some(events) } else { None }
@@ -204,7 +261,11 @@ impl ToTokens for UpdateAllFn<'_> {
         let (instrument_attr, error_recording) = {
             let entity_name = entity.to_string();
             let repo_name = &self.repo_name_snake;
-            let span_name = format!("{}.update_all", repo_name);
+            let span_suffix = match mode {
+                BatchMode::OwnedSlice => "update_all",
+                BatchMode::RefVec => "update_all_mut",
+            };
+            let span_name = format!("{}.{}", repo_name, span_suffix);
             (
                 quote! {
                     #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, count = entities.len(), error = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
@@ -229,22 +290,28 @@ impl ToTokens for UpdateAllFn<'_> {
             quote! {}
         };
 
-        tokens.append_all(quote! {
-            pub async fn update_all(
-                &self,
-                entities: &mut [#entity]
-            ) -> Result<usize, #modify_error> {
-                let mut op = self.begin_op().await?;
-                let res = self.update_all_in_op(&mut op, entities).await?;
-                op.commit().await?;
-                Ok(res)
+        let standalone_wrapper = matches!(mode, BatchMode::OwnedSlice).then(|| {
+            quote! {
+                pub async fn update_all(
+                    &self,
+                    entities: &mut [#entity]
+                ) -> Result<usize, #modify_error> {
+                    let mut op = self.begin_op().await?;
+                    let res = self.update_all_in_op(&mut op, entities).await?;
+                    op.commit().await?;
+                    Ok(res)
+                }
             }
+        });
+
+        quote! {
+            #standalone_wrapper
 
             #instrument_attr
-            pub async fn update_all_in_op<OP>(
+            pub async fn #fn_name<OP>(
                 &self,
                 op: &mut OP,
-                entities: &mut [#entity]
+                #entities_param
             ) -> Result<usize, #modify_error>
             where
                 OP: es_entity::AtomicOperation
@@ -262,7 +329,7 @@ impl ToTokens for UpdateAllFn<'_> {
                     #event_collection_vars
 
                     let mut has_new_events = false;
-                    for entity in entities.iter() {
+                    for entity in #iter_ref {
                         if !entity.events().any_new() {
                             continue;
                         }
@@ -279,7 +346,7 @@ impl ToTokens for UpdateAllFn<'_> {
                     #persist_tokens
 
                     let mut total_events = 0usize;
-                    for entity in entities.iter_mut() {
+                    for entity in #iter_mut_ref {
                         if let Some(&n_events) = n_persisted.get(&entity.id) {
                             if n_events > 0 {
                                 #post_persist_check
@@ -294,7 +361,7 @@ impl ToTokens for UpdateAllFn<'_> {
                 #error_recording
                 __result
             }
-        });
+        }
     }
 }
 
@@ -441,6 +508,100 @@ mod tests {
 
                 __result
             }
+
+            pub async fn update_all_mut_in_op<OP>(
+                &self,
+                op: &mut OP,
+                mut entities: Vec<&mut Entity>
+            ) -> Result<usize, EntityModifyError>
+            where
+                OP: es_entity::AtomicOperation
+            {
+                let __result: Result<usize, EntityModifyError> = async {
+                    use es_entity::prelude::sqlx::Row;
+
+                    if entities.is_empty() {
+                        return Ok(0);
+                    }
+
+                    let mut id_collection = Vec::new();
+                    let mut name_collection = Vec::new();
+
+                    let mut all_ids: Vec<&EntityId> = Vec::new();
+                    let mut all_sequences: Vec<i32> = Vec::new();
+                    let mut all_types = Vec::new();
+                    let mut all_serialized = Vec::new();
+                    let mut n_persisted: std::collections::HashMap<EntityId, usize> = std::collections::HashMap::new();
+
+                    let mut has_new_events = false;
+                    for entity in entities.iter().map(|e| &**e) {
+                        if !entity.events().any_new() {
+                            continue;
+                        }
+                        has_new_events = true;
+
+                        let id = &entity.id;
+                        let name = &entity.name;
+                        id_collection.push(id);
+                        name_collection.push(name);
+                        let offset = entity.events().len_persisted() + 1;
+                        let types = entity.events().new_event_types();
+                        let serialized = entity.events().serialize_new_events();
+
+                        let n_new = serialized.len();
+                        all_types.extend(types);
+                        all_serialized.extend(serialized);
+                        all_ids.extend(std::iter::repeat(&entity.id).take(n_new));
+                        all_sequences.extend((offset..).take(n_new).map(|i| i as i32));
+                        n_persisted.insert(entity.id.clone(), n_new);
+                    }
+
+                    if !has_new_events {
+                        return Ok(0);
+                    }
+
+                    let expected_events = all_ids.len();
+                    let rows = sqlx::query("WITH updated AS (UPDATE entities SET name = unnested.name FROM UNNEST($1, $2) AS unnested(id, name) WHERE entities.id = unnested.id RETURNING entities.id) INSERT INTO entity_events (id, recorded_at, sequence, event_type, event) SELECT unnested.id, COALESCE($3, NOW()), unnested.sequence, unnested.event_type, unnested.event FROM UNNEST($4, $5::INT[], $6::TEXT[], $7::JSONB[]) AS unnested(id, sequence, event_type, event) JOIN updated ON updated.id = unnested.id RETURNING recorded_at")
+                        .bind(id_collection)
+                        .bind(name_collection)
+                        .bind(op.maybe_now())
+                        .bind(&all_ids)
+                        .bind(&all_sequences)
+                        .bind(&all_types)
+                        .bind(&all_serialized)
+                        .fetch_all(op.as_executor())
+                        .await
+                        .map_err(Self::classify_write_error)?;
+
+                    if rows.len() != expected_events {
+                        return Err(EntityModifyError::ConcurrentModification);
+                    }
+
+                    let recorded_at = rows
+                        .first()
+                        .ok_or(sqlx::Error::RowNotFound)
+                        .and_then(|row| row.try_get("recorded_at"))?;
+                    for entity in entities.iter_mut().map(|e| &mut **e) {
+                        let events = Self::extract_events(entity);
+                        if events.any_new() {
+                            events.mark_new_events_persisted_at(recorded_at);
+                        }
+                    }
+
+                    let mut total_events = 0usize;
+                    for entity in entities.iter_mut().map(|e| &mut **e) {
+                        if let Some(&n_events) = n_persisted.get(&entity.id) {
+                            if n_events > 0 {
+                                total_events += n_events;
+                            }
+                        }
+                    }
+
+                    Ok(total_events)
+                }.await;
+
+                __result
+            }
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
@@ -526,6 +687,60 @@ mod tests {
 
                     let mut total_events = 0usize;
                     for entity in entities.iter_mut() {
+                        if let Some(&n_events) = n_persisted.get(&entity.id) {
+                            if n_events > 0 {
+                                total_events += n_events;
+                            }
+                        }
+                    }
+
+                    Ok(total_events)
+                }.await;
+
+                __result
+            }
+
+            pub async fn update_all_mut_in_op<OP>(
+                &self,
+                op: &mut OP,
+                mut entities: Vec<&mut Entity>
+            ) -> Result<usize, EntityModifyError>
+            where
+                OP: es_entity::AtomicOperation
+            {
+                let __result: Result<usize, EntityModifyError> = async {
+                    use es_entity::prelude::sqlx::Row;
+
+                    if entities.is_empty() {
+                        return Ok(0);
+                    }
+
+                    let mut has_new_events = false;
+                    for entity in entities.iter().map(|e| &**e) {
+                        if !entity.events().any_new() {
+                            continue;
+                        }
+                        has_new_events = true;
+                    }
+
+                    if !has_new_events {
+                        return Ok(0);
+                    }
+
+                    let mut all_event_refs: Vec<_> = entities.iter_mut().map(|e| &mut **e)
+                        .filter_map(|entity| {
+                            let events = Self::extract_events(entity);
+                            if events.any_new() { Some(events) } else { None }
+                        })
+                        .collect();
+                    let n_persisted = Self::extract_concurrent_modification(
+                        self.persist_events_batch(op, &mut all_event_refs).await,
+                        EntityModifyError::ConcurrentModification,
+                    )?;
+                    drop(all_event_refs);
+
+                    let mut total_events = 0usize;
+                    for entity in entities.iter_mut().map(|e| &mut **e) {
                         if let Some(&n_events) = n_persisted.get(&entity.id) {
                             if n_events > 0 {
                                 total_events += n_events;

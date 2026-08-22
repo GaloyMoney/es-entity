@@ -55,7 +55,7 @@ impl ToTokens for CreateFn<'_> {
 
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
-                self.#f(op, &mut entity).await?;
+                self.#f(op, &mut [&mut entity]).await?;
             }
         });
         let maybe_mut_entity = if self.nested_fn_names.is_empty() {
