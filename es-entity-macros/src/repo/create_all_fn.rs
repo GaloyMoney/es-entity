@@ -53,15 +53,23 @@ impl ToTokens for CreateAllFn<'_> {
         let entity = self.entity;
         let create_error = &self.create_error;
 
-        let nested = self.nested_fn_names.iter().map(|f| {
-            quote! {
-                self.#f(op, &mut entity).await?;
-            }
-        });
-        let maybe_mut_entity = if self.nested_fn_names.is_empty() {
-            quote! { entity }
+        // Nested creation is batched once across the whole hydrated parent
+        // batch (not once per parent), so it runs as its own pass after every
+        // parent is hydrated, gathering `&mut` refs into every parent just
+        // for that pass.
+        let nested_phase = if self.nested_fn_names.is_empty() {
+            quote! {}
         } else {
-            quote! { mut entity }
+            let nested = self.nested_fn_names.iter().map(|f| {
+                quote! {
+                    self.#f(op, &mut entity_refs).await?;
+                }
+            });
+            quote! {
+                let mut entity_refs: Vec<&mut #entity> = entities.iter_mut().collect();
+                #(#nested)*
+                drop(entity_refs);
+            }
         };
 
         let table_name = self.table_name;
@@ -163,6 +171,40 @@ impl ToTokens for CreateAllFn<'_> {
             quote! {}
         };
 
+        // The post-hydrate/post-persist pass only exists to run these two
+        // hooks (nested creation is already batched by `nested_phase`
+        // above), so it — and the `n_events` bookkeeping it needs — is
+        // skipped entirely when neither hook is configured: an empty loop
+        // would just be dead weight (and an unused-variable warning under
+        // `-D warnings`).
+        let post_checks_phase =
+            if self.post_hydrate_error.is_some() || self.post_persist_error.is_some() {
+                quote! {
+                    let mut n_events_by_entity: Vec<usize> = Vec::new();
+                    for (events, n_events) in all_events.into_iter().zip(n_persisted) {
+                        let entity = Self::hydrate_entity(events)?;
+                        entities.push(entity);
+                        n_events_by_entity.push(n_events);
+                    }
+
+                    #nested_phase
+
+                    for (entity, n_events) in entities.iter().zip(n_events_by_entity) {
+                        #post_hydrate_check
+                        #post_persist_check
+                    }
+                }
+            } else {
+                quote! {
+                    for (events, _n_events) in all_events.into_iter().zip(n_persisted) {
+                        let entity = Self::hydrate_entity(events)?;
+                        entities.push(entity);
+                    }
+
+                    #nested_phase
+                }
+            };
+
         tokens.append_all(quote! {
             pub async fn create_all(
                 &self,
@@ -186,9 +228,9 @@ impl ToTokens for CreateAllFn<'_> {
                 let __result: Result<Vec<#entity>, #create_error> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
-                    let mut res = Vec::new();
+                    let mut entities = Vec::new();
                     if new_entities.is_empty() {
-                        return Ok(res);
+                        return Ok(entities);
                     }
 
                     let mut __query_args = sqlx::postgres::PgArguments::default();
@@ -239,17 +281,9 @@ impl ToTokens for CreateAllFn<'_> {
                         }
                     }
 
-                    for (events, n_events) in all_events.into_iter().zip(n_persisted) {
-                        let #maybe_mut_entity = Self::hydrate_entity(events)?;
+                    #post_checks_phase
 
-                        #(#nested)*
-
-                        #post_hydrate_check
-                        #post_persist_check
-                        res.push(entity);
-                    }
-
-                    Ok(res)
+                    Ok(entities)
                 }.await;
 
                 #error_recording
@@ -319,9 +353,9 @@ mod tests {
                 let __result: Result<Vec<Entity>, EntityCreateError> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
-                    let mut res = Vec::new();
+                    let mut entities = Vec::new();
                     if new_entities.is_empty() {
-                        return Ok(res);
+                        return Ok(entities);
                     }
 
                     let mut __query_args = sqlx::postgres::PgArguments::default();
@@ -391,13 +425,12 @@ mod tests {
                         }
                     }
 
-                    for (events, n_events) in all_events.into_iter().zip(n_persisted) {
+                    for (events, _n_events) in all_events.into_iter().zip(n_persisted) {
                         let entity = Self::hydrate_entity(events)?;
-
-                        res.push(entity);
+                        entities.push(entity);
                     }
 
-                    Ok(res)
+                    Ok(entities)
                 }.await;
 
                 __result

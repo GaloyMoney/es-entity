@@ -53,7 +53,7 @@ impl ToTokens for UpdateFn<'_> {
 
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
-                self.#f(op, entity).await?;
+                self.#f(op, &mut [&mut *entity]).await?;
             }
         });
 
