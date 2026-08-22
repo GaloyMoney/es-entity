@@ -5,7 +5,7 @@ use quote::{TokenStreamExt, quote};
 use super::{
     list_by_fn::{CursorStruct, assemble_union_select, not_deleted_predicate},
     options::*,
-    scope::ScopeInfo,
+    scope::{ScopeCol, ScopeInfo},
 };
 
 pub struct ListForFn<'a> {
@@ -210,7 +210,7 @@ impl ToTokens for ListForFn<'_> {
                 }
             };
 
-            let build_query_arms = |scope: Option<&ScopeInfo>| -> TokenStream {
+            let build_query_arms = |scope: Option<&ScopeCol>| -> TokenStream {
                 let mut query_arms = TokenStream::new();
                 let offset = if scope.is_some() { 2 } else { 1 };
                 for ascending in [true, false] {
@@ -264,16 +264,18 @@ impl ToTokens for ListForFn<'_> {
                 None => (quote! {}, quote! {}, quote! {}),
             };
             let match_expr = if let Some(scope) = &self.scope {
-                let scoped_query_arms = build_query_arms(Some(scope));
                 scope.dispatch(
                     quote! {
                         match direction {
                             #query_arms
                         }
                     },
-                    quote! {
-                        match direction {
-                            #scoped_query_arms
+                    |col| {
+                        let scoped_query_arms = build_query_arms(Some(col));
+                        quote! {
+                            match direction {
+                                #scoped_query_arms
+                            }
                         }
                     },
                 )

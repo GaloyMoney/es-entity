@@ -7,15 +7,16 @@ use entities::contact::*;
 use es_entity::*;
 
 /// Partner-scoped repo: every generated read fn requires a leading
-/// `scope: impl Into<ContactScope>` argument. `Only(partner_id)` filters all
-/// reads by the scope column; `All` reads across scopes. Writes (`create`,
-/// `update`, `delete`) keep their unscoped signatures — mutations operate on
-/// entities that could only have been obtained through a scoped read.
+/// `scope: impl Into<ContactScope>` argument. `PartnerId(partner_id)` filters
+/// all reads by the scope column; `All` reads across scopes. Writes
+/// (`create`, `update`, `delete`) keep their unscoped signatures — mutations
+/// operate on entities that could only have been obtained through a scoped
+/// read.
 ///
 /// The scope column additionally opts into `find_by`/`list_for`: callers
 /// filter by `partner_id` through the normal query surface, composing with
-/// the scope — under `Only(a)` the column is double-specified (filter AND
-/// scope conjunct), so a mismatching caller value is a contradictory
+/// the scope — under `PartnerId(a)` the column is double-specified (filter
+/// AND scope conjunct), so a mismatching caller value is a contradictory
 /// predicate returning an empty result.
 #[derive(EsRepo, Debug)]
 #[es_repo(
@@ -71,12 +72,13 @@ async fn scoped_point_reads() -> anyhow::Result<()> {
     let (id_a, id_b) = (ids_a[0], ids_b[0]);
 
     // own scope: found — `impl Into<ContactScope>` accepts the partner id
-    // directly (From<PartnerId> => Only), a reference, or the explicit enum.
+    // directly (From<PartnerId> => PartnerId), a reference, or the explicit
+    // enum.
     let found = contacts.find_by_id(partner_a, id_a).await?;
     assert_eq!(found.partner_id, partner_a);
     contacts.find_by_id(&partner_a, id_a).await?;
     contacts
-        .find_by_id(ContactScope::Only(partner_a), id_a)
+        .find_by_id(ContactScope::PartnerId(partner_a), id_a)
         .await?;
 
     // foreign scope: missing and not-yours look identical
@@ -142,8 +144,8 @@ async fn scoped_find_all_drops_foreign_ids() -> anyhow::Result<()> {
 
     let all_ids: Vec<ContactId> = ids_a.iter().chain(ids_b.iter()).copied().collect();
 
-    // Only(a): foreign ids are silently absent — missing and not-yours look
-    // identical.
+    // PartnerId(a): foreign ids are silently absent — missing and not-yours
+    // look identical.
     let found = contacts.find_all::<Contact>(partner_a, &all_ids).await?;
     assert_eq!(found.len(), 2);
     assert!(ids_a.iter().all(|id| found.contains_key(id)));
@@ -169,8 +171,8 @@ async fn scoped_list_by_paginates_within_scope() -> anyhow::Result<()> {
     let ids_a = seed_contacts(&contacts, partner_a, &specs).await?;
     seed_contacts(&contacts, partner_b, &specs).await?;
 
-    // paginate under Only(a) with a page size that forces both the page-1
-    // and the cursor-page specialized variants to execute
+    // paginate under PartnerId(a) with a page size that forces both the
+    // page-1 and the cursor-page specialized variants to execute
     let mut collected = Vec::new();
     let mut after: Option<contact_cursor::ContactByCreatedAtCursor> = None;
     let mut pages = 0;
@@ -335,7 +337,7 @@ async fn foreign_cursor_cannot_leak_rows() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The `Only` arm's page-1 list SQL must be sargable against a
+/// The `PartnerId` arm's page-1 list SQL must be sargable against a
 /// `(partner_id, created_at, id)` composite index — the scope conjunct is a
 /// plain equality, not a COALESCE catch-all.
 #[tokio::test]
@@ -346,7 +348,7 @@ async fn scoped_list_query_plan_uses_composite_index() -> anyhow::Result<()> {
     sqlx::query("SET LOCAL enable_seqscan = off")
         .execute(&mut *tx)
         .await?;
-    // The exact page-1 `Only` arm SQL shape generated for
+    // The exact page-1 `PartnerId` arm SQL shape generated for
     // `list_by_created_at`.
     let rows: Vec<(String,)> = sqlx::query_as(
         "EXPLAIN SELECT created_at, id FROM contacts WHERE partner_id = $1 \
@@ -397,7 +399,7 @@ async fn scoped_view_delegates() -> anyhow::Result<()> {
     let ids_b = seed_contacts(&contacts, partner_b, &[("v3", "active")]).await?;
 
     let view = contacts.scoped(partner_a);
-    assert!(matches!(view.scope(), ContactScope::Only(p) if p == partner_a));
+    assert!(matches!(view.scope(), ContactScope::PartnerId(p) if p == partner_a));
 
     // point reads — no scope argument at the call sites
     let contact = view.find_by_id(ids_a[0]).await?;
@@ -477,7 +479,7 @@ async fn scoped_view_delegates() -> anyhow::Result<()> {
 
 /// The scope column opted into `find_by = true`: the lookup composes with
 /// the scope via the double-specified conjunct (`partner_id = $1 AND
-/// partner_id = $2`). Under `Only(a)` a lookup of `b != a` is a
+/// partner_id = $2`). Under `PartnerId(a)` a lookup of `b != a` is a
 /// contradictory predicate — not-found, indistinguishable from missing.
 #[tokio::test]
 async fn scope_column_find_by_composes() -> anyhow::Result<()> {
@@ -495,11 +497,11 @@ async fn scope_column_find_by_composes() -> anyhow::Result<()> {
         .await?;
     assert_eq!(found.partner_id, partner_a);
 
-    // Only(a) + a: match — behaves like the scoped read
+    // PartnerId(a) + a: match — behaves like the scoped read
     let found = contacts.find_by_partner_id(partner_a, partner_a).await?;
     assert_eq!(found.partner_id, partner_a);
 
-    // Only(a) + b: mismatch — not-found, indistinguishable from missing
+    // PartnerId(a) + b: mismatch — not-found, indistinguishable from missing
     let err = contacts.find_by_partner_id(partner_a, partner_b).await;
     assert!(matches!(err, Err(ContactFindError::NotFound { .. })));
     assert!(
@@ -518,8 +520,8 @@ async fn scope_column_find_by_composes() -> anyhow::Result<()> {
 ///
 /// - `All` + `None`      → unfiltered
 /// - `All` + `Some(p)`   → rows of `p`
-/// - `Only(a)` + `None`  → rows of `a`
-/// - `Only(a)` + `Some(b)` → `partner_id = b AND partner_id = a` — empty
+/// - `PartnerId(a)` + `None`  → rows of `a`
+/// - `PartnerId(a)` + `Some(b)` → `partner_id = b AND partner_id = a` — empty
 ///   unless `a == b` (a caller filter can narrow but never widen the scope)
 #[tokio::test]
 async fn scope_column_filter_combinations() -> anyhow::Result<()> {
@@ -577,19 +579,19 @@ async fn scope_column_filter_combinations() -> anyhow::Result<()> {
     assert_eq!(ret.entities.len(), 2);
     assert!(ret.entities.iter().all(|c| c.partner_id == partner_a));
 
-    // Only(a) + None: the scope alone filters
+    // PartnerId(a) + None: the scope alone filters
     let ret = contacts
         .list_for_filters(partner_a, ContactFilters::default(), sort(), query())
         .await?;
     assert_eq!(ret.entities.len(), 2);
 
-    // Only(a) + Some(a): match — same result as the scope alone
+    // PartnerId(a) + Some(a): match — same result as the scope alone
     let ret = contacts
         .list_for_filters(partner_a, partner_filter(partner_a), sort(), query())
         .await?;
     assert_eq!(ret.entities.len(), 2);
 
-    // Only(a) + Some(b): a caller filter can never widen the scope — the
+    // PartnerId(a) + Some(b): a caller filter can never widen the scope — the
     // mismatch honestly returns nothing instead of being silently ignored
     let ret = contacts
         .list_for_filters(partner_a, partner_filter(partner_b), sort(), query())

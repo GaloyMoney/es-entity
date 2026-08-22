@@ -96,12 +96,27 @@ async fn specialization_relied_on_indexes_physically_exist() -> anyhow::Result<(
     );
 
     // `tests/scoped_repo_sargable.rs` `Contacts` (scope partner_id, sort
-    // created_at): the scoped Only-arm auto-prefixes the scope column.
+    // created_at): the scoped PartnerId-arm auto-prefixes the scope column.
     let contacts = index_key_columns(&mut conn, "contacts").await?;
     assert!(
         covered(&contacts, &["partner_id"], "created_at"),
         "contacts must have an index covering (partner_id, created_at, ...); \
          got {contacts:?}"
+    );
+
+    // `tests/multi_scoped_repo.rs` `Facilities` (scope partner_id AND
+    // customer_id, sort created_at): each dimension's arm is checked
+    // independently against the catalog, so both must be covered.
+    let facilities = index_key_columns(&mut conn, "facilities").await?;
+    assert!(
+        covered(&facilities, &["partner_id"], "created_at"),
+        "facilities must have an index covering (partner_id, created_at, ...); \
+         got {facilities:?}"
+    );
+    assert!(
+        covered(&facilities, &["customer_id"], "created_at"),
+        "facilities must have an index covering (customer_id, created_at, ...); \
+         got {facilities:?}"
     );
 
     // Newly-permitted shape (#185): a bare `(status)` index covers the status

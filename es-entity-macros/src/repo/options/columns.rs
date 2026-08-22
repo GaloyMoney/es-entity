@@ -43,53 +43,90 @@ impl Columns {
         self.all.iter().filter(|c| c.opts.list_for())
     }
 
-    /// The column marked `scope`, if any. Validated by
-    /// [`Self::validate_scope`] to be unique and non-nullable.
-    pub fn scope_column(&self) -> Option<&Column> {
-        self.all.iter().find(|c| c.opts.scope)
+    /// The columns marked `scope`, in declaration order (declaration order
+    /// becomes enum-variant order and dispatch-arm order). Validated by
+    /// [`Self::validate_scope`].
+    pub fn scope_columns(&self) -> Vec<&Column> {
+        self.all.iter().filter(|c| c.opts.scope).collect()
     }
 
-    /// Validates the `scope` column marker:
+    /// Validates the `scope` column markers:
     ///
-    /// - at most one column may be marked `scope`
-    /// - the scope column must be non-nullable (`Option<T>` and
+    /// - scope columns must have pairwise-distinct Rust types (the generated
+    ///   `From<T>` conversions dispatch on type, so two same-typed scope
+    ///   columns would produce conflicting impls) and pairwise-distinct
+    ///   variant names (UpperCamel of the column name), neither colliding
+    ///   with the reserved `All` variant
+    /// - every scope column must be non-nullable (`Option<T>` and
     ///   `nullable`-annotated types are rejected — nullable scope columns are
     ///   a future feature)
-    /// - the scope column must not be `Forgettable<T>`
-    /// - the scope column must not be the `parent` column (nested repos
-    ///   cannot be scoped — children are custody-guarded via their parent)
+    /// - every scope column must not be `Forgettable<T>`
+    /// - no scope column may be the `parent` column (nested repos cannot be
+    ///   scoped — children are custody-guarded via their parent)
     pub fn validate_scope(&self) -> darling::Result<()> {
         let scope_columns: Vec<_> = self.all.iter().filter(|c| c.opts.scope).collect();
-        if scope_columns.len() > 1 {
-            return Err(darling::Error::custom(
-                "only one scope column per repo is supported",
-            ));
-        }
-        let Some(col) = scope_columns.first() else {
+        if scope_columns.is_empty() {
             return Ok(());
-        };
-        if col.is_nullable_column() {
-            return Err(darling::Error::custom(format!(
-                "scope column '{}' must be non-nullable — nullable scope columns are not supported (yet)",
-                col.name(),
-            )));
-        }
-        if col.opts.forgettable {
-            return Err(darling::Error::custom(format!(
-                "scope column '{}' cannot be Forgettable",
-                col.name(),
-            )));
-        }
-        if col.opts.parent_opts.is_some() {
-            return Err(darling::Error::custom(format!(
-                "scope column '{}' cannot be the parent column — nested repos cannot be scoped",
-                col.name(),
-            )));
         }
         if self.parent().is_some() {
             return Err(darling::Error::custom(
                 "scope is not supported on nested repos — children are custody-guarded via their (scoped) parent",
             ));
+        }
+        for col in &scope_columns {
+            if col.is_nullable_column() {
+                return Err(darling::Error::custom(format!(
+                    "scope column '{}' must be non-nullable — nullable scope columns are not supported (yet)",
+                    col.name(),
+                )));
+            }
+            if col.opts.forgettable {
+                return Err(darling::Error::custom(format!(
+                    "scope column '{}' cannot be Forgettable",
+                    col.name(),
+                )));
+            }
+            if col.opts.parent_opts.is_some() {
+                return Err(darling::Error::custom(format!(
+                    "scope column '{}' cannot be the parent column — nested repos cannot be scoped",
+                    col.name(),
+                )));
+            }
+        }
+        // The generated From<T> conversions dispatch on the Rust type — every
+        // scope column must have a distinct type or the impls conflict.
+        for (i, a) in scope_columns.iter().enumerate() {
+            for b in &scope_columns[i + 1..] {
+                let ty_a = quote::ToTokens::to_token_stream(a.ty()).to_string();
+                let ty_b = quote::ToTokens::to_token_stream(b.ty()).to_string();
+                if ty_a == ty_b {
+                    return Err(darling::Error::custom(format!(
+                        "scope columns '{}' and '{}' have the same Rust type '{}' — the generated From<T> conversions would conflict; use distinct newtype ids",
+                        a.name(),
+                        b.name(),
+                        ty_a,
+                    )));
+                }
+            }
+        }
+        // Variant idents are UpperCamel(column name); they must not collide
+        // with each other or with the built-in `All` variant.
+        use convert_case::{Case, Casing};
+        let mut variant_names: Vec<String> = Vec::new();
+        for col in &scope_columns {
+            let variant = col.name().to_string().to_case(Case::UpperCamel);
+            if variant == "All" {
+                return Err(darling::Error::custom(format!(
+                    "scope column '{}' maps to the reserved variant name 'All'",
+                    col.name(),
+                )));
+            }
+            if variant_names.contains(&variant) {
+                return Err(darling::Error::custom(format!(
+                    "scope columns map to the same variant name '{variant}'",
+                )));
+            }
+            variant_names.push(variant);
         }
         Ok(())
     }
@@ -799,9 +836,11 @@ struct ColumnOpts {
     /// `NULL` by `forget()`/`delete()`. `ty` is rewritten to `Option<Inner>`.
     #[darling(default, skip)]
     forgettable: bool,
-    /// Marks the repo's scope column: every generated read fn gains a leading
+    /// Marks a repo scope column: every generated read fn gains a leading
     /// `scope: impl Into<{Entity}Scope>` argument and filters by this column
-    /// under `Only(_)`. Validated by [`Columns::validate_scope`].
+    /// under its dedicated enum variant. Multiple columns may be marked
+    /// `scope` (one variant each, plus `All`). Validated by
+    /// [`Columns::validate_scope`].
     #[darling(default)]
     scope: bool,
     #[darling(default)]
@@ -1169,7 +1208,8 @@ mod tests {
         assert_eq!(columns.all.len(), 1);
         columns.set_id_column(&parse_quote!(TestId));
 
-        let scope = columns.scope_column().expect("id should be scope column");
+        let scope_cols = columns.scope_columns();
+        let scope = scope_cols.first().expect("id should be scope column");
         assert_eq!(scope.name().to_string(), "id");
         // The id column keeps its point-read and cursor fns despite being
         // the scope column (`for_id` opts in explicitly).
@@ -1183,7 +1223,7 @@ mod tests {
         let input: syn::Meta = parse_quote!(columns(name = "String"));
         let mut columns = Columns::from_meta(&input).expect("Failed to parse Fields");
         columns.set_id_column(&parse_quote!(TestId));
-        assert!(columns.scope_column().is_none());
+        assert!(columns.scope_columns().is_empty());
     }
 
     fn parse_columns_err(input: syn::Meta) -> String {
@@ -1215,14 +1255,37 @@ mod tests {
     }
 
     #[test]
-    fn id_scope_conflicts_with_column_scope() {
+    fn id_scope_composes_with_distinct_column_scope() {
+        // Multiple scope columns are allowed as long as their Rust types are
+        // pairwise distinct — `id(scope)` (TestId) plus a `partner_id(scope)`
+        // (PartnerId) is a valid two-dimension scope.
         let input: syn::Meta =
             parse_quote!(columns(id(scope), partner_id(ty = "PartnerId", scope)));
         let mut columns = Columns::from_meta(&input).expect("Failed to parse Fields");
         columns.set_id_column(&parse_quote!(TestId));
+        assert!(columns.validate_scope().is_ok());
+        assert_eq!(columns.scope_columns().len(), 2);
+    }
+
+    #[test]
+    fn same_type_scope_columns_rejected() {
+        let input: syn::Meta = parse_quote!(columns(
+            partner_id(ty = "PartnerId", scope),
+            other_partner_id(ty = "PartnerId", scope)
+        ));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_scope().unwrap_err().to_string();
+        assert!(err.contains("same Rust type"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn colliding_variant_names_rejected() {
+        // `all` as a column name collides with the reserved `All` variant.
+        let input: syn::Meta = parse_quote!(columns(all(ty = "PartnerId", scope)));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
         let err = columns.validate_scope().unwrap_err().to_string();
         assert!(
-            err.contains("only one scope column"),
+            err.contains("reserved variant name"),
             "unexpected error: {err}"
         );
     }

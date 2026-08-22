@@ -3,7 +3,10 @@ use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
 use quote::{TokenStreamExt, quote};
 
-use super::{options::*, scope::ScopeInfo};
+use super::{
+    options::*,
+    scope::{ScopeCol, ScopeInfo},
+};
 
 /// Assemble the unified cursor query: the per-state cursor predicates emitted
 /// as `UNION ALL` branches in a single static query.
@@ -516,7 +519,7 @@ impl ToTokens for ListByFn<'_> {
                 }
             };
 
-            let build_query_arms = |scope: Option<&ScopeInfo>| -> TokenStream {
+            let build_query_arms = |scope: Option<&ScopeCol>| -> TokenStream {
                 let mut query_arms = TokenStream::new();
                 let offset = if scope.is_some() { 1 } else { 0 };
                 for ascending in [true, false] {
@@ -568,16 +571,18 @@ impl ToTokens for ListByFn<'_> {
                 None => (quote! {}, quote! {}, quote! {}),
             };
             let match_expr = if let Some(scope) = &self.scope {
-                let scoped_query_arms = build_query_arms(Some(scope));
                 scope.dispatch(
                     quote! {
                         match direction {
                             #query_arms
                         }
                     },
-                    quote! {
-                        match direction {
-                            #scoped_query_arms
+                    |col| {
+                        let scoped_query_arms = build_query_arms(Some(col));
+                        quote! {
+                            match direction {
+                                #scoped_query_arms
+                            }
                         }
                     },
                 )
