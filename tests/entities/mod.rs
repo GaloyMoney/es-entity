@@ -1,5 +1,6 @@
 pub mod contact;
 pub mod customer;
+pub mod facility;
 pub mod order;
 pub mod partner;
 pub mod profile;

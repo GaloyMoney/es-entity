@@ -7,11 +7,11 @@ use entities::contact::*;
 use es_entity::*;
 
 /// The scoped `Contacts` repo whose migrations declare a
-/// `(partner_id, created_at, id)` index, so the scoped `Only`-arm
+/// `(partner_id, created_at, id)` index, so the scoped `PartnerId`-arm
 /// no-filter combo is specialized (the scope column is auto-prefixed): the
 /// scope × filter composition must hold through the specialized unified query,
 /// not just the catch-all fallback (exercised by `scoped_repo.rs`). The scope
-/// column doubles as a `list_for` filter column; under `Only` it is
+/// column doubles as a `list_for` filter column; under `PartnerId(_)` it is
 /// double-specified (filter AND scope conjunct) — a mismatch is a
 /// contradictory predicate returning no
 /// rows.
@@ -109,7 +109,7 @@ async fn sargable_scope_column_filter_combinations() -> anyhow::Result<()> {
     assert_eq!(ret.entities.len(), 2);
     assert!(ret.entities.iter().all(|c| c.partner_id == partner_a));
 
-    // Only(a) + Some(a): match — the conjunct is satisfiable, same rows
+    // PartnerId(a) + Some(a): match — the conjunct is satisfiable, same rows
     let ret = contacts
         .list_for_filters(
             partner_a,
@@ -123,7 +123,7 @@ async fn sargable_scope_column_filter_combinations() -> anyhow::Result<()> {
         .await?;
     assert_eq!(ret.entities.len(), 2);
 
-    // Only(a) + Some(b): mismatch — contradictory conjunct, empty
+    // PartnerId(a) + Some(b): mismatch — contradictory conjunct, empty
     let ret = contacts
         .list_for_filters(
             partner_a,

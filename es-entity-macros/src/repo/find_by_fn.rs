@@ -219,23 +219,22 @@ impl ToTokens for FindByFn<'_> {
                     quote! { fetch_optional }
                 };
                 let fetch_optional_call = if let Some(scope) = &self.scope {
-                    let scoped_query = format!(
-                        r#"SELECT id FROM {} WHERE {} {} $1 AND {}{}"#,
-                        self.table_name,
-                        column_name,
-                        filter_op,
-                        scope.predicate(2),
-                        if delete == DeleteOption::No {
-                            self.delete.not_deleted_condition()
-                        } else {
-                            ""
-                        }
-                    );
-                    let scoped_es_query_call = make_es_query(&scoped_query, &scope.arg_tokens());
-                    scope.dispatch(
-                        quote! { #es_query_call.#fetch_method(op).await? },
-                        quote! { #scoped_es_query_call.#fetch_method(op).await? },
-                    )
+                    scope.dispatch(quote! { #es_query_call.#fetch_method(op).await? }, |col| {
+                        let scoped_query = format!(
+                            r#"SELECT id FROM {} WHERE {} {} $1 AND {}{}"#,
+                            self.table_name,
+                            column_name,
+                            filter_op,
+                            col.predicate(2),
+                            if delete == DeleteOption::No {
+                                self.delete.not_deleted_condition()
+                            } else {
+                                ""
+                            }
+                        );
+                        let scoped_es_query_call = make_es_query(&scoped_query, &col.arg_tokens());
+                        quote! { #scoped_es_query_call.#fetch_method(op).await? }
+                    })
                 } else {
                     quote! { #es_query_call.#fetch_method(op).await? }
                 };

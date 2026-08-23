@@ -26,21 +26,57 @@ pub struct Customers {
 
 `partner_id` remains an ordinary persisted column — it is populated on
 `create` from the `NewCustomer`'s field like any other column. The `scope`
-marker additionally generates an entity-named scope enum:
+marker additionally generates an entity-named scope enum, with one variant
+per scope column (UpperCamel of the column name):
 
 ```rust,ignore
 pub enum CustomerScope {
-    All,               // no filter — reads across all scopes
-    Only(PartnerId),   // restricts every read to this scope value
+    All,                     // no filter — reads across all scopes
+    PartnerId(PartnerId),    // restricts every read to this scope value
 }
 
-impl From<PartnerId> for CustomerScope { /* => Only */ }
-impl From<&PartnerId> for CustomerScope { /* => Only */ }
+impl From<PartnerId> for CustomerScope { /* => PartnerId */ }
+impl From<&PartnerId> for CustomerScope { /* => PartnerId */ }
 ```
 
 There is deliberately **no** `From<Option<PartnerId>>`: mapping `None` to
 `All` would turn a stray `None` into silent all-scope access. All-scope reads
 must be written explicitly — `CustomerScope::All` is greppable and auditable.
+
+### Overriding the variant name
+
+The default variant name is UpperCamel of the column name. When that reads
+awkwardly, or you'd rather the enum spell out the principal kind than the
+column, override it with `scope(variant = "...")`:
+
+```rust,ignore
+#[derive(EsRepo)]
+#[es_repo(
+    entity = "CreditFacility",
+    columns(
+        partner_id(ty = "PartnerId", scope(variant = "Partner")),
+        customer_id(ty = "CustomerId", scope),
+        status(ty = "String"),
+    )
+)]
+pub struct CreditFacilities {
+    pool: PgPool,
+}
+
+// generates:
+pub enum CreditFacilityScope {
+    All,
+    Partner(PartnerId),        // overridden — reads "as a partner", not "by partner_id"
+    CustomerId(CustomerId),    // default — UpperCamel of the column name
+}
+```
+
+The override only renames the enum variant and its `From` impl target — the
+underlying SQL conjunct is still keyed off the real column (`partner_id = $n`).
+Overridden and defaulted scope columns compose freely on the same repo.
+Variant names, whether defaulted or overridden, must still be pairwise
+distinct and may not collide with the reserved `All` variant (see
+"Validation rules" below).
 
 ## Tenancy roots: `id(scope)`
 
@@ -63,18 +99,41 @@ pub struct Partners {
 ```
 
 The id column is macro-owned — its type comes from the repo-level `id`
-attribute and `find_by`/`list_by` are always on — so `id(scope)` is the only
-accepted entry; anything else (`ty`, `find_by = ...`) is a compile error.
+attribute and `find_by`/`list_by` are always on — so the only accepted
+entries are `id(scope)` and its variant-override form,
+`id(scope(variant = "..."))`; anything else (`ty`, `find_by = ...`) is a
+compile error.
 
 The generated surface is the ordinary scoped one: a `PartnerScope` enum and a
-leading scope argument on every read. Under `Only(p)` every query carries an
-`id = p` conjunct, so reads collapse to **self-or-nothing**:
-`find_by_id(Only(a), b)` is `NotFound` unless `a == b`, `find_all` intersects
-down to at most the own row, and every list returns the own row or nothing.
-Unlike ordinary scope columns, the id column keeps its point-read — under
-`Only` it is simply double-specified, composing exactly like a caller filter
-on the scope column (see below). No scope-led composite index is needed: the
-primary key already serves the `Only` arm.
+leading scope argument on every read. Since the `id` column's scope variant
+defaults to `Id`, every query under `Id(p)` carries an `id = p` conjunct, so
+reads collapse to **self-or-nothing**: `find_by_id(Id(a), b)` is `NotFound`
+unless `a == b`, `find_all` intersects down to at most the own row, and every
+list returns the own row or nothing. Unlike ordinary scope columns, the id
+column keeps its point-read — under `Id(_)` it is simply double-specified,
+composing exactly like a caller filter on the scope column (see below). No
+scope-led composite index is needed: the primary key already serves the `Id`
+arm.
+
+Like an ordinary scope column, the default `Id` variant name can be
+overridden:
+
+```rust,ignore
+#[derive(EsRepo)]
+#[es_repo(
+    entity = "Partner",
+    columns(
+        id(scope(variant = "Tenant")),
+        name(ty = "String", list_by),
+    )
+)]
+pub struct Partners {
+    pool: PgPool,
+}
+
+// generates PartnerScope::Tenant(PartnerId) instead of PartnerScope::Id(PartnerId);
+// everything else (self-or-nothing collapse, no extra index needed, `All`) is unchanged.
+```
 
 ```rust,ignore
 // authz-derived scope: a tenant subject reads itself or nothing,
@@ -89,7 +148,7 @@ Every generated read function gains a leading `scope: impl Into<{Entity}Scope>`
 argument:
 
 ```rust,ignore
-customers.find_by_id(partner_id, id).await?;              // Into => Only
+customers.find_by_id(partner_id, id).await?;              // Into => PartnerId
 customers.find_by_id(CustomerScope::All, id).await?;      // explicit escape hatch
 customers.maybe_find_by_email(partner_id, email).await?;
 customers.find_all::<Customer>(partner_id, &ids).await?;
@@ -99,18 +158,18 @@ customers.list_for_filters(partner_id, filters, sort, args).await?;
 customers.find_by_id(id).await?;  // does not exist — compile error
 ```
 
-At runtime each function dispatches between two static, compile-time-checked
-SQL variants:
+At runtime each function dispatches between static, compile-time-checked SQL
+variants — one per scope column plus `All`:
 
 - `All` executes exactly the SQL an unscoped repo would.
-- `Only(value)` executes a variant with an additional `partner_id = $n`
-  conjunct in every `WHERE` clause.
+- Each column's variant (e.g. `PartnerId(value)`) executes a variant with an
+  additional `partner_id = $n` conjunct in every `WHERE` clause.
 
-Both arms are plain equality predicates — sargable against a scope-column-led
-index (see below). Under `Only`, a row from another scope behaves exactly like
-a missing row: `find_by_*` returns `NotFound`, `maybe_find_by_*` returns
-`None`, `find_all` silently omits the id, and lists never contain the row.
-**Missing and not-yours look identical.**
+Every arm is a plain equality predicate — sargable against a scope-column-led
+index (see below). Under any scoped variant, a row from another scope behaves
+exactly like a missing row: `find_by_*` returns `NotFound`, `maybe_find_by_*`
+returns `None`, `find_all` silently omits the id, and lists never contain the
+row. **Missing and not-yours look identical.**
 
 ## The bound view: `repo.scoped(scope)`
 
@@ -135,6 +194,56 @@ naturally request-scoped: it cannot be stored beyond the repo borrow, which
 keeps a bound all-access or tenant view from quietly outliving the request
 that justified it.
 
+## Multiple scope dimensions
+
+More than one column may be marked `scope`. This models systems with several
+independent principal kinds reading the same entity — e.g. an admin API, a
+partner API, and a customer API over the same `CreditFacility` rows:
+
+```rust,ignore
+#[derive(EsRepo)]
+#[es_repo(
+    entity = "CreditFacility",
+    columns(
+        partner_id(ty = "PartnerId", scope),
+        customer_id(ty = "CustomerId", scope),
+        status(ty = "String", list_for(by(created_at))),
+    )
+)]
+pub struct CreditFacilities { pool: PgPool }
+
+// generates:
+pub enum CreditFacilityScope {
+    All,                       // admin — audited escape hatch
+    PartnerId(PartnerId),      // partner API
+    CustomerId(CustomerId),    // customer API
+}
+```
+
+The dimensions are **disjunctive**: a single read is scoped by exactly one
+column or by `All` — never by more than one column at once. Each dimension
+gets its own dispatch arm carrying only that column's conjunct; there is no
+combined `PartnerId`-and-`CustomerId` variant. If a future consumer needs a
+read scoped by *both* dimensions simultaneously (e.g. "a partner acting on
+behalf of one specific customer"), that is out of scope for this feature and
+would need a dedicated combined variant.
+
+Every read fn's dispatch grows linearly with the number of scope columns —
+N scope columns plus `All` means N+1 static, compile-time-checked query
+variants, all still plain sargable equalities.
+
+Each scope dimension needs its **own** scope-led composite index; they are
+matched against the physical index catalog independently (see "Index
+requirements" below). A repo may have partner-led composite indexes but no
+customer-led ones yet — the partner dimension's `list_for_filters` arm
+specializes while the customer dimension's arm honestly falls back to the
+non-sargable `COALESCE` query until its indexes exist.
+
+Scope column Rust types must be pairwise distinct (the generated `From<T>`
+conversions dispatch on type — two same-typed scope columns would produce
+conflicting impls) and their UpperCamel variant names must not collide with
+each other or with the reserved `All` variant.
+
 ## Writes are custody-guarded
 
 `create`, `create_all`, `update`, `update_all` and `delete` keep their
@@ -158,7 +267,7 @@ ids. Replaying a cursor minted under a different scope yields well-defined
 
 By default the scope column generates no query surface of its own — every
 read is already filtered by it, and per-scope listing *is* the ordinary
-scoped `list_by_*(Only(value), ..)`. But some callers legitimately filter by
+scoped `list_by_*(PartnerId(value), ..)`. But some callers legitimately filter by
 the scope column *through the normal query surface*: an all-access admin
 listing that narrows to one tenant, for example. The scope value itself
 (typically authz-derived) must never be touched by caller input — the
@@ -176,17 +285,17 @@ and includes `partner_id: Option<PartnerId>` in the generated `Filters`
 struct. The caller value **composes** with the scope — it can narrow, never
 widen:
 
-| Scope     | Caller value | Result                                            |
-|-----------|--------------|---------------------------------------------------|
-| `All`     | none         | unfiltered                                        |
-| `All`     | `p`          | `WHERE partner_id = p`                            |
-| `Only(a)` | none         | `WHERE partner_id = a`                            |
-| `Only(a)` | `b`          | `WHERE partner_id = b AND partner_id = a` — **empty unless `a == b`** |
+| Scope           | Caller value | Result                                            |
+|-----------------|--------------|----------------------------------------------------|
+| `All`           | none         | unfiltered                                        |
+| `All`           | `p`          | `WHERE partner_id = p`                            |
+| `PartnerId(a)`  | none         | `WHERE partner_id = a`                            |
+| `PartnerId(a)`  | `b`          | `WHERE partner_id = b AND partner_id = a` — **empty unless `a == b`** |
 
-Under `Only`, the column is simply double-specified — once as the caller's
-filter, once as the scope conjunct, exactly like any other filter column. A
-mismatching caller value is a contradictory predicate that honestly returns
-an empty result (`NotFound`/`None` for `find_by_*`) instead of being
+Under a scoped variant, the column is simply double-specified — once as the
+caller's filter, once as the scope conjunct, exactly like any other filter
+column. A mismatching caller value is a contradictory predicate that honestly
+returns an empty result (`NotFound`/`None` for `find_by_*`) instead of being
 silently ignored — a caller filter can narrow but never widen the scope.
 Both predicates are plain equalities, so the query stays sargable against a
 scope-led index.
@@ -208,9 +317,16 @@ self.repo
 
 The macro rejects at compile time:
 
-- more than one `scope` column per repo
+- scope columns whose Rust types are not pairwise distinct (the generated
+  `From<T>` conversions dispatch on type, so two same-typed scope columns
+  would produce conflicting impls)
+- scope columns whose variant names collide with each other or with the
+  reserved `All` variant — whether the name is the UpperCamel default or an
+  explicit `scope(variant = "...")` override
+- a `scope(variant = "...")` value that isn't a valid Rust identifier
 - an `Option<T>` or `nullable`-annotated scope column (nullable scope columns
-  are not supported — every row must belong to exactly one scope)
+  are not supported — every row must belong to exactly one scope, in every
+  dimension)
 - a `Forgettable<T>` scope column
 - `scope` on nested repos — children are custody-guarded via their (scoped)
   parent
@@ -221,20 +337,23 @@ to `false`, and the scope argument replaces them.
 
 ## Index requirements
 
-The `Only` arm adds a leading equality on the scope column to every read, so
-composite indexes should lead with it:
+Each scoped variant's arm adds a leading equality on its scope column to every
+read, so composite indexes should lead with it:
 
 ```sql
--- list_by_created_at under Only(p)
+-- list_by_created_at under PartnerId(p)
 CREATE INDEX ON customers (partner_id, created_at DESC, id DESC);
 
--- list_for_status_by_created_at under Only(p)
+-- list_for_status_by_created_at under PartnerId(p)
 CREATE INDEX ON customers (partner_id, status, created_at DESC, id DESC);
 
--- find_by_email under Only(p)
+-- find_by_email under PartnerId(p)
 CREATE INDEX ON customers (partner_id, email);
 ```
 
-Plain single-column indexes keep working (Postgres can still apply the scope
-conjunct as an index qual or filter), but scope-led composites let the
-paginated lists ride the index order with an early-exit `LIMIT`.
+With multiple scope dimensions, each one needs its own composites — a
+customer-scoped read rides a `(customer_id, ...)`-led index, independent of
+whatever partner-led indexes exist. Plain single-column indexes keep working
+(Postgres can still apply the scope conjunct as an index qual or filter), but
+scope-led composites let the paginated lists ride the index order with an
+early-exit `LIMIT`.

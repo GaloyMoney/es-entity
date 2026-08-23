@@ -130,15 +130,17 @@ impl ToTokens for FindAllFn<'_> {
             None => (quote! {}, quote! {}, quote! {}),
         };
         let fetch_call = if let Some(scope) = &self.scope {
-            let scoped_query = format!(
-                "SELECT id FROM {} WHERE id = ANY($1) AND {}",
-                self.table_name,
-                scope.predicate(2),
-            );
-            let scoped_es_query_call = make_es_query(&scoped_query, &scope.arg_tokens());
             scope.dispatch(
                 quote! { #es_query_call.fetch_n(op, ids.len()).await? },
-                quote! { #scoped_es_query_call.fetch_n(op, ids.len()).await? },
+                |col| {
+                    let scoped_query = format!(
+                        "SELECT id FROM {} WHERE id = ANY($1) AND {}",
+                        self.table_name,
+                        col.predicate(2),
+                    );
+                    let scoped_es_query_call = make_es_query(&scoped_query, &col.arg_tokens());
+                    quote! { #scoped_es_query_call.fetch_n(op, ids.len()).await? }
+                },
             )
         } else {
             quote! { #es_query_call.fetch_n(op, ids.len()).await? }

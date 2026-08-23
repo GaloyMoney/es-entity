@@ -7,7 +7,7 @@ use super::{
     combo_cursor::ComboCursor,
     list_by_fn::{CursorStruct, assemble_union_select, not_deleted_predicate},
     options::*,
-    scope::ScopeInfo,
+    scope::{ScopeCol, ScopeInfo},
 };
 
 /// Runtime `Some`-ness state of one filter column. Each state that reaches
@@ -343,16 +343,21 @@ impl<'a> ListForFiltersFn<'a> {
     /// specialized sargable query — decided purely by the physical index
     /// catalog (derived from the migrations). A combination is specialized iff
     /// some composite index's leading key columns are a permutation of the
-    /// equality columns (the scope column, when present, plus every constrained
-    /// filter — `= $k` *and* `IS NULL` states both constrain the column)
-    /// immediately followed by the sort column. Everything else falls back to
-    /// the correct (non-sargable) `COALESCE` query. No arity cap: build cost
-    /// tracks declared indexes, not `3^n` combinations.
+    /// equality columns (the scope arm's column, when present, plus every
+    /// constrained filter — `= $k` *and* `IS NULL` states both constrain the
+    /// column) immediately followed by the sort column. Everything else falls
+    /// back to the correct (non-sargable) `COALESCE` query. No arity cap:
+    /// build cost tracks declared indexes, not `3^n` combinations.
+    ///
+    /// Each scope-column arm is checked independently against the index
+    /// catalog: a repo may have partner-led composite indexes but no
+    /// customer-led ones, in which case the partner arm specializes while
+    /// the customer arm honestly falls back.
     fn is_specialized_combo(
         &self,
         combo: &[FilterState],
         by_column: &Column,
-        scope: Option<&ScopeInfo>,
+        scope: Option<&ScopeCol>,
     ) -> bool {
         let mut equality_cols: Vec<String> = Vec::new();
         if let Some(scope) = scope {
@@ -540,9 +545,9 @@ impl<'a> ListForFiltersFn<'a> {
         // combination, sargable only where a matching composite index exists.
         // The filter predicates (COALESCE / apply-flag forms) are the leading
         // conjuncts shared by every unified-cursor `UNION ALL` branch.
-        // Parameterized over the scope: the scoped variant binds the scope
+        // Parameterized over the scope: each scope-column arm binds its
         // column at `$1` and shifts every other parameter by one.
-        let build_fallback = |scope: Option<&ScopeInfo>| -> (String, String, TokenStream) {
+        let build_fallback = |scope: Option<&ScopeCol>| -> (String, String, TokenStream) {
             let scope_offset: u32 = if scope.is_some() { 1 } else { 0 };
             let mut param_idx = 1u32 + scope_offset;
             let where_fragments: Vec<String> = self
@@ -630,10 +635,10 @@ impl<'a> ListForFiltersFn<'a> {
         // combination x cursor state x direction). Every present filter
         // compiles to a sargable `col = $k` (or `col IS NULL`) predicate and
         // the cursor predicate is either omitted (page 1) or a bare row
-        // comparison. Parameterized over the scope: the scoped variant binds
-        // the scope column at `$1` and shifts every other parameter by one.
+        // comparison. Parameterized over the scope: each scope-column arm
+        // binds its column at `$1` and shifts every other parameter by one.
         let build_specialized_arms =
-            |scope: Option<&ScopeInfo>| -> (TokenStream, TokenStream, bool) {
+            |scope: Option<&ScopeCol>| -> (TokenStream, TokenStream, bool) {
                 let mut asc_arms = TokenStream::new();
                 let mut desc_arms = TokenStream::new();
                 let mut all_combos_specialized = true;
@@ -776,24 +781,26 @@ impl<'a> ListForFiltersFn<'a> {
             None => (quote! {}, quote! {}, quote! {}),
         };
         let match_expr = if let Some(scope) = &self.scope {
-            let (scoped_asc_arms, scoped_desc_arms, scoped_all_specialized) =
-                build_specialized_arms(Some(scope));
-            let (scoped_asc_query, scoped_desc_query, scoped_fallback_args) =
-                build_fallback(Some(scope));
-            let (scoped_asc_fallback, scoped_desc_fallback) = build_fallback_arms(
-                &scoped_asc_query,
-                &scoped_desc_query,
-                &scoped_fallback_args,
-                scoped_all_specialized,
-            );
             scope.dispatch(
                 direction_match(&asc_arms, &asc_fallback_arm, &desc_arms, &desc_fallback_arm),
-                direction_match(
-                    &scoped_asc_arms,
-                    &scoped_asc_fallback,
-                    &scoped_desc_arms,
-                    &scoped_desc_fallback,
-                ),
+                |col| {
+                    let (scoped_asc_arms, scoped_desc_arms, scoped_all_specialized) =
+                        build_specialized_arms(Some(col));
+                    let (scoped_asc_query, scoped_desc_query, scoped_fallback_args) =
+                        build_fallback(Some(col));
+                    let (scoped_asc_fallback, scoped_desc_fallback) = build_fallback_arms(
+                        &scoped_asc_query,
+                        &scoped_desc_query,
+                        &scoped_fallback_args,
+                        scoped_all_specialized,
+                    );
+                    direction_match(
+                        &scoped_asc_arms,
+                        &scoped_asc_fallback,
+                        &scoped_desc_arms,
+                        &scoped_desc_fallback,
+                    )
+                },
             )
         } else {
             direction_match(&asc_arms, &asc_fallback_arm, &desc_arms, &desc_fallback_arm)

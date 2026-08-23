@@ -9,7 +9,7 @@ use es_entity::*;
 /// Id-scoped repo — the tenancy-root variant of a scoped repository. The
 /// entity has no separate tenant column: its rows' scope value is its own
 /// `id`, marked via `id(scope)`. Every generated read fn requires a leading
-/// `scope: impl Into<PartnerScope>` argument; under `Only(id)` every query
+/// `scope: impl Into<PartnerScope>` argument; under `Id(id)` every query
 /// carries an `id = $n` conjunct, so reads collapse to self-or-nothing —
 /// missing and not-yours look identical. `All` reads across scopes. Writes
 /// (`create`, `update`, `delete`) keep their unscoped signatures.
@@ -46,12 +46,12 @@ async fn id_scoped_point_reads() -> anyhow::Result<()> {
     let partner_b = seed_partner(&partners, "b").await?;
 
     // own scope: found — `impl Into<PartnerScope>` accepts the id directly
-    // (From<PartnerId> => Only), a reference, or the explicit enum.
+    // (From<PartnerId> => Id), a reference, or the explicit enum.
     let found = partners.find_by_id(partner_a, partner_a).await?;
     assert_eq!(found.id, partner_a);
     partners.find_by_id(&partner_a, partner_a).await?;
     partners
-        .find_by_id(PartnerScope::Only(partner_a), partner_a)
+        .find_by_id(PartnerScope::Id(partner_a), partner_a)
         .await?;
 
     // foreign scope: missing and not-yours look identical
@@ -114,7 +114,7 @@ async fn id_scoped_find_all_intersects_to_own_row() -> anyhow::Result<()> {
     let partner_b = seed_partner(&partners, "fb").await?;
     let all_ids = [partner_a, partner_b];
 
-    // Only(a): at most the own row — foreign ids are silently absent.
+    // Id(a): at most the own row — foreign ids are silently absent.
     let found = partners.find_all::<Partner>(partner_a, &all_ids).await?;
     assert_eq!(found.len(), 1);
     assert!(found.contains_key(&partner_a));
@@ -136,7 +136,7 @@ async fn id_scoped_lists_return_own_row() -> anyhow::Result<()> {
     let partner_a = seed_partner(&partners, "la").await?;
     let partner_b = seed_partner(&partners, "lb").await?;
 
-    // Only(a): exactly the own row, whatever the page size.
+    // Id(a): exactly the own row, whatever the page size.
     let ret = partners
         .list_by_created_at(
             partner_a,
@@ -233,6 +233,71 @@ async fn id_scoped_view_delegates() -> anyhow::Result<()> {
             .len(),
         2
     );
+
+    Ok(())
+}
+
+/// Same table as [`Partners`], but the tenancy-root variant is renamed via
+/// `id(scope(variant = "Tenant"))` — proves the override reaches the
+/// macro-owned `id` column, not just ordinary scope columns. Wrapped in its
+/// own module: both repos share `entity = "Partner"`, so their
+/// derive-generated companion types (`PartnerScope`, `PartnerFindError`, ...)
+/// would otherwise collide.
+pub mod overridden_id_scope {
+    use sqlx::PgPool;
+
+    use super::entities::partner::*;
+    use es_entity::*;
+
+    #[derive(EsRepo, Debug)]
+    #[es_repo(
+        entity = "Partner",
+        columns(id(scope(variant = "Tenant")), name(ty = "String"))
+    )]
+    pub struct PartnersByOverriddenScope {
+        pool: PgPool,
+    }
+
+    impl PartnersByOverriddenScope {
+        pub fn new(pool: PgPool) -> Self {
+            Self { pool }
+        }
+    }
+}
+
+#[tokio::test]
+async fn id_scope_variant_override_dispatches_correctly() -> anyhow::Result<()> {
+    use overridden_id_scope::*;
+
+    let pool = helpers::init_pool().await?;
+    let partners = PartnersByOverriddenScope::new(pool);
+
+    let id = PartnerId::new();
+    let new = NewPartner::builder()
+        .id(id)
+        .name(format!("tenant-{id}"))
+        .build()
+        .unwrap();
+    partners.create(new).await?;
+
+    // raw id routes through `From<PartnerId> for PartnerScope` into the
+    // overridden `Tenant` variant
+    let found = partners.find_by_id(id, id).await?;
+    assert_eq!(found.id, id);
+
+    // explicit overridden-variant spelling
+    partners.find_by_id(PartnerScope::Tenant(id), id).await?;
+
+    // a foreign id under the overridden variant still collapses to
+    // self-or-nothing, same as the un-overridden `Id` variant does
+    let foreign = PartnerId::new();
+    assert!(matches!(
+        partners.find_by_id(foreign, id).await,
+        Err(PartnerFindError::NotFound { .. })
+    ));
+
+    // All still reads across scopes
+    partners.find_by_id(PartnerScope::All, id).await?;
 
     Ok(())
 }

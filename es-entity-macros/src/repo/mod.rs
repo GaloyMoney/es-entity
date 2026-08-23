@@ -553,11 +553,13 @@ mod tests {
             .expect("scoped repo should derive")
             .to_string();
         assert!(tokens.contains("pub enum UserScope"));
+        assert!(tokens.contains("PartnerId (PartnerId)"));
+        assert!(!tokens.contains("Only"));
         // every read fn takes the scope argument
         assert!(tokens.contains("fn find_by_id (& self , scope : impl Into < UserScope >"));
         assert!(tokens.contains("(& self , scope : impl Into < UserScope > , ids"));
         assert!(tokens.contains("fn list_by_created_at (& self , scope : impl Into < UserScope >"));
-        // the Only arm filters by the scope column, the All arm does not
+        // the PartnerId arm filters by the scope column, the All arm does not
         assert!(tokens.contains("WHERE id = $1 AND partner_id = $2"));
         assert!(tokens.contains("WHERE id = $1\""));
         // no find_by fns are generated for the scope column itself
@@ -624,13 +626,95 @@ mod tests {
     }
 
     #[test]
-    fn two_scope_columns_is_error() {
+    fn multi_scoped_repo_is_ok() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Facility",
+                columns(
+                    partner_id(ty = "PartnerId", scope),
+                    customer_id(ty = "CustomerId", scope),
+                    name(ty = "String")
+                )
+            )]
+            struct Facilities {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("multi-scoped repo should derive")
+            .to_string();
+        assert!(tokens.contains("pub enum FacilityScope"));
+        assert!(tokens.contains("PartnerId (PartnerId)"));
+        assert!(tokens.contains("CustomerId (CustomerId)"));
+        // one dispatch arm per dimension, each with only its own conjunct
+        assert!(tokens.contains("WHERE id = $1 AND partner_id = $2"));
+        assert!(tokens.contains("WHERE id = $1 AND customer_id = $2"));
+        assert!(!tokens.contains("partner_id = $2 AND customer_id"));
+        // From impls for both id types
+        assert!(tokens.contains("impl From < PartnerId > for FacilityScope"));
+        assert!(tokens.contains("impl From < CustomerId > for FacilityScope"));
+    }
+
+    #[test]
+    fn scope_variant_override_is_ok() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Facility",
+                columns(
+                    partner_id(ty = "PartnerId", scope(variant = "Partner")),
+                    customer_id(ty = "CustomerId", scope),
+                    name(ty = "String")
+                )
+            )]
+            struct Facilities {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("overridden-variant scoped repo should derive")
+            .to_string();
+        assert!(tokens.contains("pub enum FacilityScope"));
+        // overridden column uses the custom variant name...
+        assert!(tokens.contains("Partner (PartnerId)"));
+        assert!(!tokens.contains("PartnerId (PartnerId)"));
+        // ...while the un-overridden column keeps the default
+        assert!(tokens.contains("CustomerId (CustomerId)"));
+        assert!(tokens.contains("impl From < PartnerId > for FacilityScope"));
+        assert!(tokens.contains("FacilityScope :: Partner (__scope_val)"));
+    }
+
+    #[test]
+    fn id_scope_variant_override_is_ok() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Partner",
+                columns(id(scope(variant = "Tenant")), name(ty = "String", list_by))
+            )]
+            struct Partners {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("id(scope(variant = ...)) repo should derive")
+            .to_string();
+        assert!(tokens.contains("pub enum PartnerScope"));
+        // the id column's overridden variant name replaces the default `Id`...
+        assert!(tokens.contains("Tenant (PartnerId)"));
+        assert!(!tokens.contains("Id (PartnerId)"));
+        assert!(tokens.contains("impl From < PartnerId > for PartnerScope"));
+        assert!(tokens.contains("PartnerScope :: Tenant (__scope_val)"));
+        // every query carries the id conjunct under the overridden variant
+        assert!(tokens.contains("WHERE id = $1 AND id = $2"));
+    }
+
+    #[test]
+    fn same_type_scope_columns_is_error() {
         let input: syn::DeriveInput = parse_quote! {
             #[es_repo(
                 entity = "User",
                 columns(
                     partner_id(ty = "PartnerId", scope),
-                    customer_id(ty = "CustomerId", scope)
+                    other_partner_id(ty = "PartnerId", scope)
                 )
             )]
             struct Users {
@@ -639,7 +723,7 @@ mod tests {
         };
         let err = derive(input).unwrap_err();
         assert!(
-            err.to_string().contains("only one scope column"),
+            err.to_string().contains("same Rust type"),
             "unexpected error: {err}"
         );
     }

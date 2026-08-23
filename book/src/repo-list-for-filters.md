@@ -78,7 +78,7 @@ SELECT id FROM user_documents
 
 A multi-filter combination gets a specialized sargable query only when a matching **composite index physically exists** — because sargable and catch-all SQL differ only when there is an index to ride. The derive discovers your indexes by parsing the committed migration `.sql` files at compile time (the migrations directory is the source of truth, exactly as `sqlx::migrate!` reads it), so there is nothing to declare and no per-repo flag: a combination filtering on the (order-insensitive) columns `C` and paginating by sort column `S` is specialized iff some index's leading key columns are a permutation of `C` immediately followed by `S`. Everything else uses the catch-all COALESCE query above (correct, just not sargable). Adding a `CREATE INDEX` migration is the single, PR-visible way to expand the specialized surface — build cost tracks your real indexes, never `2^N`.
 
-For scoped repos the scope column is auto-prefixed: the scoped (`Only`) arm looks for `(scope_col, C…, S)` and the unscoped (`All`) arm for `(C…, S)`, matched independently against the catalog.
+For scoped repos each scope column is auto-prefixed: each column's dispatch arm looks for `(scope_col, C…, S)` and the unscoped (`All`) arm for `(C…, S)`, matched independently against the catalog per dimension — a repo may have partner-led composite indexes but no customer-led ones, in which case the partner arm specializes while the customer arm falls back.
 
 Single-filter (`list_for_{col}_by_{sort}`) and no-filter (`list_by_{sort}`) queries, and all cursor pagination, are always emitted as a single unified query regardless of the catalog — sargable when the matching `(…, id)` index exists, harmlessly equivalent when it does not.
 
