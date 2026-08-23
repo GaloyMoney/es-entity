@@ -211,13 +211,6 @@ async fn update_all_batches_nested_children_across_parents() -> anyhow::Result<(
     Ok(())
 }
 
-/// `update_all_mut_in_op` accepts `impl IntoIterator<Item = &mut Entity>`
-/// specifically so a caller can hand it a genuinely chained iterator —
-/// `flat_map` scattering `&mut` borrows across many parents' own
-/// `HashMap`s — without collecting into a `Vec` first. This is the
-/// motivating case from the nested-batching design: it's exactly what the
-/// macro-generated `update_nested_*_in_op` glue does internally, exercised
-/// here directly against the child repo.
 #[tokio::test]
 async fn update_all_mut_accepts_a_chained_iterator() -> anyhow::Result<()> {
     let pool = init_pool().await?;
@@ -244,10 +237,6 @@ async fn update_all_mut_accepts_a_chained_iterator() -> anyhow::Result<()> {
             .expect("item-0 exists");
     }
 
-    // The chain itself: each `order.iter_persisted_children_mut()` borrows
-    // from that order's own `Nested<OrderItem>` HashMap, `flat_map` scatters
-    // those borrows across the whole `batch`, and the chain is passed
-    // straight through — no `.collect::<Vec<_>>()` at the call site.
     let mut op = orders.begin_op().await?;
     let n_events = orders
         .items

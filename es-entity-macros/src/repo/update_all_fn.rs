@@ -49,29 +49,18 @@ impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
 /// Which shape of parent collection a generated bulk-update function
 /// operates on.
 ///
-/// `update_all_in_op` is the top-level API for a caller that already owns a
-/// contiguous, owned collection: it takes `&mut [Entity]` and never copies
-/// or reallocates it. `update_all_mut_in_op` is the shape needed to batch
-/// *nested children across many parents*: each parent owns its own children
-/// (in its own `HashMap`), so gathering "every persisted child that needs
-/// updating, across the whole parent batch" can only ever produce scattered
-/// `&mut Entity` borrows, never a contiguous slice — there is no owned
-/// collection for a caller to hand over `&mut` to in the first place.
-///
-/// Because of that, `update_all_mut_in_op` accepts `impl IntoIterator<Item =
-/// &mut Entity>` rather than a concrete `Vec`: a caller assembling those
-/// scattered borrows (e.g. `parents.iter_mut().flat_map(|p|
-/// p.children.values_mut())`) can pass the chain straight through instead of
-/// collecting it themselves first. The *internal* representation is still a
-/// `Vec<&mut Entity>` — the body below needs multiple independent passes
-/// over `entities` (SQL building, marking events persisted, computing the
-/// returned count, and, when this entity itself has nested children, the
-/// nested phase), which a bare `IntoIterator` only supports once — so the
-/// very first thing the generated `RefVec` body does is `.into_iter().collect()`
-/// into a `Vec` shadowing the parameter. Every use of `entities` after that
-/// point operates on that `Vec`, so it reads exactly like `update_all_in_op`
-/// (and like this fn did before the parameter type changed) — only the
-/// entry point moved from "caller collects" to "callee collects".
+/// `update_all_in_op` is the top-level, caller-facing batch API: it owns a
+/// contiguous `&mut [Entity]`. `update_all_mut_in_op` is the shape needed to
+/// batch *nested children across many parents*: each parent owns its own
+/// children (in its own `HashMap`), so gathering "every persisted child that
+/// needs updating, across the whole parent batch" can only ever produce
+/// scattered `&mut Entity` borrows, never a contiguous slice. It accepts
+/// `impl IntoIterator<Item = &mut Entity>` rather than a concrete `Vec` so a
+/// caller assembling those scattered borrows can pass the chain straight
+/// through; the *internal* representation is still `Vec<&mut Entity>` (the
+/// body needs multiple passes over `entities`, which a bare `IntoIterator`
+/// only supports once), collected right at the top of the generated `RefVec`
+/// body, shadowing the parameter.
 ///
 /// Both variants share the exact same SQL-building logic below; only the
 /// outer signature and how `entities` is iterated differ, via `iter_ref` /
@@ -81,9 +70,7 @@ impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
 /// unify against a concrete `&mut Entity`, not `&mut &mut Entity`), so the
 /// `RefVec` adapters reborrow down to a single level with `.map(|e| &mut
 /// **e)` / `.map(|e| &**e)`, making the entity-loop bodies below identical
-/// text for both modes. That reborrow is unaffected by where the `Vec` comes
-/// from — collected internally now, formerly passed in — since it only ever
-/// operates on the `Vec`, never on the caller's original iterator.
+/// text for both modes.
 enum BatchMode {
     OwnedSlice,
     RefVec,
@@ -112,15 +99,6 @@ impl UpdateAllFn<'_> {
             BatchMode::RefVec => (
                 quote::format_ident!("update_all_mut_in_op"),
                 quote! { entities: impl IntoIterator<Item = &mut #entity> },
-                // The caller hands us anything iterable once (a `Vec`, an
-                // array, or — the motivating case — a `flat_map` chain
-                // scattering across many parents' `HashMap`s); we collect it
-                // into an owned `Vec` exactly once, right here, and every use
-                // of `entities` below this point operates on that `Vec`.
-                // Shadowing the parameter name means the reborrow adapters
-                // and every later `entities.iter()`/`entities.iter_mut()`
-                // call are unchanged text from before this Vec was built
-                // internally rather than passed in.
                 Some(quote! {
                     let mut entities: Vec<&mut #entity> = entities.into_iter().collect();
                 }),
@@ -298,11 +276,6 @@ impl UpdateAllFn<'_> {
                 BatchMode::RefVec => "update_all_mut",
             };
             let span_name = format!("{}.{}", repo_name, span_suffix);
-            // `OwnedSlice`'s `entities: &mut [Entity]` has a `.len()` at
-            // function entry, so its `count` field is populated immediately.
-            // `RefVec`'s `entities: impl IntoIterator<...>` does not — the
-            // count is only known once it's collected into a `Vec` inside
-            // the async body, so that variant records it there instead.
             let count_field = match mode {
                 BatchMode::OwnedSlice => quote! { count = entities.len(), },
                 BatchMode::RefVec => quote! { count = tracing::field::Empty, },
