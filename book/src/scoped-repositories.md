@@ -99,18 +99,41 @@ pub struct Partners {
 ```
 
 The id column is macro-owned — its type comes from the repo-level `id`
-attribute and `find_by`/`list_by` are always on — so `id(scope)` is the only
-accepted entry; anything else (`ty`, `find_by = ...`) is a compile error.
+attribute and `find_by`/`list_by` are always on — so the only accepted
+entries are `id(scope)` and its variant-override form,
+`id(scope(variant = "..."))`; anything else (`ty`, `find_by = ...`) is a
+compile error.
 
 The generated surface is the ordinary scoped one: a `PartnerScope` enum and a
-leading scope argument on every read. Since the `id` column's scope variant is
-named `Id`, every query under `Id(p)` carries an `id = p` conjunct, so reads
-collapse to **self-or-nothing**: `find_by_id(Id(a), b)` is `NotFound` unless
-`a == b`, `find_all` intersects down to at most the own row, and every list
-returns the own row or nothing. Unlike ordinary scope columns, the id column
-keeps its point-read — under `Id(_)` it is simply double-specified, composing
-exactly like a caller filter on the scope column (see below). No scope-led
-composite index is needed: the primary key already serves the `Id` arm.
+leading scope argument on every read. Since the `id` column's scope variant
+defaults to `Id`, every query under `Id(p)` carries an `id = p` conjunct, so
+reads collapse to **self-or-nothing**: `find_by_id(Id(a), b)` is `NotFound`
+unless `a == b`, `find_all` intersects down to at most the own row, and every
+list returns the own row or nothing. Unlike ordinary scope columns, the id
+column keeps its point-read — under `Id(_)` it is simply double-specified,
+composing exactly like a caller filter on the scope column (see below). No
+scope-led composite index is needed: the primary key already serves the `Id`
+arm.
+
+Like an ordinary scope column, the default `Id` variant name can be
+overridden:
+
+```rust,ignore
+#[derive(EsRepo)]
+#[es_repo(
+    entity = "Partner",
+    columns(
+        id(scope(variant = "Tenant")),
+        name(ty = "String", list_by),
+    )
+)]
+pub struct Partners {
+    pool: PgPool,
+}
+
+// generates PartnerScope::Tenant(PartnerId) instead of PartnerScope::Id(PartnerId);
+// everything else (self-or-nothing collapse, no extra index needed, `All`) is unchanged.
+```
 
 ```rust,ignore
 // authz-derived scope: a tenant subject reads itself or nothing,

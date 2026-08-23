@@ -4,11 +4,13 @@ use quote::quote;
 #[derive(Default)]
 pub struct Columns {
     all: Vec<Column>,
-    /// Set by an `id(scope)` entry in `columns(...)`: marks the implicit
-    /// `id` column as the repo's scope column (applied in
-    /// [`Self::set_id_column`]). Used by tenancy-root repos whose rows' scope
-    /// value is their own id.
-    id_scope: bool,
+    /// Set by an `id(scope)` / `id(scope(variant = "..."))` entry in
+    /// `columns(...)`: marks the implicit `id` column as the repo's scope
+    /// column (applied in [`Self::set_id_column`]). Used by tenancy-root
+    /// repos whose rows' scope value is their own id. Defaults the enum
+    /// variant to `Id`; `variant = "..."` overrides it, same as an ordinary
+    /// scope column.
+    id_scope_opts: Option<ScopeOpts>,
 }
 
 impl Columns {
@@ -17,7 +19,7 @@ impl Columns {
         let all = columns.into_iter().collect();
         let mut res = Columns {
             all,
-            id_scope: false,
+            id_scope_opts: None,
         };
         res.set_id_column(id);
         res
@@ -25,7 +27,7 @@ impl Columns {
 
     pub fn set_id_column(&mut self, ty: &syn::Ident) {
         let mut id_column = Column::for_id(syn::parse_str(&ty.to_string()).unwrap());
-        id_column.opts.scope_opts = self.id_scope.then(ScopeOpts::default);
+        id_column.opts.scope_opts = self.id_scope_opts.take();
         let mut all = vec![Column::for_created_at(), id_column];
         all.append(&mut self.all);
         self.all = all;
@@ -484,40 +486,53 @@ impl Columns {
 
 impl FromMeta for Columns {
     fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
-        let mut id_scope = false;
+        let mut id_scope_opts: Option<ScopeOpts> = None;
         let mut all = Vec::new();
         for item in items {
             if let darling::ast::NestedMeta::Meta(meta) = item
                 && meta.path().is_ident("id")
             {
-                if id_scope {
+                if id_scope_opts.is_some() {
                     return Err(darling::Error::custom("duplicate `id` column").with_span(meta));
                 }
-                id_scope = id_scope_from_meta(meta)?;
+                id_scope_opts = Some(id_scope_from_meta(meta)?);
                 continue;
             }
             all.push(Column::from_nested_meta(item)?);
         }
-        Ok(Columns { all, id_scope })
+        Ok(Columns { all, id_scope_opts })
     }
 }
 
 /// The implicit `id` column is macro-owned — its type comes from the
 /// repo-level `id` attribute and `find_by`/`list_by` are always on — so the
-/// only supported entry is the `id(scope)` marker.
-fn id_scope_from_meta(meta: &syn::Meta) -> darling::Result<bool> {
-    let err =
-        || darling::Error::custom("the `id` column only supports `id(scope)`").with_span(meta);
+/// only supported entries are the `id(scope)` marker and its
+/// `id(scope(variant = "..."))` override form (identical to an ordinary
+/// scope column's `scope`/`scope(variant = "...")`).
+fn id_scope_from_meta(meta: &syn::Meta) -> darling::Result<ScopeOpts> {
+    let err = || {
+        darling::Error::custom(
+            "the `id` column only supports `id(scope)` or `id(scope(variant = \"...\"))`",
+        )
+        .with_span(meta)
+    };
     let syn::Meta::List(list) = meta else {
         return Err(err());
     };
-    let inner: syn::punctuated::Punctuated<syn::Ident, syn::Token![,]> = list
+    let inner: syn::punctuated::Punctuated<syn::Meta, syn::Token![,]> = list
         .parse_args_with(syn::punctuated::Punctuated::parse_terminated)
         .map_err(|_| err())?;
-    if inner.len() != 1 || inner[0] != "scope" {
+    if inner.len() != 1 {
         return Err(err());
     }
-    Ok(true)
+    let scope_meta = &inner[0];
+    if !scope_meta.path().is_ident("scope") {
+        return Err(err());
+    }
+    match scope_meta {
+        syn::Meta::Path(_) | syn::Meta::List(_) => ScopeOpts::from_meta(scope_meta),
+        syn::Meta::NameValue(_) => Err(err()),
+    }
 }
 
 #[derive(PartialEq)]
@@ -1276,6 +1291,54 @@ mod tests {
         assert!(scope.opts.find_by());
         assert!(scope.opts.list_by());
         assert!(columns.validate_scope().is_ok());
+        // bare `id(scope)` defaults the variant to `Id`.
+        assert_eq!(scope.scope_variant().to_string(), "Id");
+    }
+
+    #[test]
+    fn id_scope_variant_override_is_parsed_and_used() {
+        let input: syn::Meta =
+            parse_quote!(columns(id(scope(variant = "Tenant")), name = "String"));
+        let mut columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        columns.set_id_column(&parse_quote!(TestId));
+
+        let scope_cols = columns.scope_columns();
+        let scope = scope_cols.first().expect("id should be scope column");
+        assert_eq!(scope.scope_variant().to_string(), "Tenant");
+        assert!(columns.validate_scope().is_ok());
+    }
+
+    #[test]
+    fn id_scope_variant_override_must_be_valid_identifier() {
+        let input: syn::Meta = parse_quote!(columns(
+            id(scope(variant = "not an ident")),
+            name = "String"
+        ));
+        let err = match Columns::from_meta(&input) {
+            Err(err) => err.to_string(),
+            Ok(_) => panic!("expected error"),
+        };
+        assert!(
+            err.contains("not a valid Rust identifier"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn id_scope_rejects_unknown_scope_option() {
+        let input: syn::Meta = parse_quote!(columns(id(scope(unknown = "x")), name = "String"));
+        let err = parse_columns_err(input);
+        assert!(
+            err.contains("unknown") || err.contains("Unknown"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn id_scope_rejects_name_value_form() {
+        let input: syn::Meta = parse_quote!(columns(id(scope = true), name = "String"));
+        let err = parse_columns_err(input);
+        assert!(err.contains("id(scope)"), "unexpected error: {err}");
     }
 
     #[test]

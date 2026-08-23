@@ -236,3 +236,68 @@ async fn id_scoped_view_delegates() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Same table as [`Partners`], but the tenancy-root variant is renamed via
+/// `id(scope(variant = "Tenant"))` — proves the override reaches the
+/// macro-owned `id` column, not just ordinary scope columns. Wrapped in its
+/// own module: both repos share `entity = "Partner"`, so their
+/// derive-generated companion types (`PartnerScope`, `PartnerFindError`, ...)
+/// would otherwise collide.
+pub mod overridden_id_scope {
+    use sqlx::PgPool;
+
+    use super::entities::partner::*;
+    use es_entity::*;
+
+    #[derive(EsRepo, Debug)]
+    #[es_repo(
+        entity = "Partner",
+        columns(id(scope(variant = "Tenant")), name(ty = "String"))
+    )]
+    pub struct PartnersByOverriddenScope {
+        pool: PgPool,
+    }
+
+    impl PartnersByOverriddenScope {
+        pub fn new(pool: PgPool) -> Self {
+            Self { pool }
+        }
+    }
+}
+
+#[tokio::test]
+async fn id_scope_variant_override_dispatches_correctly() -> anyhow::Result<()> {
+    use overridden_id_scope::*;
+
+    let pool = helpers::init_pool().await?;
+    let partners = PartnersByOverriddenScope::new(pool);
+
+    let id = PartnerId::new();
+    let new = NewPartner::builder()
+        .id(id)
+        .name(format!("tenant-{id}"))
+        .build()
+        .unwrap();
+    partners.create(new).await?;
+
+    // raw id routes through `From<PartnerId> for PartnerScope` into the
+    // overridden `Tenant` variant
+    let found = partners.find_by_id(id, id).await?;
+    assert_eq!(found.id, id);
+
+    // explicit overridden-variant spelling
+    partners.find_by_id(PartnerScope::Tenant(id), id).await?;
+
+    // a foreign id under the overridden variant still collapses to
+    // self-or-nothing, same as the un-overridden `Id` variant does
+    let foreign = PartnerId::new();
+    assert!(matches!(
+        partners.find_by_id(foreign, id).await,
+        Err(PartnerFindError::NotFound { .. })
+    ));
+
+    // All still reads across scopes
+    partners.find_by_id(PartnerScope::All, id).await?;
+
+    Ok(())
+}

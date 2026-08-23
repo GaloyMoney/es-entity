@@ -684,6 +684,30 @@ mod tests {
     }
 
     #[test]
+    fn id_scope_variant_override_is_ok() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Partner",
+                columns(id(scope(variant = "Tenant")), name(ty = "String", list_by))
+            )]
+            struct Partners {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("id(scope(variant = ...)) repo should derive")
+            .to_string();
+        assert!(tokens.contains("pub enum PartnerScope"));
+        // the id column's overridden variant name replaces the default `Id`...
+        assert!(tokens.contains("Tenant (PartnerId)"));
+        assert!(!tokens.contains("Id (PartnerId)"));
+        assert!(tokens.contains("impl From < PartnerId > for PartnerScope"));
+        assert!(tokens.contains("PartnerScope :: Tenant (__scope_val)"));
+        // every query carries the id conjunct under the overridden variant
+        assert!(tokens.contains("WHERE id = $1 AND id = $2"));
+    }
+
+    #[test]
     fn same_type_scope_columns_is_error() {
         let input: syn::DeriveInput = parse_quote! {
             #[es_repo(
