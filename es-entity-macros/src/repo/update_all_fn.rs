@@ -49,12 +49,29 @@ impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
 /// Which shape of parent collection a generated bulk-update function
 /// operates on.
 ///
-/// `update_all_in_op` is the top-level, caller-facing batch API: it owns a
-/// contiguous `&mut [Entity]`. `update_all_mut_in_op` is the shape needed to
-/// batch *nested children across many parents*: each parent owns its own
-/// children (in its own `HashMap`), so gathering "every persisted child that
-/// needs updating, across the whole parent batch" can only ever produce a
-/// `Vec` of scattered `&mut Entity` borrows, never a contiguous slice.
+/// `update_all_in_op` is the top-level API for a caller that already owns a
+/// contiguous, owned collection: it takes `&mut [Entity]` and never copies
+/// or reallocates it. `update_all_mut_in_op` is the shape needed to batch
+/// *nested children across many parents*: each parent owns its own children
+/// (in its own `HashMap`), so gathering "every persisted child that needs
+/// updating, across the whole parent batch" can only ever produce scattered
+/// `&mut Entity` borrows, never a contiguous slice — there is no owned
+/// collection for a caller to hand over `&mut` to in the first place.
+///
+/// Because of that, `update_all_mut_in_op` accepts `impl IntoIterator<Item =
+/// &mut Entity>` rather than a concrete `Vec`: a caller assembling those
+/// scattered borrows (e.g. `parents.iter_mut().flat_map(|p|
+/// p.children.values_mut())`) can pass the chain straight through instead of
+/// collecting it themselves first. The *internal* representation is still a
+/// `Vec<&mut Entity>` — the body below needs multiple independent passes
+/// over `entities` (SQL building, marking events persisted, computing the
+/// returned count, and, when this entity itself has nested children, the
+/// nested phase), which a bare `IntoIterator` only supports once — so the
+/// very first thing the generated `RefVec` body does is `.into_iter().collect()`
+/// into a `Vec` shadowing the parameter. Every use of `entities` after that
+/// point operates on that `Vec`, so it reads exactly like `update_all_in_op`
+/// (and like this fn did before the parameter type changed) — only the
+/// entry point moved from "caller collects" to "callee collects".
 ///
 /// Both variants share the exact same SQL-building logic below; only the
 /// outer signature and how `entities` is iterated differ, via `iter_ref` /
@@ -64,7 +81,9 @@ impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
 /// unify against a concrete `&mut Entity`, not `&mut &mut Entity`), so the
 /// `RefVec` adapters reborrow down to a single level with `.map(|e| &mut
 /// **e)` / `.map(|e| &**e)`, making the entity-loop bodies below identical
-/// text for both modes.
+/// text for both modes. That reborrow is unaffected by where the `Vec` comes
+/// from — collected internally now, formerly passed in — since it only ever
+/// operates on the `Vec`, never on the caller's original iterator.
 enum BatchMode {
     OwnedSlice,
     RefVec,
@@ -82,16 +101,29 @@ impl UpdateAllFn<'_> {
         let entity = self.entity;
         let modify_error = &self.modify_error;
 
-        let (fn_name, entities_param, iter_ref, iter_mut_ref) = match mode {
+        let (fn_name, entities_param, entities_prelude, iter_ref, iter_mut_ref) = match mode {
             BatchMode::OwnedSlice => (
                 quote::format_ident!("update_all_in_op"),
                 quote! { entities: &mut [#entity] },
+                None,
                 quote! { entities.iter() },
                 quote! { entities.iter_mut() },
             ),
             BatchMode::RefVec => (
                 quote::format_ident!("update_all_mut_in_op"),
-                quote! { mut entities: Vec<&mut #entity> },
+                quote! { entities: impl IntoIterator<Item = &mut #entity> },
+                // The caller hands us anything iterable once (a `Vec`, an
+                // array, or — the motivating case — a `flat_map` chain
+                // scattering across many parents' `HashMap`s); we collect it
+                // into an owned `Vec` exactly once, right here, and every use
+                // of `entities` below this point operates on that `Vec`.
+                // Shadowing the parameter name means the reborrow adapters
+                // and every later `entities.iter()`/`entities.iter_mut()`
+                // call are unchanged text from before this Vec was built
+                // internally rather than passed in.
+                Some(quote! {
+                    let mut entities: Vec<&mut #entity> = entities.into_iter().collect();
+                }),
                 quote! { entities.iter().map(|e| &**e) },
                 quote! { entities.iter_mut().map(|e| &mut **e) },
             ),
@@ -258,7 +290,7 @@ impl UpdateAllFn<'_> {
         };
 
         #[cfg(feature = "instrument")]
-        let (instrument_attr, error_recording) = {
+        let (instrument_attr, error_recording, count_recording) = {
             let entity_name = entity.to_string();
             let repo_name = &self.repo_name_snake;
             let span_suffix = match mode {
@@ -266,9 +298,23 @@ impl UpdateAllFn<'_> {
                 BatchMode::RefVec => "update_all_mut",
             };
             let span_name = format!("{}.{}", repo_name, span_suffix);
+            // `OwnedSlice`'s `entities: &mut [Entity]` has a `.len()` at
+            // function entry, so its `count` field is populated immediately.
+            // `RefVec`'s `entities: impl IntoIterator<...>` does not — the
+            // count is only known once it's collected into a `Vec` inside
+            // the async body, so that variant records it there instead.
+            let count_field = match mode {
+                BatchMode::OwnedSlice => quote! { count = entities.len(), },
+                BatchMode::RefVec => quote! { count = tracing::field::Empty, },
+            };
+            let count_recording = matches!(mode, BatchMode::RefVec).then(|| {
+                quote! {
+                    tracing::Span::current().record("count", entities.len());
+                }
+            });
             (
                 quote! {
-                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, count = entities.len(), error = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
+                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #count_field error = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
                 },
                 quote! {
                     if let Err(ref e) = __result {
@@ -277,10 +323,12 @@ impl UpdateAllFn<'_> {
                         tracing::Span::current().record("exception.type", std::any::type_name_of_val(e));
                     }
                 },
+                count_recording,
             )
         };
         #[cfg(not(feature = "instrument"))]
-        let (instrument_attr, error_recording) = (quote! {}, quote! {});
+        let (instrument_attr, error_recording, count_recording) =
+            (quote! {}, quote! {}, None::<TokenStream>);
 
         let post_persist_check = if self.post_persist_error.is_some() {
             quote! {
@@ -318,6 +366,9 @@ impl UpdateAllFn<'_> {
             {
                 let __result: Result<usize, #modify_error> = async {
                     use es_entity::prelude::sqlx::Row;
+
+                    #entities_prelude
+                    #count_recording
 
                     if entities.is_empty() {
                         return Ok(0);
@@ -512,13 +563,15 @@ mod tests {
             pub async fn update_all_mut_in_op<OP>(
                 &self,
                 op: &mut OP,
-                mut entities: Vec<&mut Entity>
+                entities: impl IntoIterator<Item = &mut Entity>
             ) -> Result<usize, EntityModifyError>
             where
                 OP: es_entity::AtomicOperation
             {
                 let __result: Result<usize, EntityModifyError> = async {
                     use es_entity::prelude::sqlx::Row;
+
+                    let mut entities: Vec<&mut Entity> = entities.into_iter().collect();
 
                     if entities.is_empty() {
                         return Ok(0);
@@ -703,13 +756,15 @@ mod tests {
             pub async fn update_all_mut_in_op<OP>(
                 &self,
                 op: &mut OP,
-                mut entities: Vec<&mut Entity>
+                entities: impl IntoIterator<Item = &mut Entity>
             ) -> Result<usize, EntityModifyError>
             where
                 OP: es_entity::AtomicOperation
             {
                 let __result: Result<usize, EntityModifyError> = async {
                     use es_entity::prelude::sqlx::Row;
+
+                    let mut entities: Vec<&mut Entity> = entities.into_iter().collect();
 
                     if entities.is_empty() {
                         return Ok(0);

@@ -210,3 +210,69 @@ async fn update_all_batches_nested_children_across_parents() -> anyhow::Result<(
 
     Ok(())
 }
+
+/// `update_all_mut_in_op` accepts `impl IntoIterator<Item = &mut Entity>`
+/// specifically so a caller can hand it a genuinely chained iterator —
+/// `flat_map` scattering `&mut` borrows across many parents' own
+/// `HashMap`s — without collecting into a `Vec` first. This is the
+/// motivating case from the nested-batching design: it's exactly what the
+/// macro-generated `update_nested_*_in_op` glue does internally, exercised
+/// here directly against the child repo.
+#[tokio::test]
+async fn update_all_mut_accepts_a_chained_iterator() -> anyhow::Result<()> {
+    let pool = init_pool().await?;
+    let orders = Orders::new(pool);
+
+    const N_PARENTS: usize = 3;
+    const M_ITEMS: usize = 2;
+
+    let mut order_ids = Vec::new();
+    for _ in 0..N_PARENTS {
+        let (order_id, _items) = create_order_with_items(&orders, M_ITEMS).await?;
+        order_ids.push(order_id);
+    }
+
+    let mut loaded = orders.find_all::<Order>(&order_ids).await?;
+    let mut batch: Vec<Order> = order_ids
+        .iter()
+        .map(|id| loaded.remove(id).expect("order was loaded"))
+        .collect();
+
+    for order in batch.iter_mut() {
+        order
+            .update_item_quantity("item-0", 99)
+            .expect("item-0 exists");
+    }
+
+    // The chain itself: each `order.iter_persisted_children_mut()` borrows
+    // from that order's own `Nested<OrderItem>` HashMap, `flat_map` scatters
+    // those borrows across the whole `batch`, and the chain is passed
+    // straight through — no `.collect::<Vec<_>>()` at the call site.
+    let mut op = orders.begin_op().await?;
+    let n_events = orders
+        .items
+        .update_all_mut_in_op(
+            &mut op,
+            batch
+                .iter_mut()
+                .flat_map(|order| order.iter_persisted_children_mut()),
+        )
+        .await?;
+    op.commit().await?;
+
+    assert_eq!(
+        n_events, N_PARENTS,
+        "one QuantityUpdated event per parent's item-0"
+    );
+
+    let mut reloaded = orders.find_all::<Order>(&order_ids).await?;
+    for order_id in &order_ids {
+        let order = reloaded.remove(order_id).expect("order reloaded");
+        let item0 = order
+            .find_item_with_name("item-0")
+            .expect("item-0 still present");
+        assert_eq!(item0.quantity, 99, "order {order_id}'s item-0 was updated");
+    }
+
+    Ok(())
+}
