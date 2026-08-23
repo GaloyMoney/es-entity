@@ -1,3 +1,16 @@
+# [cala release v0.12.12](https://github.com/GaloyMoney/cala/releases/tag/0.12.12)
+
+
+
+### Features
+
+- Multi-column repo scopes (#204)
+- Update_all_mut_in_op accepts a chained iterator (#205)
+
+### Miscellaneous Tasks
+
+- Bump the all-dependencies group with 3 updates (#202)
+
 # [cala release v0.12.11](https://github.com/GaloyMoney/cala/releases/tag/0.12.11)
 
 
