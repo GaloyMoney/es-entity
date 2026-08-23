@@ -656,6 +656,34 @@ mod tests {
     }
 
     #[test]
+    fn scope_variant_override_is_ok() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Facility",
+                columns(
+                    partner_id(ty = "PartnerId", scope(variant = "Partner")),
+                    customer_id(ty = "CustomerId", scope),
+                    name(ty = "String")
+                )
+            )]
+            struct Facilities {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("overridden-variant scoped repo should derive")
+            .to_string();
+        assert!(tokens.contains("pub enum FacilityScope"));
+        // overridden column uses the custom variant name...
+        assert!(tokens.contains("Partner (PartnerId)"));
+        assert!(!tokens.contains("PartnerId (PartnerId)"));
+        // ...while the un-overridden column keeps the default
+        assert!(tokens.contains("CustomerId (CustomerId)"));
+        assert!(tokens.contains("impl From < PartnerId > for FacilityScope"));
+        assert!(tokens.contains("FacilityScope :: Partner (__scope_val)"));
+    }
+
+    #[test]
     fn same_type_scope_columns_is_error() {
         let input: syn::DeriveInput = parse_quote! {
             #[es_repo(

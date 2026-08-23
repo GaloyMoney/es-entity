@@ -1,9 +1,13 @@
-use convert_case::{Case, Casing};
 use darling::ToTokens;
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
 use super::options::*;
+
+#[cfg(test)]
+use convert_case::{Case, Casing};
+#[cfg(test)]
+use proc_macro2::Span;
 
 /// One scope column: its enum variant ident (UpperCamel of the column name,
 /// e.g. `partner_id` -> `PartnerId`), the column name, and its Rust type.
@@ -28,6 +32,10 @@ impl ScopeCol<'_> {
     }
 }
 
+/// Test-only helper mirroring [`super::options::Column::scope_variant`]'s
+/// default (no override) computation, for building [`ScopeCol`] fixtures
+/// directly without going through a parsed `Column`.
+#[cfg(test)]
 fn variant_ident(column_name: &syn::Ident) -> syn::Ident {
     syn::Ident::new(
         &column_name.to_string().to_case(Case::UpperCamel),
@@ -60,7 +68,7 @@ impl<'a> ScopeInfo<'a> {
             .scope_columns()
             .into_iter()
             .map(|col| ScopeCol {
-                variant: variant_ident(col.name()),
+                variant: col.scope_variant(),
                 column_name: col.name(),
                 column_ty: col.ty(),
             })

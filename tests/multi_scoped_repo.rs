@@ -29,6 +29,42 @@ impl Facilities {
     }
 }
 
+/// Same table as [`Facilities`], but the partner dimension's enum variant is
+/// renamed via `scope(variant = "Partner")` — proves the override produces a
+/// real, working dispatch arm end-to-end (SQL + `From` conversion), not just
+/// codegen tokens. `customer_id` is left at its default (`CustomerId`) to
+/// prove overridden and defaulted columns compose on the same repo.
+///
+/// Wrapped in its own module: the derive generates entity-named companion
+/// types (`FacilityScope`, `FacilityFindError`, ...) keyed off `entity`, not
+/// the repo struct name, so a second `entity = "Facility"` repo in the same
+/// scope as [`Facilities`] would collide.
+pub mod overridden_scope {
+    use sqlx::PgPool;
+
+    use super::entities::facility::*;
+    use es_entity::*;
+
+    #[derive(EsRepo, Debug)]
+    #[es_repo(
+        entity = "Facility",
+        columns(
+            partner_id(ty = "PartnerId", scope(variant = "Partner")),
+            customer_id(ty = "CustomerId", scope),
+            status(ty = "String"),
+        )
+    )]
+    pub struct FacilitiesByOverriddenScope {
+        pool: PgPool,
+    }
+
+    impl FacilitiesByOverriddenScope {
+        pub fn new(pool: PgPool) -> Self {
+            Self { pool }
+        }
+    }
+}
+
 async fn seed_facilities(
     repo: &Facilities,
     partner_id: PartnerId,
@@ -311,6 +347,49 @@ async fn cursor_replay_across_dimensions_never_widens() -> anyhow::Result<()> {
         )
         .await?;
     assert!(ret.entities.iter().all(|f| f.customer_id == customer_x));
+
+    Ok(())
+}
+
+/// `scope(variant = "Partner")` end-to-end: the overridden variant name
+/// dispatches real, correctly-scoped SQL — not just distinctive codegen.
+#[tokio::test]
+async fn scope_variant_override_dispatches_correctly() -> anyhow::Result<()> {
+    use overridden_scope::*;
+
+    let pool = helpers::init_pool().await?;
+    let facilities = FacilitiesByOverriddenScope::new(pool);
+
+    let partner_a = PartnerId::new();
+    let partner_b = PartnerId::new();
+    let customer_x = CustomerId::new();
+
+    let id_a = FacilityId::new();
+    let new = NewFacility::builder()
+        .id(id_a)
+        .partner_id(partner_a)
+        .customer_id(customer_x)
+        .status("active")
+        .build()
+        .unwrap();
+    facilities.create(new).await?;
+
+    // raw id routes through `From<PartnerId> for FacilityScope` into the
+    // overridden `Partner` variant
+    let found = facilities.find_by_id(partner_a, id_a).await?;
+    assert_eq!(found.partner_id, partner_a);
+
+    // explicit overridden-variant spelling
+    facilities
+        .find_by_id(FacilityScope::Partner(partner_a), id_a)
+        .await?;
+
+    // foreign partner under the overridden variant still misses correctly
+    let err = facilities.find_by_id(partner_b, id_a).await;
+    assert!(matches!(err, Err(FacilityFindError::NotFound { .. })));
+
+    // the un-overridden customer dimension on the same repo still works
+    facilities.find_by_id(customer_x, id_a).await?;
 
     Ok(())
 }

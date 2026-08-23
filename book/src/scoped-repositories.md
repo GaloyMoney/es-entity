@@ -43,6 +43,41 @@ There is deliberately **no** `From<Option<PartnerId>>`: mapping `None` to
 `All` would turn a stray `None` into silent all-scope access. All-scope reads
 must be written explicitly — `CustomerScope::All` is greppable and auditable.
 
+### Overriding the variant name
+
+The default variant name is UpperCamel of the column name. When that reads
+awkwardly, or you'd rather the enum spell out the principal kind than the
+column, override it with `scope(variant = "...")`:
+
+```rust,ignore
+#[derive(EsRepo)]
+#[es_repo(
+    entity = "CreditFacility",
+    columns(
+        partner_id(ty = "PartnerId", scope(variant = "Partner")),
+        customer_id(ty = "CustomerId", scope),
+        status(ty = "String"),
+    )
+)]
+pub struct CreditFacilities {
+    pool: PgPool,
+}
+
+// generates:
+pub enum CreditFacilityScope {
+    All,
+    Partner(PartnerId),        // overridden — reads "as a partner", not "by partner_id"
+    CustomerId(CustomerId),    // default — UpperCamel of the column name
+}
+```
+
+The override only renames the enum variant and its `From` impl target — the
+underlying SQL conjunct is still keyed off the real column (`partner_id = $n`).
+Overridden and defaulted scope columns compose freely on the same repo.
+Variant names, whether defaulted or overridden, must still be pairwise
+distinct and may not collide with the reserved `All` variant (see
+"Validation rules" below).
+
 ## Tenancy roots: `id(scope)`
 
 The tenancy-root entity itself — the `Partner` in a partner-scoped system —
@@ -262,8 +297,10 @@ The macro rejects at compile time:
 - scope columns whose Rust types are not pairwise distinct (the generated
   `From<T>` conversions dispatch on type, so two same-typed scope columns
   would produce conflicting impls)
-- scope columns whose UpperCamel variant names collide with each other or
-  with the reserved `All` variant
+- scope columns whose variant names collide with each other or with the
+  reserved `All` variant — whether the name is the UpperCamel default or an
+  explicit `scope(variant = "...")` override
+- a `scope(variant = "...")` value that isn't a valid Rust identifier
 - an `Option<T>` or `nullable`-annotated scope column (nullable scope columns
   are not supported — every row must belong to exactly one scope, in every
   dimension)
