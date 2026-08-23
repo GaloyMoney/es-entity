@@ -53,8 +53,14 @@ impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
 /// contiguous `&mut [Entity]`. `update_all_mut_in_op` is the shape needed to
 /// batch *nested children across many parents*: each parent owns its own
 /// children (in its own `HashMap`), so gathering "every persisted child that
-/// needs updating, across the whole parent batch" can only ever produce a
-/// `Vec` of scattered `&mut Entity` borrows, never a contiguous slice.
+/// needs updating, across the whole parent batch" can only ever produce
+/// scattered `&mut Entity` borrows, never a contiguous slice. It accepts
+/// `impl IntoIterator<Item = &mut Entity>` rather than a concrete `Vec` so a
+/// caller assembling those scattered borrows can pass the chain straight
+/// through; the *internal* representation is still `Vec<&mut Entity>` (the
+/// body needs multiple passes over `entities`, which a bare `IntoIterator`
+/// only supports once), collected right at the top of the generated `RefVec`
+/// body, shadowing the parameter.
 ///
 /// Both variants share the exact same SQL-building logic below; only the
 /// outer signature and how `entities` is iterated differ, via `iter_ref` /
@@ -82,16 +88,20 @@ impl UpdateAllFn<'_> {
         let entity = self.entity;
         let modify_error = &self.modify_error;
 
-        let (fn_name, entities_param, iter_ref, iter_mut_ref) = match mode {
+        let (fn_name, entities_param, entities_prelude, iter_ref, iter_mut_ref) = match mode {
             BatchMode::OwnedSlice => (
                 quote::format_ident!("update_all_in_op"),
                 quote! { entities: &mut [#entity] },
+                None,
                 quote! { entities.iter() },
                 quote! { entities.iter_mut() },
             ),
             BatchMode::RefVec => (
                 quote::format_ident!("update_all_mut_in_op"),
-                quote! { mut entities: Vec<&mut #entity> },
+                quote! { entities: impl IntoIterator<Item = &mut #entity> },
+                Some(quote! {
+                    let mut entities: Vec<&mut #entity> = entities.into_iter().collect();
+                }),
                 quote! { entities.iter().map(|e| &**e) },
                 quote! { entities.iter_mut().map(|e| &mut **e) },
             ),
@@ -258,7 +268,7 @@ impl UpdateAllFn<'_> {
         };
 
         #[cfg(feature = "instrument")]
-        let (instrument_attr, error_recording) = {
+        let (instrument_attr, error_recording, count_recording) = {
             let entity_name = entity.to_string();
             let repo_name = &self.repo_name_snake;
             let span_suffix = match mode {
@@ -266,9 +276,18 @@ impl UpdateAllFn<'_> {
                 BatchMode::RefVec => "update_all_mut",
             };
             let span_name = format!("{}.{}", repo_name, span_suffix);
+            let count_field = match mode {
+                BatchMode::OwnedSlice => quote! { count = entities.len(), },
+                BatchMode::RefVec => quote! { count = tracing::field::Empty, },
+            };
+            let count_recording = matches!(mode, BatchMode::RefVec).then(|| {
+                quote! {
+                    tracing::Span::current().record("count", entities.len());
+                }
+            });
             (
                 quote! {
-                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, count = entities.len(), error = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
+                    #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, #count_field error = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
                 },
                 quote! {
                     if let Err(ref e) = __result {
@@ -277,10 +296,12 @@ impl UpdateAllFn<'_> {
                         tracing::Span::current().record("exception.type", std::any::type_name_of_val(e));
                     }
                 },
+                count_recording,
             )
         };
         #[cfg(not(feature = "instrument"))]
-        let (instrument_attr, error_recording) = (quote! {}, quote! {});
+        let (instrument_attr, error_recording, count_recording) =
+            (quote! {}, quote! {}, None::<TokenStream>);
 
         let post_persist_check = if self.post_persist_error.is_some() {
             quote! {
@@ -318,6 +339,9 @@ impl UpdateAllFn<'_> {
             {
                 let __result: Result<usize, #modify_error> = async {
                     use es_entity::prelude::sqlx::Row;
+
+                    #entities_prelude
+                    #count_recording
 
                     if entities.is_empty() {
                         return Ok(0);
@@ -512,13 +536,15 @@ mod tests {
             pub async fn update_all_mut_in_op<OP>(
                 &self,
                 op: &mut OP,
-                mut entities: Vec<&mut Entity>
+                entities: impl IntoIterator<Item = &mut Entity>
             ) -> Result<usize, EntityModifyError>
             where
                 OP: es_entity::AtomicOperation
             {
                 let __result: Result<usize, EntityModifyError> = async {
                     use es_entity::prelude::sqlx::Row;
+
+                    let mut entities: Vec<&mut Entity> = entities.into_iter().collect();
 
                     if entities.is_empty() {
                         return Ok(0);
@@ -703,13 +729,15 @@ mod tests {
             pub async fn update_all_mut_in_op<OP>(
                 &self,
                 op: &mut OP,
-                mut entities: Vec<&mut Entity>
+                entities: impl IntoIterator<Item = &mut Entity>
             ) -> Result<usize, EntityModifyError>
             where
                 OP: es_entity::AtomicOperation
             {
                 let __result: Result<usize, EntityModifyError> = async {
                     use es_entity::prelude::sqlx::Row;
+
+                    let mut entities: Vec<&mut Entity> = entities.into_iter().collect();
 
                     if entities.is_empty() {
                         return Ok(0);
