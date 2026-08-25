@@ -473,12 +473,22 @@ pub trait AtomicOperation: Send {
     /// [`force_execute_pre_commit`](hooks::CommitHook::force_execute_pre_commit)
     /// exactly as they already do on the operation itself.
     ///
-    /// There is deliberately **no default implementation**. A default could only
-    /// return [`HookSlot::unsupported`], which would compile for a wrapper type
-    /// that forgot to override it while silently downgrading every savepoint
-    /// taken through it to "hooks unsupported" — turning a missing four-line
-    /// method into a quiet behavioural change instead of a compile error.
-    fn savepoint_parts(&mut self) -> (&mut db::Connection, savepoint::HookSlot<'_>);
+    /// The default reports no hook buffer, which is correct for an operation
+    /// that has none — a bare [`sqlx::Transaction`] needs nothing else.
+    ///
+    /// It is **not** correct for an operation that wraps one which does. Such a
+    /// type must override this (or implement [`WrapsOperation`], which does it
+    /// for you), because the default would otherwise refuse hooks inside every
+    /// savepoint taken through it while the wrapped operation supports them
+    /// fine. That mismatch is caught rather than left silent:
+    /// [`begin_savepoint`](SavepointOperation::begin_savepoint) fails with a
+    /// protocol error when an operation reports
+    /// [`supports_hooks`](Self::supports_hooks) but yields an unsupported slot,
+    /// which is exactly the shape "delegated `supports_hooks`, inherited
+    /// `savepoint_parts`" produces.
+    fn savepoint_parts(&mut self) -> (&mut db::Connection, savepoint::HookSlot<'_>) {
+        (self.connection(), savepoint::HookSlot::unsupported())
+    }
 }
 
 /// Derives the whole of [`AtomicOperation`] for a type that wraps another
@@ -567,14 +577,11 @@ impl<W: WrapsOperation> AtomicOperation for W {
     }
 }
 
+/// A bare transaction carries no commit-hook buffer, so the defaulted
+/// `savepoint_parts` is already right: savepoints work at the database level and
+/// refuse hook registration.
 impl<'c> AtomicOperation for sqlx::Transaction<'c, db::Db> {
     fn connection(&mut self) -> &mut db::Connection {
         &mut *self
-    }
-
-    /// A bare transaction carries no commit-hook buffer, so savepoints taken
-    /// through it work at the database level and refuse hook registration.
-    fn savepoint_parts(&mut self) -> (&mut db::Connection, savepoint::HookSlot<'_>) {
-        (&mut *self, savepoint::HookSlot::unsupported())
     }
 }

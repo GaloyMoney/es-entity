@@ -9,12 +9,14 @@ The `AtomicOperation` trait represents a transactional operation that can execut
 
 ```rust,ignore
 pub trait AtomicOperation: Send {
-    /// The raw connection. The only required method besides `savepoint_parts`.
+    /// The raw connection. The only required method.
     fn connection(&mut self) -> &mut db::Connection;
 
     /// The connection *and* the commit-hook buffer a nested SAVEPOINT folds
-    /// into on release — see "Implementing the trait" below.
-    fn savepoint_parts(&mut self) -> (&mut db::Connection, HookSlot<'_>);
+    /// into on release. The default reports "no hook buffer", which is right
+    /// for an op that has none and wrong for a wrapper around one that does —
+    /// see "Implementing the trait" below.
+    fn savepoint_parts(&mut self) -> (&mut db::Connection, HookSlot<'_>) { .. }
 
     /// When the operation is taking place, if that time is cached.
     fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> { None }
@@ -104,7 +106,11 @@ Delegating by hand instead is not just verbose, it is a trap: a method you forge
 
 ### Owning a connection directly
 
-If your type owns the connection rather than wrapping an operation, implement `AtomicOperation` directly. Only `connection` and `savepoint_parts` are required; the rest have defaults. `savepoint_parts` returns the connection **and** the commit-hook buffer together, because a savepoint holds a `&mut` to both for its whole lifetime and two separate `&mut self` accessors could never be live at once — returning the pair lets you split the borrow across your own disjoint fields:
+If your type owns the connection rather than wrapping an operation, implement `AtomicOperation` directly. Only `connection` is required.
+
+If you have no commit-hook buffer, you are already done — the defaulted `savepoint_parts` reports exactly that, savepoints still work at the database level, and `add_commit_hook` inside them refuses so callers take their `force_execute_pre_commit` fallback.
+
+If you *do* keep a hook buffer, override `savepoint_parts`. It returns the connection **and** the buffer together, because a savepoint holds a `&mut` to both for its whole lifetime and two separate `&mut self` accessors could never be live at once — returning the pair lets you split the borrow across your own disjoint fields:
 
 ```rust,ignore
 fn savepoint_parts(&mut self) -> (&mut db::Connection, HookSlot<'_>) {
@@ -113,7 +119,11 @@ fn savepoint_parts(&mut self) -> (&mut db::Connection, HookSlot<'_>) {
 }
 ```
 
-If you have no commit-hook buffer, return `HookSlot::unsupported()`: savepoints still work at the database level, and `add_commit_hook` inside them refuses so callers take their `force_execute_pre_commit` fallback — exactly as they already do on the operation itself.
+### A mismatch is caught, not ignored
+
+Because the default reports "no hook buffer", a type that forwards `supports_hooks` to an operation it wraps but forgets to override `savepoint_parts` would refuse hooks inside every savepoint taken through it, while the wrapped operation supports them fine — a behaviour change with no compile error.
+
+`begin_savepoint` therefore fails with a protocol error when an operation reports `supports_hooks()` but hands back an unsupported slot. The two can only disagree that one way, so the check has no false positives: an op that honestly has no hooks reports `false` on both sides. Implementing `WrapsOperation` avoids the situation entirely.
 
 ## IntoOneTimeExecutor
 

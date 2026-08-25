@@ -85,6 +85,13 @@ impl HookSlot<'_> {
     pub fn unsupported() -> Self {
         Self(None)
     }
+
+    /// Whether this slot can actually receive folded hooks. Used to catch an
+    /// operation that claims hook support while yielding an unsupported slot —
+    /// see [`SavepointOperation::begin_savepoint`].
+    pub(super) fn supports_hooks(&self) -> bool {
+        self.0.is_some()
+    }
 }
 
 /// An [`AtomicOperation`] scoped to a database `SAVEPOINT` inside a parent [`DbOp`]
@@ -338,15 +345,47 @@ pub trait SavepointOperation: AtomicOperation {
     /// [`DbOp::begin_savepoint`](super::DbOp::begin_savepoint). Must be finished
     /// with [`release`](SavepointOp::release) or
     /// [`rollback`](SavepointOp::rollback); dropping it rolls back.
+    ///
+    /// # Incoherent hook capability
+    ///
+    /// Fails with a protocol error if the operation reports
+    /// [`supports_hooks`](AtomicOperation::supports_hooks) but hands back a slot
+    /// that cannot receive hooks. The two can only disagree one way: an
+    /// implementor forwarded `supports_hooks` to an operation it wraps but
+    /// inherited the default
+    /// [`savepoint_parts`](AtomicOperation::savepoint_parts), which can only
+    /// report "no hook buffer".
+    ///
+    /// Left unchecked that is silent: hooks registered inside the savepoint
+    /// would be refused, callers would fall back to
+    /// [`force_execute_pre_commit`](hooks::CommitHook::force_execute_pre_commit),
+    /// and `post_commit`/`on_rollback` would stop running for an operation whose
+    /// wrapped op supports them perfectly well. Reporting it turns a missing
+    /// method override into a loud failure the first time a savepoint is taken,
+    /// rather than a behaviour change nobody notices.
     fn begin_savepoint(
         &mut self,
     ) -> impl Future<Output = Result<SavepointOp<'_>, sqlx::Error>> + Send {
         async move {
-            // Both reads must complete before the `&mut` borrow below: cloning
-            // the handle is what releases the `&self` borrow `clock()` takes.
+            // All three reads must complete before the `&mut` borrow below:
+            // cloning the handle is what releases the `&self` borrow `clock()`
+            // takes.
             let clock = self.clock().clone();
             let now = self.maybe_now();
+            let declares_hooks = self.supports_hooks();
+
             let (conn, slot) = self.savepoint_parts();
+            if declares_hooks && !slot.supports_hooks() {
+                return Err(sqlx::Error::Protocol(
+                    "operation reports supports_hooks() but its savepoint_parts() \
+                     yields no hook buffer — commit hooks registered inside this \
+                     savepoint would be silently refused. Implement \
+                     AtomicOperation::savepoint_parts (or WrapsOperation) on this \
+                     type instead of inheriting the default."
+                        .to_string(),
+                ));
+            }
+
             SavepointOp::begin(conn, clock, now, slot.0).await
         }
     }

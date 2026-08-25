@@ -1246,3 +1246,88 @@ async fn enum_op_isolates_from_owned_variant() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// The hazard a defaulted `savepoint_parts` creates: a wrapper that forwards
+/// `supports_hooks` to an op that *does* support them, but inherits the default
+/// slot. Left alone that silently refuses hooks inside every savepoint taken
+/// through it. It must fail loudly on the first savepoint instead.
+struct ForgetfulWrapper<'a>(&'a mut DbOp<'static>);
+
+impl AtomicOperation for ForgetfulWrapper<'_> {
+    fn connection(&mut self) -> &mut es_entity::db::Connection {
+        self.0.connection()
+    }
+
+    fn add_commit_hook<H: CommitHook>(&mut self, hook: H) -> Result<(), H> {
+        self.0.add_commit_hook(hook)
+    }
+
+    fn supports_hooks(&self) -> bool {
+        self.0.supports_hooks()
+    }
+    // `savepoint_parts` deliberately NOT overridden.
+}
+
+#[tokio::test]
+async fn declaring_hook_support_without_savepoint_parts_is_rejected() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+
+    let err = {
+        let mut wrapper = ForgetfulWrapper(&mut op);
+        assert!(wrapper.supports_hooks(), "claims hook support");
+        match wrapper.begin_savepoint().await {
+            Ok(_) => panic!("must refuse rather than silently drop hook support"),
+            Err(e) => e,
+        }
+    };
+
+    match err {
+        sqlx::Error::Protocol(msg) => {
+            assert!(
+                msg.contains("savepoint_parts"),
+                "error should name the missing method, got: {msg}"
+            );
+        }
+        other => panic!("expected a protocol error, got {other:?}"),
+    }
+
+    op.commit().await?;
+    Ok(())
+}
+
+/// The legitimate no-hooks case must NOT trip that check: an op that reports no
+/// hook support and yields no slot is coherent.
+#[tokio::test]
+async fn honest_hookless_op_still_savepoints() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let prefix = format!("sp-{}", new_id());
+
+    struct HooklessOp<'a>(&'a mut es_entity::db::Connection);
+    impl AtomicOperation for HooklessOp<'_> {
+        fn connection(&mut self) -> &mut es_entity::db::Connection {
+            self.0
+        }
+        // No hooks declared, no slot: coherent, uses the default.
+    }
+
+    let mut tx = pool.begin().await?;
+    {
+        let mut op = HooklessOp(&mut tx);
+        assert!(!op.supports_hooks());
+        let sp_result = op
+            .with_savepoint(async |sp| {
+                insert_item_in_op(sp, new_id(), &format!("{prefix}-kept")).await?;
+                Ok::<_, sqlx::Error>(())
+            })
+            .await?;
+        assert!(sp_result.is_ok());
+    }
+    tx.commit().await?;
+
+    assert_eq!(
+        labels(&pool, &prefix).await?,
+        vec![format!("{prefix}-kept")]
+    );
+    Ok(())
+}
