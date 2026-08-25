@@ -69,6 +69,30 @@ self.process_in_op(&mut sp, item).await?;
 sp.release().await?;
 ```
 
+## Nesting
+
+`SavepointOp` exposes the same `with_savepoint` / `begin_savepoint` pair as `DbOp`, so a savepoint can nest inside another — isolating a sub-item's failure within an already-isolated item, without giving up any of the outer batch's atomicity:
+
+```rust,ignore
+op.with_savepoint(async |outer| {
+    self.process_in_op(outer, item).await?;
+
+    for sub_item in &item.sub_items {
+        // A sub-item's failure unwinds only its own writes — `item`'s own
+        // work, and the batch, stay intact either way.
+        let _ = outer.with_savepoint(async |inner| {
+            self.process_sub_item_in_op(inner, sub_item).await
+        }).await?;
+    }
+
+    Ok::<_, MyError>(())
+}).await?;
+```
+
+Releasing an inner savepoint folds its staged hooks into its *immediate* parent's staged buffer, not straight into the root `DbOp` — an N-deep chain rolls up one level at a time, so nothing is visible further out until every enclosing savepoint has itself released.
+
+A [`CommitHook`](./commit-hooks.md)'s own `pre_commit` can nest a savepoint too: `HookOperation` — the type `pre_commit` is handed — exposes the same pair, letting a hook isolate its own multi-statement write the same way application code isolates a batch item. This works even on the [`force_execute_pre_commit`](./commit-hooks.md) escape hatch, where there is no commit pass for a registered hook to join: the raw `SAVEPOINT`/`RELEASE`/`ROLLBACK` still works (it only needs the connection), but `add_commit_hook` inside that savepoint keeps refusing, exactly as it already does on the `HookOperation` directly.
+
 ## When not to use savepoints
 
 If every item performs the same statement, `create_all` / `update_all` / `find_all` remain cheaper — one statement for the whole batch beats one savepoint pair per item. Reach for savepoints when items need genuinely per-item logic *and* per-item error isolation.

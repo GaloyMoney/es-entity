@@ -1176,6 +1176,144 @@ async fn force_execute_path_still_refuses_reentrant_registration() -> anyhow::Re
     Ok(())
 }
 
+/// A hook whose `pre_commit` isolates its own multi-row write in a nested
+/// `SAVEPOINT`, discarding one row without losing the others or poisoning the
+/// enclosing commit pass.
+#[derive(Debug)]
+struct SavepointingHook {
+    prefix: String,
+    clashing_id: uuid::Uuid,
+}
+
+impl CommitHook for SavepointingHook {
+    async fn pre_commit(
+        self,
+        mut op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        sqlx::query!(
+            "INSERT INTO savepoint_items (id, label) VALUES ($1, $2)",
+            self.clashing_id,
+            format!("{}-kept", self.prefix)
+        )
+        .execute(op.as_executor())
+        .await?;
+
+        let doomed_res = op
+            .with_savepoint(async |sp| {
+                sqlx::query!(
+                    "INSERT INTO savepoint_items (id, label) VALUES ($1, $2)",
+                    self.clashing_id,
+                    format!("{}-doomed", self.prefix)
+                )
+                .execute(sp.as_executor())
+                .await
+            })
+            .await?;
+        assert!(doomed_res.is_err(), "duplicate id must fail the insert");
+
+        PreCommitRet::ok(self, op)
+    }
+}
+
+#[tokio::test]
+async fn hook_pre_commit_savepoint_isolates_its_own_write() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+    let prefix = format!("sp-hook-{}", uuid::Uuid::now_v7());
+
+    op.add_commit_hook(SavepointingHook {
+        prefix: prefix.clone(),
+        clashing_id: uuid::Uuid::now_v7(),
+    })
+    .unwrap();
+
+    // Proves the hook's rolled-back savepoint didn't poison the commit pass's
+    // own transaction.
+    op.commit().await?;
+
+    let labels: Vec<String> = sqlx::query!(
+        "SELECT label FROM savepoint_items WHERE label LIKE $1 ORDER BY label",
+        format!("{prefix}%")
+    )
+    .fetch_all(&pool)
+    .await?
+    .into_iter()
+    .map(|r| r.label)
+    .collect();
+    assert_eq!(labels, vec![format!("{prefix}-kept")]);
+
+    Ok(())
+}
+
+/// On the `force_execute_pre_commit` path there is no commit pass for a
+/// registered hook to join, so `add_commit_hook` inside a nested savepoint
+/// must keep refusing exactly like it does directly on the `HookOperation` —
+/// but the raw `SAVEPOINT`/`RELEASE`/`ROLLBACK` machinery, needing only the
+/// connection, works regardless.
+#[derive(Debug)]
+struct ForcePathSavepointProbe {
+    prefix: String,
+    add_hook_result: Arc<Mutex<Option<bool>>>,
+}
+
+impl CommitHook for ForcePathSavepointProbe {
+    async fn pre_commit(
+        self,
+        mut op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        let mut sp = op.begin_savepoint().await?;
+
+        let registered = sp
+            .add_commit_hook(NonMergingGetterHook { label: "child" })
+            .is_ok();
+        *self.add_hook_result.lock().unwrap() = Some(registered);
+
+        sqlx::query!(
+            "INSERT INTO savepoint_items (id, label) VALUES ($1, $2)",
+            uuid::Uuid::now_v7(),
+            format!("{}-forced", self.prefix)
+        )
+        .execute(sp.as_executor())
+        .await?;
+        sp.release().await?;
+
+        PreCommitRet::ok(self, op)
+    }
+}
+
+#[tokio::test]
+async fn force_execute_path_savepoint_works_without_hook_support() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut tx = pool.begin().await?; // bare sqlx::Transaction: no hook support at all
+    let prefix = format!("sp-force-{}", uuid::Uuid::now_v7());
+
+    let add_hook_result = Arc::new(Mutex::new(None));
+
+    ForcePathSavepointProbe {
+        prefix: prefix.clone(),
+        add_hook_result: add_hook_result.clone(),
+    }
+    .force_execute_pre_commit(&mut tx)
+    .await?;
+
+    assert_eq!(*add_hook_result.lock().unwrap(), Some(false));
+
+    tx.commit().await?;
+
+    let labels: Vec<String> = sqlx::query!(
+        "SELECT label FROM savepoint_items WHERE label LIKE $1 ORDER BY label",
+        format!("{prefix}%")
+    )
+    .fetch_all(&pool)
+    .await?
+    .into_iter()
+    .map(|r| r.label)
+    .collect();
+    assert_eq!(labels, vec![format!("{prefix}-forced")]);
+
+    Ok(())
+}
+
 #[derive(Debug)]
 struct StagesFailingChild {
     label: &'static str,

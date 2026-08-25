@@ -457,6 +457,150 @@ async fn savepoint_inherits_cached_time() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn nested_savepoint_rolls_back_without_poisoning_parent() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let prefix = format!("sp-{}", new_id());
+    let clashing_id = new_id();
+
+    let mut op = DbOp::init(&pool).await?;
+
+    op.with_savepoint(async |op| {
+        insert_item_in_op(op, clashing_id, &format!("{prefix}-outer")).await?;
+
+        // A nested savepoint isolates a sub-item's failure from the item's own
+        // (already-isolated) scope.
+        let inner_res = op
+            .with_savepoint(async |op| {
+                insert_item_in_op(op, clashing_id, &format!("{prefix}-inner-doomed")).await
+            })
+            .await?;
+        assert!(inner_res.is_err());
+
+        // The outer item's own writes, and the parent transaction, survive the
+        // inner savepoint's rollback.
+        insert_item_in_op(op, new_id(), &format!("{prefix}-outer-continues")).await
+    })
+    .await?
+    .unwrap();
+
+    op.commit().await?;
+
+    assert_eq!(
+        labels(&pool, &prefix).await?,
+        vec![
+            format!("{prefix}-outer"),
+            format!("{prefix}-outer-continues"),
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn nested_savepoint_hooks_roll_up_one_parent_at_a_time() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+    let probe = Probe::default();
+
+    op.with_savepoint(async |outer| {
+        outer.add_commit_hook(probe.hook("outer")).unwrap();
+
+        outer
+            .with_savepoint(async |inner| {
+                // Not yet visible on the grandparent `DbOp` — only the immediate
+                // parent (`outer`) has folded it in, and only once `outer`
+                // itself releases.
+                inner.add_commit_hook(probe.hook("inner")).unwrap();
+                Ok::<_, anyhow::Error>(())
+            })
+            .await?
+            .unwrap();
+
+        // Released into `outer`'s own staged buffer: visible here, on the
+        // savepoint it rolled up into, but the root `DbOp` still knows nothing
+        // about it until `outer` itself releases.
+        let seen = outer
+            .commit_hook::<MergingProbeHook>()
+            .expect("inner's hook rolled up into outer");
+        assert_eq!(seen.labels, vec!["outer", "inner"]);
+
+        Ok::<_, anyhow::Error>(())
+    })
+    .await?
+    .unwrap();
+
+    op.commit().await?;
+
+    // One level up again at the root commit: both merged into a single hook,
+    // in release order.
+    assert_eq!(probe.pre(), vec!["outer", "inner"]);
+    assert_eq!(probe.post(), vec!["outer", "inner"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn rolled_back_outer_savepoint_discards_already_rolled_up_inner_hooks() -> anyhow::Result<()>
+{
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?;
+    let probe = Probe::default();
+
+    let res = op
+        .with_savepoint(async |outer| {
+            outer
+                .with_savepoint(async |inner| {
+                    inner.add_commit_hook(probe.hook("inner")).unwrap();
+                    Ok::<_, anyhow::Error>(())
+                })
+                .await
+                .unwrap()
+                .unwrap();
+
+            // The inner hook is now staged on `outer`; rolling `outer` back
+            // must discard it right along with `outer`'s own writes/hooks.
+            Err::<(), _>("outer failed")
+        })
+        .await?;
+    assert_eq!(res, Err("outer failed"));
+
+    op.commit().await?;
+
+    assert!(probe.pre().is_empty());
+    assert!(probe.post().is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_nested_savepoint_release_and_rollback() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let prefix = format!("sp-{}", new_id());
+    let mut op = DbOp::init(&pool).await?;
+
+    let mut outer = op.begin_savepoint().await?;
+    insert_item_in_op(&mut outer, new_id(), &format!("{prefix}-outer")).await?;
+
+    let mut inner = outer.begin_savepoint().await?;
+    insert_item_in_op(&mut inner, new_id(), &format!("{prefix}-inner-kept")).await?;
+    inner.release().await?;
+
+    let mut inner = outer.begin_savepoint().await?;
+    insert_item_in_op(&mut inner, new_id(), &format!("{prefix}-inner-undone")).await?;
+    inner.rollback().await?;
+
+    outer.release().await?;
+    op.commit().await?;
+
+    assert_eq!(
+        labels(&pool, &prefix).await?,
+        vec![format!("{prefix}-inner-kept"), format!("{prefix}-outer")]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn explicit_savepoint_release_and_rollback() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let prefix = format!("sp-{}", new_id());

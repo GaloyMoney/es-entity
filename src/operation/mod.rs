@@ -183,7 +183,7 @@ impl<'c> DbOp<'c> {
             &mut self.tx,
             self.clock.clone(),
             self.now,
-            &mut self.commit_hooks,
+            savepoint::HookParent::Root(&mut self.commit_hooks),
         )
         .await
     }

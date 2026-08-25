@@ -93,8 +93,12 @@
 //! operation's set — through the same registration/merge path — when the savepoint
 //! is released; a rolled-back savepoint discards them. No callback runs at a
 //! savepoint boundary, so the lifecycle above is unchanged: one `pre_commit` pass at
-//! the parent's commit, `post_commit` only after a durable `COMMIT`. See
-//! [`SavepointOp`] for details.
+//! the root's commit, `post_commit` only after a durable `COMMIT`. Savepoints nest:
+//! [`SavepointOp`] itself exposes `with_savepoint`/`begin_savepoint`, and so does
+//! [`HookOperation`] — letting a hook's own `pre_commit` isolate its own
+//! multi-statement write the same way. Releasing an inner savepoint folds into its
+//! *immediate* parent's staged buffer, not straight to the root, so an N-deep chain
+//! rolls up one level at a time. See [`SavepointOp`] for details.
 //!
 //! [`SavepointOp`]: super::SavepointOp
 //!
@@ -380,6 +384,53 @@ impl<'c> HookOperation<'c> {
     fn drain_staged(&mut self) -> Option<CommitHooks> {
         Some(std::mem::take(self.staged.as_mut()?))
     }
+
+    /// Runs `f` inside a `SAVEPOINT` scoped to this hook's connection — see
+    /// [`DbOp::with_savepoint`](super::DbOp::with_savepoint) for the full
+    /// contract. Lets a hook's `pre_commit` isolate its own multi-statement
+    /// work (e.g. writing one outbox row per staged event) the same way
+    /// application code isolates a batch item, without risking the enclosing
+    /// commit pass.
+    pub async fn with_savepoint<T, E, F>(&mut self, f: F) -> Result<Result<T, E>, sqlx::Error>
+    where
+        F: AsyncFnOnce(&mut super::SavepointOp<'_>) -> Result<T, E>,
+    {
+        let mut op = self.begin_savepoint().await?;
+        match f(&mut op).await {
+            Ok(value) => {
+                op.release().await?;
+                Ok(Ok(value))
+            }
+            Err(error) => {
+                op.rollback().await?;
+                Ok(Err(error))
+            }
+        }
+    }
+
+    /// Begins a `SAVEPOINT` scope explicitly — see
+    /// [`DbOp::begin_savepoint`](super::DbOp::begin_savepoint).
+    ///
+    /// Hooks registered inside stage normally and, on
+    /// [`release`](super::SavepointOp::release), fold into this
+    /// `HookOperation`'s own buffer exactly like a top-level savepoint folds
+    /// into a `DbOp` — *if* this `HookOperation` is on a real commit pass
+    /// ([`supports_hooks`](AtomicOperation::supports_hooks) is `true`). On the
+    /// [`force_execute_pre_commit`](CommitHook::force_execute_pre_commit) path
+    /// there is no pass to fold into, so registering a hook inside the
+    /// savepoint fails the same way it would have on this `HookOperation`
+    /// directly — the `SAVEPOINT`/`RELEASE`/`ROLLBACK` machinery itself still
+    /// works regardless, since it needs only the connection.
+    pub async fn begin_savepoint(&mut self) -> Result<super::SavepointOp<'_>, sqlx::Error> {
+        let clock = AtomicOperation::clock(self).clone();
+        super::SavepointOp::begin(
+            &mut *self.conn,
+            clock,
+            self.now,
+            super::savepoint::HookParent::Root(&mut self.staged),
+        )
+        .await
+    }
 }
 
 impl<'c> AtomicOperation for HookOperation<'c> {
@@ -529,6 +580,10 @@ impl CommitHooks {
         }
 
         self.hooks.push((type_id, new_hook));
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.hooks.is_empty()
     }
 
     pub(super) fn get_last<H: CommitHook>(&self) -> Option<&H> {

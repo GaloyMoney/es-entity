@@ -86,7 +86,7 @@ impl CommitHook for MyHook {
 }
 ```
 
-`HookOperation` implements `AtomicOperation` so it can be passed to any function expecting that trait.
+`HookOperation` implements `AtomicOperation` so it can be passed to any function expecting that trait. It also exposes `with_savepoint` / `begin_savepoint`, letting `pre_commit` isolate its own multi-statement write in a nested `SAVEPOINT` — see [Nesting](./savepoints.md#nesting).
 
 ## Rollback Notification
 
