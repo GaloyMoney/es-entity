@@ -1,7 +1,7 @@
 mod helpers;
 
 use es_entity::operation::{
-    AtomicOperation, DbOp,
+    AtomicOperation, DbOp, SavepointOperation,
     hooks::{CommitHook, HookOperation, PreCommitRet},
 };
 use std::sync::{Arc, Mutex};
@@ -625,6 +625,260 @@ async fn explicit_savepoint_release_and_rollback() -> anyhow::Result<()> {
     assert_eq!(
         labels(&pool, &prefix).await?,
         vec![format!("{prefix}-kept")]
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Savepoints are derived, not hand-written: these cover operations that had no
+// savepoint support at all before `savepoint_parts` + the blanket impl.
+// ---------------------------------------------------------------------------
+
+/// An operation defined *outside* `es_entity::operation` — standing in for the
+/// wrapper types consumers define (obix's `BatchOp` / `IsolatedOp` / `FlushOp`).
+/// It implements `savepoint_parts` by forwarding, and gets the whole of
+/// `SavepointOperation` without writing a line of savepoint code.
+struct WrapperOp<'a>(&'a mut DbOp<'static>);
+
+impl AtomicOperation for WrapperOp<'_> {
+    fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.0.maybe_now()
+    }
+
+    fn clock(&self) -> &es_entity::clock::ClockHandle {
+        AtomicOperation::clock(self.0)
+    }
+
+    fn connection(&mut self) -> &mut es_entity::db::Connection {
+        self.0.connection()
+    }
+
+    fn add_commit_hook<H: CommitHook>(&mut self, hook: H) -> Result<(), H> {
+        self.0.add_commit_hook(hook)
+    }
+
+    fn commit_hook<H: CommitHook>(&self) -> Option<&H> {
+        self.0.commit_hook::<H>()
+    }
+
+    fn supports_hooks(&self) -> bool {
+        self.0.supports_hooks()
+    }
+
+    fn savepoint_parts(
+        &mut self,
+    ) -> (
+        &mut es_entity::db::Connection,
+        es_entity::operation::HookSlot<'_>,
+    ) {
+        self.0.savepoint_parts()
+    }
+}
+
+/// A foreign operation type earns savepoints — including hook staging that folds
+/// all the way through to the root `DbOp` — from `savepoint_parts` alone.
+#[tokio::test]
+async fn foreign_op_gets_savepoints_and_hook_folding() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let prefix = format!("sp-{}", new_id());
+    let probe = Probe::default();
+    let mut op = DbOp::init(&pool).await?;
+
+    {
+        let mut wrapper = WrapperOp(&mut op);
+        assert!(wrapper.supports_hooks());
+
+        let kept = wrapper
+            .with_savepoint(async |sp| {
+                assert!(
+                    sp.supports_hooks(),
+                    "hook support forwards through the wrapper"
+                );
+                insert_item_in_op(sp, new_id(), &format!("{prefix}-kept")).await?;
+                sp.add_commit_hook(probe.hook("kept")).unwrap();
+                Ok::<_, sqlx::Error>(())
+            })
+            .await?;
+        assert!(kept.is_ok());
+
+        let undone = wrapper
+            .with_savepoint(async |sp| {
+                insert_item_in_op(sp, new_id(), &format!("{prefix}-undone")).await?;
+                sp.add_commit_hook(probe.hook("undone")).unwrap();
+                Err::<(), _>(sqlx::Error::RowNotFound)
+            })
+            .await?;
+        assert!(undone.is_err());
+    }
+
+    op.commit().await?;
+
+    assert_eq!(
+        labels(&pool, &prefix).await?,
+        vec![format!("{prefix}-kept")]
+    );
+    // The rolled-back savepoint's hook never reached the root.
+    assert_eq!(probe.post(), vec!["kept".to_string()]);
+
+    Ok(())
+}
+
+/// `OpWithTime` had no savepoint methods at all before this change.
+#[tokio::test]
+async fn op_with_time_gets_savepoints() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let prefix = format!("sp-{}", new_id());
+    let mut op = DbOp::init(&pool).await?;
+
+    {
+        let mut timed = es_entity::operation::OpWithTime::cached_or_db_time(&mut op).await?;
+        let now = timed.now();
+
+        let res = timed
+            .with_savepoint(async |sp| {
+                // The cached time propagates into the savepoint.
+                assert_eq!(sp.maybe_now(), Some(now));
+                insert_item_in_op(sp, new_id(), &format!("{prefix}-kept")).await?;
+                Ok::<_, sqlx::Error>(())
+            })
+            .await?;
+        assert!(res.is_ok());
+    }
+
+    op.commit().await?;
+    assert_eq!(
+        labels(&pool, &prefix).await?,
+        vec![format!("{prefix}-kept")]
+    );
+
+    Ok(())
+}
+
+/// A bare `sqlx::Transaction` gets working savepoints, with hooks correctly
+/// refused rather than silently swallowed.
+#[tokio::test]
+async fn bare_transaction_gets_savepoints_without_hooks() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let prefix = format!("sp-{}", new_id());
+    let probe = Probe::default();
+    let mut tx = pool.begin().await?;
+
+    let res = tx
+        .with_savepoint(async |sp| {
+            assert!(!sp.supports_hooks(), "no hook buffer to fold into");
+            assert!(
+                sp.add_commit_hook(probe.hook("refused")).is_err(),
+                "registration must refuse so callers take force_execute_pre_commit"
+            );
+            insert_item_in_op(sp, new_id(), &format!("{prefix}-kept")).await?;
+            Ok::<_, sqlx::Error>(())
+        })
+        .await?;
+    assert!(res.is_ok());
+
+    let undone = tx
+        .with_savepoint(async |sp| {
+            insert_item_in_op(sp, new_id(), &format!("{prefix}-undone")).await?;
+            Err::<(), _>(sqlx::Error::RowNotFound)
+        })
+        .await?;
+    assert!(undone.is_err());
+
+    tx.commit().await?;
+
+    assert_eq!(
+        labels(&pool, &prefix).await?,
+        vec![format!("{prefix}-kept")]
+    );
+    assert!(probe.post().is_empty());
+
+    Ok(())
+}
+
+/// The reuse story: one generic helper that savepoints per item, called with a
+/// `DbOp`, then with a `SavepointOp` (nesting), then with a foreign op — no
+/// overloads, no per-op plumbing.
+async fn insert_each_isolated(
+    op: &mut impl AtomicOperation,
+    labels: &[String],
+) -> Result<usize, sqlx::Error> {
+    let mut kept = 0;
+    for label in labels {
+        let res = op
+            .with_savepoint(async |sp| {
+                insert_item_in_op(sp, new_id(), label).await?;
+                if label.ends_with("-bad") {
+                    return Err(sqlx::Error::RowNotFound);
+                }
+                Ok(())
+            })
+            .await?;
+        if res.is_ok() {
+            kept += 1;
+        }
+    }
+    Ok(kept)
+}
+
+#[tokio::test]
+async fn generic_helper_works_across_op_types() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let prefix = format!("sp-{}", new_id());
+    let mut op = DbOp::init(&pool).await?;
+
+    // 1. Against a DbOp.
+    let kept =
+        insert_each_isolated(&mut op, &[format!("{prefix}-a"), format!("{prefix}-b-bad")]).await?;
+    assert_eq!(kept, 1);
+
+    // 2. Against a SavepointOp — the same helper, nesting one level deeper.
+    let mut sp = op.begin_savepoint().await?;
+    let kept =
+        insert_each_isolated(&mut sp, &[format!("{prefix}-c"), format!("{prefix}-d-bad")]).await?;
+    assert_eq!(kept, 1);
+    sp.release().await?;
+
+    // 3. Against a foreign op type.
+    {
+        let mut wrapper = WrapperOp(&mut op);
+        let kept = insert_each_isolated(&mut wrapper, &[format!("{prefix}-e")]).await?;
+        assert_eq!(kept, 1);
+    }
+
+    op.commit().await?;
+
+    assert_eq!(
+        labels(&pool, &prefix).await?,
+        vec![
+            format!("{prefix}-a"),
+            format!("{prefix}-c"),
+            format!("{prefix}-e")
+        ]
+    );
+
+    Ok(())
+}
+
+/// The generic helper must remain usable inside a `Send` future (a spawned
+/// task), which is what most consumers actually do.
+#[tokio::test]
+async fn generic_savepoint_future_is_send() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let prefix = format!("sp-{}", new_id());
+
+    let handle = tokio::spawn(async move {
+        let mut op = DbOp::init(&pool).await?;
+        insert_each_isolated(&mut op, &[format!("{prefix}-spawned")]).await?;
+        op.commit().await?;
+        Ok::<_, sqlx::Error>(prefix)
+    });
+
+    let prefix = handle.await??;
+    let pool = helpers::init_pool().await?;
+    assert_eq!(
+        labels(&pool, &prefix).await?,
+        vec![format!("{prefix}-spawned")]
     );
 
     Ok(())

@@ -1,7 +1,7 @@
 mod helpers;
 
 use es_entity::operation::{
-    AtomicOperation, DbOp, OpWithTime,
+    AtomicOperation, DbOp, OpWithTime, SavepointOperation,
     hooks::{CommitHook, HookOperation, MAX_HOOK_GENERATIONS, PreCommitRet},
 };
 use sqlx::Connection;

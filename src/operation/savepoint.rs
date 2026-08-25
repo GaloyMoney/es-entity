@@ -2,6 +2,8 @@
 
 use sqlx::{Acquire, Transaction};
 
+use std::future::Future;
+
 use crate::{clock::ClockHandle, db};
 
 use super::{AtomicOperation, hooks};
@@ -24,6 +26,12 @@ use super::{AtomicOperation, hooks};
 /// [`HookOperation::begin_savepoint`]: super::hooks::HookOperation::begin_savepoint
 /// [`force_execute_pre_commit`]: hooks::CommitHook::force_execute_pre_commit
 pub(super) enum HookParent<'t> {
+    /// The operation has no commit-hook buffer at all — a bare
+    /// [`sqlx::Transaction`], or any [`AtomicOperation`] implementor that opts
+    /// out via [`HookSlot::unsupported`]. `SAVEPOINT`/`RELEASE`/`ROLLBACK TO`
+    /// still work (they need only the connection); hook registration refuses,
+    /// exactly as it does on the operation itself.
+    NoHooks,
     Root(&'t mut Option<hooks::CommitHooks>),
     Nested(&'t mut hooks::CommitHooks),
 }
@@ -31,12 +39,14 @@ pub(super) enum HookParent<'t> {
 impl HookParent<'_> {
     /// Whether this buffer can actually receive folded hooks.
     ///
-    /// `false` only for a [`Root`](Self::Root) currently holding `None` — i.e.
-    /// a `HookOperation` on the `force_execute_pre_commit` path, which has no
-    /// commit pass to fold into. Everything else (a live `DbOp`/`HookOperation`
-    /// buffer, or any `Nested` parent) always accepts hooks.
+    /// `false` for [`NoHooks`](Self::NoHooks), and for a [`Root`](Self::Root)
+    /// currently holding `None` — i.e. a `HookOperation` on the
+    /// `force_execute_pre_commit` path, which has no commit pass to fold into.
+    /// Everything else (a live `DbOp`/`HookOperation` buffer, or any `Nested`
+    /// parent) always accepts hooks.
     fn supports_hooks(&self) -> bool {
         match self {
+            Self::NoHooks => false,
             Self::Root(hooks) => hooks.is_some(),
             Self::Nested(_) => true,
         }
@@ -45,14 +55,14 @@ impl HookParent<'_> {
     /// Folds staged hooks in. `staged` is guaranteed empty when
     /// [`supports_hooks`](Self::supports_hooks) was `false` — nothing could
     /// have been added to it, since [`SavepointOp::add_commit_hook`] itself
-    /// refuses in that case — so the `None` arm is a documented no-op, not a
-    /// silent drop of real hook state.
+    /// refuses in that case — so the hook-less arms are a documented no-op, not
+    /// a silent drop of real hook state.
     fn absorb_staged(&mut self, staged: hooks::CommitHooks) {
         match self {
             Self::Root(Some(hooks)) => hooks.absorb_staged(staged),
-            Self::Root(None) => debug_assert!(
+            Self::Root(None) | Self::NoHooks => debug_assert!(
                 staged.is_empty(),
-                "hooks staged on a savepoint whose root doesn't support hooks"
+                "hooks staged on a savepoint whose parent doesn't support hooks"
             ),
             Self::Nested(hooks) => hooks.absorb_staged(staged),
         }
@@ -60,17 +70,51 @@ impl HookParent<'_> {
 
     fn get_last<H: hooks::CommitHook>(&self) -> Option<&H> {
         match self {
+            Self::NoHooks => None,
             Self::Root(hooks) => hooks.as_ref()?.get_last::<H>(),
             Self::Nested(hooks) => hooks.get_last::<H>(),
         }
     }
 }
 
+/// Where a released [`SavepointOp`]'s staged commit hooks fold into.
+///
+/// Returned as the second half of
+/// [`AtomicOperation::savepoint_parts`](super::AtomicOperation::savepoint_parts),
+/// paired with the connection the savepoint runs on. It is deliberately opaque:
+/// the only things an implementor outside this crate can do with one are
+/// *forward* a slot obtained from an operation it wraps, or declare that it has
+/// no hook buffer via [`unsupported`](Self::unsupported).
+///
+/// The pairing is the point. A savepoint needs a `&mut` to the connection **and**
+/// a `&mut` to the hook buffer, held simultaneously for its whole lifetime. Two
+/// separate `&mut self` accessors could never hand out both at once; returning
+/// them together lets the implementor split the borrow across its own disjoint
+/// fields, where the compiler permits it, and pass the result across the trait
+/// boundary already split.
+pub struct HookSlot<'t>(pub(super) HookParent<'t>);
+
+impl HookSlot<'_> {
+    /// Declares that this operation has no commit-hook buffer.
+    ///
+    /// Savepoints taken through it still work at the database level; they simply
+    /// report [`supports_hooks`](AtomicOperation::supports_hooks) as `false` and
+    /// refuse [`add_commit_hook`](AtomicOperation::add_commit_hook), so callers
+    /// take their [`force_execute_pre_commit`] fallback — the same path they
+    /// already take on the operation itself.
+    ///
+    /// [`force_execute_pre_commit`]: hooks::CommitHook::force_execute_pre_commit
+    pub fn unsupported() -> Self {
+        Self(HookParent::NoHooks)
+    }
+}
+
 /// An [`AtomicOperation`] scoped to a database `SAVEPOINT` inside a parent [`DbOp`]
 /// or another `SavepointOp`.
 ///
-/// Created by [`DbOp::with_savepoint`] / [`DbOp::begin_savepoint`], or — to nest
-/// one savepoint inside another — [`Self::with_savepoint`] / [`Self::begin_savepoint`].
+/// Created by [`SavepointOperation::with_savepoint`] /
+/// [`SavepointOperation::begin_savepoint`] on any operation — including on another
+/// `SavepointOp`, which is how savepoints nest.
 /// Statements executed through it run inside the savepoint, so they can be undone
 /// with [`rollback`](Self::rollback) without poisoning — or ending — the parent
 /// transaction. This is what makes a "loop over N items in one transaction, but
@@ -97,14 +141,12 @@ impl HookParent<'_> {
 ///   referencing rows that no longer exist.
 ///
 /// No hook's [`pre_commit`] / [`post_commit`] ever runs at savepoint boundaries,
-/// nested or not. They run once, at the root [`commit`](DbOp::commit), over the
-/// final merged hook set — so `post_commit` still only fires after a durable
+/// nested or not. They run once, at the root [`commit`](super::DbOp::commit), over
+/// the final merged hook set — so `post_commit` still only fires after a durable
 /// `COMMIT`, and [`on_rollback`] still only fires when the whole transaction is
 /// gone.
 ///
 /// [`DbOp`]: super::DbOp
-/// [`DbOp::with_savepoint`]: super::DbOp::with_savepoint
-/// [`DbOp::begin_savepoint`]: super::DbOp::begin_savepoint
 /// [`pre_commit`]: hooks::CommitHook::pre_commit
 /// [`post_commit`]: hooks::CommitHook::post_commit
 /// [`on_rollback`]: hooks::CommitHook::on_rollback
@@ -124,24 +166,23 @@ pub struct SavepointOp<'t> {
 }
 
 impl<'t> SavepointOp<'t> {
-    /// `acquire` is generic so this serves every concrete operation that can
-    /// nest a `SAVEPOINT`: a `&mut Transaction` (from `DbOp` or another
-    /// `SavepointOp`) or a bare `&mut db::Connection` (from a
-    /// [`HookOperation`](super::hooks::HookOperation), which holds the raw
-    /// connection rather than a `Transaction` wrapper). sqlx tracks nesting
-    /// depth on the connection itself, so either one correctly issues
-    /// `SAVEPOINT` rather than `BEGIN` given we're already inside a transaction.
-    pub(super) async fn begin<A>(
-        acquire: A,
+    /// Opens the savepoint on a raw connection.
+    ///
+    /// Taking the bare `&mut db::Connection` — rather than a `&mut Transaction`
+    /// — is what lets one implementation serve *every* operation. sqlx tracks
+    /// transaction depth on the connection itself, so this correctly issues
+    /// `SAVEPOINT` rather than `BEGIN` whenever we are already inside a
+    /// transaction, regardless of whether the caller happens to hold a
+    /// `Transaction` wrapper (`DbOp`, another `SavepointOp`) or just the
+    /// connection (a [`HookOperation`](super::hooks::HookOperation)).
+    pub(super) async fn begin(
+        conn: &'t mut db::Connection,
         clock: ClockHandle,
         now: Option<chrono::DateTime<chrono::Utc>>,
         parent_hooks: HookParent<'t>,
-    ) -> Result<Self, sqlx::Error>
-    where
-        A: Acquire<'t, Database = db::Db>,
-    {
+    ) -> Result<Self, sqlx::Error> {
         Ok(Self {
-            tx: acquire.begin().await?,
+            tx: conn.begin().await?,
             clock,
             now,
             staged: hooks::CommitHooks::new(),
@@ -186,42 +227,6 @@ impl<'t> SavepointOp<'t> {
     pub async fn rollback(self) -> Result<(), sqlx::Error> {
         self.tx.rollback().await
     }
-
-    /// Runs `f` inside a `SAVEPOINT` nested within this one — see
-    /// [`DbOp::with_savepoint`] for the full contract. Identical in behavior,
-    /// just one level deeper: releasing the inner savepoint folds its staged
-    /// hooks into *this* savepoint's staged buffer rather than straight into
-    /// the root `DbOp`.
-    pub async fn with_savepoint<T, E, F>(&mut self, f: F) -> Result<Result<T, E>, sqlx::Error>
-    where
-        F: AsyncFnOnce(&mut SavepointOp<'_>) -> Result<T, E>,
-    {
-        let mut op = self.begin_savepoint().await?;
-        match f(&mut op).await {
-            Ok(value) => {
-                op.release().await?;
-                Ok(Ok(value))
-            }
-            Err(error) => {
-                op.rollback().await?;
-                Ok(Err(error))
-            }
-        }
-    }
-
-    /// Begins a `SAVEPOINT` scope nested within this one, explicitly — see
-    /// [`DbOp::begin_savepoint`]. Must be finished with
-    /// [`release`](Self::release) or [`rollback`](Self::rollback); dropping it
-    /// rolls back.
-    pub async fn begin_savepoint(&mut self) -> Result<SavepointOp<'_>, sqlx::Error> {
-        SavepointOp::begin(
-            &mut self.tx,
-            self.clock.clone(),
-            self.now,
-            HookParent::Nested(&mut self.staged),
-        )
-        .await
-    }
 }
 
 impl AtomicOperation for SavepointOp<'_> {
@@ -238,7 +243,9 @@ impl AtomicOperation for SavepointOp<'_> {
     }
 
     /// Refuses, like any other operation, when the enclosing chain ultimately
-    /// has nowhere to fold hooks — see [`HookParent::supports_hooks`].
+    /// has nowhere to fold hooks — a savepoint over a bare [`sqlx::Transaction`]
+    /// or any op that returned [`HookSlot::unsupported`], or one nested under a
+    /// `HookOperation` on the `force_execute_pre_commit` path.
     fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
         if !self.parent_hooks.supports_hooks() {
             return Err(hook);
@@ -261,4 +268,96 @@ impl AtomicOperation for SavepointOp<'_> {
     fn supports_hooks(&self) -> bool {
         self.parent_hooks.supports_hooks()
     }
+
+    /// Nesting: an inner savepoint folds into *this* savepoint's staged buffer,
+    /// not straight into the root, so an N-deep chain rolls up one level at a
+    /// time. `tx` and `staged` are disjoint fields, so both borrows are legal
+    /// here — the split that the trait boundary could not otherwise express.
+    fn savepoint_parts(&mut self) -> (&mut db::Connection, HookSlot<'_>) {
+        (
+            self.tx.connection(),
+            HookSlot(HookParent::Nested(&mut self.staged)),
+        )
+    }
 }
+
+/// Savepoints for every [`AtomicOperation`], derived rather than hand-written.
+///
+/// This trait has a blanket implementation and no methods to implement — an
+/// operation earns savepoints purely by implementing
+/// [`AtomicOperation::savepoint_parts`]. `DbOp`, `DbOpWithTime`, `SavepointOp`
+/// (nesting), [`HookOperation`], a bare [`sqlx::Transaction`], any
+/// [`OpWithTime`] wrapper, and any operation type defined outside this crate all
+/// get the same pair with no per-type work.
+///
+/// ```rust,ignore
+/// use es_entity::{AtomicOperation, SavepointOperation};
+///
+/// // Generic over the operation: callers can pass a DbOp, a SavepointOp
+/// // (nesting one level deeper), or a HookOperation from inside a pre_commit.
+/// async fn process_all(
+///     op: &mut impl AtomicOperation,
+///     items: &[Item],
+/// ) -> Result<(), sqlx::Error> {
+///     for item in items {
+///         let _ = op.with_savepoint(async |sp| process_one(sp, item).await).await?;
+///     }
+///     Ok(())
+/// }
+/// ```
+///
+/// [`HookOperation`]: super::hooks::HookOperation
+/// [`OpWithTime`]: super::OpWithTime
+pub trait SavepointOperation: AtomicOperation {
+    /// Runs `f` inside a `SAVEPOINT`, keeping its work on `Ok` and undoing it on
+    /// `Err` — see [`DbOp::with_savepoint`](super::DbOp::with_savepoint) for the
+    /// full contract, including the two layers of `Result`.
+    ///
+    /// The returned future is deliberately **not** declared `Send`. Doing so
+    /// would require proving `f`'s future `Send` for every `SavepointOp<'_>`
+    /// lifetime, which needs the unstable `async_fn_traits` and still fails to
+    /// unify under a higher-ranked bound. Auto-trait inference at each call site
+    /// handles it instead, so this composes normally inside `Send` futures —
+    /// with the same caveat the inherent form already had: a closure capturing
+    /// `&self` may need to capture an owned clone instead.
+    fn with_savepoint<T, E, F>(
+        &mut self,
+        f: F,
+    ) -> impl Future<Output = Result<Result<T, E>, sqlx::Error>>
+    where
+        F: AsyncFnOnce(&mut SavepointOp<'_>) -> Result<T, E>,
+    {
+        async move {
+            let mut op = self.begin_savepoint().await?;
+            match f(&mut op).await {
+                Ok(value) => {
+                    op.release().await?;
+                    Ok(Ok(value))
+                }
+                Err(error) => {
+                    op.rollback().await?;
+                    Ok(Err(error))
+                }
+            }
+        }
+    }
+
+    /// Begins a `SAVEPOINT` scope explicitly — see
+    /// [`DbOp::begin_savepoint`](super::DbOp::begin_savepoint). Must be finished
+    /// with [`release`](SavepointOp::release) or
+    /// [`rollback`](SavepointOp::rollback); dropping it rolls back.
+    fn begin_savepoint(
+        &mut self,
+    ) -> impl Future<Output = Result<SavepointOp<'_>, sqlx::Error>> + Send {
+        async move {
+            // Both reads must complete before the `&mut` borrow below: cloning
+            // the handle is what releases the `&self` borrow `clock()` takes.
+            let clock = self.clock().clone();
+            let now = self.maybe_now();
+            let (conn, slot) = self.savepoint_parts();
+            SavepointOp::begin(conn, clock, now, slot.0).await
+        }
+    }
+}
+
+impl<T: AtomicOperation + ?Sized> SavepointOperation for T {}

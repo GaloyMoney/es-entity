@@ -79,4 +79,8 @@ impl<'a, Op: AtomicOperation + ?Sized> AtomicOperation for OpWithTime<'a, Op> {
     fn supports_hooks(&self) -> bool {
         self.inner.supports_hooks()
     }
+
+    fn savepoint_parts(&mut self) -> (&mut db::Connection, super::savepoint::HookSlot<'_>) {
+        self.inner.savepoint_parts()
+    }
 }
