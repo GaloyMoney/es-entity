@@ -1,7 +1,7 @@
 mod helpers;
 
 use es_entity::operation::{
-    AtomicOperation, DbOp, SavepointOperation,
+    AtomicOperation, DbOp, SavepointOperation, WrapsOperation,
     hooks::{CommitHook, HookOperation, PreCommitRet},
 };
 use std::sync::{Arc, Mutex};
@@ -637,43 +637,73 @@ async fn explicit_savepoint_release_and_rollback() -> anyhow::Result<()> {
 
 /// An operation defined *outside* `es_entity::operation` — standing in for the
 /// wrapper types consumers define (obix's `BatchOp` / `IsolatedOp` / `FlushOp`).
-/// It implements `savepoint_parts` by forwarding, and gets the whole of
-/// `SavepointOperation` without writing a line of savepoint code.
+///
+/// This is the whole implementation. Two accessors earn the entire
+/// `AtomicOperation` surface — time, clock, executor, commit hooks — and with it
+/// `SavepointOperation`, nesting included, all carrying the inner operation's
+/// real capabilities rather than trait defaults.
 struct WrapperOp<'a>(&'a mut DbOp<'static>);
 
-impl AtomicOperation for WrapperOp<'_> {
-    fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.0.maybe_now()
+impl<'a> WrapsOperation for WrapperOp<'a> {
+    type Inner = DbOp<'static>;
+
+    fn op(&self) -> &Self::Inner {
+        self.0
     }
 
-    fn clock(&self) -> &es_entity::clock::ClockHandle {
-        AtomicOperation::clock(self.0)
+    fn op_mut(&mut self) -> &mut Self::Inner {
+        self.0
+    }
+}
+
+/// Delegation must carry the inner op's real answers, not the trait defaults —
+/// the failure mode being a wrapper that silently reports `supports_hooks()
+/// == false` and loses the operation's cached time.
+#[tokio::test]
+async fn wrapping_op_delegates_full_capability() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let mut op = DbOp::init(&pool).await?.with_db_time().await?;
+    let now = op.now();
+
+    // Wrap a DbOpWithTime to prove the associated type is not pinned to DbOp.
+    struct TimedWrapper<'a>(&'a mut es_entity::operation::DbOpWithTime<'static>);
+    impl<'a> WrapsOperation for TimedWrapper<'a> {
+        type Inner = es_entity::operation::DbOpWithTime<'static>;
+        fn op(&self) -> &Self::Inner {
+            self.0
+        }
+        fn op_mut(&mut self) -> &mut Self::Inner {
+            self.0
+        }
     }
 
-    fn connection(&mut self) -> &mut es_entity::db::Connection {
-        self.0.connection()
-    }
+    let mut wrapper = TimedWrapper(&mut op);
+    assert!(
+        wrapper.supports_hooks(),
+        "hook support must come from the wrapped op, not the trait default"
+    );
+    assert_eq!(
+        wrapper.maybe_now(),
+        Some(now),
+        "cached time must survive delegation"
+    );
 
-    fn add_commit_hook<H: CommitHook>(&mut self, hook: H) -> Result<(), H> {
-        self.0.add_commit_hook(hook)
-    }
+    // And it savepoints, with hooks reaching the root.
+    let probe = Probe::default();
+    let res = wrapper
+        .with_savepoint(async |sp| {
+            assert!(sp.supports_hooks());
+            assert_eq!(sp.maybe_now(), Some(now));
+            sp.add_commit_hook(probe.hook("via-wrapper")).unwrap();
+            Ok::<_, sqlx::Error>(())
+        })
+        .await?;
+    assert!(res.is_ok());
 
-    fn commit_hook<H: CommitHook>(&self) -> Option<&H> {
-        self.0.commit_hook::<H>()
-    }
+    op.commit().await?;
+    assert_eq!(probe.post(), vec!["via-wrapper".to_string()]);
 
-    fn supports_hooks(&self) -> bool {
-        self.0.supports_hooks()
-    }
-
-    fn savepoint_parts(
-        &mut self,
-    ) -> (
-        &mut es_entity::db::Connection,
-        es_entity::operation::HookSlot<'_>,
-    ) {
-        self.0.savepoint_parts()
-    }
+    Ok(())
 }
 
 /// A foreign operation type earns savepoints — including hook staging that folds
@@ -1023,5 +1053,196 @@ async fn nested_savepoint_under_force_executed_hook_refuses_hooks() -> anyhow::R
     assert!(probe.pre().is_empty());
     assert!(probe.post().is_empty());
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// An enum-dispatching operation — lana's `UseCaseOp` shape. `WrapsOperation`
+// cannot serve this (one associated `Inner` cannot cover four variants), so the
+// impl is hand-written; `savepoint_parts` is simply one more match in the same
+// style as the methods already there. The payoff is that `isolated` below needs
+// no per-variant special-casing and no "savepoints unsupported" error: the
+// savepoint-backed variant nests, rather than being refused.
+// ---------------------------------------------------------------------------
+
+enum UseCaseOp<'op, 'parent> {
+    Owned(DbOp<'static>),
+    Db(&'op mut DbOp<'static>),
+    Savepoint(&'op mut es_entity::operation::SavepointOp<'parent>),
+}
+
+impl AtomicOperation for UseCaseOp<'_, '_> {
+    fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        match self {
+            Self::Owned(op) => op.maybe_now(),
+            Self::Db(op) => op.maybe_now(),
+            Self::Savepoint(op) => op.maybe_now(),
+        }
+    }
+
+    fn clock(&self) -> &es_entity::clock::ClockHandle {
+        match self {
+            Self::Owned(op) => AtomicOperation::clock(op),
+            Self::Db(op) => AtomicOperation::clock(*op),
+            Self::Savepoint(op) => AtomicOperation::clock(*op),
+        }
+    }
+
+    fn connection(&mut self) -> &mut es_entity::db::Connection {
+        match self {
+            Self::Owned(op) => op.connection(),
+            Self::Db(op) => op.connection(),
+            Self::Savepoint(op) => op.connection(),
+        }
+    }
+
+    fn add_commit_hook<H: CommitHook>(&mut self, hook: H) -> Result<(), H> {
+        match self {
+            Self::Owned(op) => op.add_commit_hook(hook),
+            Self::Db(op) => op.add_commit_hook(hook),
+            Self::Savepoint(op) => op.add_commit_hook(hook),
+        }
+    }
+
+    fn commit_hook<H: CommitHook>(&self) -> Option<&H> {
+        match self {
+            Self::Owned(op) => op.commit_hook::<H>(),
+            Self::Db(op) => op.commit_hook::<H>(),
+            Self::Savepoint(op) => op.commit_hook::<H>(),
+        }
+    }
+
+    fn supports_hooks(&self) -> bool {
+        match self {
+            Self::Owned(op) => op.supports_hooks(),
+            Self::Db(op) => op.supports_hooks(),
+            Self::Savepoint(op) => op.supports_hooks(),
+        }
+    }
+
+    /// The one addition. Every variant already knows how to yield its parts, so
+    /// this is pure dispatch — and it is what lets `isolated` treat all variants
+    /// alike, the savepoint-backed one included.
+    fn savepoint_parts(
+        &mut self,
+    ) -> (
+        &mut es_entity::db::Connection,
+        es_entity::operation::HookSlot<'_>,
+    ) {
+        match self {
+            Self::Owned(op) => op.savepoint_parts(),
+            Self::Db(op) => op.savepoint_parts(),
+            Self::Savepoint(op) => op.savepoint_parts(),
+        }
+    }
+}
+
+impl UseCaseOp<'_, '_> {
+    /// No variant match, no `SavepointsUnsupported`: uniform across all of them.
+    async fn isolated<Out, E>(
+        &mut self,
+        f: impl AsyncFnOnce(&mut UseCaseOp<'_, '_>) -> Result<Out, E>,
+    ) -> Result<Result<Out, E>, sqlx::Error> {
+        self.with_savepoint(async |sp| {
+            let mut child = UseCaseOp::Savepoint(sp);
+            f(&mut child).await
+        })
+        .await
+    }
+}
+
+#[tokio::test]
+async fn enum_op_isolates_uniformly_across_variants() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let prefix = format!("sp-{}", new_id());
+    let probe = Probe::default();
+    let mut root = DbOp::init(&pool).await?;
+
+    {
+        // Borrowed-DbOp variant: one level.
+        let mut ctx = UseCaseOp::Db(&mut root);
+        assert!(ctx.supports_hooks());
+
+        let kept = ctx
+            .isolated(async |child| {
+                insert_item_in_op(child, new_id(), &format!("{prefix}-a")).await?;
+                child.add_commit_hook(probe.hook("a")).unwrap();
+                Ok::<_, sqlx::Error>(())
+            })
+            .await?;
+        assert!(kept.is_ok());
+
+        // Savepoint-backed variant nesting inside another isolation — the case
+        // that previously had to return SavepointsUnsupported.
+        let nested = ctx
+            .isolated(async |child| {
+                insert_item_in_op(child, new_id(), &format!("{prefix}-b")).await?;
+
+                let inner_ok = child
+                    .isolated(async |grandchild| {
+                        insert_item_in_op(grandchild, new_id(), &format!("{prefix}-c")).await?;
+                        grandchild.add_commit_hook(probe.hook("c")).unwrap();
+                        Ok::<_, sqlx::Error>(())
+                    })
+                    .await?;
+                assert!(inner_ok.is_ok());
+
+                // A failing grandchild unwinds only itself.
+                let inner_bad = child
+                    .isolated(async |grandchild| {
+                        insert_item_in_op(grandchild, new_id(), &format!("{prefix}-d")).await?;
+                        grandchild.add_commit_hook(probe.hook("d")).unwrap();
+                        Err::<(), _>(sqlx::Error::RowNotFound)
+                    })
+                    .await?;
+                assert!(inner_bad.is_err());
+
+                child.add_commit_hook(probe.hook("b")).unwrap();
+                Ok::<_, sqlx::Error>(())
+            })
+            .await?;
+        assert!(nested.is_ok());
+    }
+
+    root.commit().await?;
+
+    // `-d` rolled back with its grandchild savepoint; everything else survived.
+    assert_eq!(
+        labels(&pool, &prefix).await?,
+        vec![
+            format!("{prefix}-a"),
+            format!("{prefix}-b"),
+            format!("{prefix}-c")
+        ]
+    );
+    // Hooks rolled up through both levels, in release order, minus the failed one.
+    assert_eq!(probe.post(), vec!["a", "c", "b"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn enum_op_isolates_from_owned_variant() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let prefix = format!("sp-{}", new_id());
+    let mut ctx = UseCaseOp::Owned(DbOp::init(&pool).await?);
+
+    let res = ctx
+        .isolated(async |child| {
+            insert_item_in_op(child, new_id(), &format!("{prefix}-owned")).await?;
+            Ok::<_, sqlx::Error>(())
+        })
+        .await?;
+    assert!(res.is_ok());
+
+    let UseCaseOp::Owned(op) = ctx else {
+        unreachable!()
+    };
+    op.commit().await?;
+
+    assert_eq!(
+        labels(&pool, &prefix).await?,
+        vec![format!("{prefix}-owned")]
+    );
     Ok(())
 }

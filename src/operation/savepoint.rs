@@ -268,12 +268,19 @@ impl AtomicOperation for SavepointOp<'_> {
 
 /// Savepoints for every [`AtomicOperation`], derived rather than hand-written.
 ///
-/// This trait has a blanket implementation and no methods to implement — an
-/// operation earns savepoints purely by implementing
-/// [`AtomicOperation::savepoint_parts`]. `DbOp`, `DbOpWithTime`, `SavepointOp`
-/// (nesting), [`HookOperation`], a bare [`sqlx::Transaction`], any
-/// [`OpWithTime`] wrapper, and any operation type defined outside this crate all
-/// get the same pair with no per-type work.
+/// This trait has a blanket implementation and no methods to implement: an
+/// operation earns savepoints by implementing
+/// [`AtomicOperation::savepoint_parts`], and a wrapper type that implements
+/// [`WrapsOperation`](super::WrapsOperation) gets even that by delegation. So
+/// `DbOp`, `DbOpWithTime`, `SavepointOp` (nesting), [`HookOperation`], a bare
+/// [`sqlx::Transaction`], any [`OpWithTime`] wrapper, and operation types
+/// defined outside this crate all share one implementation of the pair.
+///
+/// The other half of the point is reachability: because these are trait methods
+/// rather than inherent ones, a function generic over `impl AtomicOperation` can
+/// take a savepoint. Inherent methods are invisible behind a generic bound,
+/// which is why code wanting savepoints previously had to name a concrete
+/// operation type in its signature.
 ///
 /// ```rust,ignore
 /// use es_entity::{AtomicOperation, SavepointOperation};

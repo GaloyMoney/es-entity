@@ -80,7 +80,7 @@ sp.release().await?;
 | `HookOperation` | the running commit pass, or nothing on the `force_execute_pre_commit` path |
 | `OpWithTime<'_, Op>` | whatever the wrapped operation folds into |
 | `sqlx::Transaction` | nothing — hooks are refused |
-| your own operation type | whatever you forward to |
+| your own `WrapsOperation` type | whatever the wrapped operation folds into |
 
 Because the API lives on a trait, one generic helper serves them all:
 
@@ -104,15 +104,28 @@ async fn process_all(
 
 ### Supporting savepoints on your own operation
 
-Implement one method — `AtomicOperation::savepoint_parts` — and the whole pair follows. Wrapper types forward:
+**If your type wraps another operation** — a newtype over `&mut DbOp` that seals off `commit()`, a restricted view handed to a callback — implement `WrapsOperation` and you are done:
 
 ```rust,ignore
-impl AtomicOperation for MyOp<'_> {
-    // ...
+struct FlushOp<'a>(&'a mut es_entity::DbOp<'static>);
 
-    fn savepoint_parts(&mut self) -> (&mut db::Connection, HookSlot<'_>) {
-        self.inner.savepoint_parts()
-    }
+impl<'a> WrapsOperation for FlushOp<'a> {
+    type Inner = es_entity::DbOp<'static>;
+    fn op(&self) -> &Self::Inner { self.0 }
+    fn op_mut(&mut self) -> &mut Self::Inner { self.0 }
+}
+```
+
+That is the entire implementation. Two accessors earn the whole of `AtomicOperation` — time, clock, executor, commit hooks, `supports_hooks` — and with it savepoints and nesting, all reporting the inner operation's real capabilities rather than trait defaults. Methods added to `AtomicOperation` later cost you nothing.
+
+It is deliberately all-or-nothing: a type implementing `WrapsOperation` cannot also override a single method, because that would need its own conflicting `impl AtomicOperation`. Wrappers that genuinely differ from the operation they hold write the impl by hand — `OpWithTime` and `DbOpWithTime` do, since both override `maybe_now` to report their cached time.
+
+**If your type owns a connection directly**, implement `AtomicOperation` by hand; the savepoint-specific part is one method:
+
+```rust,ignore
+fn savepoint_parts(&mut self) -> (&mut db::Connection, HookSlot<'_>) {
+    // `conn` and `hooks` are different fields, so both borrows are legal here.
+    (&mut self.conn, HookSlot::from(self.hooks.as_mut()))
 }
 ```
 

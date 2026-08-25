@@ -481,6 +481,92 @@ pub trait AtomicOperation: Send {
     fn savepoint_parts(&mut self) -> (&mut db::Connection, savepoint::HookSlot<'_>);
 }
 
+/// Derives the whole of [`AtomicOperation`] for a type that wraps another
+/// operation, by delegation.
+///
+/// A wrapper that restricts or re-presents an operation — obix's `FlushOp`, a
+/// newtype that seals off `commit()`, anything holding a `&mut DbOp` — needs
+/// every [`AtomicOperation`] method to forward to the operation inside. Written
+/// by hand that is eight near-identical bodies, it must be redone for each new
+/// wrapper, and a method left out silently inherits a trait default: `maybe_now`
+/// starts reporting `None`, or `supports_hooks` `false`, changing behaviour
+/// rather than failing to compile.
+///
+/// Implement this instead and the delegation is generated:
+///
+/// ```rust,ignore
+/// struct FlushOp<'a>(&'a mut es_entity::DbOp<'static>);
+///
+/// impl<'a> WrapsOperation for FlushOp<'a> {
+///     type Inner = es_entity::DbOp<'static>;
+///     fn op(&self) -> &Self::Inner { self.0 }
+///     fn op_mut(&mut self) -> &mut Self::Inner { self.0 }
+/// }
+/// ```
+///
+/// That is the entire implementation. `FlushOp` now has time, the clock, the
+/// executor, commit hooks, `supports_hooks`, and — through
+/// [`savepoint_parts`](AtomicOperation::savepoint_parts) — the full
+/// [`SavepointOperation`] pair including nesting, all with the inner operation's
+/// real capabilities rather than a default. Methods added to `AtomicOperation`
+/// in future cost implementors nothing.
+///
+/// # All or nothing
+///
+/// This is a blanket `impl AtomicOperation for W`, so a type cannot implement
+/// `WrapsOperation` *and* override a single method — that would need its own
+/// `impl AtomicOperation`, which would conflict. Wrappers that genuinely differ
+/// from the operation they hold write the impl by hand instead; [`OpWithTime`]
+/// and [`DbOpWithTime`] do exactly that, since both override
+/// [`maybe_now`](AtomicOperation::maybe_now) to report their cached time.
+///
+/// Use `WrapsOperation` for pure delegation; hand-write the impl when the
+/// wrapper changes behaviour.
+pub trait WrapsOperation: Send {
+    /// The operation being wrapped.
+    type Inner: AtomicOperation + ?Sized;
+
+    /// Shared access, for the `&self` methods.
+    fn op(&self) -> &Self::Inner;
+
+    /// Exclusive access, for the `&mut self` methods.
+    fn op_mut(&mut self) -> &mut Self::Inner;
+}
+
+impl<W: WrapsOperation> AtomicOperation for W {
+    fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.op().maybe_now()
+    }
+
+    fn clock(&self) -> &ClockHandle {
+        self.op().clock()
+    }
+
+    fn connection(&mut self) -> &mut db::Connection {
+        self.op_mut().connection()
+    }
+
+    fn as_executor(&mut self) -> OneTimeExecutor<'_, &mut db::Connection> {
+        self.op_mut().as_executor()
+    }
+
+    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
+        self.op_mut().add_commit_hook(hook)
+    }
+
+    fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H> {
+        self.op().commit_hook::<H>()
+    }
+
+    fn supports_hooks(&self) -> bool {
+        self.op().supports_hooks()
+    }
+
+    fn savepoint_parts(&mut self) -> (&mut db::Connection, savepoint::HookSlot<'_>) {
+        self.op_mut().savepoint_parts()
+    }
+}
+
 impl<'c> AtomicOperation for sqlx::Transaction<'c, db::Db> {
     fn connection(&mut self) -> &mut db::Connection {
         &mut *self
