@@ -261,7 +261,7 @@ impl<'o> AtomicOperation for DbOp<'o> {
     fn savepoint_parts(&mut self) -> (&mut db::Connection, savepoint::HookSlot<'_>) {
         (
             self.tx.connection(),
-            savepoint::HookSlot(savepoint::HookParent::Root(&mut self.commit_hooks)),
+            savepoint::HookSlot(self.commit_hooks.as_mut()),
         )
     }
 }

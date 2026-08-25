@@ -8,72 +8,50 @@ use crate::{clock::ClockHandle, db};
 
 use super::{AtomicOperation, hooks};
 
-/// The buffer a released [`SavepointOp`]'s staged hooks fold into.
+/// The buffer a released savepoint's staged hooks fold into, or `None` when
+/// there is nowhere for them to go.
 ///
-/// A top-level savepoint (opened via [`DbOp::begin_savepoint`] or
-/// [`HookOperation::begin_savepoint`]) folds into that operation's own
-/// `Option<CommitHooks>`. Both operations share this exact representation:
-/// `DbOp`'s is `Some` for its whole lifetime (`None` only while a `commit()` is
-/// actively draining it, which can't overlap with an open savepoint borrowing
-/// the same `DbOp`); `HookOperation`'s is `Some` while a real commit pass is
-/// staging through it and `None` on the [`force_execute_pre_commit`] path,
-/// where there is no pass to fold into — see [`supports_hooks`](Self::supports_hooks).
+/// Deliberately an `Option<&mut CommitHooks>` rather than an enum
+/// distinguishing "root" from "nested": the distinction carried no behavioural
+/// difference, and encoding it invited the bug where a *nested* parent was
+/// assumed to accept hooks regardless of whether the chain above it did. With
+/// one representation, capability is a property of the buffer itself and
+/// propagates down a nesting chain by construction.
 ///
-/// A nested savepoint (opened via [`SavepointOp::begin_savepoint`]) folds into
-/// its parent `SavepointOp`'s `staged` buffer instead, so releasing an N-deep
-/// chain folds hooks inward one level at a time until they reach the root.
+/// `None` arises from a bare [`sqlx::Transaction`] or any implementor that opts
+/// out via [`HookSlot::unsupported`]; from a `DbOp`/`HookOperation` whose own
+/// buffer is `None` (the [`force_execute_pre_commit`] path, which has no commit
+/// pass to fold into); and — transitively — from any savepoint nested inside one
+/// of those.
 ///
-/// [`HookOperation::begin_savepoint`]: super::hooks::HookOperation::begin_savepoint
 /// [`force_execute_pre_commit`]: hooks::CommitHook::force_execute_pre_commit
-pub(super) enum HookParent<'t> {
-    /// The operation has no commit-hook buffer at all — a bare
-    /// [`sqlx::Transaction`], or any [`AtomicOperation`] implementor that opts
-    /// out via [`HookSlot::unsupported`]. `SAVEPOINT`/`RELEASE`/`ROLLBACK TO`
-    /// still work (they need only the connection); hook registration refuses,
-    /// exactly as it does on the operation itself.
-    NoHooks,
-    Root(&'t mut Option<hooks::CommitHooks>),
-    Nested(&'t mut hooks::CommitHooks),
-}
+pub(super) type HookParent<'t> = Option<&'t mut hooks::CommitHooks>;
 
-impl HookParent<'_> {
-    /// Whether this buffer can actually receive folded hooks.
-    ///
-    /// `false` for [`NoHooks`](Self::NoHooks), and for a [`Root`](Self::Root)
-    /// currently holding `None` — i.e. a `HookOperation` on the
-    /// `force_execute_pre_commit` path, which has no commit pass to fold into.
-    /// Everything else (a live `DbOp`/`HookOperation` buffer, or any `Nested`
-    /// parent) always accepts hooks.
-    fn supports_hooks(&self) -> bool {
-        match self {
-            Self::NoHooks => false,
-            Self::Root(hooks) => hooks.is_some(),
-            Self::Nested(_) => true,
+/// Folds `staged` into `parent`.
+///
+/// Errors — rather than silently dropping — if hooks were staged against a
+/// parent that cannot receive them. With capability propagated correctly this
+/// is unreachable, so it is defence in depth: it converts a future regression
+/// from silent hook loss (`pre_commit`/`post_commit` never running for work the
+/// caller was told had been registered) into a loud failure, in release builds
+/// as well as debug. Mirrors how the crate already reports the impossible
+/// `runs_after` cycle.
+fn absorb_staged(
+    parent: &mut HookParent<'_>,
+    staged: hooks::CommitHooks,
+) -> Result<(), sqlx::Error> {
+    match parent {
+        Some(hooks) => {
+            hooks.absorb_staged(staged);
+            Ok(())
         }
-    }
-
-    /// Folds staged hooks in. `staged` is guaranteed empty when
-    /// [`supports_hooks`](Self::supports_hooks) was `false` — nothing could
-    /// have been added to it, since [`SavepointOp::add_commit_hook`] itself
-    /// refuses in that case — so the hook-less arms are a documented no-op, not
-    /// a silent drop of real hook state.
-    fn absorb_staged(&mut self, staged: hooks::CommitHooks) {
-        match self {
-            Self::Root(Some(hooks)) => hooks.absorb_staged(staged),
-            Self::Root(None) | Self::NoHooks => debug_assert!(
-                staged.is_empty(),
-                "hooks staged on a savepoint whose parent doesn't support hooks"
-            ),
-            Self::Nested(hooks) => hooks.absorb_staged(staged),
-        }
-    }
-
-    fn get_last<H: hooks::CommitHook>(&self) -> Option<&H> {
-        match self {
-            Self::NoHooks => None,
-            Self::Root(hooks) => hooks.as_ref()?.get_last::<H>(),
-            Self::Nested(hooks) => hooks.get_last::<H>(),
-        }
+        None if staged.is_empty() => Ok(()),
+        None => Err(sqlx::Error::Protocol(
+            "commit hooks were staged on a savepoint whose enclosing operation \
+             cannot receive them — they would never run. This is a bug in the \
+             savepoint hook-capability propagation."
+                .to_string(),
+        )),
     }
 }
 
@@ -105,7 +83,7 @@ impl HookSlot<'_> {
     ///
     /// [`force_execute_pre_commit`]: hooks::CommitHook::force_execute_pre_commit
     pub fn unsupported() -> Self {
-        Self(HookParent::NoHooks)
+        Self(None)
     }
 }
 
@@ -211,8 +189,7 @@ impl<'t> SavepointOp<'t> {
             ..
         } = self;
         tx.commit().await?;
-        parent_hooks.absorb_staged(staged);
-        Ok(())
+        absorb_staged(&mut parent_hooks, staged)
     }
 
     /// Rolls back to the savepoint, discarding this scope's work.
@@ -247,7 +224,7 @@ impl AtomicOperation for SavepointOp<'_> {
     /// or any op that returned [`HookSlot::unsupported`], or one nested under a
     /// `HookOperation` on the `force_execute_pre_commit` path.
     fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
-        if !self.parent_hooks.supports_hooks() {
+        if self.parent_hooks.is_none() {
             return Err(hook);
         }
         self.staged.add(hook);
@@ -262,21 +239,29 @@ impl AtomicOperation for SavepointOp<'_> {
     fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H> {
         self.staged
             .get_last::<H>()
-            .or_else(|| self.parent_hooks.get_last::<H>())
+            .or_else(|| self.parent_hooks.as_ref()?.get_last::<H>())
     }
 
     fn supports_hooks(&self) -> bool {
-        self.parent_hooks.supports_hooks()
+        self.parent_hooks.is_some()
     }
 
     /// Nesting: an inner savepoint folds into *this* savepoint's staged buffer,
     /// not straight into the root, so an N-deep chain rolls up one level at a
-    /// time. `tx` and `staged` are disjoint fields, so both borrows are legal
-    /// here — the split that the trait boundary could not otherwise express.
+    /// time. `tx`, `staged` and `parent_hooks` are disjoint fields, so the reads
+    /// and borrows below coexist — the split that the trait boundary could not
+    /// otherwise express.
+    ///
+    /// Hook capability is **propagated, not assumed**: this savepoint offers its
+    /// `staged` buffer to an inner savepoint only if its own chain can ultimately
+    /// receive hooks. Handing the buffer over unconditionally would let an inner
+    /// savepoint accept a hook that had nowhere to go, so `add_commit_hook` would
+    /// report success for work whose `pre_commit`/`post_commit` could never run.
     fn savepoint_parts(&mut self) -> (&mut db::Connection, HookSlot<'_>) {
+        let supported = self.parent_hooks.is_some();
         (
             self.tx.connection(),
-            HookSlot(HookParent::Nested(&mut self.staged)),
+            HookSlot(supported.then_some(&mut self.staged)),
         )
     }
 }

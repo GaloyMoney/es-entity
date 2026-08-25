@@ -883,3 +883,145 @@ async fn generic_savepoint_future_is_send() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Hook capability must propagate down a nesting chain.
+//
+// A savepoint nested inside a savepoint whose own parent cannot receive hooks
+// has nowhere to fold them either. If it accepted them anyway, the caller would
+// be told the hook was registered while it was silently dropped at release —
+// `pre_commit`/`post_commit` never running for work reported as staged.
+// ---------------------------------------------------------------------------
+
+/// Nested under a bare `sqlx::Transaction` (no hook buffer anywhere in the
+/// chain). Depth 1 already refuses; depth 2 must refuse identically.
+#[tokio::test]
+async fn nested_savepoint_under_bare_transaction_refuses_hooks() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let prefix = format!("sp-{}", new_id());
+    let probe = Probe::default();
+    let mut tx = pool.begin().await?;
+
+    let mut outer = tx.begin_savepoint().await?;
+    assert!(!outer.supports_hooks());
+    assert!(outer.add_commit_hook(probe.hook("depth-1")).is_err());
+
+    let mut inner = outer.begin_savepoint().await?;
+    assert!(
+        !inner.supports_hooks(),
+        "a savepoint nested under a hook-less chain must not claim hook support"
+    );
+    assert!(
+        inner.add_commit_hook(probe.hook("depth-2")).is_err(),
+        "registration must fail loudly so the caller takes force_execute_pre_commit \
+         instead of believing a hook was staged that will be dropped"
+    );
+
+    // Real work still succeeds — only hooks are refused.
+    insert_item_in_op(&mut inner, new_id(), &format!("{prefix}-kept")).await?;
+    inner.release().await?;
+    outer.release().await?;
+    tx.commit().await?;
+
+    assert_eq!(
+        labels(&pool, &prefix).await?,
+        vec![format!("{prefix}-kept")]
+    );
+    assert!(probe.pre().is_empty());
+    assert!(probe.post().is_empty());
+
+    Ok(())
+}
+
+/// Three levels deep under a hook-less root — capability must stay `false` all
+/// the way down, not just at depth 2.
+#[tokio::test]
+async fn deeply_nested_savepoint_under_bare_transaction_refuses_hooks() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let probe = Probe::default();
+    let mut tx = pool.begin().await?;
+
+    let mut l1 = tx.begin_savepoint().await?;
+    let mut l2 = l1.begin_savepoint().await?;
+    let mut l3 = l2.begin_savepoint().await?;
+
+    assert!(!l3.supports_hooks());
+    assert!(l3.add_commit_hook(probe.hook("depth-3")).is_err());
+
+    l3.release().await?;
+    l2.release().await?;
+    l1.release().await?;
+    tx.commit().await?;
+
+    assert!(probe.post().is_empty());
+    Ok(())
+}
+
+/// Nested under a `HookOperation` on the `force_execute_pre_commit` path, whose
+/// `staged` is `None` — there is no commit pass for a hook to join, at any depth.
+#[derive(Debug)]
+struct NestingForceExecutedHook {
+    probe: Probe,
+    accepted_at_depth_2: Arc<Mutex<Option<bool>>>,
+    supported_at_depth_2: Arc<Mutex<Option<bool>>>,
+}
+
+impl CommitHook for NestingForceExecutedHook {
+    async fn pre_commit(
+        self,
+        mut op: HookOperation<'_>,
+    ) -> Result<PreCommitRet<'_, Self>, sqlx::Error> {
+        assert!(
+            !op.supports_hooks(),
+            "force_execute_pre_commit path has no commit pass to join"
+        );
+
+        let mut outer = op.begin_savepoint().await?;
+        assert!(!outer.supports_hooks());
+
+        let mut inner = outer.begin_savepoint().await?;
+        *self.supported_at_depth_2.lock().unwrap() = Some(inner.supports_hooks());
+        *self.accepted_at_depth_2.lock().unwrap() =
+            Some(inner.add_commit_hook(self.probe.hook("depth-2")).is_ok());
+
+        inner.release().await?;
+        outer.release().await?;
+        PreCommitRet::ok(self, op)
+    }
+}
+
+#[tokio::test]
+async fn nested_savepoint_under_force_executed_hook_refuses_hooks() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let probe = Probe::default();
+    let supported = Arc::new(Mutex::new(None));
+    let accepted = Arc::new(Mutex::new(None));
+
+    let mut op = DbOp::init(&pool).await?;
+    let hook = NestingForceExecutedHook {
+        probe: probe.clone(),
+        accepted_at_depth_2: accepted.clone(),
+        supported_at_depth_2: supported.clone(),
+    };
+    // Drive the force-execute path directly: `op` here is a plain transaction
+    // wrapper with no commit pass, exactly as when `add_commit_hook` refuses.
+    let mut tx = pool.begin().await?;
+    hook.force_execute_pre_commit(&mut tx).await?;
+    tx.commit().await?;
+    op.commit().await?;
+
+    assert_eq!(
+        *supported.lock().unwrap(),
+        Some(false),
+        "a savepoint nested under a force-executed HookOperation must not claim hook support"
+    );
+    assert_eq!(
+        *accepted.lock().unwrap(),
+        Some(false),
+        "registration must fail loudly rather than staging a hook that is then dropped"
+    );
+    assert!(probe.pre().is_empty());
+    assert!(probe.post().is_empty());
+
+    Ok(())
+}

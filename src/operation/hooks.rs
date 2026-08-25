@@ -431,7 +431,7 @@ impl<'c> AtomicOperation for HookOperation<'c> {
     fn savepoint_parts(&mut self) -> (&mut db::Connection, super::savepoint::HookSlot<'_>) {
         (
             &mut *self.conn,
-            super::savepoint::HookSlot(super::savepoint::HookParent::Root(&mut self.staged)),
+            super::savepoint::HookSlot(self.staged.as_mut()),
         )
     }
 }
