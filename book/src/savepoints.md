@@ -102,36 +102,7 @@ async fn process_all(
 
 `DbOp` and `DbOpWithTime` also keep inherent `with_savepoint` / `begin_savepoint` methods, so existing call sites work without importing the trait. Reaching for them on any *other* operation needs `use es_entity::SavepointOperation;`.
 
-### Supporting savepoints on your own operation
-
-**If your type wraps another operation** — a newtype over `&mut DbOp` that seals off `commit()`, a restricted view handed to a callback — implement `WrapsOperation` and you are done:
-
-```rust,ignore
-struct FlushOp<'a>(&'a mut es_entity::DbOp<'static>);
-
-impl<'a> WrapsOperation for FlushOp<'a> {
-    type Inner = es_entity::DbOp<'static>;
-    fn op(&self) -> &Self::Inner { self.0 }
-    fn op_mut(&mut self) -> &mut Self::Inner { self.0 }
-}
-```
-
-That is the entire implementation. Two accessors earn the whole of `AtomicOperation` — time, clock, executor, commit hooks, `supports_hooks` — and with it savepoints and nesting, all reporting the inner operation's real capabilities rather than trait defaults. Methods added to `AtomicOperation` later cost you nothing.
-
-It is deliberately all-or-nothing: a type implementing `WrapsOperation` cannot also override a single method, because that would need its own conflicting `impl AtomicOperation`. Wrappers that genuinely differ from the operation they hold write the impl by hand — `OpWithTime` and `DbOpWithTime` do, since both override `maybe_now` to report their cached time.
-
-**If your type owns a connection directly**, implement `AtomicOperation` by hand; the savepoint-specific part is one method:
-
-```rust,ignore
-fn savepoint_parts(&mut self) -> (&mut db::Connection, HookSlot<'_>) {
-    // `conn` and `hooks` are different fields, so both borrows are legal here.
-    (&mut self.conn, HookSlot::from(self.hooks.as_mut()))
-}
-```
-
-It returns the connection *and* the hook buffer together because a `SavepointOp` holds a `&mut` to both for its whole lifetime, and two separate `&mut self` accessors could never be live at once. Returning the pair lets you split the borrow across your own disjoint fields.
-
-An operation with no commit-hook buffer returns `HookSlot::unsupported()`: savepoints still work at the database level, and `add_commit_hook` inside them refuses, so callers take their `force_execute_pre_commit` fallback exactly as they already do on the operation itself.
+Your own operation types get savepoints too — see [implementing `AtomicOperation`](./connection-traits.md#implementing-the-trait). Wrapper types need only `WrapsOperation`; nothing there is savepoint-specific.
 
 ## Nesting
 
