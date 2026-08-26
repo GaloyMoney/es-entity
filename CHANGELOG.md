@@ -1,3 +1,11 @@
+# [cala release v0.12.13](https://github.com/GaloyMoney/cala/releases/tag/0.12.13)
+
+
+
+### Features
+
+- Derive savepoints for every AtomicOperation (#207)
+
 # [cala release v0.12.12](https://github.com/GaloyMoney/cala/releases/tag/0.12.12)
 
 
