@@ -1,3 +1,11 @@
+# [cala release v0.12.14](https://github.com/GaloyMoney/cala/releases/tag/0.12.14)
+
+
+
+### Features
+
+- Delegate AtomicOperation with a macro, drop WrapsOperation (#208)
+
 # [cala release v0.12.13](https://github.com/GaloyMoney/cala/releases/tag/0.12.13)
 
 
