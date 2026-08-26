@@ -78,6 +78,42 @@ Variant names, whether defaulted or overridden, must still be pairwise
 distinct and may not collide with the reserved `All` variant (see
 "Validation rules" below).
 
+## Nullable scope columns
+
+A scope column's Rust type may be `Option<T>` — the generated variant still
+carries the bare inner type, never `Option<T>`:
+
+```rust,ignore
+#[derive(EsRepo)]
+#[es_repo(
+    entity = "Party",
+    columns(
+        customer_id(ty = "Option<CustomerId>", scope(variant = "Customer")),
+        name(ty = "String"),
+    )
+)]
+pub struct Parties {
+    pool: PgPool,
+}
+
+// generates:
+pub enum PartyScope {
+    All,
+    Customer(CustomerId),   // not Customer(Option<CustomerId>)
+}
+```
+
+The SQL conjunct is unchanged: `customer_id = $n`. Since SQL `=` never matches
+`NULL`, a row whose `customer_id` is `NULL` is invisible to every scoped
+variant — only `All` sees it — with no special-casing anywhere. Use this when
+NULL genuinely means "this row is unowned", not as a stand-in for "not yet
+migrated": a backfill that leaves rows NULL makes them silently disappear from
+every scoped read. There is deliberately **no** `From<Option<CustomerId>>` — a
+scope value is always concrete, so `PartyScope::Customer(None)` is unspellable
+— and a column marked `nullable` (the opt-in flag for a non-`Option` Rust type
+backed by a nullable SQL column) is still rejected as a scope column, since
+there is no inner type to unwrap.
+
 ## Tenancy roots: `id(scope)`
 
 The tenancy-root entity itself — the `Partner` in a partner-scoped system —
@@ -317,16 +353,19 @@ self.repo
 
 The macro rejects at compile time:
 
-- scope columns whose Rust types are not pairwise distinct (the generated
-  `From<T>` conversions dispatch on type, so two same-typed scope columns
-  would produce conflicting impls)
+- scope columns whose types are not pairwise distinct, compared on the type
+  that lands in the generated enum — the inner type, for an `Option<T>`
+  scope column (the generated `From<T>` conversions dispatch on that type, so
+  two scope columns that resolve to the same type would produce conflicting
+  impls)
 - scope columns whose variant names collide with each other or with the
   reserved `All` variant — whether the name is the UpperCamel default or an
   explicit `scope(variant = "...")` override
 - a `scope(variant = "...")` value that isn't a valid Rust identifier
-- an `Option<T>` or `nullable`-annotated scope column (nullable scope columns
-  are not supported — every row must belong to exactly one scope, in every
-  dimension)
+- a `nullable`-annotated scope column whose Rust type is not syntactically
+  `Option<T>` (see [Nullable scope columns](#nullable-scope-columns) above —
+  there is no inner type to unwrap, and scoping by the NULL-encoding value
+  would silently match no rows)
 - a `Forgettable<T>` scope column
 - `scope` on nested repos — children are custody-guarded via their (scoped)
   parent
