@@ -278,7 +278,8 @@ impl AtomicOperation for SavepointOp<'_> {
 /// This trait has a blanket implementation and no methods to implement: an
 /// operation earns savepoints by implementing
 /// [`AtomicOperation::savepoint_parts`], and a wrapper type that implements
-/// [`WrapsOperation`](super::WrapsOperation) gets even that by delegation. So
+/// the [`delegate_atomic_operation!`](crate::delegate_atomic_operation) macro
+/// generates even that. So
 /// `DbOp`, `DbOpWithTime`, `SavepointOp` (nesting), [`HookOperation`], a bare
 /// [`sqlx::Transaction`], any [`OpWithTime`] wrapper, and operation types
 /// defined outside this crate all share one implementation of the pair.
@@ -380,7 +381,8 @@ pub trait SavepointOperation: AtomicOperation {
                     "operation reports supports_hooks() but its savepoint_parts() \
                      yields no hook buffer — commit hooks registered inside this \
                      savepoint would be silently refused. Implement \
-                     AtomicOperation::savepoint_parts (or WrapsOperation) on this \
+                     AtomicOperation::savepoint_parts (or use the 
+                     delegate_atomic_operation! macro) on this \
                      type instead of inheriting the default."
                         .to_string(),
                 ));

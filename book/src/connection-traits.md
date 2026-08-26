@@ -49,7 +49,7 @@ Implementations of `AtomicOperation`:
 - `OpWithTime<'_, Op>` (where `Op: AtomicOperation`)
 - `HookOperation<'_>` (used internally by hooks)
 - `SavepointOp<'_>` (see [Savepoints](./savepoints.md))
-- anything implementing [`WrapsOperation`](#wrapping-another-operation)
+- anything using the [`delegate_atomic_operation!`](#wrapping-another-operation) macro
 
 Every `AtomicOperation` also gets `with_savepoint` / `begin_savepoint` from the blanket `SavepointOperation` trait — see [Savepoints](./savepoints.md).
 
@@ -59,50 +59,45 @@ Most code never implements `AtomicOperation`; it takes `&mut impl AtomicOperatio
 
 ### Wrapping another operation
 
-A type that wraps an operation — a newtype over `&mut DbOp` that seals off `commit()`, a restricted view handed to a callback — should implement `WrapsOperation` rather than `AtomicOperation`:
+A type that wraps an operation — a newtype over `&mut DbOp` that seals off `commit()`, a restricted view handed to a callback — should use the `delegate_atomic_operation!` macro rather than writing the impl out:
 
 ```rust,ignore
 struct FlushOp<'a>(&'a mut es_entity::DbOp<'static>);
 
-impl<'a> WrapsOperation for FlushOp<'a> {
-    type Inner = es_entity::DbOp<'static>;
-    fn op(&self) -> &Self::Inner { self.0 }
-    fn op_mut(&mut self) -> &mut Self::Inner { self.0 }
-}
+es_entity::delegate_atomic_operation!(FlushOp<'_>, { s => s.0 });
 ```
 
-That is the entire implementation. A blanket impl derives all of `AtomicOperation` from those two accessors — time, clock, executor, commit hooks, `supports_hooks`, savepoints — each reporting the wrapped operation's real capability rather than a trait default. Methods added to `AtomicOperation` later cost you nothing.
+That is the entire implementation. The macro generates all of `AtomicOperation` — time, clock, executor, commit hooks, `supports_hooks`, savepoints — each reporting the wrapped operation's real capability rather than a trait default. Methods added to `AtomicOperation` later cost you nothing.
 
-Delegating by hand instead is not just verbose, it is a trap: a method you forget silently inherits its default, so `maybe_now` starts returning `None` or `supports_hooks` returns `false`. The behaviour changes and nothing fails to compile.
+Crucially it adds **no accessor of its own**. The wrapped operation stays exactly as private as you made it, so a type that withholds `&mut` access on purpose — to stop callers committing it or swapping it out — keeps that guarantee.
 
-`WrapsOperation` is all-or-nothing. A type cannot implement it *and* override one method, since that needs its own conflicting `impl AtomicOperation`. Two cases therefore hand-write the impl:
+Delegating by hand instead is not just verbose, it is a trap: a method you forget silently inherits its default, so `maybe_now` starts returning `None`, `supports_hooks` returns `false`, or `savepoint_parts` reports no hook buffer while the wrapped op has one. The behaviour changes and nothing fails to compile.
 
-- **Wrappers that genuinely differ.** `OpWithTime` and `DbOpWithTime` override `maybe_now` to report their cached time.
-- **Enums that dispatch over several operations.** A single associated `Inner` cannot cover several variants, so each method is a `match`:
+### Enums
 
-  ```rust,ignore
-  impl AtomicOperation for UseCaseOp<'_, '_> {
-      fn connection(&mut self) -> &mut db::Connection {
-          match self {
-              Self::Owned(op) => op.connection(),
-              Self::Db(op) => op.connection(),
-              Self::Savepoint(op) => op.connection(),
-          }
-      }
+An enum choosing between several operations works the same way. Arms may hold different types, because the macro generates the `match` inside each method rather than unifying the arms into one value:
 
-      fn savepoint_parts(&mut self) -> (&mut db::Connection, HookSlot<'_>) {
-          match self {
-              Self::Owned(op) => op.savepoint_parts(),
-              Self::Db(op) => op.savepoint_parts(),
-              Self::Savepoint(op) => op.savepoint_parts(),
-          }
-      }
+```rust,ignore
+es_entity::delegate_atomic_operation!(UseCaseOp<'_, '_>, {
+    Self::Owned(op) => op,
+    Self::Db(op) => op,
+    Self::Savepoint(op) => op,
+});
+```
 
-      // ...and so on for the remaining methods
-  }
-  ```
+Delegating `savepoint_parts` this way is what lets such an enum open a savepoint whatever it currently holds — including nesting when it is already savepoint-backed.
 
-  Dispatching `savepoint_parts` this way is what lets such an enum open a savepoint whatever it currently holds — including nesting when it is already savepoint-backed.
+### Generic types
+
+Pass the impl generics in brackets first:
+
+```rust,ignore
+es_entity::delegate_atomic_operation!([<'a, T: AtomicOperation>] MyOp<'a, T>, { s => s.inner });
+```
+
+### When not to use it
+
+Only for pure delegation — the macro forwards every method. A wrapper that changes behaviour must hand-write the impl; `OpWithTime` and `DbOpWithTime` do, since both override `maybe_now` to report their cached time.
 
 ### Owning a connection directly
 
@@ -123,7 +118,7 @@ fn savepoint_parts(&mut self) -> (&mut db::Connection, HookSlot<'_>) {
 
 Because the default reports "no hook buffer", a type that forwards `supports_hooks` to an operation it wraps but forgets to override `savepoint_parts` would refuse hooks inside every savepoint taken through it, while the wrapped operation supports them fine — a behaviour change with no compile error.
 
-`begin_savepoint` therefore fails with a protocol error when an operation reports `supports_hooks()` but hands back an unsupported slot. The two can only disagree that one way, so the check has no false positives: an op that honestly has no hooks reports `false` on both sides. Implementing `WrapsOperation` avoids the situation entirely.
+`begin_savepoint` therefore fails with a protocol error when an operation reports `supports_hooks()` but hands back an unsupported slot. The two can only disagree that one way, so the check has no false positives: an op that honestly has no hooks reports `false` on both sides. Using the `delegate_atomic_operation!` macro avoids the situation entirely.
 
 ## IntoOneTimeExecutor
 

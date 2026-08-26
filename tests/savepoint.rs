@@ -1,7 +1,7 @@
 mod helpers;
 
 use es_entity::operation::{
-    AtomicOperation, DbOp, SavepointOperation, WrapsOperation,
+    AtomicOperation, DbOp, SavepointOperation,
     hooks::{CommitHook, HookOperation, PreCommitRet},
 };
 use std::sync::{Arc, Mutex};
@@ -638,23 +638,14 @@ async fn explicit_savepoint_release_and_rollback() -> anyhow::Result<()> {
 /// An operation defined *outside* `es_entity::operation` — standing in for the
 /// wrapper types consumers define (obix's `BatchOp` / `IsolatedOp` / `FlushOp`).
 ///
-/// This is the whole implementation. Two accessors earn the entire
+/// This is the whole implementation: one macro line earns the entire
 /// `AtomicOperation` surface — time, clock, executor, commit hooks — and with it
 /// `SavepointOperation`, nesting included, all carrying the inner operation's
-/// real capabilities rather than trait defaults.
+/// real capabilities rather than trait defaults. Note that no accessor for the
+/// wrapped `DbOp` is exposed, so a wrapper can still seal it off.
 struct WrapperOp<'a>(&'a mut DbOp<'static>);
 
-impl<'a> WrapsOperation for WrapperOp<'a> {
-    type Inner = DbOp<'static>;
-
-    fn op(&self) -> &Self::Inner {
-        self.0
-    }
-
-    fn op_mut(&mut self) -> &mut Self::Inner {
-        self.0
-    }
-}
+es_entity::delegate_atomic_operation!(WrapperOp<'_>, { s => s.0 });
 
 /// Delegation must carry the inner op's real answers, not the trait defaults —
 /// the failure mode being a wrapper that silently reports `supports_hooks()
@@ -667,15 +658,7 @@ async fn wrapping_op_delegates_full_capability() -> anyhow::Result<()> {
 
     // Wrap a DbOpWithTime to prove the associated type is not pinned to DbOp.
     struct TimedWrapper<'a>(&'a mut es_entity::operation::DbOpWithTime<'static>);
-    impl<'a> WrapsOperation for TimedWrapper<'a> {
-        type Inner = es_entity::operation::DbOpWithTime<'static>;
-        fn op(&self) -> &Self::Inner {
-            self.0
-        }
-        fn op_mut(&mut self) -> &mut Self::Inner {
-            self.0
-        }
-    }
+    es_entity::delegate_atomic_operation!(TimedWrapper<'_>, { s => s.0 });
 
     let mut wrapper = TimedWrapper(&mut op);
     assert!(
@@ -1057,12 +1040,11 @@ async fn nested_savepoint_under_force_executed_hook_refuses_hooks() -> anyhow::R
 }
 
 // ---------------------------------------------------------------------------
-// An enum-dispatching operation — lana's `UseCaseOp` shape. `WrapsOperation`
-// cannot serve this (one associated `Inner` cannot cover four variants), so the
-// impl is hand-written; `savepoint_parts` is simply one more match in the same
-// style as the methods already there. The payoff is that `isolated` below needs
-// no per-variant special-casing and no "savepoints unsupported" error: the
-// savepoint-backed variant nests, rather than being refused.
+// An enum-dispatching operation — lana's `UseCaseOp` shape. Each arm holds a
+// different type, so the macro generates the match inside every method rather
+// than unifying the arms into one value. The payoff is that `isolated` below
+// needs no per-variant special-casing and no "savepoints unsupported" error:
+// the savepoint-backed variant nests, rather than being refused.
 // ---------------------------------------------------------------------------
 
 enum UseCaseOp<'op, 'parent> {
@@ -1071,71 +1053,11 @@ enum UseCaseOp<'op, 'parent> {
     Savepoint(&'op mut es_entity::operation::SavepointOp<'parent>),
 }
 
-impl AtomicOperation for UseCaseOp<'_, '_> {
-    fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        match self {
-            Self::Owned(op) => op.maybe_now(),
-            Self::Db(op) => op.maybe_now(),
-            Self::Savepoint(op) => op.maybe_now(),
-        }
-    }
-
-    fn clock(&self) -> &es_entity::clock::ClockHandle {
-        match self {
-            Self::Owned(op) => AtomicOperation::clock(op),
-            Self::Db(op) => AtomicOperation::clock(*op),
-            Self::Savepoint(op) => AtomicOperation::clock(*op),
-        }
-    }
-
-    fn connection(&mut self) -> &mut es_entity::db::Connection {
-        match self {
-            Self::Owned(op) => op.connection(),
-            Self::Db(op) => op.connection(),
-            Self::Savepoint(op) => op.connection(),
-        }
-    }
-
-    fn add_commit_hook<H: CommitHook>(&mut self, hook: H) -> Result<(), H> {
-        match self {
-            Self::Owned(op) => op.add_commit_hook(hook),
-            Self::Db(op) => op.add_commit_hook(hook),
-            Self::Savepoint(op) => op.add_commit_hook(hook),
-        }
-    }
-
-    fn commit_hook<H: CommitHook>(&self) -> Option<&H> {
-        match self {
-            Self::Owned(op) => op.commit_hook::<H>(),
-            Self::Db(op) => op.commit_hook::<H>(),
-            Self::Savepoint(op) => op.commit_hook::<H>(),
-        }
-    }
-
-    fn supports_hooks(&self) -> bool {
-        match self {
-            Self::Owned(op) => op.supports_hooks(),
-            Self::Db(op) => op.supports_hooks(),
-            Self::Savepoint(op) => op.supports_hooks(),
-        }
-    }
-
-    /// The one addition. Every variant already knows how to yield its parts, so
-    /// this is pure dispatch — and it is what lets `isolated` treat all variants
-    /// alike, the savepoint-backed one included.
-    fn savepoint_parts(
-        &mut self,
-    ) -> (
-        &mut es_entity::db::Connection,
-        es_entity::operation::HookSlot<'_>,
-    ) {
-        match self {
-            Self::Owned(op) => op.savepoint_parts(),
-            Self::Db(op) => op.savepoint_parts(),
-            Self::Savepoint(op) => op.savepoint_parts(),
-        }
-    }
-}
+es_entity::delegate_atomic_operation!(UseCaseOp<'_, '_>, {
+    Self::Owned(op) => op,
+    Self::Db(op) => op,
+    Self::Savepoint(op) => op,
+});
 
 impl UseCaseOp<'_, '_> {
     /// No variant match, no `SavepointsUnsupported`: uniform across all of them.
@@ -1329,5 +1251,47 @@ async fn honest_hookless_op_still_savepoints() -> anyhow::Result<()> {
         labels(&pool, &prefix).await?,
         vec![format!("{prefix}-kept")]
     );
+    Ok(())
+}
+
+/// The macro's bracketed-generics form: a wrapper generic over the operation it
+/// holds, which is the shape `OpWithTime` would have if it delegated purely.
+struct GenericWrapper<'a, Op: AtomicOperation + ?Sized> {
+    inner: &'a mut Op,
+}
+
+es_entity::delegate_atomic_operation!(
+    [<'a, Op: AtomicOperation + ?Sized>] GenericWrapper<'a, Op>,
+    { s => s.inner }
+);
+
+#[tokio::test]
+async fn generic_wrapper_delegates_and_savepoints() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let prefix = format!("sp-{}", new_id());
+    let probe = Probe::default();
+    let mut op = DbOp::init(&pool).await?;
+
+    {
+        let mut wrapper = GenericWrapper { inner: &mut op };
+        assert!(wrapper.supports_hooks());
+
+        let res = wrapper
+            .with_savepoint(async |sp| {
+                assert!(sp.supports_hooks());
+                insert_item_in_op(sp, new_id(), &format!("{prefix}-kept")).await?;
+                sp.add_commit_hook(probe.hook("generic")).unwrap();
+                Ok::<_, sqlx::Error>(())
+            })
+            .await?;
+        assert!(res.is_ok());
+    }
+
+    op.commit().await?;
+    assert_eq!(
+        labels(&pool, &prefix).await?,
+        vec![format!("{prefix}-kept")]
+    );
+    assert_eq!(probe.post(), vec!["generic".to_string()]);
     Ok(())
 }
