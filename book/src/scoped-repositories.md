@@ -104,19 +104,15 @@ pub enum PartyScope {
 ```
 
 The SQL conjunct is unchanged: `customer_id = $n`. Since SQL `=` never matches
-`NULL`, a row whose `customer_id` is `NULL` is simply invisible to every
-scoped variant — it behaves like a row that belongs to some other scope,
-falling out of the existing predicate with no special-casing. Only `All`
-sees it. Use this when NULL genuinely means "this row is unowned / belongs to
-no scope", not as a stand-in for "not yet migrated" — a backfill that leaves
-rows NULL will make them silently disappear from every scoped read.
-
-There is, as ever, deliberately **no** `From<Option<CustomerId>>`: a scope
-value passed at a call site is always concrete, so `PartyScope::Customer(None)`
-is unspellable. A column marked `nullable` (the opt-in for a non-`Option`
-Rust type whose custom `sqlx::Encode` maps some value to SQL `NULL`) is still
-rejected as a scope column — there is no inner type to unwrap, and scoping by
-the NULL-encoding value would silently match no rows at all.
+`NULL`, a row whose `customer_id` is `NULL` is invisible to every scoped
+variant — only `All` sees it — with no special-casing anywhere. Use this when
+NULL genuinely means "this row is unowned", not as a stand-in for "not yet
+migrated": a backfill that leaves rows NULL makes them silently disappear from
+every scoped read. There is deliberately **no** `From<Option<CustomerId>>` — a
+scope value is always concrete, so `PartyScope::Customer(None)` is unspellable
+— and a column marked `nullable` (the opt-in flag for a non-`Option` Rust type
+backed by a nullable SQL column) is still rejected as a scope column, since
+there is no inner type to unwrap.
 
 ## Tenancy roots: `id(scope)`
 
