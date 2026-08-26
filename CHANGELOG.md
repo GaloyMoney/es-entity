@@ -1,3 +1,11 @@
+# [cala release v0.12.15](https://github.com/GaloyMoney/cala/releases/tag/0.12.15)
+
+
+
+### Features
+
+- Allow nullable (Option<T>) scope columns (#209)
+
 # [cala release v0.12.14](https://github.com/GaloyMoney/cala/releases/tag/0.12.14)
 
 
