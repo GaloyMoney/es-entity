@@ -80,7 +80,7 @@ sp.release().await?;
 | `HookOperation` | the running commit pass, or nothing on the `force_execute_pre_commit` path |
 | `OpWithTime<'_, Op>` | whatever the wrapped operation folds into |
 | `sqlx::Transaction` | nothing — hooks are refused |
-| your own `WrapsOperation` type | whatever the wrapped operation folds into |
+| your own delegating type | whatever the wrapped operation folds into |
 
 Because the API lives on a trait, one generic helper serves them all:
 
@@ -102,7 +102,7 @@ async fn process_all(
 
 `DbOp` and `DbOpWithTime` also keep inherent `with_savepoint` / `begin_savepoint` methods, so existing call sites work without importing the trait. Reaching for them on any *other* operation needs `use es_entity::SavepointOperation;`.
 
-Your own operation types get savepoints too — see [implementing `AtomicOperation`](./connection-traits.md#implementing-the-trait). Wrapper types need only `WrapsOperation`; nothing there is savepoint-specific.
+Your own operation types get savepoints too — see [implementing `AtomicOperation`](./connection-traits.md#implementing-the-trait). Wrapper types need only the `delegate_atomic_operation!` macro; nothing there is savepoint-specific.
 
 ## Nesting
 

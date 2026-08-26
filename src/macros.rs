@@ -571,3 +571,114 @@ macro_rules! entity_id {
         $crate::__entity_id_conversions!($($from => $to),*);
     };
 }
+
+/// Implements [`AtomicOperation`](crate::AtomicOperation) for a type by
+/// delegating every method to an operation it holds.
+///
+/// A type that wraps or dispatches to another operation — a newtype over
+/// `&mut DbOp` that seals off `commit()`, a restricted view handed to a
+/// callback, an enum choosing between several ops — needs all of
+/// `AtomicOperation` forwarded. Written by hand that is eight near-identical
+/// bodies per type, and a method left out silently inherits a trait default:
+/// `maybe_now` starts reporting `None`, `supports_hooks` `false`, or
+/// [`savepoint_parts`](crate::AtomicOperation::savepoint_parts) reports no hook
+/// buffer while the wrapped op has one. The behaviour changes and nothing fails
+/// to compile.
+///
+/// This macro generates the whole impl, so those cannot drift apart, and it adds
+/// **no** public accessor — the wrapped operation stays as private as it was.
+/// That matters for types that withhold `&mut` access on purpose: exposing it
+/// would let a caller swap the operation out or commit it directly.
+///
+/// # Newtype
+///
+/// ```rust,ignore
+/// struct FlushOp<'a>(&'a mut es_entity::DbOp<'static>);
+///
+/// es_entity::delegate_atomic_operation!(FlushOp<'_>, { s => s.0 });
+/// ```
+///
+/// # Enum
+///
+/// Each arm names a pattern and the operation to delegate to. Arms may hold
+/// different types — `DbOp`, `&mut DbOp`, `&mut SavepointOp` — because the
+/// generated code calls the method inside each arm rather than unifying the
+/// arms into one value.
+///
+/// ```rust,ignore
+/// es_entity::delegate_atomic_operation!(UseCaseOp<'_, '_>, {
+///     Self::Owned(op) => op,
+///     Self::Db(op) => op,
+///     Self::Savepoint(op) => op,
+/// });
+/// ```
+///
+/// # Generic types
+///
+/// Pass the impl generics in brackets first:
+///
+/// ```rust,ignore
+/// es_entity::delegate_atomic_operation!([<'a, T: es_entity::AtomicOperation>] MyOp<'a, T>, {
+///     s => s.inner
+/// });
+/// ```
+///
+/// # When not to use it
+///
+/// Only for pure delegation. A wrapper that changes behaviour — reporting its
+/// own cached time, refusing hooks — must hand-write the impl, since this macro
+/// forwards every method.
+#[macro_export]
+macro_rules! delegate_atomic_operation {
+    // Bracketed generics first: otherwise the bare arm below tries to parse a
+    // leading `[` as the start of a slice type.
+    ([$($generics:tt)*] $ty:ty, { $($pat:pat => $target:expr),+ $(,)? }) => {
+        impl $($generics)* $crate::AtomicOperation for $ty {
+            fn maybe_now(
+                &self,
+            ) -> Option<$crate::prelude::chrono::DateTime<$crate::prelude::chrono::Utc>> {
+                match self { $($pat => $target.maybe_now()),+ }
+            }
+
+            fn clock(&self) -> &$crate::clock::ClockHandle {
+                match self { $($pat => $target.clock()),+ }
+            }
+
+            fn connection(&mut self) -> &mut $crate::db::Connection {
+                match self { $($pat => $target.connection()),+ }
+            }
+
+            fn as_executor(
+                &mut self,
+            ) -> $crate::OneTimeExecutor<'_, &mut $crate::db::Connection> {
+                match self { $($pat => $target.as_executor()),+ }
+            }
+
+            fn add_commit_hook<__H: $crate::hooks::CommitHook>(
+                &mut self,
+                hook: __H,
+            ) -> Result<(), __H> {
+                match self { $($pat => $target.add_commit_hook(hook)),+ }
+            }
+
+            fn commit_hook<__H: $crate::hooks::CommitHook>(&self) -> Option<&__H> {
+                match self { $($pat => $target.commit_hook::<__H>()),+ }
+            }
+
+            fn supports_hooks(&self) -> bool {
+                match self { $($pat => $target.supports_hooks()),+ }
+            }
+
+            fn savepoint_parts(
+                &mut self,
+            ) -> (&mut $crate::db::Connection, $crate::HookSlot<'_>) {
+                match self { $($pat => $target.savepoint_parts()),+ }
+            }
+        }
+    };
+
+    // Bare form: no impl generics.
+    ($ty:ty, { $($pat:pat => $target:expr),+ $(,)? }) => {
+        $crate::delegate_atomic_operation!([] $ty, { $($pat => $target),+ });
+    };
+}
