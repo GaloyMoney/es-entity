@@ -155,21 +155,15 @@ impl<'c> DbOp<'c> {
     /// ```
     ///
     /// See [`SavepointOp`] for how commit hooks are staged and folded in.
+    ///
+    /// Kept as an inherent method so existing call sites need no import; the
+    /// behaviour lives in [`SavepointOperation::with_savepoint`], which every
+    /// [`AtomicOperation`] gets.
     pub async fn with_savepoint<T, E, F>(&mut self, f: F) -> Result<Result<T, E>, sqlx::Error>
     where
         F: AsyncFnOnce(&mut SavepointOp<'_>) -> Result<T, E>,
     {
-        let mut op = self.begin_savepoint().await?;
-        match f(&mut op).await {
-            Ok(value) => {
-                op.release().await?;
-                Ok(Ok(value))
-            }
-            Err(error) => {
-                op.rollback().await?;
-                Ok(Err(error))
-            }
-        }
+        SavepointOperation::with_savepoint(self, f).await
     }
 
     /// Begins a `SAVEPOINT` scope explicitly.
@@ -179,13 +173,7 @@ impl<'c> DbOp<'c> {
     /// with [`release`](SavepointOp::release) or
     /// [`rollback`](SavepointOp::rollback). Dropping it rolls back.
     pub async fn begin_savepoint(&mut self) -> Result<SavepointOp<'_>, sqlx::Error> {
-        SavepointOp::begin(
-            &mut self.tx,
-            self.clock.clone(),
-            self.now,
-            &mut self.commit_hooks,
-        )
-        .await
+        SavepointOperation::begin_savepoint(self).await
     }
 
     /// Commits the inner transaction.
@@ -265,6 +253,17 @@ impl<'o> AtomicOperation for DbOp<'o> {
     fn supports_hooks(&self) -> bool {
         true
     }
+
+    /// `tx` and `commit_hooks` are disjoint fields, so both can be borrowed
+    /// mutably in one expression — the borrow split that a pair of `&mut self`
+    /// accessors could not express, which is the whole reason this method
+    /// returns both halves at once.
+    fn savepoint_parts(&mut self) -> (&mut db::Connection, savepoint::HookSlot<'_>) {
+        (
+            self.tx.connection(),
+            savepoint::HookSlot(self.commit_hooks.as_mut()),
+        )
+    }
 }
 
 /// Equivileant of [`DbOp`] just that the time is guaranteed to be cached.
@@ -300,12 +299,12 @@ impl<'c> DbOpWithTime<'c> {
     where
         F: AsyncFnOnce(&mut SavepointOp<'_>) -> Result<T, E>,
     {
-        self.inner.with_savepoint(f).await
+        SavepointOperation::with_savepoint(self, f).await
     }
 
     /// Begins a `SAVEPOINT` scope explicitly — see [`DbOp::begin_savepoint`].
     pub async fn begin_savepoint(&mut self) -> Result<SavepointOp<'_>, sqlx::Error> {
-        self.inner.begin_savepoint().await
+        SavepointOperation::begin_savepoint(self).await
     }
 
     /// Commits the inner transaction.
@@ -342,6 +341,10 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
 
     fn supports_hooks(&self) -> bool {
         self.inner.supports_hooks()
+    }
+
+    fn savepoint_parts(&mut self) -> (&mut db::Connection, savepoint::HookSlot<'_>) {
+        self.inner.savepoint_parts()
     }
 }
 
@@ -434,8 +437,149 @@ pub trait AtomicOperation: Send {
     fn supports_hooks(&self) -> bool {
         false
     }
+
+    /// Simultaneous access to the connection **and** the commit-hook buffer a
+    /// nested `SAVEPOINT` folds into when released. Implementing this is the
+    /// only thing an operation must do to get the whole of
+    /// [`SavepointOperation`] — `with_savepoint`, `begin_savepoint`, and
+    /// arbitrary-depth nesting — for free.
+    ///
+    /// Returning both halves together is not a convenience: it is a
+    /// requirement. A [`SavepointOp`] holds a `&mut` to the connection *and* a
+    /// `&mut` to the hook buffer for its entire lifetime, and two separate
+    /// `&mut self` accessors can never be live at the same time. Returning the
+    /// pair lets an implementor split the borrow across its own disjoint fields
+    /// — legal inside the type, impossible across a trait boundary otherwise:
+    ///
+    /// ```rust,ignore
+    /// fn savepoint_parts(&mut self) -> (&mut db::Connection, HookSlot<'_>) {
+    ///     // `tx` and `commit_hooks` are different fields, so this is fine.
+    ///     (self.tx.connection(), HookSlot::root(&mut self.commit_hooks))
+    /// }
+    /// ```
+    ///
+    /// An operation that wraps another should **forward** to the inner one, so
+    /// hook support is preserved:
+    ///
+    /// ```rust,ignore
+    /// fn savepoint_parts(&mut self) -> (&mut db::Connection, HookSlot<'_>) {
+    ///     self.inner.savepoint_parts()
+    /// }
+    /// ```
+    ///
+    /// An operation with no hook buffer of its own returns
+    /// [`HookSlot::unsupported`] — savepoints still work at the database level,
+    /// hook registration inside them refuses, and callers fall back to
+    /// [`force_execute_pre_commit`](hooks::CommitHook::force_execute_pre_commit)
+    /// exactly as they already do on the operation itself.
+    ///
+    /// The default reports no hook buffer, which is correct for an operation
+    /// that has none — a bare [`sqlx::Transaction`] needs nothing else.
+    ///
+    /// It is **not** correct for an operation that wraps one which does. Such a
+    /// type must override this (or implement [`WrapsOperation`], which does it
+    /// for you), because the default would otherwise refuse hooks inside every
+    /// savepoint taken through it while the wrapped operation supports them
+    /// fine. That mismatch is caught rather than left silent:
+    /// [`begin_savepoint`](SavepointOperation::begin_savepoint) fails with a
+    /// protocol error when an operation reports
+    /// [`supports_hooks`](Self::supports_hooks) but yields an unsupported slot,
+    /// which is exactly the shape "delegated `supports_hooks`, inherited
+    /// `savepoint_parts`" produces.
+    fn savepoint_parts(&mut self) -> (&mut db::Connection, savepoint::HookSlot<'_>) {
+        (self.connection(), savepoint::HookSlot::unsupported())
+    }
 }
 
+/// Derives the whole of [`AtomicOperation`] for a type that wraps another
+/// operation, by delegation.
+///
+/// A wrapper that restricts or re-presents an operation — obix's `FlushOp`, a
+/// newtype that seals off `commit()`, anything holding a `&mut DbOp` — needs
+/// every [`AtomicOperation`] method to forward to the operation inside. Written
+/// by hand that is eight near-identical bodies, it must be redone for each new
+/// wrapper, and a method left out silently inherits a trait default: `maybe_now`
+/// starts reporting `None`, or `supports_hooks` `false`, changing behaviour
+/// rather than failing to compile.
+///
+/// Implement this instead and the delegation is generated:
+///
+/// ```rust,ignore
+/// struct FlushOp<'a>(&'a mut es_entity::DbOp<'static>);
+///
+/// impl<'a> WrapsOperation for FlushOp<'a> {
+///     type Inner = es_entity::DbOp<'static>;
+///     fn op(&self) -> &Self::Inner { self.0 }
+///     fn op_mut(&mut self) -> &mut Self::Inner { self.0 }
+/// }
+/// ```
+///
+/// That is the entire implementation. `FlushOp` now has time, the clock, the
+/// executor, commit hooks, `supports_hooks`, and — through
+/// [`savepoint_parts`](AtomicOperation::savepoint_parts) — the full
+/// [`SavepointOperation`] pair including nesting, all with the inner operation's
+/// real capabilities rather than a default. Methods added to `AtomicOperation`
+/// in future cost implementors nothing.
+///
+/// # All or nothing
+///
+/// This is a blanket `impl AtomicOperation for W`, so a type cannot implement
+/// `WrapsOperation` *and* override a single method — that would need its own
+/// `impl AtomicOperation`, which would conflict. Wrappers that genuinely differ
+/// from the operation they hold write the impl by hand instead; [`OpWithTime`]
+/// and [`DbOpWithTime`] do exactly that, since both override
+/// [`maybe_now`](AtomicOperation::maybe_now) to report their cached time.
+///
+/// Use `WrapsOperation` for pure delegation; hand-write the impl when the
+/// wrapper changes behaviour.
+pub trait WrapsOperation: Send {
+    /// The operation being wrapped.
+    type Inner: AtomicOperation + ?Sized;
+
+    /// Shared access, for the `&self` methods.
+    fn op(&self) -> &Self::Inner;
+
+    /// Exclusive access, for the `&mut self` methods.
+    fn op_mut(&mut self) -> &mut Self::Inner;
+}
+
+impl<W: WrapsOperation> AtomicOperation for W {
+    fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.op().maybe_now()
+    }
+
+    fn clock(&self) -> &ClockHandle {
+        self.op().clock()
+    }
+
+    fn connection(&mut self) -> &mut db::Connection {
+        self.op_mut().connection()
+    }
+
+    fn as_executor(&mut self) -> OneTimeExecutor<'_, &mut db::Connection> {
+        self.op_mut().as_executor()
+    }
+
+    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
+        self.op_mut().add_commit_hook(hook)
+    }
+
+    fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H> {
+        self.op().commit_hook::<H>()
+    }
+
+    fn supports_hooks(&self) -> bool {
+        self.op().supports_hooks()
+    }
+
+    fn savepoint_parts(&mut self) -> (&mut db::Connection, savepoint::HookSlot<'_>) {
+        self.op_mut().savepoint_parts()
+    }
+}
+
+/// A bare transaction carries no commit-hook buffer, so the defaulted
+/// `savepoint_parts` is already right: savepoints work at the database level and
+/// refuse hook registration.
 impl<'c> AtomicOperation for sqlx::Transaction<'c, db::Db> {
     fn connection(&mut self) -> &mut db::Connection {
         &mut *self

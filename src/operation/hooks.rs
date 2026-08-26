@@ -93,10 +93,16 @@
 //! operation's set — through the same registration/merge path — when the savepoint
 //! is released; a rolled-back savepoint discards them. No callback runs at a
 //! savepoint boundary, so the lifecycle above is unchanged: one `pre_commit` pass at
-//! the parent's commit, `post_commit` only after a durable `COMMIT`. See
-//! [`SavepointOp`] for details.
+//! the root's commit, `post_commit` only after a durable `COMMIT`. Savepoints nest:
+//! `with_savepoint`/`begin_savepoint` come from [`SavepointOperation`], which every
+//! [`AtomicOperation`] gets — including [`SavepointOp`] itself and [`HookOperation`],
+//! so a hook's own `pre_commit` can isolate its own multi-statement write the same
+//! way. Releasing an inner savepoint folds into its *immediate* parent's staged
+//! buffer, not straight to the root, so an N-deep chain rolls up one level at a
+//! time. See [`SavepointOp`] for details.
 //!
 //! [`SavepointOp`]: super::SavepointOp
+//! [`SavepointOperation`]: super::SavepointOperation
 //!
 //! # Examples
 //!
@@ -408,6 +414,26 @@ impl<'c> AtomicOperation for HookOperation<'c> {
     fn supports_hooks(&self) -> bool {
         self.staged.is_some()
     }
+
+    /// Lets a hook's own `pre_commit` isolate its multi-statement work in a
+    /// `SAVEPOINT` — see [`SavepointOperation`](super::SavepointOperation).
+    ///
+    /// Hooks registered inside stage normally and, on
+    /// [`release`](super::SavepointOp::release), fold into this
+    /// `HookOperation`'s own buffer exactly like a top-level savepoint folds
+    /// into a `DbOp` — *if* this `HookOperation` is on a real commit pass
+    /// ([`supports_hooks`](AtomicOperation::supports_hooks) is `true`). On the
+    /// [`force_execute_pre_commit`](CommitHook::force_execute_pre_commit) path
+    /// `staged` is `None`, so registering a hook inside the savepoint fails the
+    /// same way it would have on this `HookOperation` directly — the
+    /// `SAVEPOINT`/`RELEASE`/`ROLLBACK` machinery itself still works, since it
+    /// needs only the connection.
+    fn savepoint_parts(&mut self) -> (&mut db::Connection, super::savepoint::HookSlot<'_>) {
+        (
+            &mut *self.conn,
+            super::savepoint::HookSlot(self.staged.as_mut()),
+        )
+    }
 }
 
 /// Return type for [`CommitHook::pre_commit()`].
@@ -529,6 +555,10 @@ impl CommitHooks {
         }
 
         self.hooks.push((type_id, new_hook));
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.hooks.is_empty()
     }
 
     pub(super) fn get_last<H: CommitHook>(&self) -> Option<&H> {
