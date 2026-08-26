@@ -10,16 +10,21 @@ use convert_case::{Case, Casing};
 use proc_macro2::Span;
 
 /// One scope column: its enum variant ident (UpperCamel of the column name,
-/// e.g. `partner_id` -> `PartnerId`), the column name, and its Rust type.
+/// e.g. `partner_id` -> `PartnerId`), the column name, and its scope type
+/// ([`Column::ty_for_scope`] — the inner type, for a nullable `Option<T>`
+/// scope column).
 #[derive(Clone)]
 pub struct ScopeCol<'a> {
     pub variant: syn::Ident,
     pub column_name: &'a syn::Ident,
-    pub column_ty: &'a syn::Type,
+    pub column_ty: syn::Type,
 }
 
 impl ScopeCol<'_> {
     /// The SQL conjunct for this column's arm at the given parameter index.
+    /// Unchanged for a nullable scope column: `col = $n` never matches SQL
+    /// NULL, so rows where the column is NULL are invisible to this arm
+    /// with zero special-casing.
     pub fn predicate(&self, param_idx: u32) -> String {
         format!("{} = ${}", self.column_name, param_idx)
     }
@@ -27,7 +32,7 @@ impl ScopeCol<'_> {
     /// The query binding for this column's arm (pairs with the dispatch
     /// arm's `__scope_val` pattern binding).
     pub fn arg_tokens(&self) -> TokenStream {
-        let column_ty = self.column_ty;
+        let column_ty = &self.column_ty;
         quote! { __scope_val as &#column_ty, }
     }
 }
@@ -70,7 +75,7 @@ impl<'a> ScopeInfo<'a> {
             .map(|col| ScopeCol {
                 variant: col.scope_variant(),
                 column_name: col.name(),
-                column_ty: col.ty(),
+                column_ty: col.ty_for_scope(),
             })
             .collect();
         if cols.is_empty() {
@@ -134,7 +139,10 @@ impl<'a> ScopeInfo<'a> {
 /// plus `From<T>` / `From<&T>` conversions into each column's variant so call
 /// sites can pass a scope value directly. Deliberately **no**
 /// `From<Option<T>>`: mapping `None` to `All` would turn a stray `None` into
-/// silent all-scope access.
+/// silent all-scope access. For a scope column whose declared Rust type is
+/// `Option<T>` ([`Column::ty_for_scope`] unwraps it), `T` is what appears
+/// here — `Scope::X(None)` is unspellable, and rows where the column is NULL
+/// are simply invisible to every scoped variant (only `All` sees them).
 pub struct ScopeType<'a> {
     entity: &'a syn::Ident,
     info: ScopeInfo<'a>,
@@ -160,7 +168,7 @@ impl ToTokens for ScopeType<'_> {
 
         let variants = self.info.cols.iter().map(|col| {
             let variant = &col.variant;
-            let column_ty = col.column_ty;
+            let column_ty = &col.column_ty;
             let vdoc = format!(
                 "Restricts every read to rows whose `{}` column equals the value.",
                 col.column_name,
@@ -173,7 +181,7 @@ impl ToTokens for ScopeType<'_> {
 
         let from_impls = self.info.cols.iter().map(|col| {
             let variant = &col.variant;
-            let column_ty = col.column_ty;
+            let column_ty = &col.column_ty;
             quote! {
                 impl From<#column_ty> for #scope_ty {
                     fn from(value: #column_ty) -> Self {
@@ -223,7 +231,7 @@ mod tests {
                     .map(|(name, ty)| ScopeCol {
                         variant: variant_ident(name),
                         column_name: name,
-                        column_ty: ty,
+                        column_ty: (*ty).clone(),
                     })
                     .collect(),
             },

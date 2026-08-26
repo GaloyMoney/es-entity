@@ -57,14 +57,20 @@ impl Columns {
 
     /// Validates the `scope` column markers:
     ///
-    /// - scope columns must have pairwise-distinct Rust types (the generated
-    ///   `From<T>` conversions dispatch on type, so two same-typed scope
-    ///   columns would produce conflicting impls) and pairwise-distinct
-    ///   variant names (UpperCamel of the column name), neither colliding
-    ///   with the reserved `All` variant
-    /// - every scope column must be non-nullable (`Option<T>` and
-    ///   `nullable`-annotated types are rejected — nullable scope columns are
-    ///   a future feature)
+    /// - scope columns must have pairwise-distinct Rust types, compared on
+    ///   the type that lands in the generated enum ([`Column::ty_for_scope`]
+    ///   — the inner type for an `Option<T>` column) since the generated
+    ///   `From<T>` conversions dispatch on that type: two scope columns that
+    ///   resolve to the same type would produce conflicting impls. Variant
+    ///   names (UpperCamel of the column name, or `scope(variant = "...")`)
+    ///   must also be pairwise-distinct and not collide with the reserved
+    ///   `All` variant
+    /// - a `nullable`-annotated scope column whose Rust type is not
+    ///   syntactically `Option<T>` is rejected: there is no inner type to
+    ///   unwrap, and scoping by the NULL-encoding value would silently match
+    ///   no rows. Syntactic `Option<T>` scope columns are allowed — the
+    ///   generated variant carries the inner `T`, and NULL rows are simply
+    ///   invisible to every scoped variant (`All` still sees them)
     /// - every scope column must not be `Forgettable<T>`
     /// - no scope column may be the `parent` column (nested repos cannot be
     ///   scoped — children are custody-guarded via their parent)
@@ -83,9 +89,9 @@ impl Columns {
             ));
         }
         for col in &scope_columns {
-            if col.is_nullable_column() {
+            if col.opts.nullable() && !col.is_optional() {
                 return Err(darling::Error::custom(format!(
-                    "scope column '{}' must be non-nullable — nullable scope columns are not supported (yet)",
+                    "scope column '{}' is `nullable`-annotated — only syntactic Option<T> scope columns are supported (the NULL-encoding value would silently match no rows)",
                     col.name(),
                 )));
             }
@@ -102,12 +108,13 @@ impl Columns {
                 )));
             }
         }
-        // The generated From<T> conversions dispatch on the Rust type — every
-        // scope column must have a distinct type or the impls conflict.
+        // The generated From<T> conversions dispatch on the type that lands
+        // in the enum (the inner type for an Option<T> scope column) — every
+        // scope column must resolve to a distinct type or the impls conflict.
         for (i, a) in scope_columns.iter().enumerate() {
             for b in &scope_columns[i + 1..] {
-                let ty_a = quote::ToTokens::to_token_stream(a.ty()).to_string();
-                let ty_b = quote::ToTokens::to_token_stream(b.ty()).to_string();
+                let ty_a = quote::ToTokens::to_token_stream(&a.ty_for_scope()).to_string();
+                let ty_b = quote::ToTokens::to_token_stream(&b.ty_for_scope()).to_string();
                 if ty_a == ty_b {
                     return Err(darling::Error::custom(format!(
                         "scope columns '{}' and '{}' have the same Rust type '{}' — the generated From<T> conversions would conflict; use distinct newtype ids",
@@ -721,6 +728,18 @@ impl Column {
 
     pub fn name(&self) -> &syn::Ident {
         &self.name
+    }
+
+    /// The Rust type used in the generated `{Entity}Scope` enum variant, its
+    /// `From` impl, and the query bind. For a scope column whose declared
+    /// type is syntactically `Option<Inner>`, this is `Inner` — the
+    /// generated variant is `{Variant}(Inner)`, never `{Variant}(Option
+    /// <Inner>)`, since a scope value is always concrete: NULL rows match no
+    /// scoped variant (only `All` sees them). Non-`Option` scope columns are
+    /// unaffected. Only meaningful for columns marked `scope`; mirrors the
+    /// `Forgettable<Inner>` unwrapping in [`Self::ty_for_find_by`].
+    pub fn ty_for_scope(&self) -> syn::Type {
+        option_inner(self.ty()).unwrap_or_else(|| self.ty().clone())
     }
 
     pub fn ty(&self) -> &syn::Type {
@@ -1490,5 +1509,81 @@ mod tests {
             err.contains("reserved variant name"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn nullable_option_scope_column_is_accepted() {
+        // A syntactic Option<T> scope column is the new feature: previously
+        // rejected outright, now validates fine — the enum variant carries
+        // the inner type (checked in scope.rs's token tests).
+        let input: syn::Meta = parse_quote!(columns(customer_id(
+            ty = "Option<CustomerId>",
+            scope(variant = "Customer")
+        )));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        assert!(columns.validate_scope().is_ok());
+        let scope_cols = columns.scope_columns();
+        let col = scope_cols
+            .first()
+            .expect("customer_id should be scope column");
+        assert!(col.is_optional());
+        assert_eq!(col.scope_variant().to_string(), "Customer");
+    }
+
+    #[test]
+    fn ty_for_scope_unwraps_option_to_inner_type() {
+        let input: syn::Meta = parse_quote!(columns(customer_id(ty = "Option<CustomerId>", scope)));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let scope_cols = columns.scope_columns();
+        let col = scope_cols
+            .first()
+            .expect("customer_id should be scope column");
+        assert_eq!(
+            quote::ToTokens::to_token_stream(&col.ty_for_scope()).to_string(),
+            quote!(CustomerId).to_string(),
+        );
+    }
+
+    #[test]
+    fn ty_for_scope_is_identity_for_non_option_column() {
+        let input: syn::Meta = parse_quote!(columns(partner_id(ty = "PartnerId", scope)));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let scope_cols = columns.scope_columns();
+        let col = scope_cols
+            .first()
+            .expect("partner_id should be scope column");
+        assert_eq!(
+            quote::ToTokens::to_token_stream(&col.ty_for_scope()).to_string(),
+            quote!(PartnerId).to_string(),
+        );
+    }
+
+    #[test]
+    fn nullable_annotated_non_option_scope_column_still_rejected() {
+        // `nullable` (the opt-in flag for a non-Option Rust type whose custom
+        // Encode maps a value to SQL NULL) has no inner type to unwrap into a
+        // variant payload — still rejected, with a narrowed message.
+        let input: syn::Meta = parse_quote!(columns(status(ty = "StatusEnum", nullable, scope)));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_scope().unwrap_err().to_string();
+        assert!(err.contains("nullable"), "unexpected error: {err}");
+        assert!(
+            err.contains("only syntactic Option<T>"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn option_and_bare_same_inner_type_scope_columns_rejected() {
+        // customer_id: Option<CustomerId> and other_customer_id: CustomerId
+        // both resolve to the same From<CustomerId> impl target — must be
+        // caught even though their declared Rust types differ syntactically.
+        let input: syn::Meta = parse_quote!(columns(
+            customer_id(ty = "Option<CustomerId>", scope),
+            other_customer_id(ty = "CustomerId", scope)
+        ));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_scope().unwrap_err().to_string();
+        assert!(err.contains("same Rust type"), "unexpected error: {err}");
     }
 }

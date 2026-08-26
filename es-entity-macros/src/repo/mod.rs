@@ -729,7 +729,11 @@ mod tests {
     }
 
     #[test]
-    fn optional_scope_column_is_error() {
+    fn optional_scope_column_is_ok() {
+        // A syntactic Option<T> scope column is accepted: the generated
+        // variant and its `From` impl carry the bare inner type, never
+        // `Option<T>` — a scope value is always concrete, and NULL rows are
+        // simply invisible to this variant (only `All` sees them).
         let input: syn::DeriveInput = parse_quote! {
             #[es_repo(
                 entity = "User",
@@ -739,15 +743,30 @@ mod tests {
                 pool: sqlx::PgPool,
             }
         };
-        let err = derive(input).unwrap_err();
-        assert!(
-            err.to_string().contains("non-nullable"),
-            "unexpected error: {err}"
-        );
+        let tokens = derive(input)
+            .expect("Option<T> scope column should derive")
+            .to_string();
+        assert!(tokens.contains("pub enum UserScope"));
+        // the variant carries the bare inner type, not Option<PartnerId>.
+        // The full derive output legitimately still contains "Option <
+        // PartnerId >" elsewhere (the column itself stays declared
+        // `Option<PartnerId>` for create/persist — only the scope enum and
+        // its `From` impls unwrap it), so assert on the specific
+        // scope-related spots rather than the whole token stream.
+        assert!(tokens.contains("PartnerId (PartnerId)"));
+        assert!(!tokens.contains("PartnerId (Option < PartnerId >)"));
+        assert!(tokens.contains("impl From < PartnerId > for UserScope"));
+        assert!(tokens.contains("impl From < & PartnerId > for UserScope"));
+        assert!(!tokens.contains("impl From < Option < PartnerId > > for UserScope"));
+        // the SQL conjunct is the ordinary equality — NULL rows fall out of
+        // `=` semantics with zero special-casing.
+        assert!(tokens.contains("WHERE id = $1 AND partner_id = $2"));
     }
 
     #[test]
     fn nullable_annotated_scope_column_is_error() {
+        // Unlike Option<T>, a `nullable`-annotated non-Option scope column
+        // has no inner type to unwrap — still rejected.
         let input: syn::DeriveInput = parse_quote! {
             #[es_repo(
                 entity = "User",
@@ -759,7 +778,7 @@ mod tests {
         };
         let err = derive(input).unwrap_err();
         assert!(
-            err.to_string().contains("non-nullable"),
+            err.to_string().contains("only syntactic Option<T>"),
             "unexpected error: {err}"
         );
     }
