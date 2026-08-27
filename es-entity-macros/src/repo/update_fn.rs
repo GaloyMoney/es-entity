@@ -18,6 +18,7 @@ pub struct UpdateFn<'a> {
     columns: &'a Columns,
     modify_error: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
+    is_root: bool,
     post_persist_error: Option<&'a syn::Type>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
@@ -39,6 +40,7 @@ impl<'a> From<&'a RepositoryOptions> for UpdateFn<'a> {
                 .all_nested()
                 .map(|f| f.update_nested_fn_name())
                 .collect(),
+            is_root: opts.is_root(),
             post_persist_error: opts.post_persist_hook.as_ref().map(|h| &h.error),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
@@ -56,6 +58,66 @@ impl ToTokens for UpdateFn<'_> {
                 self.#f(op, &mut [&mut *entity]).await?;
             }
         });
+
+        // Aggregate roots bump one version for the whole aggregate, and they do
+        // it FIRST — before any child write. Two reasons: a losing writer must
+        // fail before it has produced side effects, and the `UPDATE ... WHERE
+        // version = $2` takes the root row lock, so concurrent writers to the
+        // same aggregate serialize on it rather than interleaving their child
+        // writes.
+        //
+        // Note the cost this buys: closing write-skew means every child
+        // mutation contends on the single root row, so two unrelated children of
+        // the same root can no longer be written concurrently — one writer gets
+        // `ConcurrentModification` and must retry.
+        let (pending_work_gate, version_cas) = if self.is_root {
+            let table_name = self.table_name;
+            let cas_query = format!(
+                "UPDATE {} SET version = version + 1 WHERE id = $1 AND version = $2 RETURNING version",
+                table_name
+            );
+            let modify_error = &self.modify_error;
+            let id = self.id;
+            (
+                // A root's "is there anything to do?" question spans the whole
+                // aggregate, not just the parent's own event stream: a
+                // child-only or grandchild-only mutation is still aggregate
+                // work and must bump the version.
+                quote! {
+                    let __has_pending_work = Self::extract_events(entity).any_new()
+                        || <Self as es_entity::EsRepo>::has_pending_nested_work(&mut [&mut *entity]);
+                    if !__has_pending_work {
+                        return Ok(0);
+                    }
+                },
+                quote! {
+                    {
+                        let __current_version = entity
+                            .events()
+                            .aggregate_version()
+                            .ok_or(#modify_error::EntityNotHydrated)?;
+                        let __id = &entity.id;
+                        // A version-only UPDATE by primary key cannot violate a
+                        // constraint, so there is nothing for the write-error
+                        // classifier to reclassify — the only outcome that
+                        // matters is "matched no row", handled below.
+                        let __bumped = sqlx::query!(
+                            #cas_query,
+                            __id as &#id,
+                            __current_version,
+                        )
+                            .fetch_optional(op.as_executor())
+                            .await?;
+                        let __new_version = __bumped
+                            .map(|row| row.version)
+                            .ok_or(#modify_error::ConcurrentModification)?;
+                        Self::extract_events(entity).set_aggregate_version(__new_version);
+                    }
+                },
+            )
+        } else {
+            (quote! {}, quote! {})
+        };
 
         // With index columns to persist, the index update and the event insert
         // are a single statement: the event insert reads from the `updated`
@@ -205,6 +267,8 @@ impl ToTokens for UpdateFn<'_> {
             {
                 let __result: Result<usize, #modify_error> = async {
                     #record_id
+                    #pending_work_gate
+                    #version_cas
                     #(#nested)*
 
                     if !Self::extract_events(entity).any_new() {
@@ -256,6 +320,7 @@ mod tests {
             modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
+            is_root: false,
             post_persist_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -352,6 +417,7 @@ mod tests {
             modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
+            is_root: false,
             post_persist_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),

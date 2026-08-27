@@ -63,6 +63,7 @@ pub struct EsRepo<'a> {
     list_for_fns: Vec<list_for_fn::ListForFn<'a>>,
     nested_fns: Vec<syn::Ident>,
     nested_include_deleted_fns: Vec<syn::Ident>,
+    pending_nested_work_fns: Vec<syn::Ident>,
     nested: Vec<nested::Nested<'a>>,
     populate_nested: Option<populate_nested::PopulateNested<'a>>,
     error_types: error_types::ErrorTypes<'a>,
@@ -108,6 +109,10 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             .all_nested()
             .map(|n| (n.find_nested_fn_name(), nested::Nested::new(n, opts)))
             .unzip();
+        let pending_nested_work_fns: Vec<_> = opts
+            .all_nested()
+            .map(|n| n.pending_nested_work_fn_name())
+            .collect();
 
         let forget_fn = if opts.forgettable_enabled() {
             Some(forget_fn::ForgetFn::from(opts))
@@ -155,6 +160,7 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             list_for_fns,
             nested_fns,
             nested_include_deleted_fns,
+            pending_nested_work_fns,
             nested,
             populate_nested,
             error_types: error_types::ErrorTypes::new(opts),
@@ -223,6 +229,75 @@ impl ToTokens for EsRepo<'_> {
 
         let pool_field = self.opts.pool_field();
         let has_tbl_prefix = self.opts.table_prefix().is_some();
+        let is_root = self.opts.is_root();
+        // Aggregate roots hydrate through a row type that carries the index
+        // row's `version` alongside the events, so the version is captured in
+        // the *same statement* (and therefore the same snapshot) as the parent
+        // read. Non-roots keep `GenericEvent` verbatim — no SQL shape change,
+        // no `.sqlx` churn.
+        let db_event_ty = if is_root {
+            quote! { es_entity::RootGenericEvent<#id> }
+        } else {
+            quote! { es_entity::GenericEvent<#id> }
+        };
+        let pending_nested_work_fns = &self.pending_nested_work_fns;
+        let pending_nested_work_impl = if pending_nested_work_fns.is_empty() {
+            quote! {}
+        } else {
+            quote! {
+                #[inline(always)]
+                fn has_pending_nested_work(entities: &mut [&mut #entity]) -> bool {
+                    #(if Self::#pending_nested_work_fns(entities) { return true; })*
+                    false
+                }
+            }
+        };
+
+        // Only aggregate roots carry a version, and the validation query reads
+        // the root's own index table.
+        let validate_aggregate_versions_impl = if is_root {
+            let table_name = self.opts.table_name();
+            let validate_query = format!(
+                "SELECT id AS \"id: {}\", version FROM {} WHERE id = ANY($1)",
+                quote!(#id),
+                table_name
+            );
+            quote! {
+                #[inline(always)]
+                async fn validate_aggregate_versions<OP>(
+                    op: &mut OP,
+                    checks: &[(#id, i32)],
+                ) -> Result<Vec<#id>, sqlx::Error>
+                    where OP: es_entity::AtomicOperation,
+                {
+                    if checks.is_empty() {
+                        return Ok(Vec::new());
+                    }
+                    let ids: Vec<&#id> = checks.iter().map(|(id, _)| id).collect();
+                    let rows = sqlx::query!(
+                        #validate_query,
+                        ids.as_slice() as &[&#id],
+                    )
+                        .fetch_all(op.as_executor())
+                        .await?;
+
+                    let mut stale = Vec::new();
+                    for (id, expected) in checks.iter() {
+                        // A root whose row has vanished (hard-deleted underneath
+                        // the read) counts as stale just as a moved version does:
+                        // either way the aggregate is not what was hydrated.
+                        let current = rows.iter().find(|r| &r.id == id).map(|r| r.version);
+                        if current != Some(*expected) {
+                            stale.push(id.clone());
+                        }
+                    }
+                    Ok(stale)
+                }
+            }
+        } else {
+            quote! {}
+        };
+
         let es_query_flavor = if nested_fns.is_empty() {
             quote! {
                 es_entity::EsQueryFlavorFlat
@@ -350,9 +425,11 @@ impl ToTokens for EsRepo<'_> {
                 #[allow(non_camel_case_types)]
                 pub(super) type Repo__Entity = #entity;
                 #[allow(non_camel_case_types)]
-                pub(super) type Repo__DbEvent = es_entity::GenericEvent<#id>;
+                pub(super) type Repo__DbEvent = #db_event_ty;
                 #[allow(dead_code)]
                 pub(super) const REPO__HAS_TBL_PREFIX: bool = #has_tbl_prefix;
+                #[allow(dead_code)]
+                pub(super) const REPO__IS_ROOT: bool = #is_root;
 
                 #forgettable_event_guard
             }
@@ -429,6 +506,10 @@ impl ToTokens for EsRepo<'_> {
                    #(Self::#nested_include_deleted_fns::<_, _, __EsErr>(op, entities).await?;)*
                    Ok(())
                }
+
+               #pending_nested_work_impl
+
+               #validate_aggregate_versions_impl
             }
         });
     }

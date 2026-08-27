@@ -20,12 +20,15 @@
 
 use crate::{
     db,
-    error::EntityHydrationError,
-    events::{EntityEvents, GenericEvent},
+    error::{EntityHydrationError, StaleAggregateRead},
+    events::{EntityEvents, EsQueryRow},
     one_time_executor::IntoOneTimeExecutor,
     operation::AtomicOperation,
     traits::*,
 };
+
+/// Shorthand for the entity-id type behind a repo.
+type RepoId<Repo> = <<<Repo as EsRepo>::Entity as EsEntity>::Event as EsEvent>::EntityId;
 
 /// Query builder for event-sourced entities.
 ///
@@ -43,16 +46,16 @@ pub struct EsQueryFlavorFlat;
 /// Query flavor for entities with nested relationships that need to be loaded recursively.
 pub struct EsQueryFlavorNested;
 
-impl<'q, Repo, Flavor, F, A> EsQuery<'q, Repo, Flavor, F, A>
+// `R` is the row type the mapper yields. It is bound purely through `F`'s
+// `Fn` output (an associated-type equality), so it needs no slot in `EsQuery`'s
+// public generic list — adding one there would break every consumer that names
+// the type.
+impl<'q, Repo, Flavor, F, A, R> EsQuery<'q, Repo, Flavor, F, A>
 where
     Repo: EsRepo,
-    <<<Repo as EsRepo>::Entity as EsEntity>::Event as EsEvent>::EntityId: Unpin,
-    F: FnMut(
-            db::Row,
-        ) -> Result<
-            GenericEvent<<<<Repo as EsRepo>::Entity as EsEntity>::Event as EsEvent>::EntityId>,
-            sqlx::Error,
-        > + Send,
+    RepoId<Repo>: Unpin,
+    R: EsQueryRow<Id = RepoId<Repo>> + Send + Unpin,
+    F: FnMut(db::Row) -> Result<R, sqlx::Error> + Send,
     A: 'q + Send + sqlx::IntoArguments<'q, db::Db>,
 {
     pub fn new(query: sqlx::query::Map<'q, db::Db, F, A>) -> Self {
@@ -63,40 +66,81 @@ where
         }
     }
 
+    /// Splits raw rows into the per-entity aggregate versions and the plain
+    /// `GenericEvent` stream hydration expects.
+    ///
+    /// Every row of a given entity carries the same version (it comes from that
+    /// entity's single index row), so the first row per id decides.
+    fn split_versions(
+        rows: Vec<R>,
+    ) -> (
+        Vec<(RepoId<Repo>, i32)>,
+        Vec<crate::events::GenericEvent<RepoId<Repo>>>,
+    )
+    where
+        RepoId<Repo>: Clone + PartialEq,
+    {
+        let mut versions: Vec<(RepoId<Repo>, i32)> = Vec::new();
+        let generics = rows
+            .into_iter()
+            .map(|row| {
+                if let Some(v) = row.aggregate_version() {
+                    let generic = row.into_generic();
+                    if versions.last().map(|(id, _)| id) != Some(&generic.entity_id) {
+                        versions.push((generic.entity_id.clone(), v));
+                    }
+                    generic
+                } else {
+                    row.into_generic()
+                }
+            })
+            .collect();
+        (versions, generics)
+    }
+
     async fn fetch_optional_inner<E: From<sqlx::Error> + From<EntityHydrationError>>(
         self,
         op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, E> {
+    ) -> Result<(Option<<Repo as EsRepo>::Entity>, Vec<(RepoId<Repo>, i32)>), E> {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
         if rows.is_empty() {
-            return Ok(None);
+            return Ok((None, Vec::new()));
         }
 
-        Ok(EntityEvents::load_first(rows.into_iter())?)
+        let (versions, generics) = Self::split_versions(rows);
+        Ok((EntityEvents::load_first(generics.into_iter())?, versions))
     }
 
     async fn fetch_n_inner<E: From<sqlx::Error> + From<EntityHydrationError>>(
         self,
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
-    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), E> {
+    ) -> Result<
+        (
+            Vec<<Repo as EsRepo>::Entity>,
+            bool,
+            Vec<(RepoId<Repo>, i32)>,
+        ),
+        E,
+    > {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
-        Ok(EntityEvents::load_n(rows.into_iter(), first)?)
+        let (versions, generics) = Self::split_versions(rows);
+        let (entities, more) = EntityEvents::load_n(generics.into_iter(), first)?;
+        Ok((entities, more, versions))
     }
 }
 
-impl<'q, Repo, F, A> EsQuery<'q, Repo, EsQueryFlavorFlat, F, A>
+// Flat repos are never aggregate roots (root implies nested children), so no
+// versions are ever captured here — the plumbing below just discards the empty
+// version vector.
+impl<'q, Repo, F, A, R> EsQuery<'q, Repo, EsQueryFlavorFlat, F, A>
 where
     Repo: EsRepo,
-    <<<Repo as EsRepo>::Entity as EsEntity>::Event as EsEvent>::EntityId: Unpin,
-    F: FnMut(
-            db::Row,
-        ) -> Result<
-            GenericEvent<<<<Repo as EsRepo>::Entity as EsEntity>::Event as EsEvent>::EntityId>,
-            sqlx::Error,
-        > + Send,
+    RepoId<Repo>: Unpin + Clone + PartialEq,
+    R: EsQueryRow<Id = RepoId<Repo>> + Send + Unpin,
+    F: FnMut(db::Row) -> Result<R, sqlx::Error> + Send,
     A: 'q + Send + sqlx::IntoArguments<'q, db::Db>,
 {
     /// Fetches at most one entity from the query results.
@@ -106,7 +150,10 @@ where
         self,
         op: impl IntoOneTimeExecutor<'_>,
     ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::QueryError> {
-        self.fetch_optional_inner(op).await
+        let (entity, _) = self
+            .fetch_optional_inner::<<Repo as EsRepo>::QueryError>(op)
+            .await?;
+        Ok(entity)
     }
 
     /// Fetches up to `first` entities from the query results.
@@ -118,22 +165,32 @@ where
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
     ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::QueryError> {
-        self.fetch_n_inner(op, first).await
+        let (entities, more, _) = self
+            .fetch_n_inner::<<Repo as EsRepo>::QueryError>(op, first)
+            .await?;
+        Ok((entities, more))
     }
 }
 
-impl<'q, Repo, F, A> EsQuery<'q, Repo, EsQueryFlavorNested, F, A>
+impl<'q, Repo, F, A, R> EsQuery<'q, Repo, EsQueryFlavorNested, F, A>
 where
     Repo: EsRepo,
-    <<<Repo as EsRepo>::Entity as EsEntity>::Event as EsEvent>::EntityId: Unpin,
-    F: FnMut(
-            db::Row,
-        ) -> Result<
-            GenericEvent<<<<Repo as EsRepo>::Entity as EsEntity>::Event as EsEvent>::EntityId>,
-            sqlx::Error,
-        > + Send,
+    RepoId<Repo>: Unpin + Clone + PartialEq,
+    R: EsQueryRow<Id = RepoId<Repo>> + Send + Unpin,
+    F: FnMut(db::Row) -> Result<R, sqlx::Error> + Send,
     A: 'q + Send + sqlx::IntoArguments<'q, db::Db>,
+    <Repo as EsRepo>::QueryError: From<StaleAggregateRead>,
 {
+    /// Stamps each hydrated entity with the version its parent row was read at,
+    /// so a later update can CAS against it without an extra reload.
+    fn apply_versions(entities: &mut [<Repo as EsRepo>::Entity], versions: &[(RepoId<Repo>, i32)]) {
+        for entity in entities.iter_mut() {
+            let id = entity.events().entity_id.clone();
+            if let Some((_, v)) = versions.iter().find(|(vid, _)| *vid == id) {
+                entity.events_mut().set_aggregate_version(*v);
+            }
+        }
+    }
     /// Fetches at most one entity and loads all nested relationships.
     ///
     /// Returns `Ok(None)` if no entities match, or `Ok(Some(entity))` with all
@@ -145,10 +202,10 @@ where
     where
         OP: AtomicOperation,
     {
-        let Some(entity) = self
+        let (entity, versions) = self
             .fetch_optional_inner::<<Repo as EsRepo>::QueryError>(&mut *op)
-            .await?
-        else {
+            .await?;
+        let Some(entity) = entity else {
             return Ok(None);
         };
         let mut entities = [entity];
@@ -157,6 +214,16 @@ where
             &mut entities,
         )
         .await?;
+        // Closing the bracket: the version was captured in the same statement
+        // as the parent, so an unchanged version here proves no aggregate write
+        // committed while the children were loading.
+        if !versions.is_empty() {
+            let stale = <Repo as EsRepo>::validate_aggregate_versions(op, &versions).await?;
+            if !stale.is_empty() {
+                return Err(StaleAggregateRead.into());
+            }
+        }
+        Self::apply_versions(&mut entities, &versions);
         let [entity] = entities;
         Ok(Some(entity))
     }
@@ -173,7 +240,40 @@ where
     where
         OP: AtomicOperation,
     {
-        let (mut entities, more) = self
+        let (entities, more, stale) = self.fetch_n_with_stale(op, first).await?;
+        // User-written `es_query!` call sites do not auto-retry: the error
+        // surfaces and the caller retries the op, the same contract as a
+        // write-path `ConcurrentModification`. Generated batch fns instead call
+        // `fetch_n_with_stale` and refetch just the stale roots.
+        if !stale.is_empty() {
+            return Err(StaleAggregateRead.into());
+        }
+        Ok((entities, more))
+    }
+
+    /// Like [`fetch_n`](EsQuery::fetch_n) but hands back the ids of roots whose
+    /// aggregate version moved during hydration instead of erroring.
+    ///
+    /// Generated batch fns use this to refetch only the affected roots. Retrying
+    /// the *whole* page instead would livelock: for a page of N aggregates a
+    /// clean pass has probability (1−p)^N and each retry re-exposes all N to a
+    /// fresh validation window, so under the very write load the check exists to
+    /// survive, reads would start failing at scale. Partial refetch converges
+    /// because a root that validated stays valid, so the stale set shrinks
+    /// monotonically.
+    #[doc(hidden)]
+    pub async fn fetch_n_with_stale<OP>(
+        self,
+        op: &mut OP,
+        first: usize,
+    ) -> Result<
+        (Vec<<Repo as EsRepo>::Entity>, bool, Vec<RepoId<Repo>>),
+        <Repo as EsRepo>::QueryError,
+    >
+    where
+        OP: AtomicOperation,
+    {
+        let (mut entities, more, versions) = self
             .fetch_n_inner::<<Repo as EsRepo>::QueryError>(&mut *op, first)
             .await?;
         <Repo as EsRepo>::load_all_nested_in_op::<_, <Repo as EsRepo>::QueryError>(
@@ -181,7 +281,13 @@ where
             &mut entities,
         )
         .await?;
-        Ok((entities, more))
+        let stale = if versions.is_empty() {
+            Vec::new()
+        } else {
+            <Repo as EsRepo>::validate_aggregate_versions(op, &versions).await?
+        };
+        Self::apply_versions(&mut entities, &versions);
+        Ok((entities, more, stale))
     }
 
     /// Like [`fetch_optional`](EsQuery::fetch_optional) but transitively includes
@@ -193,10 +299,10 @@ where
     where
         OP: AtomicOperation,
     {
-        let Some(entity) = self
+        let (entity, versions) = self
             .fetch_optional_inner::<<Repo as EsRepo>::QueryError>(&mut *op)
-            .await?
-        else {
+            .await?;
+        let Some(entity) = entity else {
             return Ok(None);
         };
         let mut entities = [entity];
@@ -205,6 +311,13 @@ where
             &mut entities,
         )
         .await?;
+        if !versions.is_empty() {
+            let stale = <Repo as EsRepo>::validate_aggregate_versions(op, &versions).await?;
+            if !stale.is_empty() {
+                return Err(StaleAggregateRead.into());
+            }
+        }
+        Self::apply_versions(&mut entities, &versions);
         let [entity] = entities;
         Ok(Some(entity))
     }
@@ -219,7 +332,28 @@ where
     where
         OP: AtomicOperation,
     {
-        let (mut entities, more) = self
+        let (entities, more, stale) = self.fetch_n_include_deleted_with_stale(op, first).await?;
+        if !stale.is_empty() {
+            return Err(StaleAggregateRead.into());
+        }
+        Ok((entities, more))
+    }
+
+    /// [`fetch_n_with_stale`](EsQuery::fetch_n_with_stale) including soft-deleted
+    /// nested entities.
+    #[doc(hidden)]
+    pub async fn fetch_n_include_deleted_with_stale<OP>(
+        self,
+        op: &mut OP,
+        first: usize,
+    ) -> Result<
+        (Vec<<Repo as EsRepo>::Entity>, bool, Vec<RepoId<Repo>>),
+        <Repo as EsRepo>::QueryError,
+    >
+    where
+        OP: AtomicOperation,
+    {
+        let (mut entities, more, versions) = self
             .fetch_n_inner::<<Repo as EsRepo>::QueryError>(&mut *op, first)
             .await?;
         <Repo as EsRepo>::load_all_nested_in_op_include_deleted::<_, <Repo as EsRepo>::QueryError>(
@@ -227,6 +361,12 @@ where
             &mut entities,
         )
         .await?;
-        Ok((entities, more))
+        let stale = if versions.is_empty() {
+            Vec::new()
+        } else {
+            <Repo as EsRepo>::validate_aggregate_versions(op, &versions).await?
+        };
+        Self::apply_versions(&mut entities, &versions);
+        Ok((entities, more, stale))
     }
 }

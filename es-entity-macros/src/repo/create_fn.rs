@@ -18,6 +18,7 @@ pub struct CreateFn<'a> {
     columns: &'a Columns,
     create_error: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
+    is_root: bool,
     post_hydrate_error: Option<&'a syn::Type>,
     post_persist_error: Option<&'a syn::Type>,
     #[cfg(feature = "instrument")]
@@ -39,6 +40,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
                 .all_nested()
                 .map(|f| f.create_nested_fn_name())
                 .collect(),
+            is_root: opts.is_root(),
             columns: &opts.columns,
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             post_persist_error: opts.post_persist_hook.as_ref().map(|h| &h.error),
@@ -88,12 +90,28 @@ impl ToTokens for CreateFn<'_> {
             cte: "new_row",
             offset_param: None,
         };
+        // An aggregate root starts its clock at 1. No CAS here: the row is new,
+        // so there is nothing to race against.
+        let (version_col, version_val) = if self.is_root {
+            (", version", ", 1")
+        } else {
+            ("", "")
+        };
+        // Recording it in-memory lets the caller create → mutate → update
+        // without an intervening reload.
+        let set_initial_version = if self.is_root {
+            quote! { events.set_aggregate_version(1); }
+        } else {
+            quote! {}
+        };
         let query = format!(
-            "WITH new_row AS (INSERT INTO {} ({}, created_at) VALUES ({}, COALESCE(${}, NOW())) RETURNING id) {}",
+            "WITH new_row AS (INSERT INTO {} ({}, created_at{}) VALUES ({}, COALESCE(${}, NOW()){}) RETURNING id) {}",
             table_name,
             column_names.join(", "),
+            version_col,
             placeholders,
             now_p,
+            version_val,
             events_insert.sql(&source, now_p, now_p + 1),
         );
 
@@ -233,6 +251,7 @@ impl ToTokens for CreateFn<'_> {
                         .ok_or(sqlx::Error::RowNotFound)
                         .and_then(|row| row.try_get("recorded_at"))?;
                     let n_events = events.mark_new_events_persisted_at(recorded_at);
+                    #set_initial_version
                     let #maybe_mut_entity = Self::hydrate_entity(events)?;
 
                     #(#nested)*
@@ -275,6 +294,7 @@ mod tests {
             create_error,
             columns: &columns,
             nested_fn_names: Vec::new(),
+            is_root: false,
             post_hydrate_error: None,
             post_persist_error: None,
             #[cfg(feature = "instrument")]
@@ -385,6 +405,7 @@ mod tests {
             create_error,
             columns: &columns,
             nested_fn_names: Vec::new(),
+            is_root: false,
             post_hydrate_error: None,
             post_persist_error: None,
             #[cfg(feature = "instrument")]

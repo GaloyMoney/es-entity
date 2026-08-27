@@ -316,6 +316,53 @@ pub trait EsRepo: Send {
     {
         Self::load_all_nested_in_op(op, entities)
     }
+
+    /// Whether any entity in `entities` has un-persisted work anywhere in its
+    /// nested subtree — a new child, or a persisted child (at any depth) with
+    /// new events.
+    ///
+    /// The recursion matters: a dirty *grandchild* under a clean child produces
+    /// no signal one level down, so a depth-1 check would let a grandchild-only
+    /// mutation reach the database without bumping the root's version, silently
+    /// reopening the write-skew hole one level deeper.
+    ///
+    /// Purely in-memory; no database access. Defaults to `false` for repos with
+    /// no nested children.
+    fn has_pending_nested_work(_entities: &mut [&mut Self::Entity]) -> bool {
+        false
+    }
+
+    /// Re-reads the aggregate version of each `(id, version_at_hydration)` pair
+    /// and reports which roots have since moved.
+    ///
+    /// This closes the read side of the aggregate bracket. Nested hydration is
+    /// multi-statement and the framework runs at READ COMMITTED, so each
+    /// statement sees its own snapshot and a reader can otherwise end up
+    /// holding a parent whose state predates the children it holds. Because
+    /// every aggregate write bumps the root version, finding the version
+    /// unchanged after the children have loaded proves no aggregate write
+    /// committed in between — so the tree is equivalent to a single snapshot.
+    ///
+    /// Returns the **stale id set** rather than a bool: batch reads refetch
+    /// only the roots that moved (see the partial-refetch loop in the generated
+    /// list fns), which converges because a validated root stays valid.
+    ///
+    /// The default implementation reports nothing stale — correct for every
+    /// non-root repo, which has no aggregate clock. Root repos override it.
+    fn validate_aggregate_versions<OP>(
+        _op: &mut OP,
+        _checks: &[(
+            <<Self::Entity as EsEntity>::Event as EsEvent>::EntityId,
+            i32,
+        )],
+    ) -> impl Future<
+        Output = Result<Vec<<<Self::Entity as EsEntity>::Event as EsEvent>::EntityId>, sqlx::Error>,
+    > + Send
+    where
+        OP: AtomicOperation,
+    {
+        async { Ok(Vec::new()) }
+    }
 }
 
 pub trait RetryableInto<T>: Into<T> + Copy + std::fmt::Debug {}

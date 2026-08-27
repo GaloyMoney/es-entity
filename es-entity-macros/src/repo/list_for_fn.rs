@@ -19,6 +19,7 @@ pub struct ListForFn<'a> {
     delete: DeleteOption,
     cursor_mod: syn::Ident,
     any_nested: bool,
+    is_root: bool,
     post_hydrate_error: Option<&'a syn::Type>,
     forgettable_table_name: Option<&'a str>,
     scope: Option<ScopeInfo<'a>>,
@@ -39,6 +40,7 @@ impl<'a> ListForFn<'a> {
             delete: opts.delete,
             cursor_mod: opts.cursor_mod(),
             any_nested: opts.any_nested(),
+            is_root: opts.is_root(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             forgettable_table_name: opts.forgettable_table_name(),
             scope: ScopeInfo::from_opts(opts),
@@ -187,6 +189,11 @@ impl ToTokens for ListForFn<'_> {
             } else {
                 quote! {}
             };
+            let root_arg = if self.is_root {
+                quote! { root = true, }
+            } else {
+                quote! {}
+            };
 
             let make_es_query = |query: &str, args: &TokenStream| -> TokenStream {
                 if let Some(prefix) = self.ignore_prefix {
@@ -194,6 +201,7 @@ impl ToTokens for ListForFn<'_> {
                         es_entity::es_query!(
                             tbl_prefix = #prefix,
                             #forgettable_tbl_arg
+                            #root_arg
                             #query,
                             #args
                         )
@@ -203,6 +211,7 @@ impl ToTokens for ListForFn<'_> {
                         es_entity::es_query!(
                             entity = #entity,
                             #forgettable_tbl_arg
+                            #root_arg
                             #query,
                             #args
                         )
@@ -435,6 +444,7 @@ mod tests {
             delete: DeleteOption::No,
             cursor_mod,
             any_nested: false,
+            is_root: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
@@ -535,6 +545,7 @@ mod tests {
             delete: DeleteOption::No,
             cursor_mod,
             any_nested: false,
+            is_root: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,

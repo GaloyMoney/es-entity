@@ -931,6 +931,11 @@ impl<'a> ErrorTypes<'a> {
                 /// trust boundaries.
                 ConstraintViolation { column: Option<#column_enum>, value: Option<String>, inner: sqlx::Error },
                 ConcurrentModification,
+                /// An aggregate-root update was attempted on an entity that did
+                /// not come from this repo, so it carries no aggregate version
+                /// to check against. Bumping the version unguarded would defeat
+                /// the concurrency check, so this is an error instead.
+                EntityNotHydrated,
                 #pp_variant
                 #(#nested_variants)*
             }
@@ -941,6 +946,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::Sqlx(e) => write!(f, "{}ModifyError - Sqlx: {}", #entity_name, e),
                         Self::ConstraintViolation { column, value, inner } => write!(f, "{}ModifyError - ConstraintViolation({:?}, {:?}): {}", #entity_name, column, value, inner),
                         Self::ConcurrentModification => write!(f, "{}ModifyError - ConcurrentModification", #entity_name),
+                        Self::EntityNotHydrated => write!(f, "{}ModifyError - EntityNotHydrated: entity was not hydrated through the repo, so it has no aggregate version to check", #entity_name),
                         #pp_display_arm
                         #(#nested_display_arms)*
                     }
@@ -953,6 +959,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::Sqlx(e) => Some(e),
                         Self::ConstraintViolation { inner, .. } => Some(inner),
                         Self::ConcurrentModification => None,
+                        Self::EntityNotHydrated => None,
                         #pp_source_arm
                         #(#nested_source_arms)*
                     }
@@ -1081,6 +1088,10 @@ impl<'a> ErrorTypes<'a> {
                 Sqlx(sqlx::Error),
                 NotFound { entity: &'static str, column: Option<#column_enum>, value: String },
                 HydrationError(es_entity::EntityHydrationError),
+                /// The aggregate moved while its nested entities were loading.
+                /// Reachable on aggregate-root repos alone; generated finders
+                /// retry a bounded number of times before surfacing it.
+                StaleAggregateRead(es_entity::StaleAggregateRead),
                 #ph_variant
             }
 
@@ -1091,6 +1102,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::NotFound { entity, column: Some(column), value } => write!(f, "{}FindError - NotFound({column}={value})", entity),
                         Self::NotFound { entity, column: None, value } => write!(f, "{}FindError - NotFound({})", entity, value),
                         Self::HydrationError(e) => write!(f, "{}FindError - HydrationError: {}", #entity_name, e),
+                        Self::StaleAggregateRead(e) => write!(f, "{}FindError - StaleAggregateRead: {}", #entity_name, e),
                         #ph_display_arm
                     }
                 }
@@ -1102,6 +1114,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::Sqlx(e) => Some(e),
                         Self::NotFound { .. } => None,
                         Self::HydrationError(e) => Some(e),
+                        Self::StaleAggregateRead(e) => Some(e),
                         #ph_source_arm
                     }
                 }
@@ -1119,11 +1132,18 @@ impl<'a> ErrorTypes<'a> {
                 }
             }
 
+            impl From<es_entity::StaleAggregateRead> for #find_error {
+                fn from(e: es_entity::StaleAggregateRead) -> Self {
+                    Self::StaleAggregateRead(e)
+                }
+            }
+
             impl From<#query_error> for #find_error {
                 fn from(e: #query_error) -> Self {
                     match e {
                         #query_error::Sqlx(e) => Self::Sqlx(e),
                         #query_error::HydrationError(e) => Self::HydrationError(e),
+                        #query_error::StaleAggregateRead(e) => Self::StaleAggregateRead(e),
                         #query_error::CursorDestructureError(_) => unreachable!("CursorDestructureError cannot occur in find operations"),
                         #ph_from_arm
                     }
@@ -1133,6 +1153,10 @@ impl<'a> ErrorTypes<'a> {
             impl #find_error {
                 pub fn was_not_found(&self) -> bool {
                     matches!(self, Self::NotFound { .. })
+                }
+
+                pub fn was_stale_aggregate_read(&self) -> bool {
+                    matches!(self, Self::StaleAggregateRead(..))
                 }
 
                 pub fn was_not_found_by(&self, column: #column_enum) -> bool {
@@ -1185,6 +1209,11 @@ impl<'a> ErrorTypes<'a> {
                 Sqlx(sqlx::Error),
                 HydrationError(es_entity::EntityHydrationError),
                 CursorDestructureError(es_entity::CursorDestructureError),
+                /// The aggregate moved while its nested entities were loading.
+                /// Reachable on aggregate-root repos alone; generated list fns
+                /// refetch the affected roots a bounded number of times before
+                /// surfacing it.
+                StaleAggregateRead(es_entity::StaleAggregateRead),
                 #ph_variant
             }
 
@@ -1194,6 +1223,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::Sqlx(e) => write!(f, "{}QueryError - Sqlx: {}", #entity_name, e),
                         Self::HydrationError(e) => write!(f, "{}QueryError - HydrationError: {}", #entity_name, e),
                         Self::CursorDestructureError(e) => write!(f, "{}QueryError - CursorDestructureError: {}", #entity_name, e),
+                        Self::StaleAggregateRead(e) => write!(f, "{}QueryError - StaleAggregateRead: {}", #entity_name, e),
                         #ph_display_arm
                     }
                 }
@@ -1205,6 +1235,7 @@ impl<'a> ErrorTypes<'a> {
                         Self::Sqlx(e) => Some(e),
                         Self::HydrationError(e) => Some(e),
                         Self::CursorDestructureError(e) => Some(e),
+                        Self::StaleAggregateRead(e) => Some(e),
                         #ph_source_arm
                     }
                 }
@@ -1228,7 +1259,17 @@ impl<'a> ErrorTypes<'a> {
                 }
             }
 
+            impl From<es_entity::StaleAggregateRead> for #query_error {
+                fn from(e: es_entity::StaleAggregateRead) -> Self {
+                    Self::StaleAggregateRead(e)
+                }
+            }
+
             impl #query_error {
+                pub fn was_stale_aggregate_read(&self) -> bool {
+                    matches!(self, Self::StaleAggregateRead(..))
+                }
+
                 pub fn was_post_hydrate_error(&self) -> bool {
                     match self {
                         #query_ph_self_check

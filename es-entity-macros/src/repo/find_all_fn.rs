@@ -11,6 +11,7 @@ pub struct FindAllFn<'a> {
     table_name: &'a str,
     query_error: syn::Ident,
     any_nested: bool,
+    is_root: bool,
     post_hydrate_error: Option<&'a syn::Type>,
     forgettable_table_name: Option<&'a str>,
     scope: Option<ScopeInfo<'a>>,
@@ -27,6 +28,7 @@ impl<'a> From<&'a RepositoryOptions> for FindAllFn<'a> {
             table_name: opts.table_name(),
             query_error: opts.query_error(),
             any_nested: opts.any_nested(),
+            is_root: opts.is_root(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             forgettable_table_name: opts.forgettable_table_name(),
             scope: ScopeInfo::from_opts(opts),
@@ -99,6 +101,11 @@ impl ToTokens for FindAllFn<'_> {
         } else {
             quote! {}
         };
+        let root_arg = if self.is_root {
+            quote! { root = true, }
+        } else {
+            quote! {}
+        };
 
         let make_es_query = |query: &str, extra_args: &TokenStream| -> TokenStream {
             if let Some(prefix) = self.prefix {
@@ -106,6 +113,7 @@ impl ToTokens for FindAllFn<'_> {
                     es_entity::es_query!(
                         tbl_prefix = #prefix,
                         #forgettable_tbl_arg
+                        #root_arg
                         #query,
                         ids as &[#id],
                         #extra_args
@@ -116,6 +124,7 @@ impl ToTokens for FindAllFn<'_> {
                     es_entity::es_query!(
                         entity = #entity,
                         #forgettable_tbl_arg
+                        #root_arg
                         #query,
                         ids as &[#id],
                         #extra_args
@@ -218,6 +227,7 @@ mod tests {
             table_name: "entities",
             query_error,
             any_nested: false,
+            is_root: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
