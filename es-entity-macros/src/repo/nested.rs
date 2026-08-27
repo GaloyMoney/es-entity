@@ -28,9 +28,38 @@ impl ToTokens for Nested<'_> {
         let update_fn_name = self.field.update_nested_fn_name();
         let find_fn_name = self.field.find_nested_fn_name();
         let delete_fn_name = self.field.delete_nested_fn_name();
+        let forget_fn_name = self.field.forget_nested_fn_name();
         let find_include_deleted_fn_name = self.field.find_nested_include_deleted_fn_name();
+        let pending_work_fn_name = self.field.pending_nested_work_fn_name();
 
         tokens.append_all(quote! {
+            // In-memory check for un-persisted work in this nested field's
+            // subtree, used by the root's update path to decide whether the
+            // aggregate version must be bumped.
+            //
+            // Recurses through the child repo so a dirty grandchild under a
+            // clean child is still seen: a depth-1 check would let a
+            // grandchild-only mutation reach the database without bumping the
+            // root version.
+            fn #pending_work_fn_name<P>(entities: &mut [&mut P]) -> bool
+                where
+                    P: es_entity::Parent<<#nested_repo_ty as es_entity::EsRepo>::Entity>,
+            {
+                for entity in entities.iter_mut() {
+                    if !entity.new_children_mut().is_empty() {
+                        return true;
+                    }
+                    let mut persisted: Vec<_> = entity.iter_persisted_children_mut().collect();
+                    if persisted.iter().any(|child| child.events().any_new()) {
+                        return true;
+                    }
+                    if <#nested_repo_ty as es_entity::EsRepo>::has_pending_nested_work(&mut persisted) {
+                        return true;
+                    }
+                }
+                false
+            }
+
             // Batches every parent's new children into a single
             // `create_all_in_op` call on the child repo — one statement for
             // the whole parent batch, not one per parent — then redistributes
@@ -119,6 +148,23 @@ impl ToTokens for Nested<'_> {
                 <#nested_repo_ty>::cascade_delete_in_op::<_, __EsErr>(op, &entity.events().entity_id).await?;
                 Ok(())
             }
+
+            // Mirrors #delete_fn_name: descends into this field's direct
+            // children the same way delete's own cascade does, scrubbing
+            // their forgettable data by parent id rather than replaying each
+            // child's event stream. `CascadeForgetNested` is generated for
+            // every nested repo unconditionally, so this compiles regardless
+            // of whether the child (or the root) declares `forgettable`.
+            async fn #forget_fn_name<OP, P, __EsErr>(op: &mut OP, entity: &P) -> Result<(), __EsErr>
+                where
+                    OP: es_entity::AtomicOperation,
+                    P: es_entity::EsEntity,
+                    #nested_repo_ty: es_entity::CascadeForgetNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
+                    __EsErr: From<sqlx::Error> + Send,
+            {
+                <#nested_repo_ty>::cascade_forget_in_op::<_, __EsErr>(op, &entity.events().entity_id).await?;
+                Ok(())
+            }
         });
     }
 }
@@ -152,6 +198,25 @@ mod tests {
         cursor.to_tokens(&mut tokens);
 
         let expected = quote! {
+            fn has_pending_nested_users_work<P>(entities: &mut [&mut P]) -> bool
+                where
+                    P: es_entity::Parent<<UserRepo as es_entity::EsRepo>::Entity>,
+            {
+                for entity in entities.iter_mut() {
+                    if !entity.new_children_mut().is_empty() {
+                        return true;
+                    }
+                    let mut persisted: Vec<_> = entity.iter_persisted_children_mut().collect();
+                    if persisted.iter().any(|child| child.events().any_new()) {
+                        return true;
+                    }
+                    if <UserRepo as es_entity::EsRepo>::has_pending_nested_work(&mut persisted) {
+                        return true;
+                    }
+                }
+                false
+            }
+
             async fn create_nested_users_in_op<OP, P>(&self, op: &mut OP, entities: &mut [&mut P]) -> Result<(), <UserRepo as es_entity::EsRepo>::CreateError>
                 where
                     P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
@@ -225,6 +290,17 @@ mod tests {
                     __EsErr: From<sqlx::Error> + Send,
             {
                 <UserRepo>::cascade_delete_in_op::<_, __EsErr>(op, &entity.events().entity_id).await?;
+                Ok(())
+            }
+
+            async fn forget_nested_users_in_op<OP, P, __EsErr>(op: &mut OP, entity: &P) -> Result<(), __EsErr>
+                where
+                    OP: es_entity::AtomicOperation,
+                    P: es_entity::EsEntity,
+                    UserRepo: es_entity::CascadeForgetNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
+                    __EsErr: From<sqlx::Error> + Send,
+            {
+                <UserRepo>::cascade_forget_in_op::<_, __EsErr>(op, &entity.events().entity_id).await?;
                 Ok(())
             }
         };

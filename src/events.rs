@@ -21,6 +21,71 @@ pub struct GenericEvent<Id> {
     pub forgettable_payload: Option<serde_json::Value>,
 }
 
+/// Row type for aggregate-root queries: a [`GenericEvent`] plus the root index
+/// row's `version`.
+///
+/// The version is selected in the *same statement* as the events, so it is read
+/// under the same snapshot as the parent. That is what makes the read-side
+/// version bracket sound: a version captured by a separate `SELECT` before or
+/// after the parent query would leave a gap in which a write could commit
+/// unobserved.
+///
+/// Only aggregate-root repos hydrate through this type; every other repo keeps
+/// using [`GenericEvent`] unchanged.
+pub struct RootGenericEvent<Id> {
+    pub entity_id: Id,
+    pub sequence: i32,
+    pub event: serde_json::Value,
+    pub context: Option<crate::ContextData>,
+    pub recorded_at: DateTime<Utc>,
+    pub forgettable_payload: Option<serde_json::Value>,
+    pub version: i32,
+}
+
+/// Bridges the two row shapes an `es_query!` can yield, so [`EsQuery`] can be
+/// generic over "plain events" and "events + aggregate version" without
+/// duplicating the fetch path.
+///
+/// [`EsQuery`]: crate::query::EsQuery
+pub trait EsQueryRow {
+    type Id;
+
+    /// The aggregate version carried by this row, if any. `None` for
+    /// non-root repos, which have no aggregate clock.
+    fn aggregate_version(&self) -> Option<i32> {
+        None
+    }
+
+    fn into_generic(self) -> GenericEvent<Self::Id>;
+}
+
+impl<Id> EsQueryRow for GenericEvent<Id> {
+    type Id = Id;
+
+    fn into_generic(self) -> GenericEvent<Id> {
+        self
+    }
+}
+
+impl<Id> EsQueryRow for RootGenericEvent<Id> {
+    type Id = Id;
+
+    fn aggregate_version(&self) -> Option<i32> {
+        Some(self.version)
+    }
+
+    fn into_generic(self) -> GenericEvent<Id> {
+        GenericEvent {
+            entity_id: self.entity_id,
+            sequence: self.sequence,
+            event: self.event,
+            context: self.context,
+            recorded_at: self.recorded_at,
+            forgettable_payload: self.forgettable_payload,
+        }
+    }
+}
+
 /// Strongly-typed event wrapper with metadata for successfully stored events.
 ///
 /// Contains the event data along with persistence metadata (sequence, timestamp, entity_id).
@@ -77,6 +142,13 @@ pub struct EntityEvents<T: EsEvent> {
     persisted_events: Vec<PersistedEvent<T>>,
     /// New events that are yet to be persisted to track state changes
     new_events: Vec<EventWithContext<T>>,
+    /// The aggregate-root version this entity was hydrated at, for optimistic
+    /// concurrency control across the whole aggregate.
+    ///
+    /// Framework-managed and deliberately private: `None` for non-root entities
+    /// and for freshly-`init`ed ones, `Some(_)` once the entity has been read
+    /// through (or written by) a root repo.
+    aggregate_version: Option<i32>,
 }
 
 impl<T: Clone + EsEvent> Clone for EntityEvents<T> {
@@ -85,6 +157,7 @@ impl<T: Clone + EsEvent> Clone for EntityEvents<T> {
             entity_id: self.entity_id.clone(),
             persisted_events: self.persisted_events.clone(),
             new_events: self.new_events.clone(),
+            aggregate_version: self.aggregate_version,
         }
     }
 }
@@ -111,7 +184,25 @@ where
             entity_id: id,
             persisted_events: Vec::new(),
             new_events,
+            aggregate_version: None,
         }
+    }
+
+    /// The aggregate-root version this entity was hydrated at.
+    ///
+    /// `None` for non-root entities and for entities not obtained through a
+    /// repo. Root repos require `Some(_)` to update: an unhydrated root cannot
+    /// be CAS-checked, and silently bumping it unguarded would defeat the point.
+    #[doc(hidden)]
+    pub fn aggregate_version(&self) -> Option<i32> {
+        self.aggregate_version
+    }
+
+    /// Records the aggregate-root version. Framework-internal: called on
+    /// hydration, on root create, and after a successful CAS bump.
+    #[doc(hidden)]
+    pub fn set_aggregate_version(&mut self, version: i32) {
+        self.aggregate_version = Some(version);
     }
 
     /// Returns a reference to the entity's identifier
@@ -200,6 +291,7 @@ where
                     entity_id: e.entity_id.clone(),
                     persisted_events: Vec::new(),
                     new_events: Vec::new(),
+                    aggregate_version: None,
                 });
             }
             if current_id.as_ref() != Some(&e.entity_id) {
@@ -258,6 +350,7 @@ where
                     entity_id: e.entity_id.clone(),
                     persisted_events: Vec::new(),
                     new_events: Vec::new(),
+                    aggregate_version: None,
                 });
             }
             let cur = current.as_mut().expect("Could not get current");
@@ -334,12 +427,18 @@ where
             forget_fn(&mut persisted.event);
         }
         let entity_id = self.entity_id.clone();
+        // `self` stays the live entity (the returned value is the drained copy
+        // handed to the forget path), so it must keep its aggregate version —
+        // dropping it here would make a subsequent root update fail as
+        // "not hydrated through the repo".
+        let aggregate_version = self.aggregate_version;
         std::mem::replace(
             self,
             Self {
                 entity_id,
                 persisted_events: Vec::new(),
                 new_events: Vec::new(),
+                aggregate_version,
             },
         )
     }

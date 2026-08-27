@@ -172,6 +172,41 @@ macro_rules! idempotency_guard {
 /// ```
 #[macro_export]
 macro_rules! es_query {
+    // Arms are matched top-down, so every `root = true` variant precedes its
+    // non-root counterpart with the same leading keys. Canonical key order is
+    // `entity`/`tbl_prefix`, then `forgettable_tbl`, then `root`.
+
+    // With entity override + forgettable + root
+    (
+        entity = $entity:ident,
+        forgettable_tbl = $forgettable_tbl:literal,
+        root = $root:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            entity = $entity,
+            forgettable_tbl = $forgettable_tbl,
+            root = $root,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // With entity override + forgettable + root - no args
+    (
+        entity = $entity:ident,
+        forgettable_tbl = $forgettable_tbl:literal,
+        root = $root:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            entity = $entity,
+            forgettable_tbl = $forgettable_tbl,
+            root = $root,
+            sql = $query
+        )
+    });
+
     // With entity override + forgettable
     (
         entity = $entity:ident,
@@ -199,6 +234,33 @@ macro_rules! es_query {
         )
     });
 
+    // With entity override + root
+    (
+        entity = $entity:ident,
+        root = $root:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            entity = $entity,
+            root = $root,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // With entity override + root - no args
+    (
+        entity = $entity:ident,
+        root = $root:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            entity = $entity,
+            root = $root,
+            sql = $query
+        )
+    });
+
     // With entity override
     (
         entity = $entity:ident,
@@ -218,6 +280,37 @@ macro_rules! es_query {
     ) => ({
         $crate::expand_es_query!(
             entity = $entity,
+            sql = $query
+        )
+    });
+
+    // With tbl_prefix + forgettable + root
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        forgettable_tbl = $forgettable_tbl:literal,
+        root = $root:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            forgettable_tbl = $forgettable_tbl,
+            root = $root,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // With tbl_prefix + forgettable + root - no args
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        forgettable_tbl = $forgettable_tbl:literal,
+        root = $root:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            forgettable_tbl = $forgettable_tbl,
+            root = $root,
             sql = $query
         )
     });
@@ -249,6 +342,33 @@ macro_rules! es_query {
         )
     });
 
+    // With tbl_prefix + root
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        root = $root:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            root = $root,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // With tbl_prefix + root - no args
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        root = $root:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            root = $root,
+            sql = $query
+        )
+    });
+
     // With tbl_prefix
     (
         tbl_prefix = $tbl_prefix:literal,
@@ -268,6 +388,29 @@ macro_rules! es_query {
     ) => ({
         $crate::expand_es_query!(
             tbl_prefix = $tbl_prefix,
+            sql = $query
+        )
+    });
+
+    // Root only
+    (
+        root = $root:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            root = $root,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // Root only - no args
+    (
+        root = $root:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            root = $root,
             sql = $query
         )
     });

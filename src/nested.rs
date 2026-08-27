@@ -146,6 +146,27 @@ pub trait CascadeDeleteNested<ID>: EsRepo {
         E: From<sqlx::Error> + Send;
 }
 
+/// Trait for cascading `forget()` into direct child entities.
+///
+/// Generated automatically — unconditionally, regardless of delete strategy —
+/// for every nested repository that has a `parent` column, so a root's
+/// `forget()` can reach into its children's forgettable data even when the
+/// children are never soft-deleted. A child repo with no forgettable data at
+/// all still implements this trait; its generated body is simply a no-op.
+///
+/// Scoped to *direct* children only (matching [`CascadeDeleteNested`]'s own
+/// forgettable scrub): a grandchild's forgettable data is reached only if the
+/// grandchild's own parent (the child) is itself forgotten in turn.
+pub trait CascadeForgetNested<ID>: EsRepo {
+    fn cascade_forget_in_op<OP, E>(
+        op: &mut OP,
+        parent_id: &ID,
+    ) -> impl Future<Output = Result<(), E>> + Send
+    where
+        OP: AtomicOperation,
+        E: From<sqlx::Error> + Send;
+}
+
 /// Trait that entities implement for every field marked `#[es_entity(nested)]`
 ///
 /// Will be auto-implemented when [`#[derive(EsEntity)]`](`EsEntity`) is used.

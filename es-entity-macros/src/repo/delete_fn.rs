@@ -18,6 +18,7 @@ pub struct DeleteFn<'a> {
     columns: &'a Columns,
     delete_option: &'a DeleteOption,
     nested_delete_fn_names: Vec<syn::Ident>,
+    is_root: bool,
     post_persist_error: Option<&'a syn::Type>,
     forgettable_table_name: Option<&'a str>,
     #[cfg(feature = "instrument")]
@@ -36,6 +37,7 @@ impl<'a> DeleteFn<'a> {
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
             delete_option: &opts.delete,
+            is_root: opts.is_root(),
             nested_delete_fn_names: opts
                 .all_nested()
                 .map(|f| f.delete_nested_fn_name())
@@ -56,6 +58,42 @@ impl ToTokens for DeleteFn<'_> {
 
         let entity = self.entity;
         let modify_error = &self.modify_error;
+
+        // Deleting a root is an aggregate write like any other: it must CAS so
+        // a writer holding a stale version loses, and so concurrent readers
+        // see the version move. It runs before the cascade for the same reason
+        // update does — a loser must fail before any child is touched.
+        let delete_cas = if self.is_root {
+            let table_name = self.table_name;
+            let id_ty = self.id;
+            let modify_error = &self.modify_error;
+            let cas_query = format!(
+                "UPDATE {} SET version = version + 1 WHERE id = $1 AND version = $2 RETURNING version",
+                table_name
+            );
+            Some(quote! {
+                {
+                    let __current_version = entity
+                        .events()
+                        .aggregate_version()
+                        .ok_or(#modify_error::EntityNotHydrated)?;
+                    let __id = entity.events().entity_id.clone();
+                    let __bumped = sqlx::query!(
+                        #cas_query,
+                        &__id as &#id_ty,
+                        __current_version,
+                    )
+                        .fetch_optional(op.as_executor())
+                        .await?;
+                    let __new_version = __bumped
+                        .map(|row| row.version)
+                        .ok_or(#modify_error::ConcurrentModification)?;
+                    entity.events_mut().set_aggregate_version(__new_version);
+                }
+            })
+        } else {
+            None
+        };
 
         let nested_deletes = self.nested_delete_fn_names.iter().map(|f| {
             quote! {
@@ -173,6 +211,7 @@ impl ToTokens for DeleteFn<'_> {
                 OP: es_entity::AtomicOperation
             {
                 let __result: Result<(), #modify_error> = async {
+                    #delete_cas
                     #(#nested_deletes)*
                     #assignments
                     #record_id
@@ -242,6 +281,7 @@ mod tests {
             columns: &columns,
             delete_option: &DeleteOption::Soft,
             nested_delete_fn_names: Vec::new(),
+            is_root: false,
             post_persist_error: None,
             forgettable_table_name: None,
             #[cfg(feature = "instrument")]
@@ -334,6 +374,7 @@ mod tests {
             columns: &columns,
             delete_option: &DeleteOption::Soft,
             nested_delete_fn_names: Vec::new(),
+            is_root: false,
             post_persist_error: None,
             forgettable_table_name: None,
             #[cfg(feature = "instrument")]
@@ -422,6 +463,7 @@ mod tests {
             columns: &columns,
             delete_option: &DeleteOption::Soft,
             nested_delete_fn_names: Vec::new(),
+            is_root: false,
             post_persist_error: None,
             forgettable_table_name: Some("entities_forgettable_payloads"),
             #[cfg(feature = "instrument")]

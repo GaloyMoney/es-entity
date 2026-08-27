@@ -452,3 +452,96 @@ async fn grandchild_batching_composes_across_the_whole_tree() -> anyhow::Result<
 
     Ok(())
 }
+
+/// A **grandchild-only** mutation must bump the root's aggregate version.
+///
+/// This is the case a depth-1 pending-work check silently misses: the root has
+/// no new events and its children are all clean, so only a recursive walk sees
+/// that a grandchild is dirty. Missing it would let a grandchild write commit
+/// without touching the aggregate clock, reopening write skew one level down.
+///
+/// Revert-to-red: make the generated pending-work check non-recursive (drop the
+/// `has_pending_nested_work` delegation in `nested.rs`) and this fails
+/// deterministically — the version stays put and the stale writer succeeds.
+#[tokio::test]
+async fn grandchild_only_mutation_bumps_the_root_version() -> anyhow::Result<()> {
+    let pool = init_pool().await?;
+    let parents_repo = GcParents::new(pool.clone());
+    let children_repo = GcChildren::new(pool.clone());
+
+    // parent -> child -> grandchild, all persisted.
+    let parent_id = GcParentId::new();
+    let child_id = GcChildId::new();
+    let mut parent = parents_repo
+        .create(NewGcParentBuilder::default().id(parent_id).build()?)
+        .await?;
+    parent.add_child(
+        NewGcChildBuilder::default()
+            .id(child_id)
+            .parent_id(parent_id)
+            .build()?,
+    );
+    parents_repo.update(&mut parent).await?;
+
+    let mut child = children_repo.find_by_id(child_id).await?;
+    child.add_grandchild(
+        NewGcGrandchild::builder()
+            .id(GcGrandchildId::new())
+            .child_id(child_id)
+            .note("initial")
+            .build()?,
+    );
+    children_repo.update(&mut child).await?;
+
+    let version_before = sqlx::query!(
+        "SELECT version FROM gc_parents WHERE id = $1",
+        parent_id as GcParentId
+    )
+    .fetch_one(&pool)
+    .await?
+    .version;
+
+    // Touch ONLY the grandchild. Root stream clean, child stream clean.
+    let mut parent = parents_repo.find_by_id(parent_id).await?;
+    for child in parent.persisted_children_mut() {
+        child.update_grandchild_note("updated");
+    }
+    parents_repo.update(&mut parent).await?;
+
+    let version_after = sqlx::query!(
+        "SELECT version FROM gc_parents WHERE id = $1",
+        parent_id as GcParentId
+    )
+    .fetch_one(&pool)
+    .await?
+    .version;
+
+    assert_eq!(
+        version_after,
+        version_before + 1,
+        "a grandchild-only mutation must still bump the root's aggregate version"
+    );
+
+    // And the bump is load-bearing: a writer holding the pre-mutation version
+    // is now rejected.
+    let mut stale = parents_repo.find_by_id(parent_id).await?;
+    let mut fresh = parents_repo.find_by_id(parent_id).await?;
+    for child in fresh.persisted_children_mut() {
+        child.update_grandchild_note("winner");
+    }
+    parents_repo.update(&mut fresh).await?;
+
+    for child in stale.persisted_children_mut() {
+        child.update_grandchild_note("loser");
+    }
+    let err = parents_repo
+        .update(&mut stale)
+        .await
+        .expect_err("stale grandchild writer must be rejected");
+    assert!(
+        err.was_concurrent_modification(),
+        "expected ConcurrentModification, got: {err}"
+    );
+
+    Ok(())
+}

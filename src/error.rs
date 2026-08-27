@@ -11,6 +11,21 @@ pub enum EntityHydrationError {
     EventDeserialization(#[from] serde_json::Error),
 }
 
+/// An aggregate was modified while its nested entities were being loaded.
+///
+/// Nested hydration takes several statements and the framework runs at READ
+/// COMMITTED, so a concurrent aggregate write can land between them and leave
+/// the reader holding a parent and children from different points in time.
+/// The root's aggregate version is re-checked after the children load, and this
+/// error is raised when it has moved.
+///
+/// Generated finders retry a bounded number of times before surfacing this;
+/// seeing it means the aggregate is under sustained write load. It is safe to
+/// retry the read.
+#[derive(Error, Debug)]
+#[error("StaleAggregateRead: aggregate was concurrently modified during hydration; retry the read")]
+pub struct StaleAggregateRead;
+
 #[derive(Error, Debug)]
 #[error("CursorDestructureError: couldn't turn {0} into {1}")]
 pub struct CursorDestructureError(&'static str, &'static str);

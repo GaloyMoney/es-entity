@@ -148,9 +148,9 @@ impl ToTokens for PopulateNested<'_> {
             }
         });
 
-        if self.delete_option.is_soft() {
-            let column_name = self.column.name();
+        let column_name = self.column.name();
 
+        if self.delete_option.is_soft() {
             let cascade = if let Some(forgettable_tbl) = self.forgettable_table_name {
                 // Scrub the direct nested children's forgettable data before the
                 // soft-delete flips them, mirroring the parent's own delete
@@ -215,6 +215,74 @@ impl ToTokens for PopulateNested<'_> {
                 }
             });
         }
+
+        // Unlike `CascadeDeleteNested`, generated only for soft-delete repos,
+        // this is generated for every nested child unconditionally: a root's
+        // `forget()` must be able to scrub a direct child's forgettable data
+        // regardless of whether that child ever gets soft-deleted. A child
+        // with no forgettable data at all still implements the trait, with a
+        // no-op body — mirrors `forget()`'s own no-op-when-nothing-configured
+        // shape rather than making the impl conditional and forcing nested.rs
+        // to special-case whether the trait bound is satisfiable.
+        let cascade_forget = if let Some(forgettable_tbl) = self.forgettable_table_name {
+            // Same ordering as the parent's own `forget`: payload rows first,
+            // then NULL the index columns — scoped to direct children by the
+            // parent FK, not gated on `deleted`, since forgotten data must be
+            // scrubbed regardless of the child's delete status.
+            let payload_delete_query = format!(
+                "DELETE FROM {} WHERE entity_id IN (SELECT id FROM {} WHERE {} = $1)",
+                forgettable_tbl, self.table_name, column_name,
+            );
+            let column_update = if self.forgettable_columns.is_empty() {
+                quote! {}
+            } else {
+                let null_cols = self
+                    .forgettable_columns
+                    .iter()
+                    .map(|c| format!("{} = NULL", c))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let columns_query = format!(
+                    "UPDATE {} SET {} WHERE {} = $1",
+                    self.table_name, null_cols, column_name,
+                );
+                quote! {
+                    sqlx::query!(
+                        #columns_query,
+                        parent_id as &#ty,
+                    )
+                    .execute(op.as_executor())
+                    .await?;
+                }
+            };
+            quote! {
+                sqlx::query!(
+                    #payload_delete_query,
+                    parent_id as &#ty,
+                )
+                .execute(op.as_executor())
+                .await?;
+                #column_update
+            }
+        } else {
+            quote! {}
+        };
+
+        tokens.append_all(quote! {
+            impl #impl_generics es_entity::CascadeForgetNested<#ty> for #ident #ty_generics #where_clause {
+                async fn cascade_forget_in_op<OP, __EsErr>(
+                    op: &mut OP,
+                    parent_id: &#ty,
+                ) -> Result<(), __EsErr>
+                where
+                    OP: es_entity::AtomicOperation,
+                    __EsErr: From<sqlx::Error> + Send,
+                {
+                    #cascade_forget
+                    Ok(())
+                }
+            }
+        });
     }
 }
 
@@ -284,6 +352,63 @@ mod tests {
         assert!(output.contains(
             "UPDATE account_holders SET deleted = TRUE WHERE account_id = $1 AND deleted = FALSE"
         ));
+        assert!(!output.contains("DELETE FROM"));
+        assert!(!output.contains("= NULL"));
+    }
+
+    #[test]
+    fn cascade_forget_scrubs_forgettable_nested_children_unconditionally() {
+        // No `delete = "soft"` at all — `CascadeForgetNested` must still be
+        // generated and scrub forgettable data, unlike `CascadeDeleteNested`
+        // which is only emitted for soft-delete repos.
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "AccountHolder",
+                forgettable,
+                columns(
+                    account_id(ty = "AccountId", update(persist = false), parent),
+                    email(ty = "Forgettable<String>")
+                )
+            )]
+            struct AccountHolders {
+                pool: sqlx::PgPool,
+            }
+        };
+        let output = cascade_output(input);
+        assert!(output.contains("es_entity :: CascadeForgetNested < AccountId >"));
+        assert!(output.contains(
+            "DELETE FROM account_holders_forgettable_payloads WHERE entity_id IN (SELECT id FROM account_holders WHERE account_id = $1)"
+        ));
+        // Scrubs the index column too, but — unlike the soft-delete cascade —
+        // not gated on `deleted`: forgotten data must go regardless of the
+        // child's delete status.
+        assert!(output.contains("UPDATE account_holders SET email = NULL WHERE account_id = $1"));
+        assert!(
+            !output.contains(
+                "UPDATE account_holders SET email = NULL WHERE account_id = $1 AND deleted"
+            )
+        );
+    }
+
+    #[test]
+    fn cascade_forget_is_a_noop_without_forgettable() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "AccountHolder",
+                columns(
+                    account_id(ty = "AccountId", update(persist = false), parent),
+                    label(ty = "String")
+                )
+            )]
+            struct AccountHolders {
+                pool: sqlx::PgPool,
+            }
+        };
+        let output = cascade_output(input);
+        // The trait is still implemented — nested.rs's generated cascade call
+        // needs the bound satisfied regardless — but with an empty body.
+        assert!(output.contains("es_entity :: CascadeForgetNested < AccountId >"));
+        assert!(output.contains("cascade_forget_in_op"));
         assert!(!output.contains("DELETE FROM"));
         assert!(!output.contains("= NULL"));
     }

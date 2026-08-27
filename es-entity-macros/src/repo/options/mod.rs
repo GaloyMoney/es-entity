@@ -197,6 +197,20 @@ impl RepoField {
         )
     }
 
+    pub fn pending_nested_work_fn_name(&self) -> syn::Ident {
+        syn::Ident::new(
+            &format!("has_pending_nested_{}_work", self.ident()),
+            proc_macro2::Span::call_site(),
+        )
+    }
+
+    pub fn forget_nested_fn_name(&self) -> syn::Ident {
+        syn::Ident::new(
+            &format!("forget_nested_{}_in_op", self.ident()),
+            proc_macro2::Span::call_site(),
+        )
+    }
+
     /// PascalCase variant name derived from field name (e.g. `line_items` -> `LineItems`)
     pub fn nested_variant_name(&self) -> syn::Ident {
         syn::Ident::new(
@@ -495,6 +509,21 @@ impl RepositoryOptions {
         } else {
             panic!("Repository must be a struct")
         }
+    }
+
+    /// Whether this repo is an *aggregate root*: it owns nested children but is
+    /// not itself a child of anything.
+    ///
+    /// Root-ness is inferred, never declared. A repo is a root iff it has
+    /// `#[es_repo(nested)]` fields **and** no column marked `parent`. This
+    /// deliberately excludes mid-level repos in grandchildren trees, which have
+    /// both (children below, a `parent` column above): they are parents but not
+    /// roots, and carry no version machinery.
+    ///
+    /// The root's index-table `version` column is the clock for the whole
+    /// aggregate — see `book/src/aggregate-version.md`.
+    pub fn is_root(&self) -> bool {
+        self.any_nested() && self.columns.parent().is_none()
     }
 
     pub fn query_fn_generics(nested: bool) -> proc_macro2::TokenStream {
