@@ -671,3 +671,188 @@ async fn update_all_mut_in_op_cas_covers_the_ref_batch_shape() -> anyhow::Result
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// List paging — the peeked-but-unreturned entity
+// ---------------------------------------------------------------------------
+//
+// `list_by_id` (and any other paginated read) over-fetches by one entity to
+// compute `has_next_page`. That extra entity's aggregate version must not be
+// validated against the *current* page — it was never handed back to the
+// caller, so a concurrent write to it proves nothing about staleness here.
+//
+// Dedicated `paging_orders`/`paging_order_items` tables, NOT the shared
+// `orders`/`order_items` used above: this test pages the whole table with no
+// filter, and those tables are touched unscoped by every other test in every
+// file that imports `entities::order` — sharing them would make this flaky
+// for reasons unrelated to the bug it proves.
+//
+// This also reuses `entities::order::Order` as its entity, so it needs its
+// own module: `#[derive(EsRepo)]` generates `OrderQueryError` and friends at
+// the scope it's invoked in, and `Orders` above already owns those names at
+// this file's top level.
+mod list_paging {
+    // Not `use super::*`: the parent module's `Orders`/`OrderItems` derives
+    // (also `entity = "Order"` / `"OrderItem"`) already generated sibling
+    // modules named after the entity (`order_cursor`, `order_repo_types`,
+    // ...) at the parent scope. A glob import would pull those in and
+    // collide with the identically-named modules this file's own derives
+    // below generate.
+    use crate::{entities::order::*, helpers, new_item};
+    use es_entity::*;
+    use sqlx::PgPool;
+
+    #[derive(EsRepo, Debug)]
+    #[es_repo(
+        entity = "Order",
+        tbl = "paging_orders",
+        events_tbl = "paging_order_events"
+    )]
+    pub struct PagingOrders {
+        pool: PgPool,
+
+        #[es_repo(nested)]
+        items: PagingOrderItems,
+    }
+
+    impl PagingOrders {
+        pub fn new(pool: PgPool) -> Self {
+            Self {
+                pool: pool.clone(),
+                items: PagingOrderItems::new(pool),
+            }
+        }
+    }
+
+    #[derive(EsRepo, Debug)]
+    #[es_repo(
+        entity = "OrderItem",
+        tbl = "paging_order_items",
+        events_tbl = "paging_order_item_events",
+        columns(order_id(ty = "OrderId", update(persist = false), parent))
+    )]
+    pub struct PagingOrderItems {
+        // Only ever reached through `PagingOrders`' generated nested-child calls,
+        // which resolve by type (`<PagingOrderItems>::populate_in_op`, etc.), not
+        // through an instance of this struct — this file never calls a
+        // `PagingOrderItems` method directly, so the field itself is unread.
+        #[allow(dead_code)]
+        pool: PgPool,
+    }
+
+    impl PagingOrderItems {
+        pub fn new(pool: PgPool) -> Self {
+            Self { pool }
+        }
+    }
+
+    /// Bugbot finding: `fetch_n_inner` captured an aggregate version for every
+    /// row the underlying query returned — including the extra entity read
+    /// solely to decide `has_next_page` — before `EntityEvents::load_n` truncated
+    /// down to the requested page. A concurrent write to that unreturned entity
+    /// therefore failed the *current* page with `StaleAggregateRead`, even though
+    /// the page never contained it.
+    ///
+    /// Two roots, `kept` (the one a `first: 1` ascending page returns) and
+    /// `peeked` (the one fetched only to prove `has_next_page = true`). A writer
+    /// hammers `peeked` continuously; the reader pages with `first: 1` in a tight
+    /// loop. `peeked`'s id sorts after `kept`'s by construction, so it can never
+    /// legitimately be the entity returned — any error here can only come from
+    /// `peeked`'s version riding along into the validation it was excluded from.
+    ///
+    /// Revert-to-red: remove `versions.truncate(entities.len())` in
+    /// `fetch_n_inner` (src/query.rs) and this fails — not on every iteration,
+    /// since it needs the writer's commit to land inside a specific window
+    /// relative to the reader's own SELECT and validate statements, but reliably
+    /// within the loop below.
+    #[tokio::test]
+    async fn list_page_does_not_fail_on_a_peeked_but_unreturned_entity() -> anyhow::Result<()> {
+        let pool = helpers::init_pool().await?;
+        let orders = PagingOrders::new(pool.clone());
+
+        // `paging_orders` is dedicated to this one test, but nothing else clears
+        // it between runs — a re-run against the same dev DB would otherwise
+        // accumulate rows from every prior run, and `list_by_id` pages the whole
+        // table unscoped, so an old row could out-sort `kept` and break the
+        // "the returned page is exactly `kept`" assumption below.
+        sqlx::query!("DELETE FROM paging_order_item_events")
+            .execute(&pool)
+            .await?;
+        sqlx::query!("DELETE FROM paging_order_items")
+            .execute(&pool)
+            .await?;
+        sqlx::query!("DELETE FROM paging_order_events")
+            .execute(&pool)
+            .await?;
+        sqlx::query!("DELETE FROM paging_orders")
+            .execute(&pool)
+            .await?;
+
+        let new_order = |id| NewOrderBuilder::default().id(id).build().unwrap();
+        let a = orders.create(new_order(OrderId::new())).await?.id;
+        let b = orders.create(new_order(OrderId::new())).await?.id;
+        let (kept, peeked) = if a < b { (a, b) } else { (b, a) };
+
+        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let writer_orders = PagingOrders::new(pool.clone());
+        let writer = tokio::spawn(async move {
+            for i in 0..300 {
+                let mut order = writer_orders.find_by_id(peeked).await?;
+                order.add_item(new_item(peeked, "x", i));
+                match writer_orders.update(&mut order).await {
+                    Ok(_) => {}
+                    // The reader never writes, so contention here is not
+                    // expected, but a lost race is not a test failure either.
+                    Err(e) if e.was_concurrent_modification() => continue,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            // A dropped receiver means the reader already exited (via `?`, on
+            // the very error this test is trying to catch) — that is reported
+            // through `reader.await??` below, not by panicking here on send.
+            let _ = stop_tx.send(());
+            Ok::<_, anyhow::Error>(())
+        });
+
+        let reader_orders = PagingOrders::new(pool.clone());
+        let reader = tokio::spawn(async move {
+            let mut reads = 0usize;
+            loop {
+                let page = reader_orders
+                    .list_by_id(
+                        es_entity::PaginatedQueryArgs {
+                            first: 1,
+                            after: None,
+                        },
+                        es_entity::ListDirection::Ascending,
+                    )
+                    .await?;
+                assert_eq!(
+                    page.entities.len(),
+                    1,
+                    "exactly one root exists at `kept`'s position"
+                );
+                assert_eq!(
+                    page.entities[0].id, kept,
+                    "the concurrently-written root must never be the one returned"
+                );
+                assert!(
+                    page.has_next_page,
+                    "`peeked` must still be there, just unreturned"
+                );
+                reads += 1;
+                if stop_rx.try_recv().is_ok() {
+                    break;
+                }
+            }
+            Ok::<_, anyhow::Error>(reads)
+        });
+
+        writer.await??;
+        let reads = reader.await??;
+        assert!(reads > 0, "reader must have observed at least one page");
+
+        Ok(())
+    }
+} // mod list_paging

@@ -18,6 +18,7 @@ pub struct CreateAllFn<'a> {
     columns: &'a Columns,
     create_error: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
+    is_root: bool,
     post_hydrate_error: Option<&'a syn::Type>,
     post_persist_error: Option<&'a syn::Type>,
     #[cfg(feature = "instrument")]
@@ -39,6 +40,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateAllFn<'a> {
                 .all_nested()
                 .map(|f| f.create_nested_fn_name())
                 .collect(),
+            is_root: opts.is_root(),
             columns: &opts.columns,
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             post_persist_error: opts.post_persist_hook.as_ref().map(|h| &h.error),
@@ -88,13 +90,23 @@ impl ToTokens for CreateAllFn<'_> {
         // both to the same `ConstraintViolation`.
         let events_insert = EventsInsert::new(self.events_table_name, self.event_ctx);
         let source = EventSource::BatchCte { cte: "new_rows" };
+        // An aggregate root starts every row's clock at 1, same as single-row
+        // `create` — literal, not from the UNNEST batch, since every row in
+        // the batch gets the same starting value.
+        let (version_col, version_val) = if self.is_root {
+            (", version", ", 1")
+        } else {
+            ("", "")
+        };
         let query = format!(
-            "WITH new_rows AS (INSERT INTO {} (created_at, {}) \
-            SELECT COALESCE($1, NOW()), unnested.{} \
+            "WITH new_rows AS (INSERT INTO {} (created_at{}, {}) \
+            SELECT COALESCE($1, NOW()){}, unnested.{} \
             FROM UNNEST({}) \
             AS unnested({}) RETURNING id) {}",
             table_name,
+            version_col,
             column_names.join(", "),
+            version_val,
             column_names.join(", unnested."),
             placeholders,
             column_names.join(", "),
@@ -155,6 +167,19 @@ impl ToTokens for CreateAllFn<'_> {
         #[cfg(not(feature = "instrument"))]
         let (instrument_attr, error_recording) = (quote! {}, quote! {});
 
+        // Recording it in-memory — same as single-row `create` — lets the
+        // caller create_all → mutate → update without an intervening reload.
+        // The binding is only `mut` for roots: an unconditional `mut` would
+        // warn as unused (denied under `-D warnings`) for every non-root repo.
+        let (events_binding, set_initial_version) = if self.is_root {
+            (
+                quote! { mut events },
+                quote! { events.set_aggregate_version(1); },
+            )
+        } else {
+            (quote! { events }, quote! {})
+        };
+
         let post_hydrate_check = if self.post_hydrate_error.is_some() {
             quote! {
                 self.execute_post_hydrate_hook(&entity).map_err(#create_error::PostHydrateError)?;
@@ -181,7 +206,8 @@ impl ToTokens for CreateAllFn<'_> {
             if self.post_hydrate_error.is_some() || self.post_persist_error.is_some() {
                 quote! {
                     let mut n_events_by_entity: Vec<usize> = Vec::new();
-                    for (events, n_events) in all_events.into_iter().zip(n_persisted) {
+                    for (#events_binding, n_events) in all_events.into_iter().zip(n_persisted) {
+                        #set_initial_version
                         let entity = Self::hydrate_entity(events)?;
                         entities.push(entity);
                         n_events_by_entity.push(n_events);
@@ -196,7 +222,8 @@ impl ToTokens for CreateAllFn<'_> {
                 }
             } else {
                 quote! {
-                    for (events, _n_events) in all_events.into_iter().zip(n_persisted) {
+                    for (#events_binding, _n_events) in all_events.into_iter().zip(n_persisted) {
+                        #set_initial_version
                         let entity = Self::hydrate_entity(events)?;
                         entities.push(entity);
                     }
@@ -322,6 +349,7 @@ mod tests {
             create_error,
             columns: &columns,
             nested_fn_names: Vec::new(),
+            is_root: false,
             post_hydrate_error: None,
             post_persist_error: None,
             #[cfg(feature = "instrument")]
@@ -438,5 +466,101 @@ mod tests {
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    /// Bugbot finding: single-entity `create` stamps `version = 1` in the
+    /// insert and records it on `EntityEvents` so the caller can update
+    /// without a reload; `create_all` did neither. A batch-created root was
+    /// therefore left un-hydrated (`EntityNotHydrated` on the next `update`)
+    /// and, absent a `DEFAULT` on the column, the insert failed outright.
+    #[test]
+    fn create_all_fn_root_sets_initial_version() {
+        let entity = Ident::new("Entity", Span::call_site());
+        let create_error = syn::Ident::new("EntityCreateError", Span::call_site());
+        let id = Ident::new("EntityId", Span::call_site());
+        let event = Ident::new("EntityEvent", Span::call_site());
+        let mut columns = Columns::default();
+        columns.set_id_column(&id);
+
+        let create_fn = CreateAllFn {
+            table_name: "entities",
+            entity: &entity,
+            id: &id,
+            event: &event,
+            events_table_name: "entity_events",
+            event_ctx: false,
+            forgettable_table_name: None,
+            create_error,
+            columns: &columns,
+            nested_fn_names: Vec::new(),
+            is_root: true,
+            post_hydrate_error: None,
+            post_persist_error: None,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        create_fn.to_tokens(&mut tokens);
+
+        let output = tokens.to_string();
+        // The insert stamps every row's version literally, not via UNNEST —
+        // every row in a `create_all` batch starts at the same value.
+        assert!(output.contains(
+            "INSERT INTO entities (created_at, version, id) SELECT COALESCE($1, NOW()), 1, unnested.id"
+        ));
+        // And it's recorded in-memory before hydration, mirroring single-row
+        // `create`, so the returned entity can be `update()`d without a reload.
+        let mut_events_at = output
+            .find("for (mut events , _n_events)")
+            .expect("events binding must be mut for a root");
+        let set_version_at = output
+            .find("events . set_aggregate_version (1)")
+            .expect("aggregate version must be stamped in-memory");
+        let hydrate_at = output
+            .find("Self :: hydrate_entity (events)")
+            .expect("hydration present");
+        assert!(
+            mut_events_at < set_version_at && set_version_at < hydrate_at,
+            "version must be set on `events` before hydration: {output}"
+        );
+    }
+
+    /// A non-root repo must not gain a stray `mut` on the `events` binding —
+    /// that would warn as unused under `-D warnings`.
+    #[test]
+    fn create_all_fn_non_root_has_no_mut_events_binding() {
+        let entity = Ident::new("Entity", Span::call_site());
+        let create_error = syn::Ident::new("EntityCreateError", Span::call_site());
+        let id = Ident::new("EntityId", Span::call_site());
+        let event = Ident::new("EntityEvent", Span::call_site());
+        let mut columns = Columns::default();
+        columns.set_id_column(&id);
+
+        let create_fn = CreateAllFn {
+            table_name: "entities",
+            entity: &entity,
+            id: &id,
+            event: &event,
+            events_table_name: "entity_events",
+            event_ctx: false,
+            forgettable_table_name: None,
+            create_error,
+            columns: &columns,
+            nested_fn_names: Vec::new(),
+            is_root: false,
+            post_hydrate_error: None,
+            post_persist_error: None,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        create_fn.to_tokens(&mut tokens);
+
+        let output = tokens.to_string();
+        assert!(!output.contains("mut events"));
+        assert!(!output.contains("set_aggregate_version"));
+        assert!(!output.contains(", version"));
     }
 }

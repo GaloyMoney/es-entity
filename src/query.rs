@@ -132,8 +132,19 @@ where
     ) -> Result<PageWithVersions<Repo>, E> {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
-        let (versions, generics) = Self::split_versions(rows);
+        let (mut versions, generics) = Self::split_versions(rows);
         let (entities, more) = EntityEvents::load_n(generics.into_iter(), first)?;
+        // The row set is over-fetched by one entity (`LIMIT first + 1`) purely
+        // to compute `more`; `split_versions` ran over all of it before
+        // `load_n` truncated to the page. Without this, the peeked-but-unreturned
+        // entity's version rides along into `versions` and a concurrent write
+        // to *that* entity — never handed back to the caller — would fail the
+        // whole page with a `StaleAggregateRead` that protects nothing.
+        // `split_versions` and `load_n` walk the same `generics` sequence in
+        // the same first-encounter order, so `versions[i]` lines up with
+        // `entities[i]` and truncating to the same length drops exactly the
+        // peeked entity, never a returned one.
+        versions.truncate(entities.len());
         Ok((entities, more, versions))
     }
 }
