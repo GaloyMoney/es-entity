@@ -623,3 +623,51 @@ async fn delete_cas_rejects_a_stale_writer() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// `update_all_mut_in_op` is the other batch shape (`RefVec`): it takes
+/// scattered `&mut` borrows rather than a contiguous slice, and it is public on
+/// root repos too. It gets its own CAS codegen, so it needs its own coverage —
+/// `update_all` above only exercises the `OwnedSlice` shape.
+#[tokio::test]
+async fn update_all_mut_in_op_cas_covers_the_ref_batch_shape() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let orders = Orders::new(pool.clone());
+
+    let first = seed_order_with_two_items(&orders).await?;
+    let second = seed_order_with_two_items(&orders).await?;
+    let v_first = raw_version(&pool, first).await?;
+    let v_second = raw_version(&pool, second).await?;
+
+    let mut a = orders.find_by_id(first).await?;
+    let mut b = orders.find_by_id(second).await?;
+    assert!(a.update_item_quantity("left", 81).did_execute());
+    assert!(b.update_item_quantity("left", 82).did_execute());
+
+    let mut op = orders.begin_op().await?;
+    orders
+        .update_all_mut_in_op(&mut op, vec![&mut a, &mut b])
+        .await?;
+    op.commit().await?;
+
+    assert_eq!(raw_version(&pool, first).await?, v_first + 1);
+    assert_eq!(raw_version(&pool, second).await?, v_second + 1);
+
+    // And a stale member is rejected on this shape too.
+    let mut stale = orders.find_by_id(first).await?;
+    let mut winner = orders.find_by_id(first).await?;
+    assert!(winner.update_item_quantity("right", 83).did_execute());
+    orders.update(&mut winner).await?;
+
+    assert!(stale.update_item_quantity("right", 84).did_execute());
+    let mut op = orders.begin_op().await?;
+    let err = orders
+        .update_all_mut_in_op(&mut op, vec![&mut stale])
+        .await
+        .expect_err("a stale root must be rejected on the ref-batch shape too");
+    assert!(
+        err.was_concurrent_modification(),
+        "expected ConcurrentModification, got: {err}"
+    );
+
+    Ok(())
+}
