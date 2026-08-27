@@ -8,10 +8,16 @@ As discussed, this approach makes the aggregate relationship explicit in the typ
 First, we need to create the tables for both the parent (`Subscription`) and nested (`BillingPeriod`) entities:
 
 ```sql
--- The parent entity table
+-- The parent entity table.
+--
+-- `version` is the aggregate clock. It is REQUIRED on the index table of every
+-- aggregate root — a repo that owns nested children and is not itself a child.
+-- Every write anywhere in the aggregate compare-and-swaps it, and nested reads
+-- re-check it after the children have loaded.
 CREATE TABLE subscriptions (
   id UUID PRIMARY KEY,
-  created_at TIMESTAMPTZ NOT NULL
+  created_at TIMESTAMPTZ NOT NULL,
+  version INT NOT NULL DEFAULT 1
 );
 
 CREATE TABLE subscription_events (
@@ -24,7 +30,8 @@ CREATE TABLE subscription_events (
   UNIQUE(id, sequence)
 );
 
--- The nested entity table
+-- The nested entity table. Children get NO version column: the root's version
+-- is the clock for the whole aggregate.
 CREATE TABLE billing_periods (
   id UUID PRIMARY KEY,
   subscription_id UUID NOT NULL REFERENCES subscriptions(id),
@@ -920,18 +927,32 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-One thing to note is that  the `_in_op` functions of the parent repository now require an `AtomicOperation` argument since we must load all the entities in a consistent snapshot:
+One thing to note is that the `_in_op` functions of the parent repository now require an `AtomicOperation` argument, because loading a whole aggregate takes several statements that must run inside one operation:
 ```rust,ignore
 async fn find_by_id_in_op<OP>(op: OP, id: EntityId)
 where
     OP: AtomicOperation;
 
 // The version of the queries in Repositories without nested children
-// cannot be used here as it would not load parent + children from a consistent snapshot.
+// cannot be used here: loading parent + children is multi-statement.
 // async fn find_by_id_in_op<'a, OP>(op: OP, id: EntityId)
 // where
 //     OP: IntoOneTimeExecutor<'a>;
 ```
+
+Note carefully what the operation does and does not give you. It scopes the
+statements to one transaction, but **the operation alone does not make the read a
+consistent snapshot.** The framework runs at Postgres' default READ COMMITTED
+isolation, where every statement gets its own snapshot — so between the parent
+query and the per-level child queries, another transaction can commit and leave
+you holding a parent whose state predates the children you hold.
+
+What actually closes that gap is the aggregate `version` on the root index
+table: it is read in the same statement as the parent, then re-checked after the
+children have loaded. Because every aggregate write bumps it, an unchanged
+version proves nothing committed in between, which makes the whole tree
+equivalent to a single snapshot. If the version did move, the read fails with
+`StaleAggregateRead` rather than quietly returning a torn aggregate.
 
 ## Benefits of the Nested Approach
 

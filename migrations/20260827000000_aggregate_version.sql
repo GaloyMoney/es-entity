@@ -25,3 +25,8 @@ ALTER TABLE accounts ADD COLUMN version INT NOT NULL DEFAULT 1;
 -- gc_children is intentionally skipped: it has a `parent_id` column, so it is
 -- a mid-level parent rather than a root.
 ALTER TABLE gc_parents ADD COLUMN version INT NOT NULL DEFAULT 1;
+
+-- Subscriptions: nested `billing_periods`, no parent column. This one backs the
+-- executable doc-tests in book/src/nesting.md and book/src/nesting-alt.md, whose
+-- illustrative CREATE TABLE blocks are kept in sync with this column.
+ALTER TABLE subscriptions ADD COLUMN version INT NOT NULL DEFAULT 1;
