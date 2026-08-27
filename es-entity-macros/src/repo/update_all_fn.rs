@@ -18,6 +18,7 @@ pub struct UpdateAllFn<'a> {
     columns: &'a Columns,
     modify_error: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
+    is_root: bool,
     post_persist_error: Option<&'a syn::Type>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
@@ -39,6 +40,7 @@ impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
                 .all_nested()
                 .map(|f| f.update_nested_fn_name())
                 .collect(),
+            is_root: opts.is_root(),
             post_persist_error: opts.post_persist_hook.as_ref().map(|h| &h.error),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
@@ -133,6 +135,91 @@ impl UpdateAllFn<'_> {
                 #setup
                 #(#nested_calls)*
             })
+        };
+
+        // Aggregate roots CAS every root in the batch before any child write.
+        // Without this, `update_all` on a root would write children with no
+        // version bump at all — which not only leaves write skew open on this
+        // path, but makes the *read* side unsound: a reader re-checking an
+        // unchanged version would conclude its tree was consistent while an
+        // `update_all` had changed children underneath it.
+        //
+        // One statement for the whole batch (UNNEST pairs), matching the
+        // batching the rest of this fn does. Any root that fails its CAS fails
+        // the whole call: a partially-applied batch is not something callers
+        // can reason about.
+        let root_batch_cas = if self.is_root {
+            let table_name = self.table_name;
+            let id_ty = self.id;
+            let modify_error = &self.modify_error;
+            let cas_query = format!(
+                // The RHS must be table-qualified: bare `version` is ambiguous
+                // between the target table and the UNNEST alias.
+                "UPDATE {t} SET version = {t}.version + 1 \
+                 FROM UNNEST($1, $2::INT[]) AS c(id, version) \
+                 WHERE {t}.id = c.id AND {t}.version = c.version \
+                 RETURNING {t}.id, {t}.version",
+                t = table_name
+            );
+            let gather = match mode {
+                BatchMode::OwnedSlice => quote! {
+                    let mut __cas_refs: Vec<&mut #entity> = entities.iter_mut().collect();
+                },
+                BatchMode::RefVec => quote! {
+                    let mut __cas_refs: Vec<&mut #entity> = entities.iter_mut().map(|e| &mut **e).collect();
+                },
+            };
+            Some(quote! {
+                {
+                    #gather
+                    // Only roots with something to write take part: an
+                    // untouched entity in the batch must not bump, exactly as
+                    // a no-op single update does not.
+                    let mut __cas_ids: Vec<#id_ty> = Vec::new();
+                    let mut __cas_versions: Vec<i32> = Vec::new();
+                    for __e in __cas_refs.iter_mut() {
+                        let __dirty = __e.events().any_new()
+                            || <Self as es_entity::EsRepo>::has_pending_nested_work(
+                                &mut [&mut **__e],
+                            );
+                        if !__dirty {
+                            continue;
+                        }
+                        let __v = __e
+                            .events()
+                            .aggregate_version()
+                            .ok_or(#modify_error::EntityNotHydrated)?;
+                        __cas_ids.push(__e.events().entity_id.clone());
+                        __cas_versions.push(__v);
+                    }
+
+                    if !__cas_ids.is_empty() {
+                        let __bumped = sqlx::query(#cas_query)
+                            .bind(&__cas_ids)
+                            .bind(&__cas_versions)
+                            .fetch_all(op.as_executor())
+                            .await
+                            .map_err(#modify_error::Sqlx)?;
+
+                        if __bumped.len() != __cas_ids.len() {
+                            return Err(#modify_error::ConcurrentModification);
+                        }
+
+                        let mut __new: std::collections::HashMap<#id_ty, i32> =
+                            std::collections::HashMap::with_capacity(__bumped.len());
+                        for __row in __bumped.iter() {
+                            __new.insert(__row.try_get("id")?, __row.try_get("version")?);
+                        }
+                        for __e in __cas_refs.iter_mut() {
+                            if let Some(__v) = __new.get(&__e.events().entity_id) {
+                                __e.events_mut().set_aggregate_version(*__v);
+                            }
+                        }
+                    }
+                }
+            })
+        } else {
+            None
         };
 
         let id_type = self.id;
@@ -347,6 +434,8 @@ impl UpdateAllFn<'_> {
                         return Ok(0);
                     }
 
+                    #root_batch_cas
+
                     #nested_phase
 
                     #vec_declarations
@@ -420,6 +509,7 @@ mod tests {
             modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
+            is_root: false,
             post_persist_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -653,6 +743,7 @@ mod tests {
             modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
+            is_root: false,
             post_persist_error: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),

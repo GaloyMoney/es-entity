@@ -494,3 +494,132 @@ async fn concurrent_reads_stay_consistent_and_do_not_spuriously_fail() -> anyhow
 // Grandchildren — the recursive pending-work check
 // ---------------------------------------------------------------------------
 // Covered in `tests/nested_grandchildren.rs`, which owns the gc_* fixtures.
+
+// ---------------------------------------------------------------------------
+// Batch and delete paths
+// ---------------------------------------------------------------------------
+
+/// `update_all` on roots CAS-bumps every root it writes.
+///
+/// This path matters more than it looks: `update_all` runs the nested phase, so
+/// without a CAS it would write children with no version bump at all — leaving
+/// write skew open here *and* making the read side unsound, since a reader
+/// re-checking an unchanged version would wrongly conclude its tree was
+/// consistent.
+///
+/// Revert-to-red: drop the batch CAS and both the version assertion and the
+/// stale-writer rejection below fail deterministically.
+#[tokio::test]
+async fn update_all_cas_bumps_every_root_and_rejects_a_stale_one() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let orders = Orders::new(pool.clone());
+
+    let first = seed_order_with_two_items(&orders).await?;
+    let second = seed_order_with_two_items(&orders).await?;
+    let v_first = raw_version(&pool, first).await?;
+    let v_second = raw_version(&pool, second).await?;
+
+    let mut batch = vec![
+        orders.find_by_id(first).await?,
+        orders.find_by_id(second).await?,
+    ];
+    for order in batch.iter_mut() {
+        assert!(order.update_item_quantity("left", 31).did_execute());
+    }
+    orders.update_all(&mut batch).await?;
+
+    assert_eq!(raw_version(&pool, first).await?, v_first + 1);
+    assert_eq!(raw_version(&pool, second).await?, v_second + 1);
+
+    // A batch containing one stale root fails as a whole — a partially applied
+    // batch is not something callers could reason about.
+    let mut stale_batch = vec![orders.find_by_id(first).await?];
+    let mut winner = orders.find_by_id(first).await?;
+    assert!(winner.update_item_quantity("right", 44).did_execute());
+    orders.update(&mut winner).await?;
+
+    for order in stale_batch.iter_mut() {
+        assert!(order.update_item_quantity("right", 55).did_execute());
+    }
+    let err = orders
+        .update_all(&mut stale_batch)
+        .await
+        .expect_err("a batch holding a stale root must be rejected");
+    assert!(
+        err.was_concurrent_modification(),
+        "expected ConcurrentModification, got: {err}"
+    );
+
+    // The loser's write did not land.
+    let reloaded = orders.find_by_id(first).await?;
+    assert_eq!(reloaded.find_item_with_name("right").unwrap().quantity, 44);
+
+    Ok(())
+}
+
+/// An untouched root inside a batch must not have its version bumped — the same
+/// no-op carve-out the single-entity path has.
+#[tokio::test]
+async fn update_all_leaves_untouched_roots_alone() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let orders = Orders::new(pool.clone());
+
+    let touched = seed_order_with_two_items(&orders).await?;
+    let untouched = seed_order_with_two_items(&orders).await?;
+    let v_untouched = raw_version(&pool, untouched).await?;
+    let v_touched = raw_version(&pool, touched).await?;
+
+    let mut batch = vec![
+        orders.find_by_id(touched).await?,
+        orders.find_by_id(untouched).await?,
+    ];
+    // Mutate only the first.
+    assert!(batch[0].update_item_quantity("left", 61).did_execute());
+    orders.update_all(&mut batch).await?;
+
+    assert_eq!(raw_version(&pool, touched).await?, v_touched + 1);
+    assert_eq!(
+        raw_version(&pool, untouched).await?,
+        v_untouched,
+        "a root with nothing to write must not bump"
+    );
+
+    Ok(())
+}
+
+/// Deleting a root is an aggregate write and CASes like any other, so a writer
+/// holding a stale version loses the race.
+#[tokio::test]
+async fn delete_cas_rejects_a_stale_writer() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let orders = Orders::new(pool.clone());
+    let order_id = seed_order_with_two_items(&orders).await?;
+
+    let stale = orders.find_by_id(order_id).await?;
+
+    // Move the aggregate underneath the stale handle.
+    let mut winner = orders.find_by_id(order_id).await?;
+    assert!(winner.update_item_quantity("left", 71).did_execute());
+    orders.update(&mut winner).await?;
+
+    let err = orders
+        .delete(stale)
+        .await
+        .expect_err("deleting on a stale version must be rejected");
+    assert!(
+        err.was_concurrent_modification(),
+        "expected ConcurrentModification, got: {err}"
+    );
+
+    // Still there, and still holding the winner's write.
+    let reloaded = orders.find_by_id(order_id).await?;
+    assert_eq!(reloaded.find_item_with_name("left").unwrap().quantity, 71);
+
+    // A fresh handle deletes fine and bumps the version.
+    let fresh = orders.find_by_id(order_id).await?;
+    let before = raw_version(&pool, order_id).await?;
+    orders.delete(fresh).await?;
+    assert_eq!(raw_version(&pool, order_id).await?, before + 1);
+
+    Ok(())
+}
