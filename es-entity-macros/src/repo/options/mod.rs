@@ -204,6 +204,13 @@ impl RepoField {
         )
     }
 
+    pub fn forget_nested_fn_name(&self) -> syn::Ident {
+        syn::Ident::new(
+            &format!("forget_nested_{}_in_op", self.ident()),
+            proc_macro2::Span::call_site(),
+        )
+    }
+
     /// PascalCase variant name derived from field name (e.g. `line_items` -> `LineItems`)
     pub fn nested_variant_name(&self) -> syn::Ident {
         syn::Ident::new(

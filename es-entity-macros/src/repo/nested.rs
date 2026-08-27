@@ -28,6 +28,7 @@ impl ToTokens for Nested<'_> {
         let update_fn_name = self.field.update_nested_fn_name();
         let find_fn_name = self.field.find_nested_fn_name();
         let delete_fn_name = self.field.delete_nested_fn_name();
+        let forget_fn_name = self.field.forget_nested_fn_name();
         let find_include_deleted_fn_name = self.field.find_nested_include_deleted_fn_name();
         let pending_work_fn_name = self.field.pending_nested_work_fn_name();
 
@@ -145,6 +146,23 @@ impl ToTokens for Nested<'_> {
                     __EsErr: From<sqlx::Error> + Send,
             {
                 <#nested_repo_ty>::cascade_delete_in_op::<_, __EsErr>(op, &entity.events().entity_id).await?;
+                Ok(())
+            }
+
+            // Mirrors #delete_fn_name: descends into this field's direct
+            // children the same way delete's own cascade does, scrubbing
+            // their forgettable data by parent id rather than replaying each
+            // child's event stream. `CascadeForgetNested` is generated for
+            // every nested repo unconditionally, so this compiles regardless
+            // of whether the child (or the root) declares `forgettable`.
+            async fn #forget_fn_name<OP, P, __EsErr>(op: &mut OP, entity: &P) -> Result<(), __EsErr>
+                where
+                    OP: es_entity::AtomicOperation,
+                    P: es_entity::EsEntity,
+                    #nested_repo_ty: es_entity::CascadeForgetNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
+                    __EsErr: From<sqlx::Error> + Send,
+            {
+                <#nested_repo_ty>::cascade_forget_in_op::<_, __EsErr>(op, &entity.events().entity_id).await?;
                 Ok(())
             }
         });
@@ -272,6 +290,17 @@ mod tests {
                     __EsErr: From<sqlx::Error> + Send,
             {
                 <UserRepo>::cascade_delete_in_op::<_, __EsErr>(op, &entity.events().entity_id).await?;
+                Ok(())
+            }
+
+            async fn forget_nested_users_in_op<OP, P, __EsErr>(op: &mut OP, entity: &P) -> Result<(), __EsErr>
+                where
+                    OP: es_entity::AtomicOperation,
+                    P: es_entity::EsEntity,
+                    UserRepo: es_entity::CascadeForgetNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
+                    __EsErr: From<sqlx::Error> + Send,
+            {
+                <UserRepo>::cascade_forget_in_op::<_, __EsErr>(op, &entity.events().entity_id).await?;
                 Ok(())
             }
         };

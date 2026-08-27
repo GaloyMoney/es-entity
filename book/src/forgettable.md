@@ -203,7 +203,11 @@ existing transaction) on the repository that:
    which is the concurrency fence against stale writers
 2. Deletes all forgettable payloads for the entity from the database
 3. Sets any [forgettable index columns](#forgettable-index-columns) to `NULL`
-4. Rebuilds and returns the entity with forgotten fields set to
+4. Descends into every [nested](nesting.md) field's direct children, scrubbing
+   each forgettable child's payloads and index columns the same way — by
+   parent id, mirroring soft `delete()`'s own cascade (see below). This does
+   **not** persist a child's own staged events; only `update()` does that
+5. Rebuilds and returns the entity with forgotten fields set to
    `Forgettable::forgotten()`
 
 ```rust,ignore
@@ -291,6 +295,8 @@ This prevents silently loading events without their forgettable data.
 ## Delete and Forgettable
 
 When `forgettable` is enabled and `delete = "soft"` is configured, calling `delete()` also auto-forgets: it deletes all forgettable payloads for the entity **and** sets any forgettable index columns to `NULL` (instead of re-persisting the live value). This prevents orphaned personal data from remaining in the database after a soft delete.
+
+Both `delete()` and `forget()` cascade this scrub to a [nested](nesting.md) entity's direct children — scoped by parent id, regardless of the child's own delete strategy — so a forgettable child never outlives its parent's erasure. `forget()`'s cascade does not depend on `delete = "soft"` at all: it runs whenever the parent itself declares `forgettable`.
 
 ```rust,ignore
 #[derive(EsRepo)]

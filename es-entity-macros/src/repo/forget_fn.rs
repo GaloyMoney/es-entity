@@ -18,6 +18,7 @@ pub struct ForgetFn<'a> {
     event_ctx: bool,
     forgettable_table_name: &'a str,
     forgettable_columns: Vec<&'a syn::Ident>,
+    nested_forget_fn_names: Vec<syn::Ident>,
     post_persist_error: Option<&'a syn::Type>,
 }
 
@@ -35,6 +36,10 @@ impl<'a> ForgetFn<'a> {
                 .forgettable_table_name()
                 .expect("forgettable must be enabled"),
             forgettable_columns: opts.columns.forgettable_column_names(),
+            nested_forget_fn_names: opts
+                .all_nested()
+                .map(|f| f.forget_nested_fn_name())
+                .collect(),
             post_persist_error: opts.post_persist_hook.as_ref().map(|h| &h.error),
         }
     }
@@ -46,6 +51,19 @@ impl ToTokens for ForgetFn<'_> {
         let entity_type = self.entity;
         let event_type = self.event;
         let error = &self.error;
+
+        // Descends into every nested field's direct children, mirroring
+        // `delete`'s own cascade: scrub by parent id, not by replaying each
+        // child's event stream. Runs before the root's own payload delete —
+        // order doesn't matter for the smuggling hazard `#persist_staged`
+        // guards against (this cascade only ever removes child payload rows,
+        // it never creates one), but matching delete's cascade-then-own-row
+        // order keeps the two write paths easy to compare.
+        let nested_forgets = self.nested_forget_fn_names.iter().map(|f| {
+            quote! {
+                Self::#f::<_, _, #error>(op, &entity).await?;
+            }
+        });
 
         let query = format!(
             "DELETE FROM {} WHERE entity_id = $1",
@@ -200,6 +218,15 @@ impl ToTokens for ForgetFn<'_> {
             /// all payload rows, NULLs forgettable index columns, and rebuilds
             /// the entity from the drained events.
             ///
+            /// Descends into every nested field's direct children too,
+            /// mirroring `delete`'s own cascade: each child's forgettable
+            /// payloads and index columns are scrubbed by parent id, the same
+            /// way `delete` cascades its soft-delete flag. This does **not**
+            /// replay or persist a child's own staged events — only `update`
+            /// does that — so a child event staged before calling `forget` on
+            /// its parent is left unpersisted, exactly as it would be if
+            /// `forget` were never called.
+            ///
             /// Consumes the entity by value and returns the rebuilt (forgotten)
             /// entity; on any error the consumed copy is dropped, so no
             /// half-mutated entity can survive a failed erasure.
@@ -236,6 +263,7 @@ impl ToTokens for ForgetFn<'_> {
                 OP: es_entity::AtomicOperation
             {
                 #persist_staged
+                #(#nested_forgets)*
                 {
                     let id = &entity.id;
                     sqlx::query!(
@@ -422,6 +450,7 @@ mod tests {
             event_ctx: false,
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: Vec::new(),
+            nested_forget_fn_names: Vec::new(),
             post_persist_error: None,
         };
 
@@ -472,6 +501,7 @@ mod tests {
             event_ctx: false,
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: vec![&email],
+            nested_forget_fn_names: Vec::new(),
             post_persist_error: None,
         };
 
@@ -517,6 +547,7 @@ mod tests {
             event_ctx: false,
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: Vec::new(),
+            nested_forget_fn_names: Vec::new(),
             post_persist_error: Some(&hook_error),
         };
 
@@ -564,6 +595,7 @@ mod tests {
             event_ctx: false,
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: vec![&email],
+            nested_forget_fn_names: Vec::new(),
             post_persist_error: Some(&hook_error),
         };
 
@@ -597,6 +629,53 @@ mod tests {
         assert!(
             delete_at < mark_at,
             "marking must follow the payload delete"
+        );
+    }
+
+    /// `forget` must descend into nested children the same way `delete` does
+    /// — one generated call per nested field, scoped to the entity by id —
+    /// rather than leaving a child's forgettable data untouched when its
+    /// parent is forgotten.
+    #[test]
+    fn forget_fn_cascades_into_nested_children() {
+        let id = Ident::new("EntityId", Span::call_site());
+        let entity = Ident::new("Entity", Span::call_site());
+        let event = Ident::new("EntityEvent", Span::call_site());
+        let error = Ident::new("EntityForgetError", Span::call_site());
+        let nested_fn_name = Ident::new("forget_nested_users_in_op", Span::call_site());
+
+        let forget_fn = ForgetFn {
+            id: &id,
+            entity: &entity,
+            event: &event,
+            error,
+            table_name: "entities",
+            events_table_name: "entity_events",
+            event_ctx: false,
+            forgettable_table_name: "entities_forgettable_payloads",
+            forgettable_columns: Vec::new(),
+            nested_forget_fn_names: vec![nested_fn_name],
+            post_persist_error: None,
+        };
+
+        let mut tokens = TokenStream::new();
+        forget_fn.to_tokens(&mut tokens);
+
+        let output = tokens.to_string();
+        assert!(output.contains(
+            "Self :: forget_nested_users_in_op :: < _ , _ , EntityForgetError > (op , & entity) . await ?"
+        ));
+        // Cascades before the entity's own payload row is touched, matching
+        // `delete`'s cascade-then-own-row order.
+        let cascade_at = output
+            .find("forget_nested_users_in_op")
+            .expect("cascade call present");
+        let delete_at = output
+            .find("DELETE FROM entities_forgettable_payloads WHERE entity_id = $1")
+            .expect("own payload delete present");
+        assert!(
+            cascade_at < delete_at,
+            "must cascade BEFORE own payload delete"
         );
     }
 }
