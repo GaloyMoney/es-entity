@@ -16,7 +16,4 @@ gh_repository: es-entity
 
 crates_api_token: ((crates.token))
 
-cachix_auth_token: ((cachix-token.token))
-cachix_cache_name: es-entity-ci
-
 zenduty_webhook_url: ((zenduty.webhook_url))
