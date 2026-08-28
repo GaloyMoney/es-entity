@@ -38,6 +38,7 @@ pub mod pagination;
 pub mod query;
 pub mod sql_commenter;
 pub mod traits;
+pub mod tree_query;
 
 pub mod prelude {
     //! Convenience re-export of crates that the derive macros reference in generated code.
@@ -81,6 +82,8 @@ pub use pagination::*;
 pub use query::*;
 #[doc(inline)]
 pub use traits::*;
+#[doc(inline)]
+pub use tree_query::*;
 
 #[cfg(feature = "graphql")]
 pub mod graphql {

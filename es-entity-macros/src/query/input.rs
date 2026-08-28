@@ -48,6 +48,17 @@ impl QueryInput {
     }
 
     fn order_by_columns(&self) -> Vec<String> {
+        self.order_by_columns_raw()
+            .into_iter()
+            .map(|column| format!("i.{column}"))
+            .collect()
+    }
+
+    /// Same extraction as [`order_by_columns`](Self::order_by_columns) but
+    /// without the `i.` alias prefix — used to build the tree query's
+    /// `entities` CTE, where there is no such alias (the columns come
+    /// straight off the user's own `SELECT`).
+    pub(super) fn order_by_columns_raw(&self) -> Vec<String> {
         use regex::Regex;
         let re = Regex::new(r"(?i)ORDER\s+BY\s+(.+?)(?:\s+(?:LIMIT|OFFSET)|\s*;?\s*$)").unwrap();
 
@@ -60,12 +71,11 @@ impl QueryInput {
                 .map(|s| {
                     let trimmed = s.trim();
                     // Strip any existing alias prefix (e.g., "a.id" -> "id")
-                    let column = if let Some(dot_pos) = trimmed.rfind('.') {
-                        &trimmed[dot_pos + 1..]
+                    if let Some(dot_pos) = trimmed.rfind('.') {
+                        trimmed[dot_pos + 1..].to_string()
                     } else {
-                        trimmed
-                    };
-                    format!("i.{}", column)
+                        trimmed.to_string()
+                    }
                 })
                 .filter(|s| !s.is_empty())
                 .collect();

@@ -56,7 +56,10 @@ impl ToTokens for EsQuery {
 
         let events_table = syn::Ident::new(&format!("{singular}_events"), Span::call_site());
         let args = &self.input.arg_exprs;
-        let context_arg = format!("${}", args.len() + 1);
+        let n_args = args.len();
+        let context_arg = format!("${}", n_args + 1);
+        let user_sql = &self.input.sql;
+        let raw_order_cols = self.input.order_by_columns_raw();
 
         let (payload_column, forgettable_join) =
             if let Some(ref forgettable_tbl) = self.input.forgettable_tbl {
@@ -119,7 +122,13 @@ impl ToTokens for EsQuery {
                         #query,
                         #(#args,)*
                         <<<Self as es_entity::EsRepo>::Entity as EsEntity>::Event>::event_context(),
-                    )
+                    ),
+                    es_entity::TreeQuerySource {
+                        user_sql: #user_sql,
+                        order_by_cols: &[#(#raw_order_cols),*],
+                        n_user_args: #n_args,
+                        decode: es_entity::decode_tagged_row::<Repo__Id>,
+                    },
                 )
             }
         });
@@ -162,7 +171,13 @@ mod tests {
                         "WITH entities AS (SELECT * FROM users WHERE id = $1) SELECT i.id AS \"entity_id!: Repo__Id\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, NULL::jsonb as \"forgettable_payload?\" FROM entities i JOIN user_events e ON i.id = e.id ORDER BY i.id, e.sequence",
                         id as UserId,
                         <<<Self as es_entity::EsRepo>::Entity as EsEntity>::Event>::event_context(),
-                    )
+                    ),
+                    es_entity::TreeQuerySource {
+                        user_sql: "SELECT * FROM users WHERE id = $1",
+                        order_by_cols: &[],
+                        n_user_args: 1usize,
+                        decode: es_entity::decode_tagged_row::<Repo__Id>,
+                    },
                 )
             }
         };
@@ -197,7 +212,13 @@ mod tests {
                         "WITH entities AS (SELECT * FROM my_custom_table WHERE id = $1) SELECT i.id AS \"entity_id!: Repo__Id\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, NULL::jsonb as \"forgettable_payload?\" FROM entities i JOIN my_custom_table_events e ON i.id = e.id ORDER BY i.id, e.sequence",
                         id as MyCustomEntityId,
                         <<<Self as es_entity::EsRepo>::Entity as EsEntity>::Event>::event_context(),
-                    )
+                    ),
+                    es_entity::TreeQuerySource {
+                        user_sql: "SELECT * FROM my_custom_table WHERE id = $1",
+                        order_by_cols: &[],
+                        n_user_args: 1usize,
+                        decode: es_entity::decode_tagged_row::<Repo__Id>,
+                    },
                 )
             }
         };
@@ -241,7 +262,13 @@ mod tests {
                         id as Option<MyCustomEntityId>,
                         name as Option<String>,
                         <<<Self as es_entity::EsRepo>::Entity as EsEntity>::Event>::event_context(),
-                    )
+                    ),
+                    es_entity::TreeQuerySource {
+                        user_sql: "SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1",
+                        order_by_cols: &["name", "id"],
+                        n_user_args: 3usize,
+                        decode: es_entity::decode_tagged_row::<Repo__Id>,
+                    },
                 )
             }
         };

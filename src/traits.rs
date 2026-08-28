@@ -2,7 +2,9 @@
 
 use serde::{Serialize, de::DeserializeOwned};
 
-use super::{db, error::EntityHydrationError, events::EntityEvents, operation::AtomicOperation};
+use std::collections::HashMap;
+
+use super::{db, error::EntityHydrationError, events::EntityEvents, tree_query::TreeSpec};
 
 /// Required trait for all event enums to be compatible and recognised by es-entity.
 ///
@@ -293,29 +295,24 @@ pub trait EsRepo: Send {
     type QueryError: From<sqlx::Error> + From<EntityHydrationError> + Send;
     type EsQueryFlavor;
 
-    /// Loads all nested entities for a given set of parent entities within an atomic operation.
-    fn load_all_nested_in_op<OP, E>(
-        op: &mut OP,
-        entities: &mut [Self::Entity],
-    ) -> impl Future<Output = Result<(), E>> + Send
-    where
-        OP: AtomicOperation,
-        E: From<sqlx::Error> + From<EntityHydrationError> + Send;
+    /// Static description of this repo's subtree (self + nested children,
+    /// recursively) — used to assemble the single-statement tree query. A
+    /// repo with no nested fields reports an empty `children` list.
+    fn nested_tree_spec() -> TreeSpec;
 
-    /// Like [`load_all_nested_in_op`](EsRepo::load_all_nested_in_op) but includes soft-deleted
-    /// children.
-    ///
-    /// Default implementation delegates to `load_all_nested_in_op`.
-    fn load_all_nested_in_op_include_deleted<OP, E>(
-        op: &mut OP,
+    /// Consumes this repo's own children's rows from a tag-partitioned row
+    /// set (already fetched — all DB work happened before this is called,
+    /// so it is synchronous) and injects the hydrated children into
+    /// `entities`. `tag_cursor` starts at this node's own tag and is
+    /// advanced across the whole subtree in the same pre-order the SQL
+    /// assembler numbered it in.
+    fn hydrate_nested_from_rows<E>(
+        rows_by_tag: &mut HashMap<i32, Vec<db::Row>>,
+        tag_cursor: &mut i32,
         entities: &mut [Self::Entity],
-    ) -> impl Future<Output = Result<(), E>> + Send
+    ) -> Result<(), E>
     where
-        OP: AtomicOperation,
-        E: From<sqlx::Error> + From<EntityHydrationError> + Send,
-    {
-        Self::load_all_nested_in_op(op, entities)
-    }
+        E: From<sqlx::Error> + From<EntityHydrationError>;
 }
 
 pub trait RetryableInto<T>: Into<T> + Copy + std::fmt::Debug {}

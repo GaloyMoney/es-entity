@@ -734,16 +734,16 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, EntityFindError> {
-                self.find_by_id_in_op(&mut self.pool().begin().await?, id).await
+                self.find_by_id_in_op(self.pool(), id).await
             }
 
-            pub async fn find_by_id_in_op<OP>(
+            pub async fn find_by_id_in_op<'a, OP>(
                 &self,
-                op: &mut OP,
+                op: OP,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Entity, EntityFindError>
                 where
-                    OP: es_entity::AtomicOperation
+                    OP: es_entity::IntoOneTimeExecutor<'a>
             {
                 let __result: Result<Entity, EntityFindError> = async {
                     let id = id.borrow();
@@ -770,16 +770,16 @@ mod tests {
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, EntityQueryError> {
-                self.maybe_find_by_id_in_op(&mut self.pool().begin().await?, id).await
+                self.maybe_find_by_id_in_op(self.pool(), id).await
             }
 
-            pub async fn maybe_find_by_id_in_op<OP>(
+            pub async fn maybe_find_by_id_in_op<'a, OP>(
                 &self,
-                op: &mut OP,
+                op: OP,
                 id: impl std::borrow::Borrow<EntityId>
             ) -> Result<Option<Entity>, EntityQueryError>
                 where
-                    OP: es_entity::AtomicOperation
+                    OP: es_entity::IntoOneTimeExecutor<'a>
             {
                 let __result: Result<Option<Entity>, EntityQueryError> = async {
                     let id = id.borrow();

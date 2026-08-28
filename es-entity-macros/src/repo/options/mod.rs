@@ -176,16 +176,15 @@ impl RepoField {
         )
     }
 
-    pub fn find_nested_fn_name(&self) -> syn::Ident {
+    /// Synchronous fn that demuxes this field's rows out of an
+    /// already-fetched, tag-partitioned row set (see
+    /// `es-entity-dev/spec-single-query-nested-reads.md`). Replaces the old
+    /// `find_nested_*_in_op` / `find_nested_*_include_deleted_in_op` pair —
+    /// deletion filtering now happens entirely in the assembled tree query,
+    /// so a single fn covers both cases.
+    pub fn hydrate_nested_fn_name(&self) -> syn::Ident {
         syn::Ident::new(
-            &format!("find_nested_{}_in_op", self.ident()),
-            proc_macro2::Span::call_site(),
-        )
-    }
-
-    pub fn find_nested_include_deleted_fn_name(&self) -> syn::Ident {
-        syn::Ident::new(
-            &format!("find_nested_{}_include_deleted_in_op", self.ident()),
+            &format!("hydrate_nested_{}", self.ident()),
             proc_macro2::Span::call_site(),
         )
     }
@@ -497,39 +496,29 @@ impl RepositoryOptions {
         }
     }
 
-    pub fn query_fn_generics(nested: bool) -> proc_macro2::TokenStream {
-        if nested {
-            quote! {
-                <OP>
-            }
-        } else {
-            quote! {
-                <'a, OP>
-            }
+    /// Nested repos' generated read fns took `op: &mut OP where OP:
+    /// AtomicOperation` (a transaction) because hydrating their tree used to
+    /// span multiple statements. Since single-statement tree queries (see
+    /// `es-entity-dev/spec-single-query-nested-reads.md`), every read fn —
+    /// nested or not — uses the same flat, transaction-free signature, so
+    /// this and the three fns below always return that form. The `_nested`
+    /// parameter is kept (rather than removed at every call site) purely to
+    /// minimize the diff; it is intentionally unused.
+    pub fn query_fn_generics(_nested: bool) -> proc_macro2::TokenStream {
+        quote! {
+            <'a, OP>
         }
     }
 
-    pub fn query_fn_op_arg(nested: bool) -> proc_macro2::TokenStream {
-        if nested {
-            quote! {
-                op: &mut OP
-            }
-        } else {
-            quote! {
-                op: OP
-            }
+    pub fn query_fn_op_arg(_nested: bool) -> proc_macro2::TokenStream {
+        quote! {
+            op: OP
         }
     }
 
-    pub fn query_fn_op_traits(nested: bool) -> proc_macro2::TokenStream {
-        if nested {
-            quote! {
-                es_entity::AtomicOperation
-            }
-        } else {
-            quote! {
-                es_entity::IntoOneTimeExecutor<'a>
-            }
+    pub fn query_fn_op_traits(_nested: bool) -> proc_macro2::TokenStream {
+        quote! {
+            es_entity::IntoOneTimeExecutor<'a>
         }
     }
 
@@ -585,15 +574,9 @@ impl RepositoryOptions {
         syn::Ident::new(&format!("Scoped{}", self.ident), Span::call_site())
     }
 
-    pub fn query_fn_get_op(nested: bool) -> proc_macro2::TokenStream {
-        if nested {
-            quote! {
-                &mut self.pool().begin().await?
-            }
-        } else {
-            quote! {
-                self.pool()
-            }
+    pub fn query_fn_get_op(_nested: bool) -> proc_macro2::TokenStream {
+        quote! {
+            self.pool()
         }
     }
 

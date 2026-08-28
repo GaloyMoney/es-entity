@@ -9,6 +9,7 @@ mod events_write;
 mod find_all_fn;
 mod find_by_fn;
 mod forget_fn;
+mod hydrate_nested;
 mod list_by_fn;
 mod list_for_filters_fn;
 mod list_for_fn;
@@ -16,7 +17,6 @@ mod nested;
 mod options;
 mod persist_events_batch_fn;
 mod persist_events_fn;
-mod populate_nested;
 mod post_hydrate_hook;
 mod post_persist_hook;
 mod scope;
@@ -61,10 +61,9 @@ pub struct EsRepo<'a> {
     begin: begin::Begin<'a>,
     list_by_fns: Vec<list_by_fn::ListByFn<'a>>,
     list_for_fns: Vec<list_for_fn::ListForFn<'a>>,
-    nested_fns: Vec<syn::Ident>,
-    nested_include_deleted_fns: Vec<syn::Ident>,
+    hydrate_nested_fns: Vec<syn::Ident>,
     nested: Vec<nested::Nested<'a>>,
-    populate_nested: Option<populate_nested::PopulateNested<'a>>,
+    hydrate_nested: Option<hydrate_nested::HydrateNested<'a>>,
     error_types: error_types::ErrorTypes<'a>,
     opts: &'a RepositoryOptions,
 }
@@ -96,17 +95,13 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
                     .collect::<Vec<_>>()
             })
             .collect();
-        let populate_nested = opts
+        let hydrate_nested = opts
             .columns
             .parent()
-            .map(|c| populate_nested::PopulateNested::new(c, opts));
-        let nested_include_deleted_fns: Vec<_> = opts
+            .map(|c| hydrate_nested::HydrateNested::new(c, opts));
+        let (hydrate_nested_fns, nested): (Vec<_>, Vec<_>) = opts
             .all_nested()
-            .map(|n| n.find_nested_include_deleted_fn_name())
-            .collect();
-        let (nested_fns, nested): (Vec<_>, Vec<_>) = opts
-            .all_nested()
-            .map(|n| (n.find_nested_fn_name(), nested::Nested::new(n, opts)))
+            .map(|n| (n.hydrate_nested_fn_name(), nested::Nested::new(n, opts)))
             .unzip();
 
         let forget_fn = if opts.forgettable_enabled() {
@@ -153,10 +148,9 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             begin: begin::Begin::from(opts),
             list_by_fns,
             list_for_fns,
-            nested_fns,
-            nested_include_deleted_fns,
+            hydrate_nested_fns,
             nested,
-            populate_nested,
+            hydrate_nested,
             error_types: error_types::ErrorTypes::new(opts),
             opts,
         }
@@ -216,20 +210,41 @@ impl ToTokens for EsRepo<'_> {
         let cursor_mod = self.opts.cursor_mod();
         let types_mod = self.opts.repo_types_mod();
 
-        let nested_fns = &self.nested_fns;
-        let nested_include_deleted_fns = &self.nested_include_deleted_fns;
+        let hydrate_nested_fns = &self.hydrate_nested_fns;
         let nested = &self.nested;
-        let populate_nested = &self.populate_nested;
+        let hydrate_nested = &self.hydrate_nested;
 
         let pool_field = self.opts.pool_field();
         let has_tbl_prefix = self.opts.table_prefix().is_some();
-        let es_query_flavor = if nested_fns.is_empty() {
+        let es_query_flavor = if hydrate_nested_fns.is_empty() {
             quote! {
                 es_entity::EsQueryFlavorFlat
             }
         } else {
             quote! { es_entity::EsQueryFlavorNested }
         };
+
+        // `TreeSpec` for the single-statement tree query (see
+        // `es-entity-dev/spec-single-query-nested-reads.md`). Reported
+        // unconditionally from this repo's own declaration — when this repo
+        // is itself queried as a nested child (not as the query's root),
+        // `parent_column` is what lets the assembler filter it by its
+        // parent's ids; when queried as root, the value is simply unused.
+        let tree_table_name = self.opts.table_name();
+        let tree_events_table_name = self.opts.events_table_name();
+        let tree_parent_column = match self.opts.columns.parent() {
+            Some(col) => {
+                let name = col.name().to_string();
+                quote! { Some(#name) }
+            }
+            None => quote! { None },
+        };
+        let tree_soft_delete = self.opts.delete.is_soft();
+        let tree_forgettable_table_name = match self.opts.forgettable_table_name() {
+            Some(tbl) => quote! { Some(#tbl) },
+            None => quote! { None },
+        };
+        let tree_child_tys: Vec<_> = self.opts.all_nested().map(|f| &f.ty).collect();
 
         let create_error = self.opts.create_error();
         let modify_error = self.opts.modify_error();
@@ -396,7 +411,7 @@ impl ToTokens for EsRepo<'_> {
                 #(#nested)*
             }
 
-            #populate_nested
+            #hydrate_nested
 
             impl #impl_generics es_entity::EsRepo for #repo #ty_generics #where_clause {
                 type Entity = #entity;
@@ -407,26 +422,28 @@ impl ToTokens for EsRepo<'_> {
                 type EsQueryFlavor = #es_query_flavor;
 
                #[inline(always)]
-               async fn load_all_nested_in_op<OP, __EsErr>(
-                   op: &mut OP, entities: &mut [#entity]
-               ) -> Result<(), __EsErr>
-                   where
-                       OP: es_entity::AtomicOperation,
-                       __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
-               {
-                   #(Self::#nested_fns::<_, _, __EsErr>(op, entities).await?;)*
-                   Ok(())
+               fn nested_tree_spec() -> es_entity::TreeSpec {
+                   es_entity::TreeSpec {
+                       table_name: #tree_table_name,
+                       events_table_name: #tree_events_table_name,
+                       parent_column: #tree_parent_column,
+                       soft_delete: #tree_soft_delete,
+                       forgettable_table_name: #tree_forgettable_table_name,
+                       event_context: <#types_mod::Repo__Event as EsEvent>::event_context(),
+                       children: vec![ #( <#tree_child_tys as es_entity::EsRepo>::nested_tree_spec(), )* ],
+                   }
                }
 
                #[inline(always)]
-               async fn load_all_nested_in_op_include_deleted<OP, __EsErr>(
-                   op: &mut OP, entities: &mut [#entity]
+               fn hydrate_nested_from_rows<__EsErr>(
+                   rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
+                   tag_cursor: &mut i32,
+                   entities: &mut [#entity],
                ) -> Result<(), __EsErr>
                    where
-                       OP: es_entity::AtomicOperation,
-                       __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
+                       __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError>,
                {
-                   #(Self::#nested_include_deleted_fns::<_, _, __EsErr>(op, entities).await?;)*
+                   #(Self::#hydrate_nested_fns::<_, __EsErr>(rows_by_tag, tag_cursor, entities)?;)*
                    Ok(())
                }
             }

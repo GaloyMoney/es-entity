@@ -48,16 +48,8 @@ impl FindAllFn<'_> {
         let query_error = &self.query_error;
         let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
 
-        let generics = if self.any_nested {
-            quote! { <Out: From<#entity>> }
-        } else {
-            quote! { <'a, Out: From<#entity>> }
-        };
-        let op_param = if self.any_nested {
-            quote! { op: &mut impl #query_fn_op_traits }
-        } else {
-            quote! { op: impl #query_fn_op_traits }
-        };
+        let generics = quote! { <'a, Out: From<#entity>> };
+        let op_param = quote! { op: impl #query_fn_op_traits };
 
         quote! {
             pub async fn find_all<Out: From<#entity>>(
@@ -86,11 +78,7 @@ impl ToTokens for FindAllFn<'_> {
         let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
         let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
 
-        let generics = if self.any_nested {
-            quote! { <Out: From<#entity>> }
-        } else {
-            quote! { <'a, Out: From<#entity>> }
-        };
+        let generics = quote! { <'a, Out: From<#entity>> };
 
         let query = format!("SELECT id FROM {} WHERE id = ANY($1)", self.table_name);
 
@@ -146,11 +134,7 @@ impl ToTokens for FindAllFn<'_> {
             quote! { #es_query_call.fetch_n(op, ids.len()).await? }
         };
 
-        let op_param = if self.any_nested {
-            quote! { op: &mut impl #query_fn_op_traits }
-        } else {
-            quote! { op: impl #query_fn_op_traits }
-        };
+        let op_param = quote! { op: impl #query_fn_op_traits };
 
         #[cfg(feature = "instrument")]
         let instrument_attr = {

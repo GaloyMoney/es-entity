@@ -4,20 +4,22 @@ use quote::{TokenStreamExt, quote};
 
 use super::options::*;
 
-pub struct PopulateNested<'a> {
+/// Generates the read-side `HydrateNested` impl (demuxing this child's rows
+/// out of an already-fetched, tag-partitioned row set — no SQL, no I/O) and,
+/// for soft-delete repos, the write-side `CascadeDeleteNested` impl
+/// (unchanged: still SQL, still runs inside the parent's delete op).
+pub struct HydrateNested<'a> {
     column: &'a Column,
     ident: &'a syn::Ident,
     generics: &'a syn::Generics,
     id: &'a syn::Ident,
     table_name: &'a str,
-    events_table_name: &'a str,
-    repo_types_mod: syn::Ident,
     delete_option: &'a DeleteOption,
     forgettable_table_name: Option<&'a str>,
     forgettable_columns: Vec<&'a syn::Ident>,
 }
 
-impl<'a> PopulateNested<'a> {
+impl<'a> HydrateNested<'a> {
     pub fn new(column: &'a Column, opts: &'a RepositoryOptions) -> Self {
         Self {
             column,
@@ -25,8 +27,6 @@ impl<'a> PopulateNested<'a> {
             generics: &opts.generics,
             id: opts.id(),
             table_name: opts.table_name(),
-            events_table_name: opts.events_table_name(),
-            repo_types_mod: opts.repo_types_mod(),
             delete_option: &opts.delete,
             forgettable_table_name: opts.forgettable_table_name(),
             forgettable_columns: opts.columns.forgettable_column_names(),
@@ -34,117 +34,49 @@ impl<'a> PopulateNested<'a> {
     }
 }
 
-impl ToTokens for PopulateNested<'_> {
+impl ToTokens for HydrateNested<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let ty = self.column.ty();
         let ident = self.ident;
-        let repo_types_mod = &self.repo_types_mod;
+        let id = self.id;
         let accessor = self.column.parent_accessor();
-
-        let not_deleted_condition = self.delete_option.not_deleted_condition();
-        let (payload_column, forgettable_join) =
-            if let Some(forgettable_tbl) = self.forgettable_table_name {
-                (
-                    "p.payload as \"forgettable_payload?\"".to_string(),
-                    format!(
-                        " LEFT JOIN {} p ON e.id = p.entity_id AND e.sequence = p.sequence",
-                        forgettable_tbl
-                    ),
-                )
-            } else {
-                (
-                    "NULL::jsonb as \"forgettable_payload?\"".to_string(),
-                    String::new(),
-                )
-            };
-
-        let query = format!(
-            "WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1)){}) SELECT i.id AS \"entity_id: {}\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, {} FROM entities i JOIN {} e ON i.id = e.id{} ORDER BY e.id, e.sequence",
-            self.table_name,
-            self.column.name(),
-            not_deleted_condition,
-            self.id,
-            payload_column,
-            self.events_table_name,
-            forgettable_join,
-        );
 
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
 
-        let include_deleted_override = if self.delete_option.is_soft() {
-            let include_deleted_query = format!(
-                "WITH entities AS (SELECT * FROM {} WHERE ({} = ANY($1))) SELECT i.id AS \"entity_id: {}\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, {} FROM entities i JOIN {} e ON i.id = e.id{} ORDER BY e.id, e.sequence",
-                self.table_name,
-                self.column.name(),
-                self.id,
-                payload_column,
-                self.events_table_name,
-                forgettable_join,
-            );
-            quote! {
-                async fn populate_in_op_include_deleted<OP, P, __EsErr>(
-                    op: &mut OP,
-                    mut lookup: std::collections::HashMap<#ty, &mut P>,
-                ) -> Result<(), __EsErr>
-                where
-                    OP: es_entity::AtomicOperation,
-                    P: Parent<<Self as EsRepo>::Entity>,
-                    __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
-                {
-                    let parent_ids: Vec<_> = lookup.keys().collect();
-                    let rows = {
-                        sqlx::query_as!(
-                            #repo_types_mod::Repo__DbEvent,
-                            #include_deleted_query,
-                            parent_ids.as_slice() as &[&#ty],
-                            <#repo_types_mod::Repo__Event as EsEvent>::event_context(),
-                        ).fetch_all(op.as_executor()).await?
-                    };
-                    let n = rows.len();
-                    let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(rows.into_iter(), n)?;
-                    Self::load_all_nested_in_op_include_deleted::<_, __EsErr>(op, &mut res).await?;
-                    for entity in res.into_iter() {
-                        let parent = lookup.get_mut(&entity.#accessor).expect("parent not present");
-                        parent.inject_children(std::iter::once(entity));
-                    }
-                    Ok(())
-                }
-            }
-        } else {
-            quote! {}
-        };
-
         tokens.append_all(quote! {
-            impl #impl_generics es_entity::PopulateNested<#ty> for #ident #ty_generics #where_clause {
-                async fn populate_in_op<OP, P, __EsErr>(
-                    op: &mut OP,
+            impl #impl_generics es_entity::HydrateNested<#ty> for #ident #ty_generics #where_clause {
+                fn hydrate_in_op<P, __EsErr>(
+                    rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
+                    tag_cursor: &mut i32,
                     mut lookup: std::collections::HashMap<#ty, &mut P>,
                 ) -> Result<(), __EsErr>
                 where
-                    OP: es_entity::AtomicOperation,
                     P: Parent<<Self as EsRepo>::Entity>,
-                    __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
+                    __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError>,
                 {
-                    let parent_ids: Vec<_> = lookup.keys().collect();
-                    let rows = {
-                        sqlx::query_as!(
-                            #repo_types_mod::Repo__DbEvent,
-                            #query,
-                            parent_ids.as_slice() as &[&#ty],
-                            <#repo_types_mod::Repo__Event as EsEvent>::event_context(),
-                        ).fetch_all(op.as_executor()).await?
-                    };
+                    let my_tag = *tag_cursor;
+                    *tag_cursor += 1;
+                    let rows = rows_by_tag.remove(&my_tag).unwrap_or_default();
                     let n = rows.len();
-                    let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(rows.into_iter(), n)?;
-                    Self::load_all_nested_in_op::<_, __EsErr>(op, &mut res).await?;
+                    let generic = rows
+                        .iter()
+                        .map(es_entity::decode_tagged_row::<#id>)
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(generic.into_iter(), n)?;
+                    <Self as es_entity::EsRepo>::hydrate_nested_from_rows::<__EsErr>(rows_by_tag, tag_cursor, &mut res)?;
                     for entity in res.into_iter() {
-                        let parent = lookup.get_mut(&entity.#accessor).expect("parent not present");
-                        parent.inject_children(std::iter::once(entity));
+                        // A missing parent is expected, not a bug: `fetch_n`'s
+                        // peek-ahead `LIMIT first + 1` row has its children
+                        // fetched in the same statement (there is no way to
+                        // exclude them without a second round trip) but is
+                        // then truncated away by `load_n` before `lookup` is
+                        // built — so its children simply have nowhere to go.
+                        if let Some(parent) = lookup.get_mut(&entity.#accessor) {
+                            parent.inject_children(std::iter::once(entity));
+                        }
                     }
                     Ok(())
                 }
-
-                #include_deleted_override
             }
         });
 
@@ -226,15 +158,38 @@ mod tests {
     use super::*;
     use crate::repo::options::RepositoryOptions;
 
-    fn cascade_output(input: syn::DeriveInput) -> String {
+    fn output(input: syn::DeriveInput) -> String {
         let opts = RepositoryOptions::from_derive_input(&input).unwrap();
         let parent = opts
             .columns
             .parent()
             .expect("repo must declare a parent column");
         let mut tokens = TokenStream::new();
-        PopulateNested::new(parent, &opts).to_tokens(&mut tokens);
+        HydrateNested::new(parent, &opts).to_tokens(&mut tokens);
         tokens.to_string()
+    }
+
+    #[test]
+    fn hydrate_in_op_demuxes_by_tag_and_recurses_before_injecting() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "OrderItem",
+                columns(order_id(ty = "OrderId", update(persist = false), parent))
+            )]
+            struct OrderItems {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = output(input);
+        assert!(out.contains("impl es_entity :: HydrateNested < OrderId > for OrderItems"));
+        assert!(out.contains("fn hydrate_in_op"));
+        // No SQL, no I/O — purely bookkeeping over already-fetched rows.
+        assert!(!out.contains("sqlx :: query"));
+        assert!(out.contains("es_entity :: decode_tagged_row :: < OrderItemId >"));
+        // Grandchildren are hydrated before this level injects into its own
+        // parents, so a grandchild's rows are consumed (tag_cursor advanced)
+        // deterministically regardless of what the parent does with them.
+        assert!(out.contains("hydrate_nested_from_rows"));
     }
 
     #[test]
@@ -253,14 +208,14 @@ mod tests {
                 pool: sqlx::PgPool,
             }
         };
-        let output = cascade_output(input);
+        let out = output(input);
         // Child payload rows are deleted first, scoped to direct children by
         // the parent FK.
-        assert!(output.contains(
+        assert!(out.contains(
             "DELETE FROM account_holders_forgettable_payloads WHERE entity_id IN (SELECT id FROM account_holders WHERE account_id = $1)"
         ));
         // The soft-delete UPDATE also NULLs the child forgettable index column.
-        assert!(output.contains(
+        assert!(out.contains(
             "UPDATE account_holders SET deleted = TRUE, email = NULL WHERE account_id = $1 AND deleted = FALSE"
         ));
     }
@@ -280,11 +235,26 @@ mod tests {
                 pool: sqlx::PgPool,
             }
         };
-        let output = cascade_output(input);
-        assert!(output.contains(
+        let out = output(input);
+        assert!(out.contains(
             "UPDATE account_holders SET deleted = TRUE WHERE account_id = $1 AND deleted = FALSE"
         ));
-        assert!(!output.contains("DELETE FROM"));
-        assert!(!output.contains("= NULL"));
+        assert!(!out.contains("DELETE FROM"));
+        assert!(!out.contains("= NULL"));
+    }
+
+    #[test]
+    fn non_soft_delete_repo_gets_no_cascade_delete_impl() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "OrderItem",
+                columns(order_id(ty = "OrderId", update(persist = false), parent))
+            )]
+            struct OrderItems {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = output(input);
+        assert!(!out.contains("CascadeDeleteNested"));
     }
 }

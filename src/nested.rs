@@ -1,6 +1,6 @@
 //! Handle operations for nested entities.
 
-use crate::{error::EntityHydrationError, operation::AtomicOperation, traits::*};
+use crate::{db, error::EntityHydrationError, operation::AtomicOperation, traits::*};
 
 use std::collections::HashMap;
 
@@ -106,30 +106,18 @@ impl<T: EsEntity> Nested<T> {
     }
 }
 
-pub trait PopulateNested<ID>: EsRepo {
-    fn populate_in_op<OP, P, E>(
-        op: &mut OP,
-        lookup: std::collections::HashMap<ID, &mut P>,
-    ) -> impl Future<Output = Result<(), E>> + Send
+/// Hydrates one nested child repo's rows out of an already-fetched,
+/// tag-partitioned row set (the tree query has already run — this is
+/// synchronous, no DB access).
+pub trait HydrateNested<ID>: EsRepo {
+    fn hydrate_in_op<P, E>(
+        rows_by_tag: &mut HashMap<i32, Vec<db::Row>>,
+        tag_cursor: &mut i32,
+        lookup: HashMap<ID, &mut P>,
+    ) -> Result<(), E>
     where
-        OP: AtomicOperation,
         P: Parent<<Self as EsRepo>::Entity>,
-        E: From<sqlx::Error> + From<EntityHydrationError> + Send;
-
-    /// Like [`populate_in_op`](PopulateNested::populate_in_op) but includes soft-deleted children.
-    ///
-    /// Default implementation delegates to `populate_in_op` (correct for repos without soft-delete).
-    fn populate_in_op_include_deleted<OP, P, E>(
-        op: &mut OP,
-        lookup: std::collections::HashMap<ID, &mut P>,
-    ) -> impl Future<Output = Result<(), E>> + Send
-    where
-        OP: AtomicOperation,
-        P: Parent<<Self as EsRepo>::Entity>,
-        E: From<sqlx::Error> + From<EntityHydrationError> + Send,
-    {
-        Self::populate_in_op(op, lookup)
-    }
+        E: From<sqlx::Error> + From<EntityHydrationError>;
 }
 
 /// Trait for cascade soft-deleting child entities when a parent is deleted.
