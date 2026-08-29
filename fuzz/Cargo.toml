@@ -1,6 +1,6 @@
 [package]
 name = "es-entity-fuzz"
-version = "0.12.16-dev"
+version = "0.12.16"
 publish = false
 edition = "2021"
 

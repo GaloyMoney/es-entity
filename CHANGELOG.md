@@ -1,3 +1,15 @@
+# [cala release v0.12.16](https://github.com/GaloyMoney/cala/releases/tag/0.12.16)
+
+
+
+### Features
+
+- Single-statement nested reads (#215)
+
+### Miscellaneous Tasks
+
+- Bump uuid from 1.24.0 to 1.24.1 in the all-dependencies group (#211)
+
 # [cala release v0.12.15](https://github.com/GaloyMoney/cala/releases/tag/0.12.15)
 
 
