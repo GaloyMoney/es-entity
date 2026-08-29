@@ -176,16 +176,9 @@ impl RepoField {
         )
     }
 
-    pub fn find_nested_fn_name(&self) -> syn::Ident {
+    pub fn hydrate_nested_fn_name(&self) -> syn::Ident {
         syn::Ident::new(
-            &format!("find_nested_{}_in_op", self.ident()),
-            proc_macro2::Span::call_site(),
-        )
-    }
-
-    pub fn find_nested_include_deleted_fn_name(&self) -> syn::Ident {
-        syn::Ident::new(
-            &format!("find_nested_{}_include_deleted_in_op", self.ident()),
+            &format!("hydrate_nested_{}", self.ident()),
             proc_macro2::Span::call_site(),
         )
     }
@@ -497,39 +490,21 @@ impl RepositoryOptions {
         }
     }
 
-    pub fn query_fn_generics(nested: bool) -> proc_macro2::TokenStream {
-        if nested {
-            quote! {
-                <OP>
-            }
-        } else {
-            quote! {
-                <'a, OP>
-            }
+    pub fn query_fn_generics() -> proc_macro2::TokenStream {
+        quote! {
+            <'a, OP>
         }
     }
 
-    pub fn query_fn_op_arg(nested: bool) -> proc_macro2::TokenStream {
-        if nested {
-            quote! {
-                op: &mut OP
-            }
-        } else {
-            quote! {
-                op: OP
-            }
+    pub fn query_fn_op_arg() -> proc_macro2::TokenStream {
+        quote! {
+            op: OP
         }
     }
 
-    pub fn query_fn_op_traits(nested: bool) -> proc_macro2::TokenStream {
-        if nested {
-            quote! {
-                es_entity::AtomicOperation
-            }
-        } else {
-            quote! {
-                es_entity::IntoOneTimeExecutor<'a>
-            }
+    pub fn query_fn_op_traits() -> proc_macro2::TokenStream {
+        quote! {
+            es_entity::IntoOneTimeExecutor<'a>
         }
     }
 
@@ -585,15 +560,9 @@ impl RepositoryOptions {
         syn::Ident::new(&format!("Scoped{}", self.ident), Span::call_site())
     }
 
-    pub fn query_fn_get_op(nested: bool) -> proc_macro2::TokenStream {
-        if nested {
-            quote! {
-                &mut self.pool().begin().await?
-            }
-        } else {
-            quote! {
-                self.pool()
-            }
+    pub fn query_fn_get_op() -> proc_macro2::TokenStream {
+        quote! {
+            self.pool()
         }
     }
 

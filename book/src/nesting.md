@@ -920,19 +920,6 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-One thing to note is that  the `_in_op` functions of the parent repository now require an `AtomicOperation` argument since we must load all the entities in a consistent snapshot:
-```rust,ignore
-async fn find_by_id_in_op<OP>(op: OP, id: EntityId)
-where
-    OP: AtomicOperation;
-
-// The version of the queries in Repositories without nested children
-// cannot be used here as it would not load parent + children from a consistent snapshot.
-// async fn find_by_id_in_op<'a, OP>(op: OP, id: EntityId)
-// where
-//     OP: IntoOneTimeExecutor<'a>;
-```
-
 ## Benefits of the Nested Approach
 
 This approach provides several key benefits:

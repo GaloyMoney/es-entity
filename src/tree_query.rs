@@ -1,0 +1,351 @@
+//! Dynamically assembles the single-statement tree query a nested repo's
+//! generated read fns execute at runtime: a tagged `UNION ALL` over one CTE
+//! per tree node, so a parent and all of its nested children (recursively)
+//! come back in one statement instead of one per level.
+
+use std::collections::HashMap;
+
+use crate::{db, events::GenericEvent};
+
+/// Static description of one node (repo) in a nested tree, used to build the query.
+#[derive(Debug, Clone)]
+pub struct TreeSpec {
+    pub table_name: &'static str,
+    pub events_table_name: &'static str,
+    pub parent_column: Option<&'static str>,
+    pub soft_delete: bool,
+    pub forgettable_table_name: Option<&'static str>,
+    pub event_context: bool,
+    pub children: Vec<TreeSpec>,
+}
+
+/// The root user query plus the bits needed to fold it into the tree query.
+pub struct TreeQuerySource<Id> {
+    pub user_sql: &'static str,
+    pub order_by_cols: &'static [&'static str],
+    pub n_user_args: usize,
+    pub decode: fn(&db::Row) -> Result<GenericEvent<Id>, sqlx::Error>,
+}
+
+pub fn decode_tag(row: &db::Row) -> Result<i32, sqlx::Error> {
+    sqlx::Row::try_get(row, "tag")
+}
+
+pub fn decode_tagged_row<Id>(row: &db::Row) -> Result<GenericEvent<Id>, sqlx::Error>
+where
+    Id: for<'r> sqlx::Decode<'r, db::Db> + sqlx::Type<db::Db>,
+{
+    use sqlx::Row;
+    Ok(GenericEvent {
+        entity_id: row.try_get("entity_id")?,
+        sequence: row.try_get("sequence")?,
+        event: row.try_get("event")?,
+        context: row.try_get("context")?,
+        recorded_at: row.try_get("recorded_at")?,
+        forgettable_payload: row.try_get("forgettable_payload")?,
+    })
+}
+
+pub fn partition_by_tag(rows: Vec<db::Row>) -> Result<HashMap<i32, Vec<db::Row>>, sqlx::Error> {
+    let mut by_tag: HashMap<i32, Vec<db::Row>> = HashMap::new();
+    for row in rows {
+        let tag = decode_tag(&row)?;
+        by_tag.entry(tag).or_default().push(row);
+    }
+    Ok(by_tag)
+}
+
+fn branch_sql(
+    tag: i32,
+    cte_name: &str,
+    node: &TreeSpec,
+    is_root: bool,
+    ctx_param_idx: usize,
+) -> String {
+    let context_expr = if is_root {
+        format!("CASE WHEN ${ctx_param_idx} THEN e.context ELSE NULL::jsonb END")
+    } else if node.event_context {
+        "e.context".to_string()
+    } else {
+        "NULL::jsonb".to_string()
+    };
+    let (payload_expr, forgettable_join) = match node.forgettable_table_name {
+        Some(tbl) => (
+            "p.payload".to_string(),
+            format!(" LEFT JOIN {tbl} p ON e.id = p.entity_id AND e.sequence = p.sequence"),
+        ),
+        None => ("NULL::jsonb".to_string(), String::new()),
+    };
+    let ord_expr = if is_root { "i.__ord" } else { "NULL::BIGINT" };
+    format!(
+        "SELECT {tag} AS tag, i.id AS entity_id, e.sequence, e.event, {context_expr} AS context, \
+         e.recorded_at, {payload_expr} AS forgettable_payload, {ord_expr} AS __ord \
+         FROM {cte_name} i JOIN {events_table} e ON i.id = e.id{forgettable_join}",
+        events_table = node.events_table_name,
+    )
+}
+
+pub fn build_tree_query(
+    user_sql: &str,
+    order_by_cols: &[&str],
+    spec: &TreeSpec,
+    include_deleted: bool,
+    ctx_param_idx: usize,
+) -> String {
+    let order_clause = if order_by_cols.is_empty() {
+        "id".to_string()
+    } else {
+        order_by_cols.join(", ")
+    };
+
+    let mut ctes = vec![
+        format!("__user AS ({user_sql})"),
+        format!(
+            "entities AS (SELECT *, ROW_NUMBER() OVER (ORDER BY {order_clause}) AS __ord FROM __user)"
+        ),
+    ];
+    let mut branches = vec![branch_sql(0, "entities", spec, true, ctx_param_idx)];
+    let mut cursor: i32 = 1;
+
+    walk_children(
+        spec,
+        "entities",
+        include_deleted,
+        ctx_param_idx,
+        &mut cursor,
+        &mut ctes,
+        &mut branches,
+    );
+
+    format!(
+        "WITH {} {} ORDER BY tag, __ord, entity_id, sequence",
+        ctes.join(", "),
+        branches.join(" UNION ALL "),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_children(
+    node: &TreeSpec,
+    parent_cte: &str,
+    include_deleted: bool,
+    ctx_param_idx: usize,
+    cursor: &mut i32,
+    ctes: &mut Vec<String>,
+    branches: &mut Vec<String>,
+) {
+    for child in &node.children {
+        let tag = *cursor;
+        *cursor += 1;
+        let cte_name = format!("n{tag}");
+        let parent_col = child
+            .parent_column
+            .expect("non-root tree node must declare a parent column");
+        let deleted_cond = if child.soft_delete && !include_deleted {
+            " AND deleted = FALSE"
+        } else {
+            ""
+        };
+        ctes.push(format!(
+            "{cte_name} AS (SELECT id FROM {} WHERE {parent_col} IN (SELECT id FROM {parent_cte}){deleted_cond})",
+            child.table_name
+        ));
+        branches.push(branch_sql(tag, &cte_name, child, false, ctx_param_idx));
+        walk_children(
+            child,
+            &cte_name,
+            include_deleted,
+            ctx_param_idx,
+            cursor,
+            ctes,
+            branches,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn leaf(table: &'static str, events: &'static str, parent_col: &'static str) -> TreeSpec {
+        TreeSpec {
+            table_name: table,
+            events_table_name: events,
+            parent_column: Some(parent_col),
+            soft_delete: false,
+            forgettable_table_name: None,
+            event_context: false,
+            children: Vec::new(),
+        }
+    }
+
+    fn root(table: &'static str, events: &'static str, children: Vec<TreeSpec>) -> TreeSpec {
+        TreeSpec {
+            table_name: table,
+            events_table_name: events,
+            parent_column: None,
+            soft_delete: false,
+            forgettable_table_name: None,
+            event_context: false,
+            children,
+        }
+    }
+
+    #[test]
+    fn leaf_only_root() {
+        let spec = root("subscriptions", "subscription_events", Vec::new());
+        let sql = build_tree_query(
+            "SELECT id FROM subscriptions WHERE id = $1",
+            &[],
+            &spec,
+            false,
+            2,
+        );
+        assert_eq!(
+            sql,
+            "WITH __user AS (SELECT id FROM subscriptions WHERE id = $1), \
+             entities AS (SELECT *, ROW_NUMBER() OVER (ORDER BY id) AS __ord FROM __user) \
+             SELECT 0 AS tag, i.id AS entity_id, e.sequence, e.event, \
+             CASE WHEN $2 THEN e.context ELSE NULL::jsonb END AS context, e.recorded_at, \
+             NULL::jsonb AS forgettable_payload, i.__ord AS __ord \
+             FROM entities i JOIN subscription_events e ON i.id = e.id \
+             ORDER BY tag, __ord, entity_id, sequence"
+        );
+    }
+
+    #[test]
+    fn one_child() {
+        let child = TreeSpec {
+            soft_delete: true,
+            ..leaf(
+                "billing_periods",
+                "billing_period_events",
+                "subscription_id",
+            )
+        };
+        let spec = root("subscriptions", "subscription_events", vec![child]);
+        let sql = build_tree_query(
+            "SELECT id FROM subscriptions WHERE id = $1",
+            &[],
+            &spec,
+            false,
+            2,
+        );
+        assert!(sql.contains(
+            "n1 AS (SELECT id FROM billing_periods WHERE subscription_id IN (SELECT id FROM entities) AND deleted = FALSE)"
+        ));
+        assert!(sql.contains(
+            "SELECT 1 AS tag, i.id AS entity_id, e.sequence, e.event, NULL::jsonb AS context, \
+             e.recorded_at, NULL::jsonb AS forgettable_payload, NULL::BIGINT AS __ord \
+             FROM n1 i JOIN billing_period_events e ON i.id = e.id"
+        ));
+    }
+
+    #[test]
+    fn two_children_first_has_grandchild() {
+        let grandchild = leaf("line_items", "line_item_events", "billing_period_id");
+        let child_a = TreeSpec {
+            children: vec![grandchild],
+            ..leaf(
+                "billing_periods",
+                "billing_period_events",
+                "subscription_id",
+            )
+        };
+        let child_b = leaf("invoices", "invoice_events", "subscription_id");
+        let spec = root(
+            "subscriptions",
+            "subscription_events",
+            vec![child_a, child_b],
+        );
+        let sql = build_tree_query(
+            "SELECT id FROM subscriptions WHERE id = $1",
+            &[],
+            &spec,
+            false,
+            2,
+        );
+        assert!(sql.contains("n1 AS (SELECT id FROM billing_periods WHERE subscription_id IN (SELECT id FROM entities)"));
+        assert!(sql.contains(
+            "n2 AS (SELECT id FROM line_items WHERE billing_period_id IN (SELECT id FROM n1)"
+        ));
+        assert!(sql.contains(
+            "n3 AS (SELECT id FROM invoices WHERE subscription_id IN (SELECT id FROM entities)"
+        ));
+        assert!(sql.contains("SELECT 1 AS tag"));
+        assert!(sql.contains("SELECT 2 AS tag"));
+        assert!(sql.contains("SELECT 3 AS tag"));
+    }
+
+    #[test]
+    fn soft_delete_and_forgettable_and_inlined_context() {
+        let child = TreeSpec {
+            soft_delete: true,
+            forgettable_table_name: Some("order_items_forgettable_payloads"),
+            event_context: true,
+            ..leaf("order_items", "order_item_events", "order_id")
+        };
+        let spec = root("orders", "order_events", vec![child]);
+        let sql = build_tree_query("SELECT id FROM orders WHERE id = $1", &[], &spec, false, 2);
+        assert!(sql.contains("AND deleted = FALSE)"));
+        assert!(sql.contains(
+            "LEFT JOIN order_items_forgettable_payloads p ON e.id = p.entity_id AND e.sequence = p.sequence"
+        ));
+        assert!(sql.contains("p.payload AS forgettable_payload"));
+        assert!(sql.contains(
+            "SELECT 1 AS tag, i.id AS entity_id, e.sequence, e.event, e.context AS context"
+        ));
+    }
+
+    #[test]
+    fn include_deleted_drops_deleted_condition_transitively() {
+        let grandchild = TreeSpec {
+            soft_delete: true,
+            ..leaf("line_items", "line_item_events", "billing_period_id")
+        };
+        let child = TreeSpec {
+            soft_delete: true,
+            children: vec![grandchild],
+            ..leaf(
+                "billing_periods",
+                "billing_period_events",
+                "subscription_id",
+            )
+        };
+        let spec = root("subscriptions", "subscription_events", vec![child]);
+        let sql = build_tree_query(
+            "SELECT id FROM subscriptions WHERE id = $1",
+            &[],
+            &spec,
+            true,
+            2,
+        );
+        assert!(!sql.contains("deleted = FALSE"));
+    }
+
+    #[test]
+    fn empty_order_by_defaults_to_id() {
+        let spec = root("subscriptions", "subscription_events", Vec::new());
+        let sql = build_tree_query(
+            "SELECT id FROM subscriptions WHERE id = $1",
+            &[],
+            &spec,
+            false,
+            2,
+        );
+        assert!(sql.contains("ROW_NUMBER() OVER (ORDER BY id) AS __ord"));
+    }
+
+    #[test]
+    fn explicit_order_by_is_unprefixed_in_the_entities_cte() {
+        let spec = root("entities", "entity_events", Vec::new());
+        let sql = build_tree_query(
+            "SELECT name, id FROM entities ORDER BY name, id LIMIT $1",
+            &["name", "id"],
+            &spec,
+            false,
+            2,
+        );
+        assert!(sql.contains("ROW_NUMBER() OVER (ORDER BY name, id) AS __ord"));
+    }
+}

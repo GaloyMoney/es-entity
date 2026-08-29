@@ -26,9 +26,8 @@ impl ToTokens for Nested<'_> {
         let nested_repo_ty = &self.field.ty;
         let create_fn_name = self.field.create_nested_fn_name();
         let update_fn_name = self.field.update_nested_fn_name();
-        let find_fn_name = self.field.find_nested_fn_name();
+        let hydrate_fn_name = self.field.hydrate_nested_fn_name();
         let delete_fn_name = self.field.delete_nested_fn_name();
-        let find_include_deleted_fn_name = self.field.find_nested_include_deleted_fn_name();
 
         tokens.append_all(quote! {
             // Batches every parent's new children into a single
@@ -85,28 +84,18 @@ impl ToTokens for Nested<'_> {
                 Ok(())
             }
 
-            async fn #find_fn_name<OP, P, __EsErr>(op: &mut OP, entities: &mut [P]) -> Result<(), __EsErr>
+            fn #hydrate_fn_name<P, __EsErr>(
+                rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
+                tag_cursor: &mut i32,
+                entities: &mut [P],
+            ) -> Result<(), __EsErr>
                 where
-                    OP: es_entity::AtomicOperation,
                     P: es_entity::Parent<<#nested_repo_ty as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
-                    #nested_repo_ty: es_entity::PopulateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
-                    __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
+                    #nested_repo_ty: es_entity::HydrateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
+                    __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError>,
             {
                 let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
-                <#nested_repo_ty>::populate_in_op::<_, _, __EsErr>(op, lookup).await?;
-                Ok(())
-            }
-
-            async fn #find_include_deleted_fn_name<OP, P, __EsErr>(op: &mut OP, entities: &mut [P]) -> Result<(), __EsErr>
-                where
-                    OP: es_entity::AtomicOperation,
-                    P: es_entity::Parent<<#nested_repo_ty as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
-                    #nested_repo_ty: es_entity::PopulateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
-                    __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
-            {
-                let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
-                <#nested_repo_ty>::populate_in_op_include_deleted::<_, _, __EsErr>(op, lookup).await?;
-                Ok(())
+                <#nested_repo_ty>::hydrate_in_op::<_, __EsErr>(rows_by_tag, tag_cursor, lookup)
             }
 
             async fn #delete_fn_name<OP, P, __EsErr>(op: &mut OP, entity: &P) -> Result<(), __EsErr>
@@ -193,28 +182,18 @@ mod tests {
                 Ok(())
             }
 
-            async fn find_nested_users_in_op<OP, P, __EsErr>(op: &mut OP, entities: &mut [P]) -> Result<(), __EsErr>
+            fn hydrate_nested_users<P, __EsErr>(
+                rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
+                tag_cursor: &mut i32,
+                entities: &mut [P],
+            ) -> Result<(), __EsErr>
                 where
-                    OP: es_entity::AtomicOperation,
                     P: es_entity::Parent<<UserRepo as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
-                    UserRepo: es_entity::PopulateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
-                    __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
+                    UserRepo: es_entity::HydrateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
+                    __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError>,
             {
                 let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
-                <UserRepo>::populate_in_op::<_, _, __EsErr>(op, lookup).await?;
-                Ok(())
-            }
-
-            async fn find_nested_users_include_deleted_in_op<OP, P, __EsErr>(op: &mut OP, entities: &mut [P]) -> Result<(), __EsErr>
-                where
-                    OP: es_entity::AtomicOperation,
-                    P: es_entity::Parent<<UserRepo as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
-                    UserRepo: es_entity::PopulateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
-                    __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError> + Send,
-            {
-                let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
-                <UserRepo>::populate_in_op_include_deleted::<_, _, __EsErr>(op, lookup).await?;
-                Ok(())
+                <UserRepo>::hydrate_in_op::<_, __EsErr>(rows_by_tag, tag_cursor, lookup)
             }
 
             async fn delete_nested_users_in_op<OP, P, __EsErr>(op: &mut OP, entity: &P) -> Result<(), __EsErr>
