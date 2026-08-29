@@ -96,12 +96,6 @@ where
         Ok(EntityEvents::load_n(rows.into_iter(), first)?)
     }
 
-    /// Runs the single-statement tree query over `spec`'s whole subtree and
-    /// returns the root's own `GenericEvent`s plus every descendant's rows,
-    /// partitioned by tag. Consumes `self.inner` only for its bind
-    /// arguments — the actual executed statement is the assembled tree
-    /// query, not the compile-checked one (that one only validated the
-    /// user's SQL fragment and carried its arguments).
     async fn fetch_tree_rows<E: From<sqlx::Error>>(
         self,
         op: impl IntoOneTimeExecutor<'_>,
@@ -188,9 +182,7 @@ where
         > + Send,
     A: 'q + Send + sqlx::IntoArguments<'q, db::Db>,
 {
-    /// Fetches at most one entity, with the whole tree (all nested levels,
-    /// grandchildren included) loaded in the same single statement — one
-    /// snapshot, so the result cannot be torn. No transaction is required.
+    /// Fetches at most one entity and loads all nested relationships.
     ///
     /// Returns `Ok(None)` if no entities match, or `Ok(Some(entity))` with all
     /// nested entities loaded if found.
@@ -201,8 +193,7 @@ where
         self.fetch_optional_tree(op, false).await
     }
 
-    /// Fetches up to `first` entities, with every entity's whole tree loaded
-    /// in the same single statement.
+    /// Fetches up to `first` entities and loads all nested relationships.
     ///
     /// Returns a tuple of (entities, has_more) where all entities have their nested
     /// relationships loaded, and `has_more` indicates if more entities were available.
@@ -214,7 +205,7 @@ where
         self.fetch_n_tree(op, first, false).await
     }
 
-    /// Like [`fetch_optional`](Self::fetch_optional) but transitively includes
+    /// Like [`fetch_optional`](EsQuery::fetch_optional) but transitively includes
     /// soft-deleted nested entities.
     pub async fn fetch_optional_include_deleted(
         self,
@@ -223,7 +214,7 @@ where
         self.fetch_optional_tree(op, true).await
     }
 
-    /// Like [`fetch_n`](Self::fetch_n) but transitively includes soft-deleted
+    /// Like [`fetch_n`](EsQuery::fetch_n) but transitively includes soft-deleted
     /// nested entities.
     pub async fn fetch_n_include_deleted(
         self,

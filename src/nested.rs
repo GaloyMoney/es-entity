@@ -106,9 +106,6 @@ impl<T: EsEntity> Nested<T> {
     }
 }
 
-/// Hydrates one nested child repo's rows out of an already-fetched,
-/// tag-partitioned row set (the tree query has already run — this is
-/// synchronous, no DB access).
 pub trait HydrateNested<ID>: EsRepo {
     fn hydrate_in_op<P, E>(
         rows_by_tag: &mut HashMap<i32, Vec<db::Row>>,

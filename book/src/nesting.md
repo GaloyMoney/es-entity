@@ -920,30 +920,6 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-Every generated read on a nested repo fetches the entire tree — the parent and
-every nested level, grandchildren included — in exactly **one SQL statement**.
-One statement means one snapshot, so the read is consistent by construction
-and, unlike in earlier versions, no transaction is required for it:
-
-```rust,ignore
-async fn find_by_id_in_op<'a, OP>(op: OP, id: EntityId)
-where
-    OP: IntoOneTimeExecutor<'a>;
-```
-
-This is the same signature a repository without nested children generates —
-nested and flat repos both take `impl IntoOneTimeExecutor<'_>`, which is
-satisfied by a plain `&pool` or by `&mut op` inside an existing
-`AtomicOperation` (so it composes with a surrounding transaction when you
-already have one). Under the hood, `find_by_id` assembles a tagged `UNION
-ALL` over one CTE per tree node — the parent-joined-to-children shape a
-naive multi-statement or single-join implementation gets wrong in two classic
-ways: `LIMIT` is applied to a parent-id subquery *before* any child join (so
-a page of `N` always means `N` parents, never a truncated row fragment), and
-the whole result carries a single `ORDER BY tag, ord, entity_id, sequence`
-that keeps every entity's own events contiguous and sequence-ordered after
-the union, regardless of how Postgres physically returns the joined rows.
-
 ## Benefits of the Nested Approach
 
 This approach provides several key benefits:
@@ -958,10 +934,9 @@ This approach provides several key benefits:
 
 While nesting provides strong consistency guarantees, there are some performance implications to consider:
 
-1. **Loading**: All nested entities are loaded when the parent is loaded, in one round trip regardless of tree depth. For aggregates with many children this is still real work — every child row is returned and parsed — but it is one statement, not one per level.
-2. **Row multiplication**: the read is a tagged union, not a join, so a child's row is never repeated once per sibling the way a plain join would; but a child with a very large fan-out still means a proportionally large result set.
-3. **Updates**: All nested entities are checked for changes during updates, even if only one was modified.
-4. **Memory**: The entire aggregate is held in memory, which could be significant for large aggregates.
+1. **Loading**: All nested entities are loaded when the parent is loaded. For aggregates with many children, this could impact performance.
+2. **Updates**: All nested entities are checked for changes during updates, even if only one was modified.
+3. **Memory**: The entire aggregate is held in memory, which could be significant for large aggregates.
 
 For these reasons, it's important to keep aggregates small and focused on a specific consistency boundary.
 

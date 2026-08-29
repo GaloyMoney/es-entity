@@ -355,7 +355,6 @@ pub struct ListByFn<'a> {
     query_error: syn::Ident,
     delete: DeleteOption,
     cursor_mod: syn::Ident,
-    any_nested: bool,
     post_hydrate_error: Option<&'a syn::Type>,
     forgettable_table_name: Option<&'a str>,
     scope: Option<ScopeInfo<'a>>,
@@ -374,7 +373,6 @@ impl<'a> ListByFn<'a> {
             query_error: opts.query_error(),
             delete: opts.delete,
             cursor_mod: opts.cursor_mod(),
-            any_nested: opts.any_nested(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             forgettable_table_name: opts.forgettable_table_name(),
             scope: ScopeInfo::from_opts(opts),
@@ -405,9 +403,9 @@ impl<'a> ListByFn<'a> {
         let cursor_ident = cursor.ident();
         let cursor_mod = cursor.cursor_mod();
         let query_error = &self.query_error;
-        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
-        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
-        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
+        let query_fn_generics = RepositoryOptions::query_fn_generics();
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg();
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
 
         for delete in [DeleteOption::No, DeleteOption::Soft] {
             let fn_name = syn::Ident::new(
@@ -465,10 +463,10 @@ impl ToTokens for ListByFn<'_> {
         let cursor_ident = cursor.ident();
         let cursor_mod = cursor.cursor_mod();
         let query_error = &self.query_error;
-        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
-        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
-        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
-        let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
+        let query_fn_generics = RepositoryOptions::query_fn_generics();
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg();
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
+        let query_fn_get_op = RepositoryOptions::query_fn_get_op();
 
         let destructure_tokens = self.cursor().destructure_tokens();
         let select_columns = cursor.select_columns(None);
@@ -801,7 +799,6 @@ mod tests {
             query_error,
             delete: DeleteOption::SoftWithoutQueries,
             cursor_mod,
-            any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
@@ -893,7 +890,6 @@ mod tests {
             query_error,
             delete: DeleteOption::Soft,
             cursor_mod,
-            any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
@@ -928,7 +924,6 @@ mod tests {
             query_error,
             delete: DeleteOption::No,
             cursor_mod,
-            any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
@@ -1025,7 +1020,6 @@ mod tests {
             query_error,
             delete: DeleteOption::No,
             cursor_mod,
-            any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
@@ -1141,7 +1135,6 @@ mod tests {
             query_error,
             delete: DeleteOption::No,
             cursor_mod,
-            any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,

@@ -53,9 +53,9 @@ impl<'a> FindByFn<'a> {
         let entity = self.entity;
         let column_name = &self.column.name();
         let (_column_type, impl_expr, _access_expr) = &self.column.ty_for_find_by();
-        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
-        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
-        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
+        let query_fn_generics = RepositoryOptions::query_fn_generics();
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg();
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
 
         for maybe in ["", "maybe_"] {
             let error = if maybe.is_empty() {
@@ -122,10 +122,10 @@ impl ToTokens for FindByFn<'_> {
         let entity = self.entity;
         let column_name = &self.column.name();
         let (column_type, impl_expr, access_expr) = &self.column.ty_for_find_by();
-        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
-        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
-        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
-        let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
+        let query_fn_generics = RepositoryOptions::query_fn_generics();
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg();
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
+        let query_fn_get_op = RepositoryOptions::query_fn_get_op();
 
         let (scope_fn_arg, scope_fn_pass, scope_convert) = match &self.scope {
             Some(scope) => (scope.fn_arg(), scope.fn_pass(), scope.convert()),

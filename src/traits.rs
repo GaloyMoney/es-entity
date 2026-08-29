@@ -295,17 +295,8 @@ pub trait EsRepo: Send {
     type QueryError: From<sqlx::Error> + From<EntityHydrationError> + Send;
     type EsQueryFlavor;
 
-    /// Static description of this repo's subtree (self + nested children,
-    /// recursively) — used to assemble the single-statement tree query. A
-    /// repo with no nested fields reports an empty `children` list.
     fn nested_tree_spec() -> TreeSpec;
 
-    /// Consumes this repo's own children's rows from a tag-partitioned row
-    /// set (already fetched — all DB work happened before this is called,
-    /// so it is synchronous) and injects the hydrated children into
-    /// `entities`. `tag_cursor` starts at this node's own tag and is
-    /// advanced across the whole subtree in the same pre-order the SQL
-    /// assembler numbered it in.
     fn hydrate_nested_from_rows<E>(
         rows_by_tag: &mut HashMap<i32, Vec<db::Row>>,
         tag_cursor: &mut i32,

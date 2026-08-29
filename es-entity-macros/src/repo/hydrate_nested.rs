@@ -4,10 +4,6 @@ use quote::{TokenStreamExt, quote};
 
 use super::options::*;
 
-/// Generates the read-side `HydrateNested` impl (demuxing this child's rows
-/// out of an already-fetched, tag-partitioned row set — no SQL, no I/O) and,
-/// for soft-delete repos, the write-side `CascadeDeleteNested` impl
-/// (unchanged: still SQL, still runs inside the parent's delete op).
 pub struct HydrateNested<'a> {
     column: &'a Column,
     ident: &'a syn::Ident,
@@ -65,12 +61,6 @@ impl ToTokens for HydrateNested<'_> {
                     let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(generic.into_iter(), n)?;
                     <Self as es_entity::EsRepo>::hydrate_nested_from_rows::<__EsErr>(rows_by_tag, tag_cursor, &mut res)?;
                     for entity in res.into_iter() {
-                        // A missing parent is expected, not a bug: `fetch_n`'s
-                        // peek-ahead `LIMIT first + 1` row has its children
-                        // fetched in the same statement (there is no way to
-                        // exclude them without a second round trip) but is
-                        // then truncated away by `load_n` before `lookup` is
-                        // built — so its children simply have nowhere to go.
                         if let Some(parent) = lookup.get_mut(&entity.#accessor) {
                             parent.inject_children(std::iter::once(entity));
                         }
@@ -183,12 +173,8 @@ mod tests {
         let out = output(input);
         assert!(out.contains("impl es_entity :: HydrateNested < OrderId > for OrderItems"));
         assert!(out.contains("fn hydrate_in_op"));
-        // No SQL, no I/O — purely bookkeeping over already-fetched rows.
         assert!(!out.contains("sqlx :: query"));
         assert!(out.contains("es_entity :: decode_tagged_row :: < OrderItemId >"));
-        // Grandchildren are hydrated before this level injects into its own
-        // parents, so a grandchild's rows are consumed (tag_cursor advanced)
-        // deterministically regardless of what the parent does with them.
         assert!(out.contains("hydrate_nested_from_rows"));
     }
 

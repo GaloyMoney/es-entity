@@ -1,15 +1,4 @@
 #![cfg(feature = "instrument")]
-//! Proves the core deliverable of single-statement nested reads (see
-//! `es-entity-dev/spec-single-query-nested-reads.md`): every generated read
-//! on a nested repo fetches the entire tree in exactly one SQL statement,
-//! from a plain `&pool` — no transaction anywhere.
-//!
-//! Counts `tracing` events on the `sqlx::query` target: sqlx emits exactly
-//! one such event per executed statement, independent of es-entity's own
-//! `instrument` feature (that gates es-entity's *own* spans, not sqlx's —
-//! but `tracing` itself is only pulled in as a dependency behind this
-//! feature, hence gating the whole file on it, mirroring
-//! `nested_batch_statement_count.rs`).
 
 mod entities;
 mod helpers;
@@ -98,10 +87,6 @@ async fn seed_order(orders: &Orders, item_names: &[&str]) -> anyhow::Result<Orde
     Ok(order_id)
 }
 
-/// A nested `find_by_id` reads its whole tree (parent + children) in exactly
-/// one SQL statement, from a plain `&pool` — no `begin_op()`/transaction
-/// anywhere. This is the core deliverable: nested reads no longer require
-/// `AtomicOperation`.
 #[tokio::test]
 async fn nested_find_by_id_is_one_statement_no_transaction() -> anyhow::Result<()> {
     let pool = init_pool().await?;
@@ -113,9 +98,6 @@ async fn nested_find_by_id_is_one_statement_no_transaction() -> anyhow::Result<(
     let subscriber = tracing_subscriber::registry().with(counter.clone());
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    // `&orders` only — the generated `find_by_id` takes `impl
-    // IntoOneTimeExecutor` now, so this compiles and runs without ever
-    // calling `begin_op()`.
     let order = orders.find_by_id(order_id).await?;
 
     assert_eq!(
@@ -128,8 +110,6 @@ async fn nested_find_by_id_is_one_statement_no_transaction() -> anyhow::Result<(
     Ok(())
 }
 
-/// `find_all` on N ids, each with children, is also one statement, not one
-/// per id and not one per level.
 #[tokio::test]
 async fn nested_find_all_is_one_statement() -> anyhow::Result<()> {
     let pool = init_pool().await?;
@@ -159,8 +139,6 @@ async fn nested_find_all_is_one_statement() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `list_by_id` (cursor pagination) is likewise one statement, covering the
-/// `LIMIT`-bearing path, not just point reads.
 #[tokio::test]
 async fn nested_list_by_id_is_one_statement() -> anyhow::Result<()> {
     let pool = init_pool().await?;

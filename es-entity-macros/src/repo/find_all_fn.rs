@@ -10,7 +10,6 @@ pub struct FindAllFn<'a> {
     entity: &'a syn::Ident,
     table_name: &'a str,
     query_error: syn::Ident,
-    any_nested: bool,
     post_hydrate_error: Option<&'a syn::Type>,
     forgettable_table_name: Option<&'a str>,
     scope: Option<ScopeInfo<'a>>,
@@ -26,7 +25,6 @@ impl<'a> From<&'a RepositoryOptions> for FindAllFn<'a> {
             entity: opts.entity(),
             table_name: opts.table_name(),
             query_error: opts.query_error(),
-            any_nested: opts.any_nested(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             forgettable_table_name: opts.forgettable_table_name(),
             scope: ScopeInfo::from_opts(opts),
@@ -46,7 +44,7 @@ impl FindAllFn<'_> {
         let id = self.id;
         let entity = self.entity;
         let query_error = &self.query_error;
-        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
 
         let generics = quote! { <'a, Out: From<#entity>> };
         let op_param = quote! { op: impl #query_fn_op_traits };
@@ -75,8 +73,8 @@ impl ToTokens for FindAllFn<'_> {
         let id = self.id;
         let entity = self.entity;
         let query_error = &self.query_error;
-        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
-        let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
+        let query_fn_get_op = RepositoryOptions::query_fn_get_op();
 
         let generics = quote! { <'a, Out: From<#entity>> };
 
@@ -201,7 +199,6 @@ mod tests {
             entity: &entity,
             table_name: "entities",
             query_error,
-            any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,

@@ -54,10 +54,6 @@ impl QueryInput {
             .collect()
     }
 
-    /// Same extraction as [`order_by_columns`](Self::order_by_columns) but
-    /// without the `i.` alias prefix — used to build the tree query's
-    /// `entities` CTE, where there is no such alias (the columns come
-    /// straight off the user's own `SELECT`).
     pub(super) fn order_by_columns_raw(&self) -> Vec<String> {
         use regex::Regex;
         let re = Regex::new(r"(?i)ORDER\s+BY\s+(.+?)(?:\s+(?:LIMIT|OFFSET)|\s*;?\s*$)").unwrap();

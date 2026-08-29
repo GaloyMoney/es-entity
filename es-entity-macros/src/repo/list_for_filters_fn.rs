@@ -172,7 +172,6 @@ pub struct ListForFiltersFn<'a> {
     table_name: &'a str,
     ignore_prefix: Option<&'a syn::LitStr>,
     id: &'a syn::Ident,
-    any_nested: bool,
     post_hydrate_error: Option<&'a syn::Type>,
     forgettable_table_name: Option<&'a str>,
     scope: Option<ScopeInfo<'a>>,
@@ -200,7 +199,6 @@ impl<'a> ListForFiltersFn<'a> {
             table_name: opts.table_name(),
             ignore_prefix: opts.table_prefix(),
             id: opts.id(),
-            any_nested: opts.any_nested(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             forgettable_table_name: opts.forgettable_table_name(),
             scope: ScopeInfo::from_opts(opts),
@@ -223,9 +221,9 @@ impl<'a> ListForFiltersFn<'a> {
         let filters_ident = self.filters_struct.ident();
         let sort_by_name = self.cursor.sort_by_name();
         let combo_cursor_ident = self.cursor.ident();
-        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
-        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
-        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
+        let query_fn_generics = RepositoryOptions::query_fn_generics();
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg();
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
 
         for delete in [DeleteOption::No, DeleteOption::Soft] {
             let delete_postfix = delete.include_deletion_fn_postfix();
@@ -481,10 +479,10 @@ impl<'a> ListForFiltersFn<'a> {
         let entity = self.entity;
         let error = &self.query_error;
         let cursor_mod = &self.cursor_mod;
-        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
-        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
-        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
-        let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
+        let query_fn_generics = RepositoryOptions::query_fn_generics();
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg();
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
+        let query_fn_get_op = RepositoryOptions::query_fn_get_op();
 
         let by_column_name = by_column.name();
         let cursor_struct = CursorStruct {
@@ -1142,7 +1140,6 @@ mod tests {
             table_name: "orders",
             ignore_prefix: None,
             id: &id,
-            any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
@@ -1389,7 +1386,6 @@ mod tests {
             table_name: "orders",
             ignore_prefix: None,
             id: &id,
-            any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
@@ -1459,7 +1455,6 @@ mod tests {
             table_name: "orders",
             ignore_prefix: None,
             id: &id,
-            any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
@@ -1545,7 +1540,6 @@ mod tests {
             table_name: "tasks",
             ignore_prefix: None,
             id: &id,
-            any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
@@ -1630,7 +1624,6 @@ mod tests {
             table_name: "tasks",
             ignore_prefix: None,
             id: &id,
-            any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
@@ -1730,7 +1723,6 @@ mod tests {
             table_name: "wides",
             ignore_prefix: None,
             id: &id,
-            any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
@@ -1820,7 +1812,6 @@ mod tests {
                 table_name: "orders",
                 ignore_prefix: None,
                 id: &id,
-                any_nested: false,
                 post_hydrate_error: None,
                 forgettable_table_name: None,
                 scope: None,

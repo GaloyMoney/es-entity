@@ -18,7 +18,6 @@ pub struct ListForFn<'a> {
     query_error: syn::Ident,
     delete: DeleteOption,
     cursor_mod: syn::Ident,
-    any_nested: bool,
     post_hydrate_error: Option<&'a syn::Type>,
     forgettable_table_name: Option<&'a str>,
     scope: Option<ScopeInfo<'a>>,
@@ -38,7 +37,6 @@ impl<'a> ListForFn<'a> {
             query_error: opts.query_error(),
             delete: opts.delete,
             cursor_mod: opts.cursor_mod(),
-            any_nested: opts.any_nested(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             forgettable_table_name: opts.forgettable_table_name(),
             scope: ScopeInfo::from_opts(opts),
@@ -68,9 +66,9 @@ impl<'a> ListForFn<'a> {
         let cursor_ident = cursor.ident();
         let cursor_mod = cursor.cursor_mod();
         let error = &self.query_error;
-        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
-        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
-        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
+        let query_fn_generics = RepositoryOptions::query_fn_generics();
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg();
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
 
         let by_column_name = self.by_column.name();
         let for_column_name = self.for_column.name();
@@ -139,10 +137,10 @@ impl ToTokens for ListForFn<'_> {
         let cursor_ident = cursor.ident();
         let cursor_mod = cursor.cursor_mod();
         let error = &self.query_error;
-        let query_fn_generics = RepositoryOptions::query_fn_generics(self.any_nested);
-        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg(self.any_nested);
-        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits(self.any_nested);
-        let query_fn_get_op = RepositoryOptions::query_fn_get_op(self.any_nested);
+        let query_fn_generics = RepositoryOptions::query_fn_generics();
+        let query_fn_op_arg = RepositoryOptions::query_fn_op_arg();
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
+        let query_fn_get_op = RepositoryOptions::query_fn_get_op();
 
         let by_column_name = self.by_column.name();
 
@@ -434,7 +432,6 @@ mod tests {
             query_error,
             delete: DeleteOption::No,
             cursor_mod,
-            any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,
@@ -534,7 +531,6 @@ mod tests {
             query_error,
             delete: DeleteOption::No,
             cursor_mod,
-            any_nested: false,
             post_hydrate_error: None,
             forgettable_table_name: None,
             scope: None,

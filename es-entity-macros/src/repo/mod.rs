@@ -224,12 +224,6 @@ impl ToTokens for EsRepo<'_> {
             quote! { es_entity::EsQueryFlavorNested }
         };
 
-        // `TreeSpec` for the single-statement tree query (see
-        // `es-entity-dev/spec-single-query-nested-reads.md`). Reported
-        // unconditionally from this repo's own declaration — when this repo
-        // is itself queried as a nested child (not as the query's root),
-        // `parent_column` is what lets the assembler filter it by its
-        // parent's ids; when queried as root, the value is simply unused.
         let tree_table_name = self.opts.table_name();
         let tree_events_table_name = self.opts.events_table_name();
         let tree_parent_column = match self.opts.columns.parent() {
