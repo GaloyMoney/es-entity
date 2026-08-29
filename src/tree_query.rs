@@ -1,7 +1,13 @@
+//! Dynamically assembles the single-statement tree query a nested repo's
+//! generated read fns execute at runtime: a tagged `UNION ALL` over one CTE
+//! per tree node, so a parent and all of its nested children (recursively)
+//! come back in one statement instead of one per level.
+
 use std::collections::HashMap;
 
 use crate::{db, events::GenericEvent};
 
+/// Static description of one node (repo) in a nested tree, used to build the query.
 #[derive(Debug, Clone)]
 pub struct TreeSpec {
     pub table_name: &'static str,
@@ -13,6 +19,7 @@ pub struct TreeSpec {
     pub children: Vec<TreeSpec>,
 }
 
+/// The root user query plus the bits needed to fold it into the tree query.
 pub struct TreeQuerySource<Id> {
     pub user_sql: &'static str,
     pub order_by_cols: &'static [&'static str],
