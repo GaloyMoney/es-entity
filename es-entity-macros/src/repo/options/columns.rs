@@ -64,7 +64,7 @@ impl Columns {
     ///   resolve to the same type would produce conflicting impls. Variant
     ///   names (UpperCamel of the column name, or `scope(variant = "...")`)
     ///   must also be pairwise-distinct and not collide with the reserved
-    ///   `All` variant
+    ///   `All` or `None` variants
     /// - a `nullable`-annotated scope column whose Rust type is not
     ///   syntactically `Option<T>` is rejected: there is no inner type to
     ///   unwrap, and scoping by the NULL-encoding value would silently match
@@ -131,10 +131,11 @@ impl Columns {
         let mut variant_names: Vec<String> = Vec::new();
         for col in &scope_columns {
             let variant = col.scope_variant().to_string();
-            if variant == "All" {
+            if variant == "All" || variant == "None" {
                 return Err(darling::Error::custom(format!(
-                    "scope column '{}' maps to the reserved variant name 'All'",
+                    "scope column '{}' maps to the reserved variant name '{}'",
                     col.name(),
+                    variant,
                 )));
             }
             if variant_names.contains(&variant) {
@@ -1502,6 +1503,21 @@ mod tests {
         let input: syn::Meta = parse_quote!(columns(partner_id(
             ty = "PartnerId",
             scope(variant = "All")
+        )));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_scope().unwrap_err().to_string();
+        assert!(
+            err.contains("reserved variant name"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn overridden_variant_colliding_with_none_is_rejected() {
+        // `None` is reserved for the fail-closed variant, same as `All`.
+        let input: syn::Meta = parse_quote!(columns(partner_id(
+            ty = "PartnerId",
+            scope(variant = "None")
         )));
         let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
         let err = columns.validate_scope().unwrap_err().to_string();

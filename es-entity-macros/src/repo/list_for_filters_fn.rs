@@ -781,6 +781,7 @@ impl<'a> ListForFiltersFn<'a> {
         let match_expr = if let Some(scope) = &self.scope {
             scope.dispatch(
                 direction_match(&asc_arms, &asc_fallback_arm, &desc_arms, &desc_fallback_arm),
+                quote! { (Vec::new(), false) },
                 |col| {
                     let (scoped_asc_arms, scoped_desc_arms, scoped_all_specialized) =
                         build_specialized_arms(Some(col));

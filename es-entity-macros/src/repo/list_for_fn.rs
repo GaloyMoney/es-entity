@@ -268,6 +268,7 @@ impl ToTokens for ListForFn<'_> {
                             #query_arms
                         }
                     },
+                    quote! { (Vec::new(), false) },
                     |col| {
                         let scoped_query_arms = build_query_arms(Some(col));
                         quote! {

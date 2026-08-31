@@ -32,6 +32,7 @@ per scope column (UpperCamel of the column name):
 ```rust,ignore
 pub enum CustomerScope {
     All,                     // no filter — reads across all scopes
+    None,                    // no scope established — every read fail-closes
     PartnerId(PartnerId),    // restricts every read to this scope value
 }
 
@@ -39,9 +40,11 @@ impl From<PartnerId> for CustomerScope { /* => PartnerId */ }
 impl From<&PartnerId> for CustomerScope { /* => PartnerId */ }
 ```
 
-There is deliberately **no** `From<Option<PartnerId>>`: mapping `None` to
-`All` would turn a stray `None` into silent all-scope access. All-scope reads
-must be written explicitly — `CustomerScope::All` is greppable and auditable.
+There is deliberately **no** `From<Option<PartnerId>>`: mapping `None` (the
+value) to `All` would turn a stray `None` into silent all-scope access.
+All-scope reads must be written explicitly — `CustomerScope::All` is
+greppable and auditable. `CustomerScope::None` is the reserved, explicit
+opposite — see [Fail-closed: `None`](#fail-closed-none) below.
 
 ### Overriding the variant name
 
@@ -75,7 +78,7 @@ The override only renames the enum variant and its `From` impl target — the
 underlying SQL conjunct is still keyed off the real column (`partner_id = $n`).
 Overridden and defaulted scope columns compose freely on the same repo.
 Variant names, whether defaulted or overridden, must still be pairwise
-distinct and may not collide with the reserved `All` variant (see
+distinct and may not collide with the reserved `All` or `None` variants (see
 "Validation rules" below).
 
 ## Nullable scope columns
@@ -113,6 +116,29 @@ scope value is always concrete, so `PartyScope::Customer(None)` is unspellable
 — and a column marked `nullable` (the opt-in flag for a non-`Option` Rust type
 backed by a nullable SQL column) is still rejected as a scope column, since
 there is no inner type to unwrap.
+
+## Fail-closed: `None`
+
+`All` is the audited "read across every scope" escape hatch. `None` is its
+fail-closed opposite: the reserved variant for a caller that could not
+establish any scope at all — no authenticated principal, no tenant resolved
+on the request. Every generated scope enum carries it alongside `All`:
+
+```rust,ignore
+customers.find_by_id(CustomerScope::None, id).await;   // NotFound
+```
+
+`None` dispatches exactly like a scope value that matches no rows —
+`find_by_*` returns `NotFound`, `maybe_find_by_*` returns `None`, `find_all`
+omits every id, and lists come back empty with no next page — **except the
+dispatch never reaches the database**. The SQL for that arm is never built or
+executed; `None` short-circuits before the query would run. This extends
+"missing and not-yours look identical" (see below) one step further: "no
+scope" and "not-yours" look identical too, and neither one costs a query.
+
+`None` is reserved the same way `All` is: a scope column's variant name
+(defaulted or `scope(variant = "...")`-overridden) may not collide with
+either.
 
 ## Tenancy roots: `id(scope)`
 
@@ -195,17 +221,20 @@ customers.find_by_id(id).await?;  // does not exist — compile error
 ```
 
 At runtime each function dispatches between static, compile-time-checked SQL
-variants — one per scope column plus `All`:
+variants — one per scope column plus `All` and `None`:
 
 - `All` executes exactly the SQL an unscoped repo would.
 - Each column's variant (e.g. `PartnerId(value)`) executes a variant with an
   additional `partner_id = $n` conjunct in every `WHERE` clause.
+- `None` executes no SQL at all — see [Fail-closed:
+  `None`](#fail-closed-none) above.
 
 Every arm is a plain equality predicate — sargable against a scope-column-led
 index (see below). Under any scoped variant, a row from another scope behaves
 exactly like a missing row: `find_by_*` returns `NotFound`, `maybe_find_by_*`
 returns `None`, `find_all` silently omits the id, and lists never contain the
-row. **Missing and not-yours look identical.**
+row. **Missing and not-yours look identical** — and, thanks to `None`,
+neither one costs a query.
 
 ## The bound view: `repo.scoped(scope)`
 
@@ -278,7 +307,7 @@ non-sargable `COALESCE` query until its indexes exist.
 Scope column Rust types must be pairwise distinct (the generated `From<T>`
 conversions dispatch on type — two same-typed scope columns would produce
 conflicting impls) and their UpperCamel variant names must not collide with
-each other or with the reserved `All` variant.
+each other or with the reserved `All` or `None` variants.
 
 ## Writes are custody-guarded
 
@@ -359,8 +388,8 @@ The macro rejects at compile time:
   two scope columns that resolve to the same type would produce conflicting
   impls)
 - scope columns whose variant names collide with each other or with the
-  reserved `All` variant — whether the name is the UpperCamel default or an
-  explicit `scope(variant = "...")` override
+  reserved `All` or `None` variants — whether the name is the UpperCamel
+  default or an explicit `scope(variant = "...")` override
 - a `scope(variant = "...")` value that isn't a valid Rust identifier
 - a `nullable`-annotated scope column whose Rust type is not syntactically
   `Option<T>` (see [Nullable scope columns](#nullable-scope-columns) above —

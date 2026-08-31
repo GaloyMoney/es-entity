@@ -103,12 +103,16 @@ impl<'a> ScopeInfo<'a> {
         quote! { let __scope = scope.into(); }
     }
 
-    /// Runtime dispatch between the unscoped (`All`) query variant and one
-    /// variant per scope column. `scoped_arm` is invoked once per column to
-    /// build that column's arm body; the arm pattern binds `__scope_val: &T`.
+    /// Runtime dispatch between the unscoped (`All`) query variant, the
+    /// fail-closed `None` variant, and one variant per scope column.
+    /// `none_arm` is the early-return value for `None` — it must never touch
+    /// the database (see [`ScopeType`]'s doc for why). `scoped_arm` is
+    /// invoked once per column to build that column's arm body; the arm
+    /// pattern binds `__scope_val: &T`.
     pub fn dispatch(
         &self,
         all_arm: TokenStream,
+        none_arm: TokenStream,
         scoped_arm: impl Fn(&ScopeCol<'a>) -> TokenStream,
     ) -> TokenStream {
         let scope_ty = &self.scope_ty;
@@ -120,6 +124,7 @@ impl<'a> ScopeInfo<'a> {
         quote! {
             match &__scope {
                 #scope_ty::All => #all_arm,
+                #scope_ty::None => #none_arm,
                 #(#arms)*
             }
         }
@@ -131,6 +136,7 @@ impl<'a> ScopeInfo<'a> {
 /// ```ignore
 /// pub enum UserScope {
 ///     All,
+///     None,
 ///     PartnerId(PartnerId),
 ///     CustomerId(CustomerId),
 /// }
@@ -138,11 +144,23 @@ impl<'a> ScopeInfo<'a> {
 ///
 /// plus `From<T>` / `From<&T>` conversions into each column's variant so call
 /// sites can pass a scope value directly. Deliberately **no**
-/// `From<Option<T>>`: mapping `None` to `All` would turn a stray `None` into
-/// silent all-scope access. For a scope column whose declared Rust type is
-/// `Option<T>` ([`Column::ty_for_scope`] unwraps it), `T` is what appears
-/// here — `Scope::X(None)` is unspellable, and rows where the column is NULL
-/// are simply invisible to every scoped variant (only `All` sees them).
+/// `From<Option<T>>`: mapping `None` (the value) to `All` would turn a stray
+/// `None` into silent all-scope access. For a scope column whose declared
+/// Rust type is `Option<T>` ([`Column::ty_for_scope`] unwraps it), `T` is
+/// what appears here — `Scope::X(None)` is unspellable, and rows where the
+/// column is NULL are simply invisible to every scoped variant (only `All`
+/// sees them).
+///
+/// `None` is the fail-closed counterpart to `All`: it is for a caller that
+/// could not establish any scope at all (no authenticated principal, no
+/// tenant on the request). Every read dispatches on it exactly like a scope
+/// value that matches no rows — `find_by_*` returns `NotFound`,
+/// `maybe_find_by_*` returns `None`, `find_all` omits every id, lists come
+/// back empty — except the dispatch never reaches the database: the SQL
+/// query for that arm is never built or executed. This mirrors "missing and
+/// not-yours look identical" (see the scoped-repositories book chapter) one
+/// step further: "no scope" and "not-yours" look identical too, and neither
+/// one costs a round trip.
 pub struct ScopeType<'a> {
     entity: &'a syn::Ident,
     info: ScopeInfo<'a>,
@@ -162,7 +180,8 @@ impl ToTokens for ScopeType<'_> {
         let scope_ty = &self.info.scope_ty;
         let doc = format!(
             "Scope argument for [`{}`] repository reads: each column variant filters every \
-             query by that scope column, `All` reads across all scopes (audited escape hatch).",
+             query by that scope column, `All` reads across all scopes (audited escape hatch), \
+             `None` fail-closes every read without touching the database.",
             self.entity,
         );
 
@@ -203,6 +222,9 @@ impl ToTokens for ScopeType<'_> {
             pub enum #scope_ty {
                 /// No scope filter — reads across all scopes.
                 All,
+                /// No scope established — every read fail-closes: it early-returns
+                /// as though nothing matched, without executing any query.
+                None,
                 #(#variants)*
             }
 
@@ -255,6 +277,7 @@ mod tests {
 
         assert!(token_str.contains("pub enum EntityScope"));
         assert!(token_str.contains("PartnerId (PartnerId)"));
+        assert!(token_str.contains("None ,"));
         assert!(!token_str.contains("Only"));
         assert!(token_str.contains("impl From < PartnerId > for EntityScope"));
         assert!(token_str.contains("impl From < & PartnerId > for EntityScope"));
@@ -280,6 +303,7 @@ mod tests {
         assert!(token_str.contains("pub enum EntityScope"));
         assert!(token_str.contains("PartnerId (PartnerId)"));
         assert!(token_str.contains("CustomerId (CustomerId)"));
+        assert!(token_str.contains("None ,"));
         assert!(token_str.contains("impl From < PartnerId > for EntityScope"));
         assert!(token_str.contains("impl From < CustomerId > for EntityScope"));
         assert!(token_str.contains("impl From < & CustomerId > for EntityScope"));
@@ -304,12 +328,13 @@ mod tests {
         let (info, _entity) = test_info(&[(&partner, &partner_ty), (&customer, &customer_ty)]);
 
         let tokens = info
-            .dispatch(quote! { all() }, |col| {
+            .dispatch(quote! { all() }, quote! { none() }, |col| {
                 let p = col.predicate(2);
                 quote! { scoped(#p) }
             })
             .to_string();
         assert!(tokens.contains("EntityScope :: All => all ()"));
+        assert!(tokens.contains("EntityScope :: None => none ()"));
         assert!(
             tokens
                 .contains("EntityScope :: PartnerId (__scope_val) => scoped (\"partner_id = $2\")")

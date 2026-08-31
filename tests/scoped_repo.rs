@@ -747,3 +747,160 @@ async fn scope_column_filter_cursor_pagination() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// `ContactScope::None` is the fail-closed counterpart to `All`: a caller
+/// that could not establish any scope. Every read must dispatch on it exactly
+/// like a scope value that matches no rows — the negative case that matters
+/// here is that a row a *real* scope would return is still denied under
+/// `None`.
+#[tokio::test]
+async fn none_scope_denies_access_like_a_foreign_scope() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let contacts = Contacts::new(pool);
+
+    let partner_a = PartnerId::new();
+    let ids_a = seed_contacts(
+        &contacts,
+        partner_a,
+        &[("none1", "active"), ("none2", "inactive")],
+    )
+    .await?;
+    let id_a = ids_a[0];
+
+    // positive control: under the row's own scope (or `All`) it is visible —
+    // proves the row genuinely exists and would be returned under a real
+    // scope, so the `None` denial below is not vacuous.
+    assert_eq!(
+        contacts.find_by_id(partner_a, id_a).await?.id,
+        id_a,
+        "sanity check: the row must be visible under its own scope"
+    );
+    assert_eq!(contacts.find_by_id(ContactScope::All, id_a).await?.id, id_a);
+
+    // `None`: point reads deny — indistinguishable from a foreign scope
+    let err = contacts.find_by_id(ContactScope::None, id_a).await;
+    assert!(matches!(err, Err(ContactFindError::NotFound { .. })));
+    assert!(
+        contacts
+            .maybe_find_by_id(ContactScope::None, id_a)
+            .await?
+            .is_none()
+    );
+    let err = contacts
+        .find_by_partner_id(ContactScope::None, partner_a)
+        .await;
+    assert!(matches!(err, Err(ContactFindError::NotFound { .. })));
+
+    // `find_all` omits every id, even ones that exist under a real scope
+    let found = contacts
+        .find_all::<Contact>(ContactScope::None, &ids_a)
+        .await?;
+    assert!(found.is_empty());
+
+    // lists come back empty, with no next page and no cursor
+    let ret = contacts
+        .list_by_created_at(
+            ContactScope::None,
+            PaginatedQueryArgs {
+                first: 100,
+                after: None,
+            },
+            ListDirection::Descending,
+        )
+        .await?;
+    assert!(ret.entities.is_empty());
+    assert!(!ret.has_next_page);
+    assert!(ret.end_cursor.is_none());
+
+    let ret = contacts
+        .list_for_status_by_created_at(
+            ContactScope::None,
+            "active",
+            PaginatedQueryArgs {
+                first: 100,
+                after: None,
+            },
+            ListDirection::Descending,
+        )
+        .await?;
+    assert!(ret.entities.is_empty());
+
+    let ret = contacts
+        .list_for_filters(
+            ContactScope::None,
+            ContactFilters::default(),
+            Sort {
+                by: ContactSortBy::CreatedAt,
+                direction: ListDirection::Descending,
+            },
+            PaginatedQueryArgs {
+                first: 100,
+                after: None,
+            },
+        )
+        .await?;
+    assert!(ret.entities.is_empty());
+
+    // the bound view denies too — it just forwards to the scope-argument fns
+    let none_view = contacts.scoped(ContactScope::None);
+    assert!(none_view.maybe_find_by_id(id_a).await?.is_none());
+    assert_eq!(none_view.find_all::<Contact>(&ids_a).await?.len(), 0);
+
+    Ok(())
+}
+
+/// The defining property of `None`: it never reaches the database. Closing
+/// the pool after seeding turns any attempted query into a hard connection
+/// error, so a `None`-scoped read succeeding at all (with the *correct*
+/// fail-closed result, not just "didn't panic") is direct evidence the SQL
+/// for that arm was never built or executed. Contrast with the same read
+/// under a real scope, which does try to reach the (now-closed) database and
+/// fails.
+#[tokio::test]
+async fn none_scope_never_executes_a_query() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let contacts = Contacts::new(pool);
+
+    let partner_a = PartnerId::new();
+    let ids_a = seed_contacts(&contacts, partner_a, &[("closed", "active")]).await?;
+    let id_a = ids_a[0];
+
+    contacts.pool.close().await;
+    assert!(contacts.pool.is_closed());
+
+    // control: a real scope on a closed pool surfaces a connection error —
+    // proving the pool closure is actually in effect and would be observed
+    // if the None arm tried to query.
+    let err = contacts.find_by_id(partner_a, id_a).await;
+    assert!(
+        matches!(err, Err(ContactFindError::Sqlx(_))),
+        "expected a connection error against the closed pool"
+    );
+
+    // `None`: no connection is ever acquired, so the fail-closed result comes
+    // back cleanly instead of erroring.
+    let err = contacts.find_by_id(ContactScope::None, id_a).await;
+    assert!(
+        matches!(err, Err(ContactFindError::NotFound { .. })),
+        "expected NotFound (not a connection error) under None scope"
+    );
+    assert!(
+        contacts
+            .maybe_find_by_id(ContactScope::None, id_a)
+            .await?
+            .is_none()
+    );
+    let ret = contacts
+        .list_by_created_at(
+            ContactScope::None,
+            PaginatedQueryArgs {
+                first: 100,
+                after: None,
+            },
+            ListDirection::Descending,
+        )
+        .await?;
+    assert!(ret.entities.is_empty());
+
+    Ok(())
+}

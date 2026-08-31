@@ -118,6 +118,7 @@ impl ToTokens for FindAllFn<'_> {
         let fetch_call = if let Some(scope) = &self.scope {
             scope.dispatch(
                 quote! { #es_query_call.fetch_n(op, ids.len()).await? },
+                quote! { (Vec::new(), false) },
                 |col| {
                     let scoped_query = format!(
                         "SELECT id FROM {} WHERE id = ANY($1) AND {}",
