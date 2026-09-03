@@ -1,3 +1,15 @@
+# [cala release v0.12.17](https://github.com/GaloyMoney/cala/releases/tag/0.12.17)
+
+
+
+### Features
+
+- Batch isolation helpers (run_isolated, run_bisected) (#220)
+
+### Miscellaneous Tasks
+
+- Bump the all-dependencies group with 2 updates (#219)
+
 # [cala release v0.12.16](https://github.com/GaloyMoney/cala/releases/tag/0.12.16)
 
 
