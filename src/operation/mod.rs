@@ -1,5 +1,6 @@
 //! Handle execution of database operations and transactions.
 
+mod batch;
 pub mod hooks;
 mod savepoint;
 mod with_time;
@@ -8,6 +9,7 @@ use sqlx::{Acquire, Transaction};
 
 use crate::{clock::ClockHandle, db, one_time_executor::OneTimeExecutor};
 
+pub use batch::*;
 pub use savepoint::*;
 pub use with_time::*;
 
