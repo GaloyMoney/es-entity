@@ -243,13 +243,20 @@ impl<'o> AtomicOperation for DbOp<'o> {
         self.tx.connection()
     }
 
-    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
-        self.commit_hooks.as_mut().expect("no hooks").add(hook);
+    fn add_commit_hook_dyn(
+        &mut self,
+        type_id: std::any::TypeId,
+        hook: Box<dyn hooks::DynHook>,
+    ) -> Result<(), Box<dyn hooks::DynHook>> {
+        self.commit_hooks
+            .as_mut()
+            .expect("no hooks")
+            .push_or_merge(type_id, hook);
         Ok(())
     }
 
-    fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H> {
-        self.commit_hooks.as_ref()?.get_last::<H>()
+    fn commit_hook_dyn(&self, type_id: std::any::TypeId) -> Option<&dyn hooks::DynHook> {
+        self.commit_hooks.as_ref()?.get_last_dyn(type_id)
     }
 
     fn supports_hooks(&self) -> bool {
@@ -333,12 +340,16 @@ impl<'o> AtomicOperation for DbOpWithTime<'o> {
         self.inner.connection()
     }
 
-    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
-        self.inner.add_commit_hook(hook)
+    fn add_commit_hook_dyn(
+        &mut self,
+        type_id: std::any::TypeId,
+        hook: Box<dyn hooks::DynHook>,
+    ) -> Result<(), Box<dyn hooks::DynHook>> {
+        self.inner.add_commit_hook_dyn(type_id, hook)
     }
 
-    fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H> {
-        self.inner.commit_hook::<H>()
+    fn commit_hook_dyn(&self, type_id: std::any::TypeId) -> Option<&dyn hooks::DynHook> {
+        self.inner.commit_hook_dyn(type_id)
     }
 
     fn supports_hooks(&self) -> bool {
@@ -415,17 +426,45 @@ pub trait AtomicOperation: Send {
         OneTimeExecutor::new(self.connection(), now)
     }
 
+    /// Object-safe, type-erased form of [`add_commit_hook`](Self::add_commit_hook).
+    fn add_commit_hook_dyn(
+        &mut self,
+        _type_id: std::any::TypeId,
+        hook: Box<dyn hooks::DynHook>,
+    ) -> Result<(), Box<dyn hooks::DynHook>> {
+        Err(hook)
+    }
+
+    /// Object-safe, type-erased form of [`commit_hook`](Self::commit_hook).
+    fn commit_hook_dyn(&self, _type_id: std::any::TypeId) -> Option<&dyn hooks::DynHook> {
+        None
+    }
+
     /// Registers a commit hook that will run pre_commit before and post_commit after the transaction commits.
     /// Returns Ok(()) if the hook was registered, Err(hook) if hooks are not supported.
-    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
-        Err(hook)
+    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H>
+    where
+        Self: Sized,
+    {
+        self.add_commit_hook_dyn(std::any::TypeId::of::<H>(), Box::new(hook))
+            .map_err(|hook| {
+                *hook
+                    .into_any()
+                    .downcast::<H>()
+                    .unwrap_or_else(|_| panic!("hook type mismatch"))
+            })
     }
 
     /// Typed shared access to the currently-accumulating commit hook of type `H`,
     /// if this operation supports commit hooks and one is registered.
     /// Returns the hook a subsequent `add_commit_hook::<H>` call would merge into.
-    fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H> {
-        None
+    fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H>
+    where
+        Self: Sized,
+    {
+        self.commit_hook_dyn(std::any::TypeId::of::<H>())?
+            .as_any()
+            .downcast_ref::<H>()
     }
 
     /// Whether this operation supports commit hooks.
@@ -500,5 +539,16 @@ pub trait AtomicOperation: Send {
 impl<'c> AtomicOperation for sqlx::Transaction<'c, db::Db> {
     fn connection(&mut self) -> &mut db::Connection {
         &mut *self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_operation_is_object_safe() {
+        fn assert_object_safe(_: &mut dyn AtomicOperation) {}
+        let _ = assert_object_safe as fn(&mut dyn AtomicOperation);
     }
 }

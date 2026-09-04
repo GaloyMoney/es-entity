@@ -2,7 +2,7 @@ mod helpers;
 
 use es_entity::operation::{
     AtomicOperation, DbOp, SavepointOperation,
-    hooks::{CommitHook, HookOperation, PreCommitRet},
+    hooks::{CommitHook, DynHook, HookOperation, PreCommitRet},
 };
 use std::sync::{Arc, Mutex};
 
@@ -1180,8 +1180,12 @@ impl AtomicOperation for ForgetfulWrapper<'_> {
         self.0.connection()
     }
 
-    fn add_commit_hook<H: CommitHook>(&mut self, hook: H) -> Result<(), H> {
-        self.0.add_commit_hook(hook)
+    fn add_commit_hook_dyn(
+        &mut self,
+        type_id: std::any::TypeId,
+        hook: Box<dyn DynHook>,
+    ) -> Result<(), Box<dyn DynHook>> {
+        self.0.add_commit_hook_dyn(type_id, hook)
     }
 
     fn supports_hooks(&self) -> bool {
