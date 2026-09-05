@@ -264,7 +264,7 @@ impl<'c> IntoOneTimeExecutorAt<'c> for &db::Pool {
 
 impl<'c, O> IntoOneTimeExecutorAt<'c> for &mut O
 where
-    O: AtomicOperation,
+    O: AtomicOperation + ?Sized,
 {
     type Executor = &'c mut db::Connection;
 

@@ -90,7 +90,7 @@ impl ToTokens for PersistEventsFn<'_> {
                 events: &mut es_entity::EntityEvents<#event_type>
             ) -> Result<usize, sqlx::Error>
             where
-                OP: es_entity::AtomicOperation,
+                OP: es_entity::AtomicOperation + ?Sized,
             {
                 let id = events.id();
                 if !events.any_new() {
@@ -151,7 +151,7 @@ mod tests {
                 events: &mut es_entity::EntityEvents<EntityEvent>
             ) -> Result<usize, sqlx::Error>
             where
-                OP: es_entity::AtomicOperation,
+                OP: es_entity::AtomicOperation + ?Sized,
             {
                 let id = events.id();
                 if !events.any_new() {
@@ -208,7 +208,7 @@ mod tests {
                 events: &mut es_entity::EntityEvents<EntityEvent>
             ) -> Result<usize, sqlx::Error>
             where
-                OP: es_entity::AtomicOperation,
+                OP: es_entity::AtomicOperation + ?Sized,
             {
                 let id = events.id();
                 if !events.any_new() {

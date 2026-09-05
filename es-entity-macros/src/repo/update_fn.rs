@@ -201,7 +201,7 @@ impl ToTokens for UpdateFn<'_> {
                 entity: &mut #entity
             ) -> Result<usize, #modify_error>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<usize, #modify_error> = async {
                     #record_id
@@ -290,7 +290,7 @@ mod tests {
                 entity: &mut Entity
             ) -> Result<usize, EntityModifyError>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<usize, EntityModifyError> = async {
                     if !Self::extract_events(entity).any_new() {
@@ -386,7 +386,7 @@ mod tests {
                 entity: &mut Entity
             ) -> Result<usize, EntityModifyError>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<usize, EntityModifyError> = async {
                     if !Self::extract_events(entity).any_new() {

@@ -39,10 +39,10 @@ impl ToTokens for Nested<'_> {
             // already holds scattered `&mut P` borrows (this same fn one
             // level up the nesting, recursing into grandchildren) can pass
             // them straight through without needing contiguous storage.
-            async fn #create_fn_name<OP, P>(&self, op: &mut OP, entities: &mut [&mut P]) -> Result<(), <#nested_repo_ty as es_entity::EsRepo>::CreateError>
+            async fn #create_fn_name<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), <#nested_repo_ty as es_entity::EsRepo>::CreateError>
                 where
                     P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>,
-                    OP: es_entity::AtomicOperation
+                    OP: es_entity::AtomicOperation + ?Sized
             {
                 let counts: Vec<usize> = entities
                     .iter_mut()
@@ -57,7 +57,13 @@ impl ToTokens for Nested<'_> {
                     .flat_map(|entity| entity.new_children_mut().drain(..))
                     .collect();
 
-                let mut children = self.#repo_field.create_all_in_op(op, new_children).await?.into_iter();
+                // The child repo's own `create_all_in_op` may or may not have
+                // been generated `?Sized` — its bound depends on *its* hook and
+                // nesting configuration, which this macro invocation cannot
+                // see. Reborrowing through one more `&mut` satisfies either
+                // bound: `&mut OP` is always `Sized`, and implements
+                // `AtomicOperation` via the blanket impl whenever `OP` does.
+                let mut children = self.#repo_field.create_all_in_op(&mut op, new_children).await?.into_iter();
                 for (entity, n) in entities.iter_mut().zip(counts) {
                     entity.inject_children(children.by_ref().take(n));
                 }
@@ -68,17 +74,18 @@ impl ToTokens for Nested<'_> {
             // `update_all_mut_in_op` call on the child repo — one statement
             // for the whole parent batch, not one per child per parent — then
             // batches new children via `#create_fn_name`.
-            async fn #update_fn_name<OP, P>(&self, op: &mut OP, entities: &mut [&mut P]) -> Result<(), #parent_modify_error>
+            async fn #update_fn_name<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), #parent_modify_error>
                 where
                     P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>,
-                    OP: es_entity::AtomicOperation
+                    OP: es_entity::AtomicOperation + ?Sized
             {
                 let persisted: Vec<_> = entities
                     .iter_mut()
                     .flat_map(|entity| entity.iter_persisted_children_mut())
                     .collect();
                 if !persisted.is_empty() {
-                    self.#repo_field.update_all_mut_in_op(op, persisted).await?;
+                    // See the comment in `#create_fn_name` above.
+                    self.#repo_field.update_all_mut_in_op(&mut op, persisted).await?;
                 }
                 self.#create_fn_name(op, entities).await?;
                 Ok(())
@@ -100,7 +107,7 @@ impl ToTokens for Nested<'_> {
 
             async fn #delete_fn_name<OP, P, __EsErr>(op: &mut OP, entity: &P) -> Result<(), __EsErr>
                 where
-                    OP: es_entity::AtomicOperation,
+                    OP: es_entity::AtomicOperation + ?Sized,
                     P: es_entity::EsEntity,
                     #nested_repo_ty: es_entity::CascadeDeleteNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
                     __EsErr: From<sqlx::Error> + Send,
@@ -141,10 +148,10 @@ mod tests {
         cursor.to_tokens(&mut tokens);
 
         let expected = quote! {
-            async fn create_nested_users_in_op<OP, P>(&self, op: &mut OP, entities: &mut [&mut P]) -> Result<(), <UserRepo as es_entity::EsRepo>::CreateError>
+            async fn create_nested_users_in_op<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), <UserRepo as es_entity::EsRepo>::CreateError>
                 where
                     P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
-                    OP: es_entity::AtomicOperation
+                    OP: es_entity::AtomicOperation + ?Sized
             {
                 let counts: Vec<usize> = entities
                     .iter_mut()
@@ -159,24 +166,24 @@ mod tests {
                     .flat_map(|entity| entity.new_children_mut().drain(..))
                     .collect();
 
-                let mut children = self.users.create_all_in_op(op, new_children).await?.into_iter();
+                let mut children = self.users.create_all_in_op(&mut op, new_children).await?.into_iter();
                 for (entity, n) in entities.iter_mut().zip(counts) {
                     entity.inject_children(children.by_ref().take(n));
                 }
                 Ok(())
             }
 
-            async fn update_nested_users_in_op<OP, P>(&self, op: &mut OP, entities: &mut [&mut P]) -> Result<(), ParentModifyError>
+            async fn update_nested_users_in_op<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), ParentModifyError>
                 where
                     P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
-                    OP: es_entity::AtomicOperation
+                    OP: es_entity::AtomicOperation + ?Sized
             {
                 let persisted: Vec<_> = entities
                     .iter_mut()
                     .flat_map(|entity| entity.iter_persisted_children_mut())
                     .collect();
                 if !persisted.is_empty() {
-                    self.users.update_all_mut_in_op(op, persisted).await?;
+                    self.users.update_all_mut_in_op(&mut op, persisted).await?;
                 }
                 self.create_nested_users_in_op(op, entities).await?;
                 Ok(())
@@ -198,7 +205,7 @@ mod tests {
 
             async fn delete_nested_users_in_op<OP, P, __EsErr>(op: &mut OP, entity: &P) -> Result<(), __EsErr>
                 where
-                    OP: es_entity::AtomicOperation,
+                    OP: es_entity::AtomicOperation + ?Sized,
                     P: es_entity::EsEntity,
                     UserRepo: es_entity::CascadeDeleteNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
                     __EsErr: From<sqlx::Error> + Send,

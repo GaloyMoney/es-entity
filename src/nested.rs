@@ -127,7 +127,7 @@ pub trait CascadeDeleteNested<ID>: EsRepo {
         parent_id: &ID,
     ) -> impl Future<Output = Result<(), E>> + Send
     where
-        OP: AtomicOperation,
+        OP: AtomicOperation + ?Sized,
         E: From<sqlx::Error> + Send;
 }
 

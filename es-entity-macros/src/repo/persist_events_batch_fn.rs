@@ -113,7 +113,7 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                 all_events: &mut [B]
             ) -> Result<std::collections::HashMap<#id_type, usize>, sqlx::Error>
             where
-                OP: es_entity::AtomicOperation,
+                OP: es_entity::AtomicOperation + ?Sized,
                 B: std::borrow::BorrowMut<es_entity::EntityEvents<#event_type>>,
             {
                 use es_entity::prelude::sqlx::Row;
@@ -202,7 +202,7 @@ mod tests {
                 all_events: &mut [B]
             ) -> Result<std::collections::HashMap<EntityId, usize>, sqlx::Error>
             where
-                OP: es_entity::AtomicOperation,
+                OP: es_entity::AtomicOperation + ?Sized,
                 B: std::borrow::BorrowMut<es_entity::EntityEvents<EntityEvent>>,
             {
                 use es_entity::prelude::sqlx::Row;
@@ -291,7 +291,7 @@ mod tests {
                 all_events: &mut [B]
             ) -> Result<std::collections::HashMap<EntityId, usize>, sqlx::Error>
             where
-                OP: es_entity::AtomicOperation,
+                OP: es_entity::AtomicOperation + ?Sized,
                 B: std::borrow::BorrowMut<es_entity::EntityEvents<EntityEvent>>,
             {
                 use es_entity::prelude::sqlx::Row;

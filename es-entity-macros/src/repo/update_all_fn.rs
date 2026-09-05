@@ -335,7 +335,7 @@ impl UpdateAllFn<'_> {
                 #entities_param
             ) -> Result<usize, #modify_error>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<usize, #modify_error> = async {
                     use es_entity::prelude::sqlx::Row;
@@ -445,7 +445,7 @@ mod tests {
                 entities: &mut [Entity]
             ) -> Result<usize, EntityModifyError>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<usize, EntityModifyError> = async {
                     use es_entity::prelude::sqlx::Row;
@@ -539,7 +539,7 @@ mod tests {
                 entities: impl IntoIterator<Item = &mut Entity>
             ) -> Result<usize, EntityModifyError>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<usize, EntityModifyError> = async {
                     use es_entity::prelude::sqlx::Row;
@@ -678,7 +678,7 @@ mod tests {
                 entities: &mut [Entity]
             ) -> Result<usize, EntityModifyError>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<usize, EntityModifyError> = async {
                     use es_entity::prelude::sqlx::Row;
@@ -732,7 +732,7 @@ mod tests {
                 entities: impl IntoIterator<Item = &mut Entity>
             ) -> Result<usize, EntityModifyError>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<usize, EntityModifyError> = async {
                     use es_entity::prelude::sqlx::Row;

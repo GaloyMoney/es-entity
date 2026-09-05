@@ -327,7 +327,7 @@ pub trait CommitHook: Send + 'static + Sized {
     /// Useful when [`AtomicOperation::add_commit_hook()`] returns `Err(hook)`.
     fn force_execute_pre_commit(
         self,
-        op: &mut impl AtomicOperation,
+        op: &mut (impl AtomicOperation + ?Sized),
     ) -> impl Future<Output = Result<Self, sqlx::Error>> + Send {
         async {
             let hook_op = HookOperation::new(op);
@@ -363,7 +363,7 @@ pub struct HookOperation<'c> {
 impl<'c> HookOperation<'c> {
     /// Force-execute path: no commit pass to fold into, so registering further
     /// hooks stays unsupported.
-    fn new(op: &'c mut impl AtomicOperation) -> Self {
+    fn new(op: &'c mut (impl AtomicOperation + ?Sized)) -> Self {
         Self {
             now: op.maybe_now(),
             conn: op.connection(),
