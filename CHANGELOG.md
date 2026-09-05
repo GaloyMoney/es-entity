@@ -1,3 +1,11 @@
+# [cala release v0.12.20](https://github.com/GaloyMoney/cala/releases/tag/0.12.20)
+
+
+
+### Features
+
+- Relax generated _in_op operation bounds to ?Sized (#223)
+
 # [cala release v0.12.19](https://github.com/GaloyMoney/cala/releases/tag/0.12.19)
 
 
