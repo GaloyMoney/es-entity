@@ -223,7 +223,7 @@ impl ToTokens for CreateAllFn<'_> {
                 new_entities: Vec<<#entity as es_entity::EsEntity>::New>
             ) -> Result<Vec<#entity>, #create_error>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<Vec<#entity>, #create_error> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
@@ -348,7 +348,7 @@ mod tests {
                 new_entities: Vec<<Entity as es_entity::EsEntity>::New>
             ) -> Result<Vec<Entity>, EntityCreateError>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<Vec<Entity>, EntityCreateError> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};

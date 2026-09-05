@@ -233,7 +233,7 @@ impl ToTokens for ForgetFn<'_> {
                 mut entity: #entity_type
             ) -> Result<#entity_type, #error>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 #persist_staged
                 {
@@ -352,7 +352,7 @@ impl ForgetFn<'_> {
                 id: impl std::borrow::Borrow<#id_type>
             ) -> Result<(), #error>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let id = id.borrow();
                 let mut remnants = es_entity::ForgettableRemnants::default();

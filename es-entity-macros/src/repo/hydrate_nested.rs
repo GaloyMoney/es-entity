@@ -128,7 +128,7 @@ impl ToTokens for HydrateNested<'_> {
                         parent_id: &#ty,
                     ) -> Result<(), __EsErr>
                     where
-                        OP: es_entity::AtomicOperation,
+                        OP: es_entity::AtomicOperation + ?Sized,
                         __EsErr: From<sqlx::Error> + Send,
                     {
                         #cascade

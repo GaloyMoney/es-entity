@@ -170,7 +170,7 @@ impl ToTokens for DeleteFn<'_> {
                 mut entity: #entity
             ) -> Result<(), #modify_error>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<(), #modify_error> = async {
                     #(#nested_deletes)*
@@ -268,7 +268,7 @@ mod tests {
                 mut entity: Entity
             ) -> Result<(), EntityModifyError>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<(), EntityModifyError> = async {
                     let id = &entity.id;
@@ -360,7 +360,7 @@ mod tests {
                 mut entity: Entity
             ) -> Result<(), EntityModifyError>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<(), EntityModifyError> = async {
                     let id = &entity.id;
@@ -448,7 +448,7 @@ mod tests {
                 mut entity: Entity
             ) -> Result<(), EntityModifyError>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<(), EntityModifyError> = async {
                     let id = &entity.id;

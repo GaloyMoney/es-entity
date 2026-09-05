@@ -203,7 +203,7 @@ impl ToTokens for CreateFn<'_> {
                 new_entity: <#entity as es_entity::EsEntity>::New
             ) -> Result<#entity, #create_error>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<#entity, #create_error> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
@@ -319,7 +319,7 @@ mod tests {
                 new_entity: <Entity as es_entity::EsEntity>::New
             ) -> Result<Entity, EntityCreateError>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<Entity, EntityCreateError> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
@@ -429,7 +429,7 @@ mod tests {
                 new_entity: <Entity as es_entity::EsEntity>::New
             ) -> Result<Entity, EntityCreateError>
             where
-                OP: es_entity::AtomicOperation
+                OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<Entity, EntityCreateError> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
