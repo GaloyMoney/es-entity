@@ -542,6 +542,44 @@ impl<'c> AtomicOperation for sqlx::Transaction<'c, db::Db> {
     }
 }
 
+impl<O: AtomicOperation + ?Sized> AtomicOperation for &mut O {
+    fn maybe_now(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        O::maybe_now(&**self)
+    }
+
+    fn clock(&self) -> &ClockHandle {
+        O::clock(&**self)
+    }
+
+    fn connection(&mut self) -> &mut db::Connection {
+        O::connection(&mut **self)
+    }
+
+    fn as_executor(&mut self) -> OneTimeExecutor<'_, &mut db::Connection> {
+        O::as_executor(&mut **self)
+    }
+
+    fn add_commit_hook_dyn(
+        &mut self,
+        type_id: std::any::TypeId,
+        hook: Box<dyn hooks::DynHook>,
+    ) -> Result<(), Box<dyn hooks::DynHook>> {
+        O::add_commit_hook_dyn(&mut **self, type_id, hook)
+    }
+
+    fn commit_hook_dyn(&self, type_id: std::any::TypeId) -> Option<&dyn hooks::DynHook> {
+        O::commit_hook_dyn(&**self, type_id)
+    }
+
+    fn supports_hooks(&self) -> bool {
+        O::supports_hooks(&**self)
+    }
+
+    fn savepoint_parts(&mut self) -> (&mut db::Connection, savepoint::HookSlot<'_>) {
+        O::savepoint_parts(&mut **self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
