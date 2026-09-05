@@ -1,3 +1,11 @@
+# [cala release v0.12.18](https://github.com/GaloyMoney/cala/releases/tag/0.12.18)
+
+
+
+### Features
+
+- Make AtomicOperation object-safe via type-erased commit hooks (#221)
+
 # [cala release v0.12.17](https://github.com/GaloyMoney/cala/releases/tag/0.12.17)
 
 
