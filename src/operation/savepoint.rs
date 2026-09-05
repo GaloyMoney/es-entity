@@ -230,11 +230,15 @@ impl AtomicOperation for SavepointOp<'_> {
     /// has nowhere to fold hooks — a savepoint over a bare [`sqlx::Transaction`]
     /// or any op that returned [`HookSlot::unsupported`], or one nested under a
     /// `HookOperation` on the `force_execute_pre_commit` path.
-    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
+    fn add_commit_hook_dyn(
+        &mut self,
+        type_id: std::any::TypeId,
+        hook: Box<dyn hooks::DynHook>,
+    ) -> Result<(), Box<dyn hooks::DynHook>> {
         if self.parent_hooks.is_none() {
             return Err(hook);
         }
-        self.staged.add(hook);
+        self.staged.push_or_merge(type_id, hook);
         Ok(())
     }
 
@@ -243,10 +247,10 @@ impl AtomicOperation for SavepointOp<'_> {
     /// While a savepoint is open the two are not yet merged, so a hook type
     /// present in *both* reports only the staged instance here — they become
     /// one hook when the savepoint is released.
-    fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H> {
+    fn commit_hook_dyn(&self, type_id: std::any::TypeId) -> Option<&dyn hooks::DynHook> {
         self.staged
-            .get_last::<H>()
-            .or_else(|| self.parent_hooks.as_ref()?.get_last::<H>())
+            .get_last_dyn(type_id)
+            .or_else(|| self.parent_hooks.as_ref()?.get_last_dyn(type_id))
     }
 
     fn supports_hooks(&self) -> bool {

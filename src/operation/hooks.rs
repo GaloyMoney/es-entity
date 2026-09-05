@@ -397,18 +397,22 @@ impl<'c> AtomicOperation for HookOperation<'c> {
         self.conn
     }
 
-    fn add_commit_hook<H: CommitHook>(&mut self, hook: H) -> Result<(), H> {
+    fn add_commit_hook_dyn(
+        &mut self,
+        type_id: TypeId,
+        hook: Box<dyn DynHook>,
+    ) -> Result<(), Box<dyn DynHook>> {
         match self.staged.as_mut() {
             Some(staged) => {
-                staged.add(hook);
+                staged.push_or_merge(type_id, hook);
                 Ok(())
             }
             None => Err(hook),
         }
     }
 
-    fn commit_hook<H: CommitHook>(&self) -> Option<&H> {
-        self.staged.as_ref()?.get_last::<H>()
+    fn commit_hook_dyn(&self, type_id: TypeId) -> Option<&dyn DynHook> {
+        self.staged.as_ref()?.get_last_dyn(type_id)
     }
 
     fn supports_hooks(&self) -> bool {
@@ -452,7 +456,7 @@ impl<'c, H> PreCommitRet<'c, H> {
 }
 
 // --- Object-safe internal trait ---
-trait DynHook: Send {
+pub trait DynHook: Send {
     #[allow(clippy::type_complexity)]
     fn pre_commit_boxed<'c>(
         self: Box<Self>,
@@ -470,6 +474,8 @@ trait DynHook: Send {
     fn as_any(&self) -> &dyn Any;
 
     fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
 impl<H: CommitHook> DynHook for H {
@@ -512,6 +518,10 @@ impl<H: CommitHook> DynHook for H {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
 }
 
 /// Hooks are stored in a single flat insertion-ordered vec so that
@@ -527,16 +537,13 @@ impl CommitHooks {
         Self { hooks: Vec::new() }
     }
 
-    pub(super) fn add<H: CommitHook>(&mut self, hook: H) {
-        self.push_or_merge(TypeId::of::<H>(), Box::new(hook));
-    }
-
     /// Folds the hooks staged by a released [`SavepointOp`] into this buffer.
     ///
-    /// Replays them through the same path as [`add`](Self::add), in their
-    /// staging order, so the result is indistinguishable from having registered
-    /// them on this operation directly: mergeable types accumulate into the
-    /// earlier instance (keeping its position), non-mergeable ones append.
+    /// Replays them through the same path as [`push_or_merge`](Self::push_or_merge),
+    /// in their staging order, so the result is indistinguishable from having
+    /// registered them on this operation directly: mergeable types accumulate
+    /// into the earlier instance (keeping its position), non-mergeable ones
+    /// append.
     ///
     /// [`SavepointOp`]: super::SavepointOp
     pub(super) fn absorb_staged(&mut self, staged: Self) {
@@ -545,7 +552,7 @@ impl CommitHooks {
         }
     }
 
-    fn push_or_merge(&mut self, type_id: TypeId, mut new_hook: Box<dyn DynHook>) {
+    pub(crate) fn push_or_merge(&mut self, type_id: TypeId, mut new_hook: Box<dyn DynHook>) {
         // Merge with the most recently added hook of the same type, keeping the
         // existing hook's original (earlier) position in the execution order.
         if let Some((_, existing)) = self.hooks.iter_mut().rev().find(|(t, _)| *t == type_id)
@@ -561,12 +568,12 @@ impl CommitHooks {
         self.hooks.is_empty()
     }
 
-    pub(super) fn get_last<H: CommitHook>(&self) -> Option<&H> {
+    pub(crate) fn get_last_dyn(&self, type_id: TypeId) -> Option<&dyn DynHook> {
         self.hooks
             .iter()
             .rev()
-            .find(|(t, _)| *t == TypeId::of::<H>())
-            .and_then(|(_, hook)| hook.as_any().downcast_ref::<H>())
+            .find(|(t, _)| *t == type_id)
+            .map(|(_, hook)| hook.as_ref())
     }
 
     /// Runs each hook's `pre_commit` in registration order.

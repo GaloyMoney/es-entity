@@ -654,15 +654,19 @@ macro_rules! delegate_atomic_operation {
                 match self { $($pat => $target.as_executor()),+ }
             }
 
-            fn add_commit_hook<__H: $crate::hooks::CommitHook>(
+            fn add_commit_hook_dyn(
                 &mut self,
-                hook: __H,
-            ) -> Result<(), __H> {
-                match self { $($pat => $target.add_commit_hook(hook)),+ }
+                type_id: std::any::TypeId,
+                hook: Box<dyn $crate::hooks::DynHook>,
+            ) -> Result<(), Box<dyn $crate::hooks::DynHook>> {
+                match self { $($pat => $target.add_commit_hook_dyn(type_id, hook)),+ }
             }
 
-            fn commit_hook<__H: $crate::hooks::CommitHook>(&self) -> Option<&__H> {
-                match self { $($pat => $target.commit_hook::<__H>()),+ }
+            fn commit_hook_dyn(
+                &self,
+                type_id: std::any::TypeId,
+            ) -> Option<&dyn $crate::hooks::DynHook> {
+                match self { $($pat => $target.commit_hook_dyn(type_id)),+ }
             }
 
             fn supports_hooks(&self) -> bool {

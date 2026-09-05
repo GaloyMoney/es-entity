@@ -68,12 +68,16 @@ impl<'a, Op: AtomicOperation + ?Sized> AtomicOperation for OpWithTime<'a, Op> {
         self.inner.connection()
     }
 
-    fn add_commit_hook<H: hooks::CommitHook>(&mut self, hook: H) -> Result<(), H> {
-        self.inner.add_commit_hook(hook)
+    fn add_commit_hook_dyn(
+        &mut self,
+        type_id: std::any::TypeId,
+        hook: Box<dyn hooks::DynHook>,
+    ) -> Result<(), Box<dyn hooks::DynHook>> {
+        self.inner.add_commit_hook_dyn(type_id, hook)
     }
 
-    fn commit_hook<H: hooks::CommitHook>(&self) -> Option<&H> {
-        self.inner.commit_hook::<H>()
+    fn commit_hook_dyn(&self, type_id: std::any::TypeId) -> Option<&dyn hooks::DynHook> {
+        self.inner.commit_hook_dyn(type_id)
     }
 
     fn supports_hooks(&self) -> bool {
