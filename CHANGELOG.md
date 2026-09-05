@@ -1,3 +1,11 @@
+# [cala release v0.12.19](https://github.com/GaloyMoney/cala/releases/tag/0.12.19)
+
+
+
+### Features
+
+- Blanket AtomicOperation impl for &mut O (#222)
+
 # [cala release v0.12.18](https://github.com/GaloyMoney/cala/releases/tag/0.12.18)
 
 
