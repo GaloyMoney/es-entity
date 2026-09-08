@@ -9,6 +9,7 @@ use super::{
 };
 
 pub struct ForgetFn<'a> {
+    in_op_only: bool,
     id: &'a syn::Ident,
     entity: &'a syn::Ident,
     event: &'a syn::Ident,
@@ -24,6 +25,7 @@ pub struct ForgetFn<'a> {
 impl<'a> ForgetFn<'a> {
     pub fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
+            in_op_only: opts.in_op_only(),
             id: opts.id(),
             entity: opts.entity(),
             event: opts.event(),
@@ -181,19 +183,25 @@ impl ToTokens for ForgetFn<'_> {
             quote! {}
         };
 
-        tokens.append_all(quote! {
-            /// Permanently forgets the entity's forgettable data. Consumes the
-            /// entity and returns the rebuilt (forgotten) entity. On any error
-            /// the potentially-inconsistent copy is dropped — reload and retry.
-            pub async fn forget(
-                &self,
-                entity: #entity_type
-            ) -> Result<#entity_type, #error> {
-                let mut op = self.begin_op().await?;
-                let entity = self.forget_in_op(&mut op, entity).await?;
-                op.commit().await?;
-                Ok(entity)
+        let standalone = (!self.in_op_only).then(|| {
+            quote! {
+                /// Permanently forgets the entity's forgettable data. Consumes the
+                /// entity and returns the rebuilt (forgotten) entity. On any error
+                /// the potentially-inconsistent copy is dropped — reload and retry.
+                pub async fn forget(
+                    &self,
+                    entity: #entity_type
+                ) -> Result<#entity_type, #error> {
+                    let mut op = self.begin_op().await?;
+                    let entity = self.forget_in_op(&mut op, entity).await?;
+                    op.commit().await?;
+                    Ok(entity)
+                }
             }
+        });
+
+        tokens.append_all(quote! {
+            #standalone
 
             /// Permanently forgets the entity's forgettable data — all in one
             /// transaction: persists any staged (unpersisted) events, deletes
@@ -318,7 +326,28 @@ impl ForgetFn<'_> {
             }
         };
 
+        let standalone = (!self.in_op_only).then(|| {
+            quote! {
+                /// Verifies at the **storage level** that all configured
+                /// forgettable data for `id` is physically absent — i.e. that
+                /// `forget()` has fully taken effect. See
+                /// [`Self::verify_forgotten_in_op`] for the details of what is
+                /// checked; this variant opens and commits its own operation.
+                pub async fn verify_forgotten(
+                    &self,
+                    id: impl std::borrow::Borrow<#id_type>
+                ) -> Result<(), #error> {
+                    let mut op = self.begin_op().await?;
+                    let res = self.verify_forgotten_in_op(&mut op, id).await?;
+                    op.commit().await?;
+                    Ok(res)
+                }
+            }
+        });
+
         tokens.append_all(quote! {
+            #standalone
+
             /// Verifies at the **storage level** that all configured
             /// forgettable data for `id` is physically absent — i.e. that
             /// `forget()` has fully taken effect. Unlike inspecting a hydrated
@@ -333,19 +362,9 @@ impl ForgetFn<'_> {
             ///
             /// Returns `Err(NotForgotten(remnants))` describing anything still
             /// present. An entity that was never persisted verifies trivially.
-            pub async fn verify_forgotten(
-                &self,
-                id: impl std::borrow::Borrow<#id_type>
-            ) -> Result<(), #error> {
-                let mut op = self.begin_op().await?;
-                let res = self.verify_forgotten_in_op(&mut op, id).await?;
-                op.commit().await?;
-                Ok(res)
-            }
-
-            /// Same as [`Self::verify_forgotten`] but runs on an existing
-            /// operation, so the check can share the erasure (or a follow-up)
-            /// transaction.
+            ///
+            /// Runs on an existing operation, so the check can share the
+            /// erasure (or a follow-up) transaction.
             pub async fn verify_forgotten_in_op<OP>(
                 &self,
                 op: &mut OP,
@@ -413,6 +432,7 @@ mod tests {
         let error = Ident::new("EntityForgetError", Span::call_site());
 
         let forget_fn = ForgetFn {
+            in_op_only: false,
             id: &id,
             entity: &entity,
             event: &event,
@@ -463,6 +483,7 @@ mod tests {
         let email = Ident::new("email", Span::call_site());
 
         let forget_fn = ForgetFn {
+            in_op_only: false,
             id: &id,
             entity: &entity,
             event: &event,
@@ -508,6 +529,7 @@ mod tests {
         let hook_error: syn::Type = syn::parse_str("MyHookError").unwrap();
 
         let forget_fn = ForgetFn {
+            in_op_only: false,
             id: &id,
             entity: &entity,
             event: &event,
@@ -555,6 +577,7 @@ mod tests {
         let hook_error: syn::Type = syn::parse_str("MyHookError").unwrap();
 
         let forget_fn = ForgetFn {
+            in_op_only: false,
             id: &id,
             entity: &entity,
             event: &event,

@@ -5,6 +5,7 @@ use quote::{TokenStreamExt, quote};
 use super::{options::*, scope::ScopeInfo};
 
 pub struct FindAllFn<'a> {
+    in_op_only: bool,
     prefix: Option<&'a syn::LitStr>,
     id: &'a syn::Ident,
     entity: &'a syn::Ident,
@@ -20,6 +21,7 @@ pub struct FindAllFn<'a> {
 impl<'a> From<&'a RepositoryOptions> for FindAllFn<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
+            in_op_only: opts.in_op_only(),
             prefix: opts.table_prefix(),
             id: opts.id(),
             entity: opts.entity(),
@@ -49,13 +51,19 @@ impl FindAllFn<'_> {
         let generics = quote! { <'a, Out: From<#entity>> };
         let op_param = quote! { op: impl #query_fn_op_traits };
 
-        quote! {
-            pub async fn find_all<Out: From<#entity>>(
-                &self,
-                ids: &[#id]
-            ) -> Result<std::collections::HashMap<#id, Out>, #query_error> {
-                self.repo.find_all(self.scope, ids).await
+        let standalone = (!self.in_op_only).then(|| {
+            quote! {
+                pub async fn find_all<Out: From<#entity>>(
+                    &self,
+                    ids: &[#id]
+                ) -> Result<std::collections::HashMap<#id, Out>, #query_error> {
+                    self.repo.find_all(self.scope, ids).await
+                }
             }
+        });
+
+        quote! {
+            #standalone
 
             pub async fn find_all_in_op #generics(
                 &self,
@@ -156,14 +164,20 @@ impl ToTokens for FindAllFn<'_> {
             quote! {}
         };
 
-        tokens.append_all(quote! {
-            pub async fn find_all<Out: From<#entity>>(
-                &self,
-                #scope_fn_arg
-                ids: &[#id]
-            ) -> Result<std::collections::HashMap<#id, Out>, #query_error> {
-                self.find_all_in_op(#query_fn_get_op, #scope_fn_pass ids).await
+        let standalone = (!self.in_op_only).then(|| {
+            quote! {
+                pub async fn find_all<Out: From<#entity>>(
+                    &self,
+                    #scope_fn_arg
+                    ids: &[#id]
+                ) -> Result<std::collections::HashMap<#id, Out>, #query_error> {
+                    self.find_all_in_op(#query_fn_get_op, #scope_fn_pass ids).await
+                }
             }
+        });
+
+        tokens.append_all(quote! {
+            #standalone
 
             #instrument_attr
             pub async fn find_all_in_op #generics(
@@ -194,6 +208,7 @@ mod tests {
         let query_error = syn::Ident::new("EntityQueryError", Span::call_site());
 
         let persist_fn = FindAllFn {
+            in_op_only: false,
             prefix: None,
             id: &id_type,
             entity: &entity,

@@ -347,6 +347,7 @@ impl ToTokens for CursorStruct<'_> {
 }
 
 pub struct ListByFn<'a> {
+    in_op_only: bool,
     ignore_prefix: Option<&'a syn::LitStr>,
     id: &'a syn::Ident,
     entity: &'a syn::Ident,
@@ -365,6 +366,7 @@ pub struct ListByFn<'a> {
 impl<'a> ListByFn<'a> {
     pub fn new(column: &'a Column, opts: &'a RepositoryOptions) -> Self {
         Self {
+            in_op_only: opts.in_op_only(),
             ignore_prefix: opts.table_prefix(),
             column,
             id: opts.id(),
@@ -425,14 +427,20 @@ impl<'a> ListByFn<'a> {
                 Span::call_site(),
             );
 
-            tokens.append_all(quote! {
-                pub async fn #fn_name(
-                    &self,
-                    cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
-                    direction: es_entity::ListDirection,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #query_error> {
-                    self.repo.#fn_name(self.scope, cursor, direction).await
+            let standalone = (!self.in_op_only).then(|| {
+                quote! {
+                    pub async fn #fn_name(
+                        &self,
+                        cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
+                        direction: es_entity::ListDirection,
+                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #query_error> {
+                        self.repo.#fn_name(self.scope, cursor, direction).await
+                    }
                 }
+            });
+
+            tokens.append_all(quote! {
+                #standalone
 
                 pub async fn #fn_in_op #query_fn_generics(
                     &self,
@@ -648,15 +656,21 @@ impl ToTokens for ListByFn<'_> {
                 quote! {}
             };
 
-            tokens.append_all(quote! {
-                pub async fn #fn_name(
-                    &self,
-                    #scope_fn_arg
-                    cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
-                    direction: es_entity::ListDirection,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #query_error> {
-                    self.#fn_in_op(#query_fn_get_op, #scope_fn_pass cursor, direction).await
+            let standalone = (!self.in_op_only).then(|| {
+                quote! {
+                    pub async fn #fn_name(
+                        &self,
+                        #scope_fn_arg
+                        cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
+                        direction: es_entity::ListDirection,
+                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #query_error> {
+                        self.#fn_in_op(#query_fn_get_op, #scope_fn_pass cursor, direction).await
+                    }
                 }
+            });
+
+            tokens.append_all(quote! {
+                #standalone
 
                 #instrument_attr
                 pub async fn #fn_in_op #query_fn_generics(
@@ -791,6 +805,7 @@ mod tests {
         let cursor_mod = Ident::new("cursor_mod", Span::call_site());
 
         let persist_fn = ListByFn {
+            in_op_only: false,
             ignore_prefix: None,
             column: &column,
             id: &id_type,
@@ -882,6 +897,7 @@ mod tests {
         let cursor_mod = Ident::new("cursor_mod", Span::call_site());
 
         let persist_fn = ListByFn {
+            in_op_only: false,
             ignore_prefix: None,
             column: &column,
             id: &id_type,
@@ -916,6 +932,7 @@ mod tests {
         let cursor_mod = Ident::new("cursor_mod", Span::call_site());
 
         let persist_fn = ListByFn {
+            in_op_only: false,
             ignore_prefix: None,
             column: &column,
             id: &id_type,
@@ -1012,6 +1029,7 @@ mod tests {
         let cursor_mod = Ident::new("cursor_mod", Span::call_site());
 
         let persist_fn = ListByFn {
+            in_op_only: false,
             ignore_prefix: None,
             column: &column,
             id: &id_type,
@@ -1127,6 +1145,7 @@ mod tests {
         let cursor_mod = Ident::new("cursor_mod", Span::call_site());
 
         let persist_fn = ListByFn {
+            in_op_only: false,
             ignore_prefix: None,
             column: &column,
             id: &id_type,
