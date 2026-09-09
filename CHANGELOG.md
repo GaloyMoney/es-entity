@@ -1,3 +1,11 @@
+# [cala release v0.12.21](https://github.com/GaloyMoney/cala/releases/tag/0.12.21)
+
+
+
+### Features
+
+- Add in_op_only option to generate only _in_op repo fns (#224)
+
 # [cala release v0.12.20](https://github.com/GaloyMoney/cala/releases/tag/0.12.20)
 
 
