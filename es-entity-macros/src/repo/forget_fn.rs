@@ -330,9 +330,7 @@ impl ForgetFn<'_> {
             quote! {
                 /// Verifies at the **storage level** that all configured
                 /// forgettable data for `id` is physically absent — i.e. that
-                /// `forget()` has fully taken effect. See
-                /// [`Self::verify_forgotten_in_op`] for the details of what is
-                /// checked; this variant opens and commits its own operation.
+                /// `forget()` has fully taken effect.
                 pub async fn verify_forgotten(
                     &self,
                     id: impl std::borrow::Borrow<#id_type>

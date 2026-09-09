@@ -403,12 +403,6 @@ impl<'a> ListForFiltersFn<'a> {
         )
     }
 
-    /// Body of one dispatch arm: picks the single sibling fn that serves this
-    /// filter combination and calls it.
-    ///
-    /// `in_op` selects the `_in_op` siblings and threads the caller's `op`
-    /// into them. Every path below is mutually exclusive (one match arm, one
-    /// if/else branch), so the one-shot `op` is consumed exactly once.
     fn generate_proxy_body(
         &self,
         by_col: &Column,
@@ -978,9 +972,7 @@ impl ToTokens for ListForFiltersFn<'_> {
 
             tokens.append_all(by_fns);
 
-            // Generate dispatch function. The `_in_op` build threads the
-            // caller's one-shot executor into whichever sibling the arm picks;
-            // the standalone build is a thin delegate that hands it the pool.
+            // Generate dispatch function
             let dispatch_arms = |in_op: bool| -> TokenStream {
                 self
                 .by_columns
@@ -1388,9 +1380,6 @@ mod tests {
                 __result
             }
 
-            // The dispatcher is now a thin delegate over its `_in_op` twin,
-            // like every other read fn: it hands the pool in as the one-shot
-            // executor and the `_in_op` body does the dispatching.
             pub async fn list_for_filters(
                 &self,
                 filters: OrderFilters,
@@ -1421,8 +1410,6 @@ mod tests {
                             let after = after.map(cursor_mod::OrderByIdCursor::try_from).transpose()?;
                             let query = es_entity::PaginatedQueryArgs { first, after };
 
-                            // Each branch is exclusive, so the one-shot `op` is
-                            // moved into exactly one of them.
                             let es_entity::PaginatedQueryRet {
                                 entities,
                                 has_next_page,

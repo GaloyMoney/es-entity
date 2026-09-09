@@ -59,8 +59,6 @@ pub struct EsRepo<'a> {
     find_all_fn: find_all_fn::FindAllFn<'a>,
     post_hydrate_hook: post_hydrate_hook::PostHydrateHook<'a>,
     post_persist_hook: post_persist_hook::PostPersistHook<'a>,
-    /// `None` for a pool-less (`in_op_only`) repo: `begin_op` manufactures a
-    /// `DbOp` from the pool, so there is nothing to generate it from.
     begin: Option<begin::Begin<'a>>,
     list_by_fns: Vec<list_by_fn::ListByFn<'a>>,
     list_for_fns: Vec<list_for_fn::ListForFn<'a>>,
@@ -220,8 +218,6 @@ impl ToTokens for EsRepo<'_> {
         let nested = &self.nested;
         let hydrate_nested = &self.hydrate_nested;
 
-        // A pool-less (`in_op_only`) repo exposes no pool accessor: there is no
-        // field to return, and nothing generated reaches for one.
         let pool_fn = self.opts.pool_field().map(|pool_field| {
             quote! {
                 #[inline(always)]
@@ -922,14 +918,6 @@ mod tests {
         );
     }
 
-    /// The standalone (non-`_in_op`) fns every write and read path generates
-    /// by default. Each entry is the *exact* token-stream prefix of the
-    /// generated signature, so an accidental re-emission cannot slip past by
-    /// being reformatted.
-    ///
-    /// Shared by the suppression test and its regression twin below so the two
-    /// can never drift apart: whatever `in_op_only` is asserted to remove, a
-    /// default repo is asserted to keep.
     const STANDALONE_FN_SIGNATURES: &[&str] = &[
         "pub async fn create (& self ,",
         "pub async fn create_all (& self ,",
@@ -939,16 +927,12 @@ mod tests {
         "pub async fn find_by_id (& self ,",
         "pub async fn maybe_find_by_id (& self ,",
         "pub async fn find_by_name (& self ,",
-        // stops before the nested `>>`, whose token spacing is not stable
         "pub async fn find_all < Out : From < User",
         "pub async fn list_by_id (& self ,",
         "pub async fn list_for_name_by_id (& self ,",
         "pub async fn list_for_filters (& self ,",
     ];
 
-    /// A repo exercising every generated fn family: writes, soft delete (so
-    /// the `_include_deleted` siblings are emitted too), find-by, list-by,
-    /// list-for and the `list_for_filters` dispatcher.
     fn every_fn_family_repo(extra_opts: proc_macro2::TokenStream) -> syn::DeriveInput {
         parse_quote! {
             #[es_repo(
@@ -975,13 +959,10 @@ mod tests {
                 "`in_op_only` must not generate the standalone fn `{sig}`"
             );
         }
-        // The soft-delete siblings go too.
         assert!(!tokens.contains("pub async fn find_by_id_include_deleted (& self ,"));
         assert!(!tokens.contains("pub async fn list_by_id_include_deleted (& self ,"));
         assert!(!tokens.contains("pub async fn list_for_filters_include_deleted (& self ,"));
 
-        // ...while every `_in_op` twin remains, including the dispatcher's,
-        // which had no `_in_op` form before this option existed.
         assert!(tokens.contains("pub async fn create_in_op"));
         assert!(tokens.contains("pub async fn update_in_op"));
         assert!(tokens.contains("pub async fn delete_in_op"));
@@ -991,9 +972,6 @@ mod tests {
         assert!(tokens.contains("pub async fn list_for_filters_in_op"));
     }
 
-    /// The regression twin: a repo *without* the option keeps every standalone
-    /// fn, the pool accessor and `begin_op`. Guards against the gating leaking
-    /// into the default path.
     #[test]
     fn repo_without_in_op_only_keeps_every_standalone_fn() {
         let tokens = derive(every_fn_family_repo(quote! {}))
@@ -1024,14 +1002,10 @@ mod tests {
         assert!(!tokens.contains("pub fn pool (& self)"));
         assert!(!tokens.contains("begin_op"));
         assert!(!tokens.contains("self . pool ()"));
-        // The op-taking surface is untouched.
         assert!(tokens.contains("pub async fn create_in_op"));
         assert!(tokens.contains("pub async fn find_by_id_in_op"));
     }
 
-    /// `in_op_only` only *permits* dropping the pool — a repo that keeps one
-    /// keeps `pool()`/`begin_op` too. Holding a pool does not weaken the
-    /// discipline: the op still has to be passed explicitly.
     #[test]
     fn in_op_only_with_pool_field_keeps_begin_op() {
         let tokens = derive(every_fn_family_repo(quote! { in_op_only, }))
@@ -1058,11 +1032,9 @@ mod tests {
             .to_string();
 
         assert!(tokens.contains("pub struct ScopedUsers"));
-        // the standalone delegates are gone...
         assert!(!tokens.contains("self . repo . find_by_id (self . scope"));
         assert!(!tokens.contains("self . repo . find_all (self . scope"));
         assert!(!tokens.contains("self . repo . list_for_filters (self . scope"));
-        // ...and the `_in_op` delegates, including the dispatcher's, remain.
         assert!(tokens.contains("self . repo . find_by_id_in_op (op , self . scope"));
         assert!(tokens.contains("self . repo . list_for_filters_in_op (op , self . scope"));
     }

@@ -230,12 +230,6 @@ pub struct RepositoryOptions {
 
     #[darling(default)]
     persist_event_context: Option<bool>,
-    /// Generate only the `_in_op` variants of every repo fn, making it
-    /// impossible to reach the database without passing an operation
-    /// (`AtomicOperation` for writes, `IntoOneTimeExecutor` for reads).
-    ///
-    /// With this set the pool field becomes optional: a repo that holds no
-    /// pool cannot begin its own operation, which is the point.
     #[darling(default)]
     in_op_only: bool,
     #[darling(default)]
@@ -449,10 +443,6 @@ impl RepositoryOptions {
         self.ident.to_string().to_case(Case::Snake)
     }
 
-    /// The pool field, if the repo has one.
-    ///
-    /// `None` is only reachable for an `in_op_only` repo — [`Self::validate_in_op_only`]
-    /// rejects a pool-less repo that has not opted in.
     pub fn pool_field(&self) -> Option<&syn::Ident> {
         match &self.data {
             darling::ast::Data::Struct(fields) => fields.iter().find_map(|field| {
@@ -466,11 +456,6 @@ impl RepositoryOptions {
         }
     }
 
-    /// Whether only the `_in_op` variants of the repo fns are generated.
-    ///
-    /// The standalone fns are exactly the ones that open (or borrow) the pool
-    /// on the caller's behalf, so suppressing them makes passing an operation
-    /// the only way to reach the database.
     pub fn in_op_only(&self) -> bool {
         self.in_op_only
     }
@@ -604,11 +589,6 @@ impl RepositoryOptions {
         Ok(())
     }
 
-    /// Validates the pool field against `in_op_only`.
-    ///
-    /// Both errors below used to be either a raw `.expect()` panic (missing
-    /// pool) or a silently dead struct field (clock without a pool), so this
-    /// trades a confusing failure for a pointed one.
     pub fn validate_in_op_only(&self) -> darling::Result<()> {
         if self.pool_field().is_some() {
             return Ok(());
@@ -623,9 +603,6 @@ impl RepositoryOptions {
             .with_span(&self.ident));
         }
 
-        // The clock is read only by `begin_op`, which needs a pool to build the
-        // `DbOp`. Without one the field would be silently dead: an `in_op_only`
-        // repo takes its time from the operation (`op.maybe_now()`) instead.
         if !matches!(self.clock_field(), ClockFieldInfo::None) {
             return Err(darling::Error::custom(
                 "repo has a clock field but no pool field: the clock is only used by \
