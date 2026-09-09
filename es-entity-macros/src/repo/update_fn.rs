@@ -8,6 +8,7 @@ use super::{
 };
 
 pub struct UpdateFn<'a> {
+    in_op_only: bool,
     entity: &'a syn::Ident,
     id: &'a syn::Ident,
     event: &'a syn::Ident,
@@ -26,6 +27,7 @@ pub struct UpdateFn<'a> {
 impl<'a> From<&'a RepositoryOptions> for UpdateFn<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
+            in_op_only: opts.in_op_only(),
             entity: opts.entity(),
             id: opts.id(),
             event: opts.event(),
@@ -174,6 +176,20 @@ impl ToTokens for UpdateFn<'_> {
             quote! {}
         };
 
+        let standalone = (!self.in_op_only).then(|| {
+            quote! {
+                pub async fn update(
+                    &self,
+                    entity: &mut #entity
+                ) -> Result<usize, #modify_error> {
+                    let mut op = self.begin_op().await?;
+                    let res = self.update_in_op(&mut op, entity).await?;
+                    op.commit().await?;
+                    Ok(res)
+                }
+            }
+        });
+
         tokens.append_all(quote! {
             #[inline(always)]
             fn extract_events<Entity, Event>(entity: &mut Entity) -> &mut es_entity::EntityEvents<Event>
@@ -184,15 +200,7 @@ impl ToTokens for UpdateFn<'_> {
                 entity.events_mut()
             }
 
-            pub async fn update(
-                &self,
-                entity: &mut #entity
-            ) -> Result<usize, #modify_error> {
-                let mut op = self.begin_op().await?;
-                let res = self.update_in_op(&mut op, entity).await?;
-                op.commit().await?;
-                Ok(res)
-            }
+            #standalone
 
             #instrument_attr
             pub async fn update_in_op<OP>(
@@ -246,6 +254,7 @@ mod tests {
 
         let event = Ident::new("EntityEvent", Span::call_site());
         let update_fn = UpdateFn {
+            in_op_only: false,
             entity: &entity,
             id: &id,
             event: &event,
@@ -342,6 +351,7 @@ mod tests {
 
         let event = Ident::new("EntityEvent", Span::call_site());
         let update_fn = UpdateFn {
+            in_op_only: false,
             entity: &entity,
             id: &id,
             event: &event,

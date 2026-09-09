@@ -8,6 +8,7 @@ use super::{
 };
 
 pub struct CreateAllFn<'a> {
+    in_op_only: bool,
     entity: &'a syn::Ident,
     id: &'a syn::Ident,
     event: &'a syn::Ident,
@@ -27,6 +28,7 @@ pub struct CreateAllFn<'a> {
 impl<'a> From<&'a RepositoryOptions> for CreateAllFn<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
+            in_op_only: opts.in_op_only(),
             table_name: opts.table_name(),
             entity: opts.entity(),
             id: opts.id(),
@@ -205,16 +207,22 @@ impl ToTokens for CreateAllFn<'_> {
                 }
             };
 
-        tokens.append_all(quote! {
-            pub async fn create_all(
-                &self,
-                new_entities: Vec<<#entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<#entity>, #create_error> {
-                let mut op = self.begin_op().await?;
-                let res = self.create_all_in_op(&mut op, new_entities).await?;
-                op.commit().await?;
-                Ok(res)
+        let standalone = (!self.in_op_only).then(|| {
+            quote! {
+                pub async fn create_all(
+                    &self,
+                    new_entities: Vec<<#entity as es_entity::EsEntity>::New>
+                ) -> Result<Vec<#entity>, #create_error> {
+                    let mut op = self.begin_op().await?;
+                    let res = self.create_all_in_op(&mut op, new_entities).await?;
+                    op.commit().await?;
+                    Ok(res)
+                }
             }
+        });
+
+        tokens.append_all(quote! {
+            #standalone
 
             #instrument_attr
             pub async fn create_all_in_op<OP>(
@@ -312,6 +320,7 @@ mod tests {
         columns.set_id_column(&id);
 
         let create_fn = CreateAllFn {
+            in_op_only: false,
             table_name: "entities",
             entity: &entity,
             id: &id,

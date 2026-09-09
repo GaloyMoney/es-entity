@@ -231,6 +231,8 @@ pub struct RepositoryOptions {
     #[darling(default)]
     persist_event_context: Option<bool>,
     #[darling(default)]
+    in_op_only: bool,
+    #[darling(default)]
     forgettable: bool,
     #[darling(default, rename = "forgettable_tbl")]
     forgettable_table_name: Option<String>,
@@ -441,8 +443,8 @@ impl RepositoryOptions {
         self.ident.to_string().to_case(Case::Snake)
     }
 
-    pub fn pool_field(&self) -> &syn::Ident {
-        let field = match &self.data {
+    pub fn pool_field(&self) -> Option<&syn::Ident> {
+        match &self.data {
             darling::ast::Data::Struct(fields) => fields.iter().find_map(|field| {
                 if field.is_pool_field() {
                     Some(field.ident.as_ref().unwrap())
@@ -451,8 +453,11 @@ impl RepositoryOptions {
                 }
             }),
             _ => None,
-        };
-        field.expect("Repo must have a field named 'pool' or marked with #[es_repo(pool)]")
+        }
+    }
+
+    pub fn in_op_only(&self) -> bool {
+        self.in_op_only
     }
 
     pub fn clock_field(&self) -> ClockFieldInfo<'_> {
@@ -581,6 +586,32 @@ impl RepositoryOptions {
                  add `forgettable` to #[es_repo(...)]",
             ));
         }
+        Ok(())
+    }
+
+    pub fn validate_in_op_only(&self) -> darling::Result<()> {
+        if self.pool_field().is_some() {
+            return Ok(());
+        }
+
+        if !self.in_op_only {
+            return Err(darling::Error::custom(
+                "repo has no pool field: add a field named `pool` (or one marked \
+                 `#[es_repo(pool)]`), or add `in_op_only` to #[es_repo(...)] to generate \
+                 only the `_in_op` fns, which take the operation from the caller",
+            )
+            .with_span(&self.ident));
+        }
+
+        if !matches!(self.clock_field(), ClockFieldInfo::None) {
+            return Err(darling::Error::custom(
+                "repo has a clock field but no pool field: the clock is only used by \
+                 `begin_op`, which an `in_op_only` repo without a pool does not generate. \
+                 Remove the clock field — the operation supplies the time — or add a pool field",
+            )
+            .with_span(&self.ident));
+        }
+
         Ok(())
     }
 

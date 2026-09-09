@@ -161,6 +161,7 @@ impl ToTokens for FiltersStruct<'_> {
 }
 
 pub struct ListForFiltersFn<'a> {
+    in_op_only: bool,
     pub filters_struct: FiltersStruct<'a>,
     entity: &'a syn::Ident,
     query_error: syn::Ident,
@@ -188,6 +189,7 @@ impl<'a> ListForFiltersFn<'a> {
         cursor: &'a ComboCursor<'a>,
     ) -> Self {
         Self {
+            in_op_only: opts.in_op_only(),
             filters_struct: FiltersStruct::new(opts, for_columns.clone()),
             entity: opts.entity(),
             query_error: opts.query_error(),
@@ -249,15 +251,21 @@ impl<'a> ListForFiltersFn<'a> {
                     Span::call_site(),
                 );
 
-                tokens.append_all(quote! {
-                    pub async fn #fn_name(
-                        &self,
-                        filters: #filters_ident,
-                        cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
-                        direction: es_entity::ListDirection,
-                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
-                        self.repo.#fn_name(self.scope, filters, cursor, direction).await
+                let standalone = (!self.in_op_only).then(|| {
+                    quote! {
+                        pub async fn #fn_name(
+                            &self,
+                            filters: #filters_ident,
+                            cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
+                            direction: es_entity::ListDirection,
+                        ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
+                            self.repo.#fn_name(self.scope, filters, cursor, direction).await
+                        }
                     }
+                });
+
+                tokens.append_all(quote! {
+                    #standalone
 
                     pub async fn #fn_in_op #query_fn_generics(
                         &self,
@@ -275,17 +283,39 @@ impl<'a> ListForFiltersFn<'a> {
             }
 
             let dispatch_fn = syn::Ident::new(
-                &format!("list_for_filters{}", delete_postfix),
+                &format!("list_for_filters{delete_postfix}"),
                 Span::call_site(),
             );
+            let dispatch_fn_in_op = syn::Ident::new(
+                &format!("list_for_filters{delete_postfix}_in_op"),
+                Span::call_site(),
+            );
+            let standalone_dispatch = (!self.in_op_only).then(|| {
+                quote! {
+                    pub async fn #dispatch_fn(
+                        &self,
+                        filters: #filters_ident,
+                        sort: es_entity::Sort<#sort_by_name>,
+                        cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#combo_cursor_ident>,
+                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#combo_cursor_ident>, #error> {
+                        self.repo.#dispatch_fn(self.scope, filters, sort, cursor).await
+                    }
+                }
+            });
             tokens.append_all(quote! {
-                pub async fn #dispatch_fn(
+                #standalone_dispatch
+
+                pub async fn #dispatch_fn_in_op #query_fn_generics(
                     &self,
+                    #query_fn_op_arg,
                     filters: #filters_ident,
                     sort: es_entity::Sort<#sort_by_name>,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#combo_cursor_ident>,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#combo_cursor_ident>, #error> {
-                    self.repo.#dispatch_fn(self.scope, filters, sort, cursor).await
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#combo_cursor_ident>, #error>
+                    where
+                        OP: #query_fn_op_traits
+                {
+                    self.repo.#dispatch_fn_in_op(op, self.scope, filters, sort, cursor).await
                 }
             });
 
@@ -373,7 +403,12 @@ impl<'a> ListForFiltersFn<'a> {
         )
     }
 
-    fn generate_proxy_body(&self, by_col: &Column, delete: DeleteOption) -> TokenStream {
+    fn generate_proxy_body(
+        &self,
+        by_col: &Column,
+        delete: DeleteOption,
+        in_op: bool,
+    ) -> TokenStream {
         let by_col_name = by_col.name();
         let delete_postfix = delete.include_deletion_fn_postfix();
 
@@ -383,13 +418,20 @@ impl<'a> ListForFiltersFn<'a> {
             quote! {}
         };
 
+        let in_op_postfix = if in_op { "_in_op" } else { "" };
+        let op_pass = if in_op {
+            quote! { op, }
+        } else {
+            quote! {}
+        };
+
         let list_by_fn = syn::Ident::new(
-            &format!("list_by_{}{}", by_col_name, delete_postfix),
+            &format!("list_by_{by_col_name}{delete_postfix}{in_op_postfix}"),
             Span::call_site(),
         );
 
         if self.for_columns.is_empty() {
-            return quote! { self.#list_by_fn(#scope_pass query, direction).await? };
+            return quote! { self.#list_by_fn(#op_pass #scope_pass query, direction).await? };
         }
 
         let all_none_checks: Vec<_> = self
@@ -424,8 +466,7 @@ impl<'a> ListForFiltersFn<'a> {
                 let for_col_name = for_col.name();
                 let fn_name = syn::Ident::new(
                     &format!(
-                        "list_for_{}_by_{}{}",
-                        for_col_name, by_col_name, delete_postfix
+                        "list_for_{for_col_name}_by_{by_col_name}{delete_postfix}{in_op_postfix}"
                     ),
                     Span::call_site(),
                 );
@@ -433,13 +474,13 @@ impl<'a> ListForFiltersFn<'a> {
                 if others_none.is_empty() {
                     quote! {
                         else {
-                            self.#fn_name(#scope_pass filters.#for_col_name.unwrap(), query, direction).await?
+                            self.#fn_name(#op_pass #scope_pass filters.#for_col_name.unwrap(), query, direction).await?
                         }
                     }
                 } else {
                     quote! {
                         else if #(#others_none)&&* {
-                            self.#fn_name(#scope_pass filters.#for_col_name.unwrap(), query, direction).await?
+                            self.#fn_name(#op_pass #scope_pass filters.#for_col_name.unwrap(), query, direction).await?
                         }
                     }
                 }
@@ -454,12 +495,12 @@ impl<'a> ListForFiltersFn<'a> {
         let needs_fallback = has_unpaired || self.for_columns.len() >= 2;
         let multi_filter_fallback = if needs_fallback {
             let list_for_filters_fn = syn::Ident::new(
-                &format!("list_for_filters_by_{}{}", by_col_name, delete_postfix),
+                &format!("list_for_filters_by_{by_col_name}{delete_postfix}{in_op_postfix}"),
                 Span::call_site(),
             );
             quote! {
                 else {
-                    self.#list_for_filters_fn(#scope_pass filters, query, direction).await?
+                    self.#list_for_filters_fn(#op_pass #scope_pass filters, query, direction).await?
                 }
             }
         } else {
@@ -468,7 +509,7 @@ impl<'a> ListForFiltersFn<'a> {
 
         quote! {
             if #(#all_none_checks)&&* {
-                self.#list_by_fn(#scope_pass query, direction).await?
+                self.#list_by_fn(#op_pass #scope_pass query, direction).await?
             }
             #single_filter_branches
             #multi_filter_fallback
@@ -849,16 +890,22 @@ impl<'a> ListForFiltersFn<'a> {
             quote! {}
         };
 
-        quote! {
-            pub async fn #fn_name(
-                &self,
-                #scope_fn_arg
-                filters: #filters_ident,
-                cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
-                direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
-                self.#fn_in_op(#query_fn_get_op, #scope_fn_pass filters, cursor, direction).await
+        let standalone = (!self.in_op_only).then(|| {
+            quote! {
+                pub async fn #fn_name(
+                    &self,
+                    #scope_fn_arg
+                    filters: #filters_ident,
+                    cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
+                    direction: es_entity::ListDirection,
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
+                    self.#fn_in_op(#query_fn_get_op, #scope_fn_pass filters, cursor, direction).await
+                }
             }
+        });
+
+        quote! {
+            #standalone
 
             #instrument_attr
             pub async fn #fn_in_op #query_fn_generics(
@@ -926,7 +973,8 @@ impl ToTokens for ListForFiltersFn<'_> {
             tokens.append_all(by_fns);
 
             // Generate dispatch function
-            let dispatch_arms: TokenStream = self
+            let dispatch_arms = |in_op: bool| -> TokenStream {
+                self
                 .by_columns
                 .iter()
                 .map(|by_col| {
@@ -942,7 +990,7 @@ impl ToTokens for ListForFiltersFn<'_> {
                             Span::call_site(),
                         )
                     };
-                    let proxy_body = self.generate_proxy_body(by_col, delete);
+                    let proxy_body = self.generate_proxy_body(by_col, delete, in_op);
                     quote! {
                         #sort_by_name::#by_variant => {
                             let after = after.map(#cursor_mod::#inner_cursor_ident::try_from).transpose()?;
@@ -961,10 +1009,19 @@ impl ToTokens for ListForFiltersFn<'_> {
                         }
                     }
                 })
-                .collect();
+                .collect()
+            };
+            let dispatch_arms = dispatch_arms(true);
 
             let fn_name = syn::Ident::new(
                 &format!("list_for_filters{}", delete.include_deletion_fn_postfix()),
+                Span::call_site(),
+            );
+            let fn_in_op = syn::Ident::new(
+                &format!(
+                    "list_for_filters{}_in_op",
+                    delete.include_deletion_fn_postfix()
+                ),
                 Span::call_site(),
             );
 
@@ -1014,15 +1071,44 @@ impl ToTokens for ListForFiltersFn<'_> {
                 error_recording,
             ) = (quote! {}, quote! {}, quote! {}, quote! {}, quote! {});
 
+            let query_fn_generics = RepositoryOptions::query_fn_generics();
+            let query_fn_op_arg = RepositoryOptions::query_fn_op_arg();
+            let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
+            let query_fn_get_op = RepositoryOptions::query_fn_get_op();
+            let scope_fn_pass = match &self.scope {
+                Some(scope) => scope.fn_pass(),
+                None => quote! {},
+            };
+
+            let standalone = (!self.in_op_only).then(|| {
+                quote! {
+                    pub async fn #fn_name(
+                        &self,
+                        #scope_fn_arg
+                        filters: #filters_name,
+                        sort: es_entity::Sort<#sort_by_name>,
+                        cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
+                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
+                    {
+                        self.#fn_in_op(#query_fn_get_op, #scope_fn_pass filters, sort, cursor).await
+                    }
+                }
+            });
+
             tokens.append_all(quote! {
+                #standalone
+
                 #instrument_attr
-                pub async fn #fn_name(
+                pub async fn #fn_in_op #query_fn_generics(
                     &self,
+                    #query_fn_op_arg,
                     #scope_fn_arg
                     filters: #filters_name,
                     sort: es_entity::Sort<#sort_by_name>,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                 ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
+                    where
+                        OP: #query_fn_op_traits
                 {
                     let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> = async {
                         #scope_convert
@@ -1129,6 +1215,7 @@ mod tests {
         let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
 
         let list_for_filters_fn = ListForFiltersFn {
+            in_op_only: false,
             filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
             entity: &entity,
             query_error,
@@ -1300,6 +1387,19 @@ mod tests {
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrderCursor>,
             ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderCursor>, OrderQueryError>
             {
+                self.list_for_filters_in_op(self.pool(), filters, sort, cursor).await
+            }
+
+            pub async fn list_for_filters_in_op<'a, OP>(
+                &self,
+                op: OP,
+                filters: OrderFilters,
+                sort: es_entity::Sort<OrderSortBy>,
+                cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrderCursor>,
+            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderCursor>, OrderQueryError>
+                where
+                    OP: es_entity::IntoOneTimeExecutor<'a>
+            {
                 let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderCursor>, OrderQueryError> = async {
                     let es_entity::Sort { by, direction } = sort;
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
@@ -1315,13 +1415,13 @@ mod tests {
                                 has_next_page,
                                 end_cursor,
                             } = if filters.customer_id.is_none() && filters.status.is_none() {
-                                self.list_by_id(query, direction).await?
+                                self.list_by_id_in_op(op, query, direction).await?
                             } else if filters.status.is_none() {
-                                self.list_for_customer_id_by_id(filters.customer_id.unwrap(), query, direction).await?
+                                self.list_for_customer_id_by_id_in_op(op, filters.customer_id.unwrap(), query, direction).await?
                             } else if filters.customer_id.is_none() {
-                                self.list_for_status_by_id(filters.status.unwrap(), query, direction).await?
+                                self.list_for_status_by_id_in_op(op, filters.status.unwrap(), query, direction).await?
                             } else {
-                                self.list_for_filters_by_id(filters, query, direction).await?
+                                self.list_for_filters_by_id_in_op(op, filters, query, direction).await?
                             };
                             es_entity::PaginatedQueryRet {
                                 entities,
@@ -1375,6 +1475,7 @@ mod tests {
         let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
 
         let list_for_filters_fn = ListForFiltersFn {
+            in_op_only: false,
             filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
             entity: &entity,
             query_error,
@@ -1444,6 +1545,7 @@ mod tests {
         let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
 
         let list_for_filters_fn = ListForFiltersFn {
+            in_op_only: false,
             filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
             entity: &entity,
             query_error,
@@ -1529,6 +1631,7 @@ mod tests {
         let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
 
         let list_for_filters_fn = ListForFiltersFn {
+            in_op_only: false,
             filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
             entity: &entity,
             query_error,
@@ -1613,6 +1716,7 @@ mod tests {
         let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
 
         let list_for_filters_fn = ListForFiltersFn {
+            in_op_only: false,
             filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
             entity: &entity,
             query_error,
@@ -1712,6 +1816,7 @@ mod tests {
         let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
 
         let list_for_filters_fn = ListForFiltersFn {
+            in_op_only: false,
             filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
             entity: &entity,
             query_error,
@@ -1801,6 +1906,7 @@ mod tests {
 
         let build = |index_catalog: crate::index_catalog::IndexCatalog| -> String {
             let fn_ = ListForFiltersFn {
+                in_op_only: false,
                 filters_struct: FiltersStruct::new_test(&entity, for_columns.clone()),
                 entity: &entity,
                 query_error: query_error.clone(),

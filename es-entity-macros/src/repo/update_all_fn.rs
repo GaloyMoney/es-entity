@@ -8,6 +8,7 @@ use super::{
 };
 
 pub struct UpdateAllFn<'a> {
+    in_op_only: bool,
     entity: &'a syn::Ident,
     id: &'a syn::Ident,
     event: &'a syn::Ident,
@@ -26,6 +27,7 @@ pub struct UpdateAllFn<'a> {
 impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
+            in_op_only: opts.in_op_only(),
             entity: opts.entity(),
             id: opts.id(),
             event: opts.event(),
@@ -311,19 +313,20 @@ impl UpdateAllFn<'_> {
             quote! {}
         };
 
-        let standalone_wrapper = matches!(mode, BatchMode::OwnedSlice).then(|| {
-            quote! {
-                pub async fn update_all(
-                    &self,
-                    entities: &mut [#entity]
-                ) -> Result<usize, #modify_error> {
-                    let mut op = self.begin_op().await?;
-                    let res = self.update_all_in_op(&mut op, entities).await?;
-                    op.commit().await?;
-                    Ok(res)
+        let standalone_wrapper =
+            (matches!(mode, BatchMode::OwnedSlice) && !self.in_op_only).then(|| {
+                quote! {
+                    pub async fn update_all(
+                        &self,
+                        entities: &mut [#entity]
+                    ) -> Result<usize, #modify_error> {
+                        let mut op = self.begin_op().await?;
+                        let res = self.update_all_in_op(&mut op, entities).await?;
+                        op.commit().await?;
+                        Ok(res)
+                    }
                 }
-            }
-        });
+            });
 
         quote! {
             #standalone_wrapper
@@ -410,6 +413,7 @@ mod tests {
 
         let event = Ident::new("EntityEvent", Span::call_site());
         let update_all_fn = UpdateAllFn {
+            in_op_only: false,
             entity: &entity,
             id: &id,
             event: &event,
@@ -643,6 +647,7 @@ mod tests {
 
         let event = Ident::new("EntityEvent", Span::call_site());
         let update_all_fn = UpdateAllFn {
+            in_op_only: false,
             entity: &entity,
             id: &id,
             event: &event,

@@ -8,6 +8,7 @@ use super::{
 };
 
 pub struct CreateFn<'a> {
+    in_op_only: bool,
     entity: &'a syn::Ident,
     id: &'a syn::Ident,
     event: &'a syn::Ident,
@@ -27,6 +28,7 @@ pub struct CreateFn<'a> {
 impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
+            in_op_only: opts.in_op_only(),
             table_name: opts.table_name(),
             entity: opts.entity(),
             id: opts.id(),
@@ -167,6 +169,20 @@ impl ToTokens for CreateFn<'_> {
             quote! {}
         };
 
+        let standalone = (!self.in_op_only).then(|| {
+            quote! {
+                pub async fn create(
+                    &self,
+                    new_entity: <#entity as es_entity::EsEntity>::New
+                ) -> Result<#entity, #create_error> {
+                    let mut op = self.begin_op().await?;
+                    let res = self.create_in_op(&mut op, new_entity).await?;
+                    op.commit().await?;
+                    Ok(res)
+                }
+            }
+        });
+
         tokens.append_all(quote! {
             #[inline(always)]
             fn convert_new<Entity, Event>(item: Entity) -> es_entity::EntityEvents<Event>
@@ -186,15 +202,7 @@ impl ToTokens for CreateFn<'_> {
                 Entity::try_from_events(events)
             }
 
-            pub async fn create(
-                &self,
-                new_entity: <#entity as es_entity::EsEntity>::New
-            ) -> Result<#entity, #create_error> {
-                let mut op = self.begin_op().await?;
-                let res = self.create_in_op(&mut op, new_entity).await?;
-                op.commit().await?;
-                Ok(res)
-            }
+            #standalone
 
             #instrument_attr
             pub async fn create_in_op<OP>(
@@ -265,6 +273,7 @@ mod tests {
         columns.set_id_column(&id);
 
         let create_fn = CreateFn {
+            in_op_only: false,
             table_name: "entities",
             entity: &entity,
             id: &id,
@@ -375,6 +384,7 @@ mod tests {
         columns.set_id_column(&id);
 
         let create_fn = CreateFn {
+            in_op_only: false,
             table_name: "entities",
             entity: &entity,
             id: &id,

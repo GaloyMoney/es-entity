@@ -287,6 +287,106 @@ pub trait EsEntity: TryFromEvents<Self::Event> + Send {
 ///    }
 /// }
 /// ```
+///
+/// # `in_op_only`: making the operation mandatory
+///
+/// `#[es_repo(in_op_only)]` generates **only** the `_in_op` variants of every
+/// repo fn. The standalone fns are exactly the ones that open (or borrow) the
+/// pool on the caller's behalf, so removing them makes passing an operation —
+/// an [`AtomicOperation`][crate::AtomicOperation] for writes, an
+/// [`IntoOneTimeExecutor`][crate::IntoOneTimeExecutor] for reads — the only way
+/// to reach the database.
+///
+/// With no standalone fn left to open one, the pool field becomes optional. A
+/// repo that holds no pool cannot begin its own operation, which is the point:
+/// the discipline is enforced by construction rather than by convention.
+///
+/// Calling a non-`_in_op` fn on such a repo does not compile — the method does
+/// not exist (note the two tests below compile a real repo, so they need the
+/// test database, like the book's examples):
+///
+/// ```compile_fail,E0599
+/// use es_entity::*;
+/// use serde::{Deserialize, Serialize};
+/// # fn main() {}
+/// # es_entity::entity_id! { UserId }
+/// # #[derive(EsEvent, Debug, Serialize, Deserialize)]
+/// # #[serde(tag = "type", rename_all = "snake_case")]
+/// # #[es_event(id = "UserId")]
+/// # pub enum UserEvent {
+/// #     Initialized { id: UserId, name: String },
+/// # }
+/// # pub struct NewUser { id: UserId, name: String }
+/// # impl IntoEvents<UserEvent> for NewUser {
+/// #     fn into_events(self) -> EntityEvents<UserEvent> { unimplemented!() }
+/// # }
+/// # #[derive(EsEntity)]
+/// # pub struct User {
+/// #     pub id: UserId,
+/// #     pub name: String,
+/// #     events: EntityEvents<UserEvent>,
+/// # }
+/// # impl TryFromEvents<UserEvent> for User {
+/// #     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
+/// #         unimplemented!()
+/// #     }
+/// # }
+/// // This repo deliberately KEEPS its pool, so that `create`, were it ever
+/// // generated again, would compile: that makes the E0599 below prove the fn
+/// // is absent, rather than merely that its body could not build an operation.
+/// #[derive(EsRepo)]
+/// #[es_repo(entity = "User", in_op_only, columns(name(ty = "String")))]
+/// pub struct Users {
+///     pool: es_entity::db::Pool,
+/// }
+///
+/// async fn reaches_the_db_without_an_op(repo: &Users, new_user: NewUser) {
+///     // error[E0599]: no method named `create` found — `in_op_only` leaves
+///     // only `create_in_op`, which demands an operation from the caller.
+///     repo.create(new_user).await.unwrap();
+/// }
+/// ```
+///
+/// The `_in_op` twin of the very same call compiles:
+///
+/// ```
+/// use es_entity::*;
+/// use serde::{Deserialize, Serialize};
+/// # fn main() {}
+/// # es_entity::entity_id! { UserId }
+/// # #[derive(EsEvent, Debug, Serialize, Deserialize)]
+/// # #[serde(tag = "type", rename_all = "snake_case")]
+/// # #[es_event(id = "UserId")]
+/// # pub enum UserEvent {
+/// #     Initialized { id: UserId, name: String },
+/// # }
+/// # pub struct NewUser { id: UserId, name: String }
+/// # impl IntoEvents<UserEvent> for NewUser {
+/// #     fn into_events(self) -> EntityEvents<UserEvent> { unimplemented!() }
+/// # }
+/// # #[derive(EsEntity)]
+/// # pub struct User {
+/// #     pub id: UserId,
+/// #     pub name: String,
+/// #     events: EntityEvents<UserEvent>,
+/// # }
+/// # impl TryFromEvents<UserEvent> for User {
+/// #     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
+/// #         unimplemented!()
+/// #     }
+/// # }
+/// #[derive(EsRepo)]
+/// #[es_repo(entity = "User", in_op_only, columns(name(ty = "String")))]
+/// pub struct Users {}
+///
+/// async fn takes_the_op_from_its_caller(
+///     repo: &Users,
+///     op: &mut impl AtomicOperation,
+///     new_user: NewUser,
+/// ) {
+///     repo.create_in_op(op, new_user).await.unwrap();
+/// }
+/// ```
 pub trait EsRepo: Send {
     type Entity: EsEntity;
     type CreateError;

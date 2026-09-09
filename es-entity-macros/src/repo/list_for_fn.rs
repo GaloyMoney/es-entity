@@ -9,6 +9,7 @@ use super::{
 };
 
 pub struct ListForFn<'a> {
+    in_op_only: bool,
     ignore_prefix: Option<&'a syn::LitStr>,
     pub for_column: &'a Column,
     pub by_column: &'a Column,
@@ -28,6 +29,7 @@ pub struct ListForFn<'a> {
 impl<'a> ListForFn<'a> {
     pub fn new(for_column: &'a Column, by_column: &'a Column, opts: &'a RepositoryOptions) -> Self {
         Self {
+            in_op_only: opts.in_op_only(),
             ignore_prefix: opts.table_prefix(),
             for_column,
             by_column,
@@ -98,15 +100,21 @@ impl<'a> ListForFn<'a> {
                 Span::call_site(),
             );
 
-            tokens.append_all(quote! {
-                pub async fn #fn_name(
-                    &self,
-                    #filter_arg_name: #for_impl_expr,
-                    cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
-                    direction: es_entity::ListDirection,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
-                    self.repo.#fn_name(self.scope, #filter_arg_name, cursor, direction).await
+            let standalone = (!self.in_op_only).then(|| {
+                quote! {
+                    pub async fn #fn_name(
+                        &self,
+                        #filter_arg_name: #for_impl_expr,
+                        cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
+                        direction: es_entity::ListDirection,
+                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
+                        self.repo.#fn_name(self.scope, #filter_arg_name, cursor, direction).await
+                    }
                 }
+            });
+
+            tokens.append_all(quote! {
+                #standalone
 
                 pub async fn #fn_in_op #query_fn_generics(
                     &self,
@@ -348,16 +356,22 @@ impl ToTokens for ListForFn<'_> {
                 quote! {}
             };
 
-            tokens.append_all(quote! {
-                pub async fn #fn_name(
-                    &self,
-                    #scope_fn_arg
-                    #filter_arg_name: #for_impl_expr,
-                    cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
-                    direction: es_entity::ListDirection,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
-                    self.#fn_in_op(#query_fn_get_op, #scope_fn_pass #filter_arg_name, cursor, direction).await
+            let standalone = (!self.in_op_only).then(|| {
+                quote! {
+                    pub async fn #fn_name(
+                        &self,
+                        #scope_fn_arg
+                        #filter_arg_name: #for_impl_expr,
+                        cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
+                        direction: es_entity::ListDirection,
+                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
+                        self.#fn_in_op(#query_fn_get_op, #scope_fn_pass #filter_arg_name, cursor, direction).await
+                    }
                 }
+            });
+
+            tokens.append_all(quote! {
+                #standalone
 
                 #instrument_attr
                 pub async fn #fn_in_op #query_fn_generics(
@@ -423,6 +437,7 @@ mod tests {
         let cursor_mod = Ident::new("cursor_mod", Span::call_site());
 
         let persist_fn = ListForFn {
+            in_op_only: false,
             ignore_prefix: None,
             entity: &entity,
             id: &id,
@@ -522,6 +537,7 @@ mod tests {
         let cursor_mod = Ident::new("cursor_mod", Span::call_site());
 
         let persist_fn = ListForFn {
+            in_op_only: false,
             ignore_prefix: None,
             entity: &entity,
             id: &id,

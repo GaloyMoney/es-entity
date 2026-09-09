@@ -34,6 +34,7 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
     opts.columns.validate_list_for_by_columns()?;
     opts.columns.validate_scope()?;
     opts.validate_forgettable()?;
+    opts.validate_in_op_only()?;
     // `include_bytes!` the resolved migrations so Cargo re-runs this derive when
     // they change (keeps the migration-derived index catalog and error mapping
     // in sync even for an auto-discovered ancestor `migrations/`).
@@ -58,7 +59,7 @@ pub struct EsRepo<'a> {
     find_all_fn: find_all_fn::FindAllFn<'a>,
     post_hydrate_hook: post_hydrate_hook::PostHydrateHook<'a>,
     post_persist_hook: post_persist_hook::PostPersistHook<'a>,
-    begin: begin::Begin<'a>,
+    begin: Option<begin::Begin<'a>>,
     list_by_fns: Vec<list_by_fn::ListByFn<'a>>,
     list_for_fns: Vec<list_for_fn::ListForFn<'a>>,
     hydrate_nested_fns: Vec<syn::Ident>,
@@ -145,7 +146,10 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             find_all_fn: find_all_fn::FindAllFn::from(opts),
             post_hydrate_hook: post_hydrate_hook::PostHydrateHook::from(opts),
             post_persist_hook: post_persist_hook::PostPersistHook::from(opts),
-            begin: begin::Begin::from(opts),
+            begin: opts
+                .pool_field()
+                .is_some()
+                .then(|| begin::Begin::from(opts)),
             list_by_fns,
             list_for_fns,
             hydrate_nested_fns,
@@ -214,7 +218,14 @@ impl ToTokens for EsRepo<'_> {
         let nested = &self.nested;
         let hydrate_nested = &self.hydrate_nested;
 
-        let pool_field = self.opts.pool_field();
+        let pool_fn = self.opts.pool_field().map(|pool_field| {
+            quote! {
+                #[inline(always)]
+                pub fn pool(&self) -> &es_entity::db::Pool {
+                    &self.#pool_field
+                }
+            }
+        });
         let has_tbl_prefix = self.opts.table_prefix().is_some();
         let es_query_flavor = if hydrate_nested_fns.is_empty() {
             quote! {
@@ -376,10 +387,7 @@ impl ToTokens for EsRepo<'_> {
             #sort_by
 
              impl #impl_generics #repo #ty_generics #where_clause {
-                #[inline(always)]
-                pub fn pool(&self) -> &es_entity::db::Pool {
-                    &self.#pool_field
-                }
+                #pool_fn
 
                 #scoped_fn
 
@@ -906,6 +914,157 @@ mod tests {
         let msg = err.to_string();
         assert!(
             msg.contains("Forgettable") || msg.contains("non-nullable"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    const STANDALONE_FN_SIGNATURES: &[&str] = &[
+        "pub async fn create (& self ,",
+        "pub async fn create_all (& self ,",
+        "pub async fn update (& self ,",
+        "pub async fn update_all (& self ,",
+        "pub async fn delete (& self ,",
+        "pub async fn find_by_id (& self ,",
+        "pub async fn maybe_find_by_id (& self ,",
+        "pub async fn find_by_name (& self ,",
+        "pub async fn find_all < Out : From < User",
+        "pub async fn list_by_id (& self ,",
+        "pub async fn list_for_name_by_id (& self ,",
+        "pub async fn list_for_filters (& self ,",
+    ];
+
+    fn every_fn_family_repo(extra_opts: proc_macro2::TokenStream) -> syn::DeriveInput {
+        parse_quote! {
+            #[es_repo(
+                entity = "User",
+                delete = "soft",
+                #extra_opts
+                columns(name(ty = "String", list_by, list_for))
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        }
+    }
+
+    #[test]
+    fn in_op_only_suppresses_every_standalone_fn() {
+        let tokens = derive(every_fn_family_repo(quote! { in_op_only, }))
+            .expect("in_op_only repo should derive")
+            .to_string();
+
+        for sig in STANDALONE_FN_SIGNATURES {
+            assert!(
+                !tokens.contains(sig),
+                "`in_op_only` must not generate the standalone fn `{sig}`"
+            );
+        }
+        assert!(!tokens.contains("pub async fn find_by_id_include_deleted (& self ,"));
+        assert!(!tokens.contains("pub async fn list_by_id_include_deleted (& self ,"));
+        assert!(!tokens.contains("pub async fn list_for_filters_include_deleted (& self ,"));
+
+        assert!(tokens.contains("pub async fn create_in_op"));
+        assert!(tokens.contains("pub async fn update_in_op"));
+        assert!(tokens.contains("pub async fn delete_in_op"));
+        assert!(tokens.contains("pub async fn find_by_id_in_op"));
+        assert!(tokens.contains("pub async fn find_all_in_op"));
+        assert!(tokens.contains("pub async fn list_by_id_in_op"));
+        assert!(tokens.contains("pub async fn list_for_filters_in_op"));
+    }
+
+    #[test]
+    fn repo_without_in_op_only_keeps_every_standalone_fn() {
+        let tokens = derive(every_fn_family_repo(quote! {}))
+            .expect("default repo should derive")
+            .to_string();
+
+        for sig in STANDALONE_FN_SIGNATURES {
+            assert!(
+                tokens.contains(sig),
+                "a repo without `in_op_only` must still generate `{sig}`"
+            );
+        }
+        assert!(tokens.contains("pub fn pool (& self)"));
+        assert!(tokens.contains("pub async fn begin_op (& self)"));
+        assert!(tokens.contains("pub async fn begin_op_with_clock"));
+    }
+
+    #[test]
+    fn in_op_only_without_pool_field_drops_pool_accessor_and_begin_op() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", in_op_only, columns(name(ty = "String")))]
+            struct Users {}
+        };
+        let tokens = derive(input)
+            .expect("pool-less in_op_only repo should derive")
+            .to_string();
+
+        assert!(!tokens.contains("pub fn pool (& self)"));
+        assert!(!tokens.contains("begin_op"));
+        assert!(!tokens.contains("self . pool ()"));
+        assert!(tokens.contains("pub async fn create_in_op"));
+        assert!(tokens.contains("pub async fn find_by_id_in_op"));
+    }
+
+    #[test]
+    fn in_op_only_with_pool_field_keeps_begin_op() {
+        let tokens = derive(every_fn_family_repo(quote! { in_op_only, }))
+            .expect("in_op_only repo with a pool should derive")
+            .to_string();
+
+        assert!(tokens.contains("pub fn pool (& self)"));
+        assert!(tokens.contains("pub async fn begin_op (& self)"));
+        assert!(!tokens.contains("pub async fn create (& self ,"));
+    }
+
+    #[test]
+    fn in_op_only_suppresses_scoped_view_standalone_delegates() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                in_op_only,
+                columns(partner_id(ty = "PartnerId", scope), name(ty = "String"))
+            )]
+            struct Users {}
+        };
+        let tokens = derive(input)
+            .expect("scoped in_op_only repo should derive")
+            .to_string();
+
+        assert!(tokens.contains("pub struct ScopedUsers"));
+        assert!(!tokens.contains("self . repo . find_by_id (self . scope"));
+        assert!(!tokens.contains("self . repo . find_all (self . scope"));
+        assert!(!tokens.contains("self . repo . list_for_filters (self . scope"));
+        assert!(tokens.contains("self . repo . find_by_id_in_op (op , self . scope"));
+        assert!(tokens.contains("self . repo . list_for_filters_in_op (op , self . scope"));
+    }
+
+    #[test]
+    fn missing_pool_without_in_op_only_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", columns(name(ty = "String")))]
+            struct Users {}
+        };
+        let err = derive(input).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no pool field") && msg.contains("in_op_only"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn clock_field_without_pool_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", in_op_only, columns(name(ty = "String")))]
+            struct Users {
+                clock: es_entity::clock::ClockHandle,
+            }
+        };
+        let err = derive(input).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("clock field") && msg.contains("begin_op"),
             "unexpected error: {msg}"
         );
     }

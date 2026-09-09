@@ -6,6 +6,7 @@ use quote::{TokenStreamExt, quote};
 use super::{options::*, scope::ScopeInfo};
 
 pub struct FindByFn<'a> {
+    in_op_only: bool,
     prefix: Option<&'a syn::LitStr>,
     entity: &'a syn::Ident,
     column: &'a Column,
@@ -25,6 +26,7 @@ pub struct FindByFn<'a> {
 impl<'a> FindByFn<'a> {
     pub fn new(column: &'a Column, opts: &'a RepositoryOptions) -> Self {
         Self {
+            in_op_only: opts.in_op_only(),
             prefix: opts.table_prefix(),
             column,
             entity: opts.entity(),
@@ -88,13 +90,19 @@ impl<'a> FindByFn<'a> {
                     Span::call_site(),
                 );
 
-                tokens.append_all(quote! {
-                    pub async fn #fn_name(
-                        &self,
-                        #column_name: #impl_expr
-                    ) -> Result<#result_type, #error> {
-                        self.repo.#fn_name(self.scope, #column_name).await
+                let standalone = (!self.in_op_only).then(|| {
+                    quote! {
+                        pub async fn #fn_name(
+                            &self,
+                            #column_name: #impl_expr
+                        ) -> Result<#result_type, #error> {
+                            self.repo.#fn_name(self.scope, #column_name).await
+                        }
                     }
+                });
+
+                tokens.append_all(quote! {
+                    #standalone
 
                     pub async fn #fn_in_op #query_fn_generics(
                         &self,
@@ -309,14 +317,20 @@ impl ToTokens for FindByFn<'_> {
                 let (instrument_attr_in_op, record_field, error_recording) =
                     (quote! {}, quote! {}, quote! {});
 
-                tokens.append_all(quote! {
-                    pub async fn #fn_name(
-                        &self,
-                        #scope_fn_arg
-                        #column_name: #impl_expr
-                    ) -> Result<#result_type, #error> {
-                        self.#fn_in_op(#query_fn_get_op, #scope_fn_pass #column_name).await
+                let standalone = (!self.in_op_only).then(|| {
+                    quote! {
+                        pub async fn #fn_name(
+                            &self,
+                            #scope_fn_arg
+                            #column_name: #impl_expr
+                        ) -> Result<#result_type, #error> {
+                            self.#fn_in_op(#query_fn_get_op, #scope_fn_pass #column_name).await
+                        }
                     }
+                });
+
+                tokens.append_all(quote! {
+                    #standalone
 
                     #instrument_attr_in_op
                     pub async fn #fn_in_op #query_fn_generics(
@@ -360,6 +374,7 @@ mod tests {
         let entity = Ident::new("Entity", Span::call_site());
 
         let persist_fn = FindByFn {
+            in_op_only: false,
             prefix: None,
             column: &column,
             entity: &entity,
@@ -458,6 +473,7 @@ mod tests {
         let entity = Ident::new("Entity", Span::call_site());
 
         let persist_fn = FindByFn {
+            in_op_only: false,
             prefix: None,
             column: &column,
             entity: &entity,
@@ -553,6 +569,7 @@ mod tests {
         let entity = Ident::new("Entity", Span::call_site());
 
         let persist_fn = FindByFn {
+            in_op_only: false,
             prefix: None,
             column: &column,
             entity: &entity,
@@ -648,6 +665,7 @@ mod tests {
         let entity = Ident::new("Entity", Span::call_site());
 
         let persist_fn = FindByFn {
+            in_op_only: false,
             prefix: None,
             column: &column,
             entity: &entity,
@@ -678,6 +696,7 @@ mod tests {
         let entity = Ident::new("Entity", Span::call_site());
 
         let persist_fn = FindByFn {
+            in_op_only: false,
             prefix: None,
             column: &column,
             entity: &entity,
@@ -710,6 +729,7 @@ mod tests {
         let entity = Ident::new("Entity", Span::call_site());
 
         let persist_fn = FindByFn {
+            in_op_only: false,
             prefix: None,
             column: &column,
             entity: &entity,

@@ -8,6 +8,7 @@ use super::{
 };
 
 pub struct DeleteFn<'a> {
+    in_op_only: bool,
     id: &'a syn::Ident,
     event: &'a syn::Ident,
     modify_error: syn::Ident,
@@ -27,6 +28,7 @@ pub struct DeleteFn<'a> {
 impl<'a> DeleteFn<'a> {
     pub fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
+            in_op_only: opts.in_op_only(),
             id: opts.id(),
             event: opts.event(),
             entity: opts.entity(),
@@ -153,16 +155,22 @@ impl ToTokens for DeleteFn<'_> {
             None => quote! {},
         };
 
-        tokens.append_all(quote! {
-            pub async fn delete(
-                &self,
-                entity: #entity
-            ) -> Result<(), #modify_error> {
-                let mut op = self.begin_op().await?;
-                let res = self.delete_in_op(&mut op, entity).await?;
-                op.commit().await?;
-                Ok(res)
+        let standalone = (!self.in_op_only).then(|| {
+            quote! {
+                pub async fn delete(
+                    &self,
+                    entity: #entity
+                ) -> Result<(), #modify_error> {
+                    let mut op = self.begin_op().await?;
+                    let res = self.delete_in_op(&mut op, entity).await?;
+                    op.commit().await?;
+                    Ok(res)
+                }
             }
+        });
+
+        tokens.append_all(quote! {
+            #standalone
 
             #instrument_attr
             pub async fn delete_in_op<OP>(&self,
@@ -232,6 +240,7 @@ mod tests {
 
         let event = Ident::new("EntityEvent", Span::call_site());
         let delete_fn = DeleteFn {
+            in_op_only: false,
             id: &id,
             event: &event,
             entity: &entity,
@@ -324,6 +333,7 @@ mod tests {
 
         let event = Ident::new("EntityEvent", Span::call_site());
         let delete_fn = DeleteFn {
+            in_op_only: false,
             id: &id,
             event: &event,
             entity: &entity,
@@ -412,6 +422,7 @@ mod tests {
 
         let event = Ident::new("EntityEvent", Span::call_site());
         let delete_fn = DeleteFn {
+            in_op_only: false,
             id: &id,
             event: &event,
             entity: &entity,
