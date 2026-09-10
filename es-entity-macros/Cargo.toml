@@ -24,7 +24,7 @@ syn = "3.0"
 quote = "1.0"
 darling = "0.24"
 pluralizer = "0.5"
-convert_case = "0.11"
+convert_case = "0.12"
 regex = "1.12"
 # Minimal features: `recursive-protection` (default) would pull in
 # recursive -> stacker -> psm (C + build.rs) + libc and the
