@@ -99,7 +99,7 @@ async fn paginate(
     let mut next = Some(PaginatedQueryArgs { first, after: None });
     while let Some(query) = next.take() {
         let mut ret = repo.list_by_score(query, direction).await?;
-        assert_eq!(ret.page_size, first);
+        assert_eq!(ret.requested_size(), first);
         out.extend(ret.entities.drain(..).map(|t| uuid::Uuid::from(t.id)));
         next = ret.into_next_query();
         if let Some(query) = &next {

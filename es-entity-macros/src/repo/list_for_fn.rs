@@ -399,12 +399,7 @@ impl ToTokens for ListForFn<'_> {
 
                         let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
 
-                        Ok(es_entity::PaginatedQueryRet {
-                            page_size: first,
-                            entities,
-                            has_next_page,
-                            end_cursor,
-                        })
+                        Ok(es_entity::PaginatedQueryRet::new(entities, has_next_page, end_cursor, first))
                     }.await;
 
                     #error_recording
@@ -512,12 +507,7 @@ mod tests {
                     };
 
                     let end_cursor = entities.last().map(cursor_mod::EntityByIdCursor::from);
-                    Ok(es_entity::PaginatedQueryRet {
-                        page_size: first,
-                        entities,
-                        has_next_page,
-                        end_cursor,
-                    })
+                    Ok(es_entity::PaginatedQueryRet::new(entities, has_next_page, end_cursor, first))
                 }.await;
 
                 __result
@@ -615,12 +605,7 @@ mod tests {
                     };
 
                     let end_cursor = entities.last().map(cursor_mod::EntityByEmailCursor::from);
-                    Ok(es_entity::PaginatedQueryRet {
-                        page_size: first,
-                        entities,
-                        has_next_page,
-                        end_cursor,
-                    })
+                    Ok(es_entity::PaginatedQueryRet::new(entities, has_next_page, end_cursor, first))
                 }.await;
 
                 __result

@@ -933,12 +933,7 @@ impl<'a> ListForFiltersFn<'a> {
 
                     let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
 
-                    Ok(es_entity::PaginatedQueryRet {
-                        page_size: first,
-                        entities,
-                        has_next_page,
-                        end_cursor,
-                    })
+                    Ok(es_entity::PaginatedQueryRet::new(entities, has_next_page, end_cursor, first))
                 }.await;
 
                 #error_recording
@@ -997,18 +992,7 @@ impl ToTokens for ListForFiltersFn<'_> {
                             let after = after.map(#cursor_mod::#inner_cursor_ident::try_from).transpose()?;
                             let query = es_entity::PaginatedQueryArgs { first, after };
 
-                            let es_entity::PaginatedQueryRet {
-                                page_size,
-                                entities,
-                                has_next_page,
-                                end_cursor,
-                            } = #proxy_body;
-                            es_entity::PaginatedQueryRet {
-                                page_size,
-                                entities,
-                                has_next_page,
-                                end_cursor: end_cursor.map(#cursor_mod::#cursor_ident::from)
-                            }
+                            #proxy_body.map_end_cursor(#cursor_mod::#cursor_ident::from)
                         }
                     }
                 })
@@ -1373,12 +1357,7 @@ mod tests {
 
                     let end_cursor = entities.last().map(cursor_mod::OrderByIdCursor::from);
 
-                    Ok(es_entity::PaginatedQueryRet {
-                        page_size: first,
-                        entities,
-                        has_next_page,
-                        end_cursor,
-                    })
+                    Ok(es_entity::PaginatedQueryRet::new(entities, has_next_page, end_cursor, first))
                 }.await;
 
                 __result
@@ -1414,12 +1393,7 @@ mod tests {
                             let after = after.map(cursor_mod::OrderByIdCursor::try_from).transpose()?;
                             let query = es_entity::PaginatedQueryArgs { first, after };
 
-                            let es_entity::PaginatedQueryRet {
-                                page_size,
-                                entities,
-                                has_next_page,
-                                end_cursor,
-                            } = if filters.customer_id.is_none() && filters.status.is_none() {
+                            if filters.customer_id.is_none() && filters.status.is_none() {
                                 self.list_by_id_in_op(op, query, direction).await?
                             } else if filters.status.is_none() {
                                 self.list_for_customer_id_by_id_in_op(op, filters.customer_id.unwrap(), query, direction).await?
@@ -1427,13 +1401,8 @@ mod tests {
                                 self.list_for_status_by_id_in_op(op, filters.status.unwrap(), query, direction).await?
                             } else {
                                 self.list_for_filters_by_id_in_op(op, filters, query, direction).await?
-                            };
-                            es_entity::PaginatedQueryRet {
-                                page_size,
-                                entities,
-                                has_next_page,
-                                end_cursor: end_cursor.map(cursor_mod::OrderCursor::from)
                             }
+                            .map_end_cursor(cursor_mod::OrderCursor::from)
                         }
                     };
 

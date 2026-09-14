@@ -145,7 +145,7 @@ async fn list_for_filters() -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(filtered_result.entities.len(), 1);
-    assert_eq!(filtered_result.page_size, 10);
+    assert_eq!(filtered_result.requested_size(), 10);
     assert_eq!(filtered_result.entities[0].name, unique_name);
 
     // Test pagination with filters
@@ -164,7 +164,7 @@ async fn list_for_filters() -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(paginated_result.entities.len(), 1);
-    assert_eq!(paginated_result.page_size, 1);
+    assert_eq!(paginated_result.requested_size(), 1);
     assert!(paginated_result.has_next_page);
 
     // Use cursor for next page
@@ -221,7 +221,7 @@ async fn collecting_pages_preserves_requested_size() -> anyhow::Result<()> {
                         .list_for_name_by_id(name.clone(), query, ListDirection::Ascending)
                         .await?
                 };
-                assert_eq!(page.page_size, first);
+                assert_eq!(page.requested_size(), first);
                 collected.append(&mut page.entities);
                 next = page.into_next_query();
                 if let Some(query) = &next {
@@ -250,7 +250,7 @@ async fn collecting_pages_preserves_requested_size() -> anyhow::Result<()> {
             ListDirection::Ascending,
         )
         .await?;
-    assert_eq!(zero_page.page_size, 0);
+    assert_eq!(zero_page.requested_size(), 0);
     assert!(zero_page.entities.is_empty());
     assert!(zero_page.has_next_page);
     assert!(zero_page.end_cursor.is_none());
