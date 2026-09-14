@@ -697,6 +697,7 @@ impl ToTokens for ListByFn<'_> {
                         let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
 
                         Ok(es_entity::PaginatedQueryRet {
+                            page_size: first,
                             entities,
                             has_next_page,
                             end_cursor,
@@ -875,6 +876,7 @@ mod tests {
 
                     let end_cursor = entities.last().map(cursor_mod::EntityByIdCursor::from);
                     Ok(es_entity::PaginatedQueryRet {
+                        page_size: first,
                         entities,
                         has_next_page,
                         end_cursor,
@@ -1004,6 +1006,7 @@ mod tests {
 
                     let end_cursor = entities.last().map(cursor_mod::EntityByNameCursor::from);
                     Ok(es_entity::PaginatedQueryRet {
+                        page_size: first,
                         entities,
                         has_next_page,
                         end_cursor,
@@ -1101,6 +1104,7 @@ mod tests {
 
                     let end_cursor = entities.last().map(cursor_mod::EntityByValueCursor::from);
                     Ok(es_entity::PaginatedQueryRet {
+                        page_size: first,
                         entities,
                         has_next_page,
                         end_cursor,
@@ -1217,6 +1221,7 @@ mod tests {
 
                     let end_cursor = entities.last().map(cursor_mod::EntityByValueCursor::from);
                     Ok(es_entity::PaginatedQueryRet {
+                        page_size: first,
                         entities,
                         has_next_page,
                         end_cursor,

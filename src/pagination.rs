@@ -126,6 +126,10 @@ impl<T: std::fmt::Debug> Default for PaginatedQueryArgs<T> {
 /// Returned by the [`EsRepo`][crate::EsRepo] functions like `list_by`, `list_for` and `list_for_filters`.
 /// Used with [`PaginatedQueryArgs`] to perform consistent and efficient pagination
 ///
+/// The requested [`Self::page_size`] and [`Self::end_cursor`] remain available
+/// when callers move or filter [`Self::entities`]. [`Self::into_next_query`]
+/// uses that metadata to continue with the existing [`PaginatedQueryArgs`] type.
+///
 /// # Examples
 ///
 /// ```ignore
@@ -153,6 +157,9 @@ impl<T: std::fmt::Debug> Default for PaginatedQueryArgs<T> {
 /// }
 /// ```
 pub struct PaginatedQueryRet<T, C> {
+    /// The requested number of entities per page, copied from [`PaginatedQueryArgs::first`].
+    /// Preserve this value when transforming a page, even if its entities change.
+    pub page_size: usize,
     /// [Vec] for the fetched `entities` by the paginated query
     pub entities: Vec<T>,
     /// [bool] for indicating if the list has been exhausted or more entities can be fetched
@@ -162,18 +169,87 @@ pub struct PaginatedQueryRet<T, C> {
 }
 
 impl<T, C> PaginatedQueryRet<T, C> {
-    /// Convenience method to create next query args if more pages are available
+    /// Creates the next query using the original page size and end cursor.
+    ///
+    /// Consuming or filtering `entities` does not change the next query's size.
+    /// Returns `None` after the last page or when the requested page size was zero.
     pub fn into_next_query(self) -> Option<PaginatedQueryArgs<C>>
     where
         C: std::fmt::Debug,
     {
-        if self.has_next_page {
+        if self.has_next_page && self.page_size > 0 {
             Some(PaginatedQueryArgs {
-                first: self.entities.len(),
+                first: self.page_size,
                 after: self.end_cursor,
             })
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn next_query_preserves_page_size_after_entities_are_moved() {
+        for page_size in [1, 3, 100] {
+            let mut page = PaginatedQueryRet {
+                page_size,
+                entities: (0..page_size).collect(),
+                has_next_page: true,
+                end_cursor: Some(page_size - 1),
+            };
+            let mut collected = Vec::new();
+            collected.append(&mut page.entities);
+
+            let next = page.into_next_query().expect("another page exists");
+            assert_eq!(next.first, page_size);
+            assert_eq!(next.after, Some(page_size - 1));
+            assert_eq!(collected.len(), page_size);
+        }
+    }
+
+    #[test]
+    fn next_query_size_is_independent_of_remaining_entities() {
+        for count in [0, 1, 3, 7, 14] {
+            let page = PaginatedQueryRet {
+                page_size: 7,
+                entities: vec![(); count],
+                has_next_page: true,
+                end_cursor: Some("last-fetched-entity"),
+            };
+
+            let next = page.into_next_query().expect("another page exists");
+            assert_eq!(next.first, 7);
+            assert_eq!(next.after, Some("last-fetched-entity"));
+        }
+    }
+
+    #[test]
+    fn last_page_has_no_next_query() {
+        for count in [0, 1, 7] {
+            let page = PaginatedQueryRet {
+                page_size: 7,
+                entities: vec![(); count],
+                has_next_page: false,
+                end_cursor: count.checked_sub(1),
+            };
+
+            assert!(page.into_next_query().is_none());
+        }
+    }
+
+    #[test]
+    fn zero_page_size_does_not_continue_even_when_more_entities_exist() {
+        let page = PaginatedQueryRet::<(), usize> {
+            page_size: 0,
+            entities: Vec::new(),
+            has_next_page: true,
+            end_cursor: None,
+        };
+
+        assert!(page.into_next_query().is_none());
     }
 }

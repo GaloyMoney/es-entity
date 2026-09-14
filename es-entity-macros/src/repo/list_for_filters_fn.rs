@@ -934,6 +934,7 @@ impl<'a> ListForFiltersFn<'a> {
                     let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
 
                     Ok(es_entity::PaginatedQueryRet {
+                        page_size: first,
                         entities,
                         has_next_page,
                         end_cursor,
@@ -997,11 +998,13 @@ impl ToTokens for ListForFiltersFn<'_> {
                             let query = es_entity::PaginatedQueryArgs { first, after };
 
                             let es_entity::PaginatedQueryRet {
+                                page_size,
                                 entities,
                                 has_next_page,
                                 end_cursor,
                             } = #proxy_body;
                             es_entity::PaginatedQueryRet {
+                                page_size,
                                 entities,
                                 has_next_page,
                                 end_cursor: end_cursor.map(#cursor_mod::#cursor_ident::from)
@@ -1371,6 +1374,7 @@ mod tests {
                     let end_cursor = entities.last().map(cursor_mod::OrderByIdCursor::from);
 
                     Ok(es_entity::PaginatedQueryRet {
+                        page_size: first,
                         entities,
                         has_next_page,
                         end_cursor,
@@ -1411,6 +1415,7 @@ mod tests {
                             let query = es_entity::PaginatedQueryArgs { first, after };
 
                             let es_entity::PaginatedQueryRet {
+                                page_size,
                                 entities,
                                 has_next_page,
                                 end_cursor,
@@ -1424,6 +1429,7 @@ mod tests {
                                 self.list_for_filters_by_id_in_op(op, filters, query, direction).await?
                             };
                             es_entity::PaginatedQueryRet {
+                                page_size,
                                 entities,
                                 has_next_page,
                                 end_cursor: end_cursor.map(cursor_mod::OrderCursor::from)

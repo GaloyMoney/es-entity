@@ -96,17 +96,16 @@ async fn paginate(
     ours: &std::collections::HashSet<uuid::Uuid>,
 ) -> anyhow::Result<Vec<uuid::Uuid>> {
     let mut out = Vec::new();
-    let mut after = None;
-    loop {
-        let ret = repo
-            .list_by_score(PaginatedQueryArgs { first, after }, direction)
-            .await?;
-        out.extend(ret.entities.iter().map(|t| uuid::Uuid::from(t.id)));
-        if !ret.has_next_page {
-            break;
+    let mut next = Some(PaginatedQueryArgs { first, after: None });
+    while let Some(query) = next.take() {
+        let mut ret = repo.list_by_score(query, direction).await?;
+        assert_eq!(ret.page_size, first);
+        out.extend(ret.entities.drain(..).map(|t| uuid::Uuid::from(t.id)));
+        next = ret.into_next_query();
+        if let Some(query) = &next {
+            assert_eq!(query.first, first);
+            assert!(query.after.is_some(), "has_next_page without end_cursor");
         }
-        after = ret.end_cursor;
-        assert!(after.is_some(), "has_next_page without end_cursor");
     }
     out.retain(|id| ours.contains(id));
     Ok(out)

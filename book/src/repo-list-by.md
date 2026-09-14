@@ -87,8 +87,7 @@ async fn main() -> anyhow::Result<()> {
 
     let PaginatedQueryRet {
         entities,
-        has_next_page: _,
-        end_cursor: _,
+        ..
     } = users
         .list_by_id(
             PaginatedQueryArgs {
@@ -104,12 +103,12 @@ async fn main() -> anyhow::Result<()> {
     assert!(!entities.is_empty());
 
     // To collect all entities in a loop you can use `into_next_query()`.
-    // This is not recommended - just to highlight the API.
+    // The result keeps the requested size and cursor when the users are moved.
     let mut query = Default::default();
     let mut all_users = Vec::new();
     loop {
         let mut res = users.list_by_name(query, Default::default()).await?;
-        all_users.extend(res.entities.drain(..));
+        all_users.append(&mut res.entities);
         if let Some(next_query) = res.into_next_query() {
             query = next_query;
         } else {

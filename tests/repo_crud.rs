@@ -79,11 +79,7 @@ async fn list_by() -> anyhow::Result<()> {
         .unwrap();
 
     users.create(new_user).await?;
-    let PaginatedQueryRet {
-        entities,
-        has_next_page: _,
-        end_cursor: _,
-    } = users
+    let PaginatedQueryRet { entities, .. } = users
         .list_by_id(
             PaginatedQueryArgs {
                 first: 5,
@@ -105,11 +101,7 @@ async fn list_for_filters() -> anyhow::Result<()> {
     let users = Users::new(pool);
 
     // Test with default filters (no filter) - should return all entities
-    let PaginatedQueryRet {
-        entities,
-        has_next_page: _,
-        end_cursor: _,
-    } = users
+    let PaginatedQueryRet { entities, .. } = users
         .list_for_filters(
             UserFilters::default(),
             Sort {
@@ -153,6 +145,7 @@ async fn list_for_filters() -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(filtered_result.entities.len(), 1);
+    assert_eq!(filtered_result.page_size, 10);
     assert_eq!(filtered_result.entities[0].name, unique_name);
 
     // Test pagination with filters
@@ -171,6 +164,7 @@ async fn list_for_filters() -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(paginated_result.entities.len(), 1);
+    assert_eq!(paginated_result.page_size, 1);
     assert!(paginated_result.has_next_page);
 
     // Use cursor for next page
@@ -190,6 +184,137 @@ async fn list_for_filters() -> anyhow::Result<()> {
 
     assert_eq!(next_page.entities.len(), 1);
     assert_ne!(paginated_result.entities[0].id, next_page.entities[0].id);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn collecting_pages_preserves_requested_size() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool);
+    let name = format!("Pagination_{}", UserId::new());
+    let mut expected_ids = std::collections::HashSet::new();
+    for _ in 0..7 {
+        let user = users
+            .create(NewUser::builder().id(UserId::new()).name(&name).build()?)
+            .await?;
+        expected_ids.insert(user.id);
+    }
+
+    for first in [1, 3, 7, 10] {
+        for use_filters in [false, true] {
+            let mut collected = Vec::new();
+            let mut next = Some(PaginatedQueryArgs { first, after: None });
+            while let Some(query) = next.take() {
+                let mut page = if use_filters {
+                    users
+                        .list_for_filters_by_id(
+                            UserFilters {
+                                name: Some(name.clone()),
+                            },
+                            query,
+                            ListDirection::Ascending,
+                        )
+                        .await?
+                } else {
+                    users
+                        .list_for_name_by_id(name.clone(), query, ListDirection::Ascending)
+                        .await?
+                };
+                assert_eq!(page.page_size, first);
+                collected.append(&mut page.entities);
+                next = page.into_next_query();
+                if let Some(query) = &next {
+                    assert_eq!(query.first, first);
+                    assert!(query.after.is_some());
+                }
+            }
+            assert_eq!(collected.len(), expected_ids.len());
+            assert_eq!(
+                collected
+                    .into_iter()
+                    .map(|user| user.id)
+                    .collect::<std::collections::HashSet<_>>(),
+                expected_ids
+            );
+        }
+    }
+
+    let zero_page = users
+        .list_for_name_by_id(
+            name,
+            PaginatedQueryArgs {
+                first: 0,
+                after: None,
+            },
+            ListDirection::Ascending,
+        )
+        .await?;
+    assert_eq!(zero_page.page_size, 0);
+    assert!(zero_page.entities.is_empty());
+    assert!(zero_page.has_next_page);
+    assert!(zero_page.end_cursor.is_none());
+    assert!(zero_page.into_next_query().is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn collecting_filtered_pages_crosses_default_page_boundary() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool);
+    let name = format!("DefaultPagination_{}", UserId::new());
+    let mut expected_ids = Vec::new();
+
+    for count in [100, 101] {
+        while expected_ids.len() < count {
+            let user = users
+                .create(NewUser::builder().id(UserId::new()).name(&name).build()?)
+                .await?;
+            expected_ids.push(user.id);
+        }
+
+        for direction in [ListDirection::Ascending, ListDirection::Descending] {
+            let mut expected = expected_ids.clone();
+            expected.sort_by_key(|id| uuid::Uuid::from(*id));
+            if matches!(direction, ListDirection::Descending) {
+                expected.reverse();
+            }
+
+            let mut collected = Vec::new();
+            let mut next = Some(PaginatedQueryArgs::default());
+            let mut requests = 0;
+            while let Some(query) = next.take() {
+                assert_eq!(query.first, 100);
+                requests += 1;
+                assert!(requests <= count.div_ceil(100), "pagination did not finish");
+
+                let mut page = users
+                    .list_for_filters(
+                        UserFilters {
+                            name: Some(name.clone()),
+                        },
+                        Sort {
+                            by: UserSortBy::Id,
+                            direction,
+                        },
+                        query,
+                    )
+                    .await?;
+                collected.append(&mut page.entities);
+                next = page.into_next_query();
+            }
+
+            assert_eq!(requests, count.div_ceil(100));
+            assert_eq!(
+                collected
+                    .into_iter()
+                    .map(|user| user.id)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
 
     Ok(())
 }
