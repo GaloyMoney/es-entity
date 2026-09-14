@@ -104,9 +104,10 @@ async fn main() -> anyhow::Result<()> {
     let mut query = Default::default();
     let mut all_users = Vec::new();
     loop {
-        let mut res = users.list_by_name(query, Default::default()).await?;
-        all_users.extend(res.drain_entities());
-        if let Some(next_query) = res.into_next_query() {
+        let res = users.list_by_name(query, Default::default()).await?;
+        let (chunk, continuation) = res.drain();
+        all_users.extend(chunk);
+        if let Some(next_query) = continuation.into_next_query() {
             query = next_query;
         } else {
             break;

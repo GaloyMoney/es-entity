@@ -209,7 +209,7 @@ async fn collecting_pages_preserves_requested_size() -> anyhow::Result<()> {
             let mut collected = Vec::new();
             let mut next = Some(PaginatedQueryArgs { first, after: None });
             while let Some(query) = next.take() {
-                let mut page = if use_filters {
+                let page = if use_filters {
                     users
                         .list_for_filters_by_id(
                             UserFilters {
@@ -225,8 +225,9 @@ async fn collecting_pages_preserves_requested_size() -> anyhow::Result<()> {
                         .await?
                 };
                 assert_eq!(page.requested_size(), first);
-                collected.extend(page.drain_entities());
-                next = page.into_next_query();
+                let (chunk, continuation) = page.drain();
+                collected.extend(chunk);
+                next = continuation.into_next_query();
                 if let Some(query) = &next {
                     assert_eq!(query.first, first);
                     assert!(query.after.is_some());
@@ -257,7 +258,7 @@ async fn collecting_pages_preserves_requested_size() -> anyhow::Result<()> {
     assert!(zero_page.entities().is_empty());
     assert!(zero_page.has_next_page);
     assert!(zero_page.end_cursor.is_none());
-    assert!(zero_page.into_next_query().is_none());
+    assert!(zero_page.drain().1.into_next_query().is_none());
 
     Ok(())
 }
@@ -292,7 +293,7 @@ async fn collecting_filtered_pages_crosses_default_page_boundary() -> anyhow::Re
                 requests += 1;
                 assert!(requests <= count.div_ceil(100), "pagination did not finish");
 
-                let mut page = users
+                let page = users
                     .list_for_filters(
                         UserFilters {
                             name: Some(name.clone()),
@@ -304,8 +305,9 @@ async fn collecting_filtered_pages_crosses_default_page_boundary() -> anyhow::Re
                         query,
                     )
                     .await?;
-                collected.extend(page.drain_entities());
-                next = page.into_next_query();
+                let (chunk, continuation) = page.drain();
+                collected.extend(chunk);
+                next = continuation.into_next_query();
             }
 
             assert_eq!(requests, count.div_ceil(100));

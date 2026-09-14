@@ -156,15 +156,21 @@ impl<T: std::fmt::Debug> Default for PaginatedQueryArgs<T> {
 ///     let next_result = users.list_by_id(next_query_args, ListDirection::Ascending).await?;
 /// }
 /// ```
-/// Construction is gated behind [`Self::new`]. The entities vec is private: the
-/// only way to move entities out is [`Self::drain_entities`], while the
-/// requested/fetched sizes, [`Self::has_next_page`], and [`Self::end_cursor`]
-/// remain available and unaffected when the entries are drained.
+/// Construction is gated behind [`Self::new`] and the entities vec is private.
+/// The only way to move entities out is [`Self::drain`], which consumes the page
+/// and returns a [`Continuation`] with no entity access, so reading a drained
+/// page fails to compile instead of returning an empty list.
+///
+/// ```compile_fail
+/// use es_entity::PaginatedQueryRet;
+/// let page = PaginatedQueryRet::<u32, u32>::new(vec![1, 2, 3], false, None, 3);
+/// let (_, continuation) = page.drain();
+/// // The continuation no longer exposes the entities, so this does not compile.
+/// let _ = continuation.entities();
+/// ```
 pub struct PaginatedQueryRet<T, C> {
     /// The number of entities requested for the page, copied from [`PaginatedQueryArgs::first`].
     requested_size: usize,
-    /// How many entities the query actually returned, captured when the page was built.
-    fetched_size: usize,
     /// [Vec] for the fetched `entities` by the paginated query
     entities: Vec<T>,
     /// [bool] for indicating if the list has been exhausted or more entities can be fetched
@@ -174,10 +180,10 @@ pub struct PaginatedQueryRet<T, C> {
 }
 
 impl<T, C> PaginatedQueryRet<T, C> {
-    /// Creates a page result, recording how many entities were requested and returned.
+    /// Creates a page result, recording how many entities were requested.
     ///
-    /// Both sizes are snapshotted at construction and are independent of [`Self::entities`],
-    /// so consuming or filtering the entities does not change them.
+    /// Pass the same `first` that produced this page. It is stored independently of
+    /// [`Self::entities`], so consuming or filtering the entities does not change it.
     pub fn new(
         entities: Vec<T>,
         has_next_page: bool,
@@ -186,7 +192,6 @@ impl<T, C> PaginatedQueryRet<T, C> {
     ) -> Self {
         Self {
             requested_size,
-            fetched_size: entities.len(),
             entities,
             has_next_page,
             end_cursor,
@@ -198,42 +203,66 @@ impl<T, C> PaginatedQueryRet<T, C> {
         self.requested_size
     }
 
-    /// The number of entities the query actually returned for this page.
-    ///
-    /// Unlike draining [`Self::drain_entities`], this is a snapshot from construction
-    /// and is not affected by draining, filtering, or reordering the entities.
-    pub fn fetched_size(&self) -> usize {
-        self.fetched_size
-    }
-
     /// Borrows the fetched entities without draining them.
     pub fn entities(&self) -> &[T] {
         &self.entities
     }
 
-    /// Moves the fetched entities out of the page in one call.
+    /// Moves the entities out of the page, returning them alongside a
+    /// [`Continuation`] that describes how to keep paginating.
     ///
-    /// The page is left drained but its continuation metadata — size, cursor, and
-    /// [`Self::has_next_page`] — is unchanged, so a subsequent [`Self::into_next_query`]
-    /// still reflects the original request.
-    pub fn drain_entities(&mut self) -> Vec<T> {
-        std::mem::take(&mut self.entities)
+    /// Draining consumes the page: the returned [`Continuation`] has no access to
+    /// the entities, so reading a drained page fails to compile instead of
+    /// returning an empty list.
+    pub fn drain(self) -> (Vec<T>, Continuation<C>) {
+        (
+            self.entities,
+            Continuation {
+                requested_size: self.requested_size,
+                has_next_page: self.has_next_page,
+                end_cursor: self.end_cursor,
+            },
+        )
     }
 
     /// Converts the cursor type while preserving the requested size.
     pub fn map_end_cursor<C2>(self, f: impl FnOnce(C) -> C2) -> PaginatedQueryRet<T, C2> {
         PaginatedQueryRet {
             requested_size: self.requested_size,
-            fetched_size: self.fetched_size,
             entities: self.entities,
             has_next_page: self.has_next_page,
             end_cursor: self.end_cursor.map(f),
         }
     }
+}
+
+/// The continuation of a page whose entities have already been drained.
+///
+/// It carries no entity access: only the metadata needed to fetch the next page.
+pub struct Continuation<C> {
+    requested_size: usize,
+    has_next_page: bool,
+    end_cursor: Option<C>,
+}
+
+impl<C> Continuation<C> {
+    /// The number of entities that were requested for the drained page.
+    pub fn requested_size(&self) -> usize {
+        self.requested_size
+    }
+
+    /// Whether the drained page reported more results to fetch.
+    pub fn has_next_page(&self) -> bool {
+        self.has_next_page
+    }
+
+    /// The cursor on the last entity of the drained page.
+    pub fn end_cursor(&self) -> Option<&C> {
+        self.end_cursor.as_ref()
+    }
 
     /// Creates the next query using the requested size and end cursor.
     ///
-    /// Consuming or filtering `entities` does not change the next query's size.
     /// Returns `None` after the last page or when the requested size was zero.
     pub fn into_next_query(self) -> Option<PaginatedQueryArgs<C>>
     where
@@ -257,15 +286,15 @@ mod tests {
     #[test]
     fn next_query_preserves_page_size_after_entities_are_moved() {
         for page_size in [1, 3, 100] {
-            let mut page = PaginatedQueryRet::new(
+            let page = PaginatedQueryRet::new(
                 (0..page_size).collect(),
                 true,
                 Some(page_size - 1),
                 page_size,
             );
-            let collected = page.drain_entities();
+            let (collected, continuation) = page.drain();
 
-            let next = page.into_next_query().expect("another page exists");
+            let next = continuation.into_next_query().expect("another page exists");
             assert_eq!(next.first, page_size);
             assert_eq!(next.after, Some(page_size - 1));
             assert_eq!(collected.len(), page_size);
@@ -278,7 +307,11 @@ mod tests {
             let page =
                 PaginatedQueryRet::new(vec![(); count], true, Some("last-fetched-entity"), 7);
 
-            let next = page.into_next_query().expect("another page exists");
+            let next = page
+                .drain()
+                .1
+                .into_next_query()
+                .expect("another page exists");
             assert_eq!(next.first, 7);
             assert_eq!(next.after, Some("last-fetched-entity"));
         }
@@ -289,7 +322,7 @@ mod tests {
         for count in [0, 1, 7] {
             let page = PaginatedQueryRet::new(vec![(); count], false, count.checked_sub(1), 7);
 
-            assert!(page.into_next_query().is_none());
+            assert!(page.drain().1.into_next_query().is_none());
         }
     }
 
@@ -297,19 +330,18 @@ mod tests {
     fn zero_page_size_does_not_continue_even_when_more_entities_exist() {
         let page = PaginatedQueryRet::<(), usize>::new(Vec::new(), true, None, 0);
 
-        assert!(page.into_next_query().is_none());
+        assert!(page.drain().1.into_next_query().is_none());
     }
 
     #[test]
-    fn sizes_survive_entities_drain() {
-        let mut page = PaginatedQueryRet::new(vec![(); 7], true, Some(6), 10);
+    fn drain_consumes_entities_and_keeps_the_requested_size() {
+        let page = PaginatedQueryRet::new(vec![(); 7], true, Some(6), 10);
         assert_eq!(page.requested_size(), 10);
-        assert_eq!(page.fetched_size(), 7);
 
-        let drained = page.drain_entities();
-        assert_eq!(drained.len(), 7);
-        assert!(page.entities().is_empty());
-        assert_eq!(page.requested_size(), 10);
-        assert_eq!(page.fetched_size(), 7);
+        let (entities, continuation) = page.drain();
+        assert_eq!(entities.len(), 7);
+        assert_eq!(continuation.requested_size(), 10);
+        assert!(continuation.has_next_page());
+        assert_eq!(continuation.end_cursor(), Some(&6));
     }
 }
