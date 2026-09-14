@@ -156,7 +156,7 @@ async fn list_for_filters_matches_reference_for_all_combos() -> anyhow::Result<(
                                     PaginatedQueryArgs { first: 7, after },
                                 )
                                 .await?;
-                            actual.extend(ret.entities.iter().map(|t| uuid::Uuid::from(t.id)));
+                            actual.extend(ret.entities().iter().map(|t| uuid::Uuid::from(t.id)));
                             if !ret.has_next_page {
                                 break;
                             }
@@ -269,7 +269,7 @@ async fn list_by_score_paginates_through_nulls() -> anyhow::Result<()> {
                 .list_by_score(PaginatedQueryArgs { first: 3, after }, direction)
                 .await?;
             pages += 1;
-            actual.extend(ret.entities.iter().map(|t| uuid::Uuid::from(t.id)));
+            actual.extend(ret.entities().iter().map(|t| uuid::Uuid::from(t.id)));
             if !ret.has_next_page {
                 break;
             }
@@ -318,7 +318,7 @@ async fn list_for_account_id_by_created_at_paginates() -> anyhow::Result<()> {
                 ListDirection::Descending,
             )
             .await?;
-        actual.extend(ret.entities.iter().map(|t| uuid::Uuid::from(t.id)));
+        actual.extend(ret.entities().iter().map(|t| uuid::Uuid::from(t.id)));
         if !ret.has_next_page {
             break;
         }

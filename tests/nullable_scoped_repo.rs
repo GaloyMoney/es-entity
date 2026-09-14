@@ -174,7 +174,7 @@ async fn list_excludes_null_scoped_rows_across_pagination() -> anyhow::Result<()
                 ListDirection::Descending,
             )
             .await?;
-        collected.extend(ret.entities.iter().map(|p| p.id));
+        collected.extend(ret.entities().iter().map(|p| p.id));
         if !ret.has_next_page {
             break;
         }
@@ -209,8 +209,8 @@ async fn bound_view_excludes_null_scoped_rows() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert_eq!(ret.entities.len(), 1);
-    assert_eq!(ret.entities[0].id, owned_id);
+    assert_eq!(ret.entities().len(), 1);
+    assert_eq!(ret.entities()[0].id, owned_id);
 
     Ok(())
 }

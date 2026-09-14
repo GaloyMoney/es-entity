@@ -167,7 +167,7 @@ async fn nested_list_by_id_is_one_statement() -> anyhow::Result<()> {
         1,
         "list_by_id must issue exactly one SQL statement regardless of page size"
     );
-    assert!(page.entities.len() >= 3);
+    assert!(page.entities().len() >= 3);
 
     Ok(())
 }

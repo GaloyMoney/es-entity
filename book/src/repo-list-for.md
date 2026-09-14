@@ -114,7 +114,7 @@ async fn main() -> anyhow::Result<()> {
         owner_id, Default::default(), Default::default()
     ).await?;
 
-    assert_eq!(docs.entities.len(), 2);
+    assert_eq!(docs.entities().len(), 2);
 
     Ok(())
 }

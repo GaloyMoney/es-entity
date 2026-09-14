@@ -79,7 +79,7 @@ async fn list_by() -> anyhow::Result<()> {
         .unwrap();
 
     users.create(new_user).await?;
-    let PaginatedQueryRet { entities, .. } = users
+    let result = users
         .list_by_id(
             PaginatedQueryArgs {
                 first: 5,
@@ -90,6 +90,7 @@ async fn list_by() -> anyhow::Result<()> {
             ListDirection::Ascending,
         )
         .await?;
+    let entities = result.entities();
     assert!(!entities.is_empty());
     Ok(())
 }
@@ -101,7 +102,7 @@ async fn list_for_filters() -> anyhow::Result<()> {
     let users = Users::new(pool);
 
     // Test with default filters (no filter) - should return all entities
-    let PaginatedQueryRet { entities, .. } = users
+    let result = users
         .list_for_filters(
             UserFilters::default(),
             Sort {
@@ -115,6 +116,7 @@ async fn list_for_filters() -> anyhow::Result<()> {
         )
         .await?;
 
+    let entities = result.entities();
     assert!(!entities.is_empty());
 
     // Create a user with a unique name for testing the filter
@@ -144,9 +146,9 @@ async fn list_for_filters() -> anyhow::Result<()> {
         )
         .await?;
 
-    assert_eq!(filtered_result.entities.len(), 1);
+    assert_eq!(filtered_result.entities().len(), 1);
     assert_eq!(filtered_result.requested_size(), 10);
-    assert_eq!(filtered_result.entities[0].name, unique_name);
+    assert_eq!(filtered_result.entities()[0].name, unique_name);
 
     // Test pagination with filters
     let paginated_result = users
@@ -163,9 +165,10 @@ async fn list_for_filters() -> anyhow::Result<()> {
         )
         .await?;
 
-    assert_eq!(paginated_result.entities.len(), 1);
+    assert_eq!(paginated_result.entities().len(), 1);
     assert_eq!(paginated_result.requested_size(), 1);
     assert!(paginated_result.has_next_page);
+    let first_id = paginated_result.entities()[0].id;
 
     // Use cursor for next page
     let next_page = users
@@ -182,8 +185,8 @@ async fn list_for_filters() -> anyhow::Result<()> {
         )
         .await?;
 
-    assert_eq!(next_page.entities.len(), 1);
-    assert_ne!(paginated_result.entities[0].id, next_page.entities[0].id);
+    assert_eq!(next_page.entities().len(), 1);
+    assert_ne!(first_id, next_page.entities()[0].id);
 
     Ok(())
 }
@@ -222,7 +225,7 @@ async fn collecting_pages_preserves_requested_size() -> anyhow::Result<()> {
                         .await?
                 };
                 assert_eq!(page.requested_size(), first);
-                collected.append(&mut page.entities);
+                collected.extend(page.drain_entities());
                 next = page.into_next_query();
                 if let Some(query) = &next {
                     assert_eq!(query.first, first);
@@ -251,7 +254,7 @@ async fn collecting_pages_preserves_requested_size() -> anyhow::Result<()> {
         )
         .await?;
     assert_eq!(zero_page.requested_size(), 0);
-    assert!(zero_page.entities.is_empty());
+    assert!(zero_page.entities().is_empty());
     assert!(zero_page.has_next_page);
     assert!(zero_page.end_cursor.is_none());
     assert!(zero_page.into_next_query().is_none());
@@ -301,7 +304,7 @@ async fn collecting_filtered_pages_crosses_default_page_boundary() -> anyhow::Re
                         query,
                     )
                     .await?;
-                collected.append(&mut page.entities);
+                collected.extend(page.drain_entities());
                 next = page.into_next_query();
             }
 

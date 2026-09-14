@@ -1035,7 +1035,7 @@ impl ToTokens for ListForFiltersFn<'_> {
                         tracing::Span::current().record("has_cursor", has_cursor);
                     },
                     quote! {
-                        let result_ids: Vec<_> = res.entities.iter().map(|e| &e.id).collect();
+                        let result_ids: Vec<_> = res.entities().iter().map(|e| &e.id).collect();
                         tracing::Span::current().record("count", result_ids.len());
                         tracing::Span::current().record("has_next_page", res.has_next_page);
                         tracing::Span::current().record("ids", tracing::field::debug(&result_ids));

@@ -185,13 +185,13 @@ async fn scoped_list_by_paginates_within_scope() -> anyhow::Result<()> {
             )
             .await?;
         pages += 1;
-        for entity in &ret.entities {
+        for entity in ret.entities() {
             assert_eq!(
                 entity.partner_id, partner_a,
                 "scoped list leaked a foreign row"
             );
         }
-        collected.extend(ret.entities.iter().map(|c| c.id));
+        collected.extend(ret.entities().iter().map(|c| c.id));
         if !ret.has_next_page {
             break;
         }
@@ -233,9 +233,9 @@ async fn scoped_list_for_and_filters_dispatch() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert!(ret.entities.iter().all(|c| c.partner_id == partner_a));
-    assert!(ret.entities.iter().all(|c| c.status == "active"));
-    assert_eq!(ret.entities.len(), 2);
+    assert!(ret.entities().iter().all(|c| c.partner_id == partner_a));
+    assert!(ret.entities().iter().all(|c| c.status == "active"));
+    assert_eq!(ret.entities().len(), 2);
 
     // unified dispatch: no filter routes through the (scoped) list_by proxy
     let ret = contacts
@@ -252,8 +252,8 @@ async fn scoped_list_for_and_filters_dispatch() -> anyhow::Result<()> {
             },
         )
         .await?;
-    assert_eq!(ret.entities.len(), 3);
-    assert!(ret.entities.iter().all(|c| c.partner_id == partner_a));
+    assert_eq!(ret.entities().len(), 3);
+    assert!(ret.entities().iter().all(|c| c.partner_id == partner_a));
 
     // unified dispatch: status filter routes through the (scoped) list_for proxy
     let ret = contacts
@@ -273,8 +273,8 @@ async fn scoped_list_for_and_filters_dispatch() -> anyhow::Result<()> {
             },
         )
         .await?;
-    assert_eq!(ret.entities.len(), 1);
-    assert_eq!(ret.entities[0].partner_id, partner_a);
+    assert_eq!(ret.entities().len(), 1);
+    assert_eq!(ret.entities()[0].partner_id, partner_a);
 
     // All sees both partners' rows (restricted to this test's seeds via status)
     let ret = contacts
@@ -288,7 +288,7 @@ async fn scoped_list_for_and_filters_dispatch() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert!(ret.entities.iter().any(|c| c.partner_id == partner_a));
+    assert!(ret.entities().iter().any(|c| c.partner_id == partner_a));
 
     Ok(())
 }
@@ -330,7 +330,7 @@ async fn foreign_cursor_cannot_leak_rows() -> anyhow::Result<()> {
         )
         .await?;
     assert!(
-        ret.entities.iter().all(|c| c.partner_id == partner_b),
+        ret.entities().iter().all(|c| c.partner_id == partner_b),
         "foreign cursor must not leak rows from another scope"
     );
 
@@ -425,8 +425,8 @@ async fn scoped_view_delegates() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert_eq!(page.entities.len(), 2);
-    assert!(page.entities.iter().all(|c| c.partner_id == partner_a));
+    assert_eq!(page.entities().len(), 2);
+    assert!(page.entities().iter().all(|c| c.partner_id == partner_a));
 
     let ret = view
         .list_for_status_by_created_at(
@@ -438,7 +438,7 @@ async fn scoped_view_delegates() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert_eq!(ret.entities.len(), 1);
+    assert_eq!(ret.entities().len(), 1);
 
     let ret = view
         .list_for_filters(
@@ -456,8 +456,8 @@ async fn scoped_view_delegates() -> anyhow::Result<()> {
             },
         )
         .await?;
-    assert_eq!(ret.entities.len(), 1);
-    assert_eq!(ret.entities[0].partner_id, partner_a);
+    assert_eq!(ret.entities().len(), 1);
+    assert_eq!(ret.entities()[0].partner_id, partner_a);
 
     // `_in_op` variants through the view
     let mut op = contacts.begin_op().await?;
@@ -564,7 +564,7 @@ async fn scope_column_filter_combinations() -> anyhow::Result<()> {
     assert!(
         ids_a
             .iter()
-            .all(|id| ret.entities.iter().any(|c| c.id == *id))
+            .all(|id| ret.entities().iter().any(|c| c.id == *id))
     );
 
     // All + Some(a): the caller's partner choice narrows the listing
@@ -576,27 +576,27 @@ async fn scope_column_filter_combinations() -> anyhow::Result<()> {
             query(),
         )
         .await?;
-    assert_eq!(ret.entities.len(), 2);
-    assert!(ret.entities.iter().all(|c| c.partner_id == partner_a));
+    assert_eq!(ret.entities().len(), 2);
+    assert!(ret.entities().iter().all(|c| c.partner_id == partner_a));
 
     // PartnerId(a) + None: the scope alone filters
     let ret = contacts
         .list_for_filters(partner_a, ContactFilters::default(), sort(), query())
         .await?;
-    assert_eq!(ret.entities.len(), 2);
+    assert_eq!(ret.entities().len(), 2);
 
     // PartnerId(a) + Some(a): match — same result as the scope alone
     let ret = contacts
         .list_for_filters(partner_a, partner_filter(partner_a), sort(), query())
         .await?;
-    assert_eq!(ret.entities.len(), 2);
+    assert_eq!(ret.entities().len(), 2);
 
     // PartnerId(a) + Some(b): a caller filter can never widen the scope — the
     // mismatch honestly returns nothing instead of being silently ignored
     let ret = contacts
         .list_for_filters(partner_a, partner_filter(partner_b), sort(), query())
         .await?;
-    assert!(ret.entities.is_empty());
+    assert!(ret.entities().is_empty());
     assert!(!ret.has_next_page);
     assert!(ret.end_cursor.is_none());
 
@@ -612,7 +612,7 @@ async fn scope_column_filter_combinations() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert_eq!(ret.entities.len(), 2);
+    assert_eq!(ret.entities().len(), 2);
     let ret = contacts
         .list_for_partner_id_by_created_at(
             partner_a,
@@ -624,7 +624,7 @@ async fn scope_column_filter_combinations() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert!(ret.entities.is_empty());
+    assert!(ret.entities().is_empty());
 
     // multi-filter (scope column + status) routes through the filters fn
     let ret = contacts
@@ -638,8 +638,8 @@ async fn scope_column_filter_combinations() -> anyhow::Result<()> {
             query(),
         )
         .await?;
-    assert_eq!(ret.entities.len(), 1);
-    assert_eq!(ret.entities[0].status, "active");
+    assert_eq!(ret.entities().len(), 1);
+    assert_eq!(ret.entities()[0].status, "active");
     let ret = contacts
         .list_for_filters(
             partner_a,
@@ -651,7 +651,7 @@ async fn scope_column_filter_combinations() -> anyhow::Result<()> {
             query(),
         )
         .await?;
-    assert!(ret.entities.is_empty());
+    assert!(ret.entities().is_empty());
     let ret = contacts
         .list_for_filters(
             ContactScope::All,
@@ -663,8 +663,8 @@ async fn scope_column_filter_combinations() -> anyhow::Result<()> {
             query(),
         )
         .await?;
-    assert_eq!(ret.entities.len(), 1);
-    assert_eq!(ret.entities[0].partner_id, partner_a);
+    assert_eq!(ret.entities().len(), 1);
+    assert_eq!(ret.entities()[0].partner_id, partner_a);
 
     Ok(())
 }
@@ -702,13 +702,13 @@ async fn scope_column_filter_cursor_pagination() -> anyhow::Result<()> {
             )
             .await?;
         pages += 1;
-        for entity in &ret.entities {
+        for entity in ret.entities() {
             assert_eq!(
                 entity.partner_id, partner_a,
                 "partner filter leaked a foreign row"
             );
         }
-        collected.extend(ret.entities.iter().map(|c| c.id));
+        collected.extend(ret.entities().iter().map(|c| c.id));
         if !ret.has_next_page {
             break;
         }
@@ -742,7 +742,7 @@ async fn scope_column_filter_cursor_pagination() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert!(ret.entities.is_empty());
+    assert!(ret.entities().is_empty());
     assert!(!ret.has_next_page);
 
     Ok(())

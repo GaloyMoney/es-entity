@@ -96,7 +96,7 @@ async fn pool_less_repo_serves_every_read_family_in_op() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert!(!by_name.entities.is_empty());
+    assert!(!by_name.entities().is_empty());
 
     // list_for_<column>_by_<column>
     let for_name = users
@@ -110,8 +110,8 @@ async fn pool_less_repo_serves_every_read_family_in_op() -> anyhow::Result<()> {
             ListDirection::Ascending,
         )
         .await?;
-    assert_eq!(for_name.entities.len(), 1);
-    assert_eq!(for_name.entities[0].id, user.id);
+    assert_eq!(for_name.entities().len(), 1);
+    assert_eq!(for_name.entities()[0].id, user.id);
 
     // The `list_for_filters` dispatcher, which had no `_in_op` twin before
     // this option existed. Filtered: routes to the single-filter sibling.
@@ -131,8 +131,8 @@ async fn pool_less_repo_serves_every_read_family_in_op() -> anyhow::Result<()> {
             },
         )
         .await?;
-    assert_eq!(filtered.entities.len(), 1);
-    assert_eq!(filtered.entities[0].id, user.id);
+    assert_eq!(filtered.entities().len(), 1);
+    assert_eq!(filtered.entities()[0].id, user.id);
 
     // Unfiltered: routes to the plain `list_by_*` sibling.
     let unfiltered = users
@@ -149,7 +149,7 @@ async fn pool_less_repo_serves_every_read_family_in_op() -> anyhow::Result<()> {
             },
         )
         .await?;
-    assert!(!unfiltered.entities.is_empty());
+    assert!(!unfiltered.entities().is_empty());
 
     Ok(())
 }
