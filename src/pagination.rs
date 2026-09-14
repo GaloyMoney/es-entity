@@ -218,6 +218,33 @@ impl<T, C> PaginatedQueryRet<T, C> {
             end_cursor: self.end_cursor.map(f),
         }
     }
+
+    /// Converts the entity type while preserving the pagination metadata.
+    ///
+    /// Adapters that expose a repository page as their own type keep the requested
+    /// size and cursor without restating them.
+    pub fn map_entities<T2>(self, f: impl FnMut(T) -> T2) -> PaginatedQueryRet<T2, C> {
+        PaginatedQueryRet {
+            requested_size: self.requested_size,
+            entities: self.entities.into_iter().map(f).collect(),
+            has_next_page: self.has_next_page,
+            end_cursor: self.end_cursor,
+        }
+    }
+
+    /// Converts the entity type with a fallible conversion, preserving the pagination
+    /// metadata. The first failing entity aborts the conversion.
+    pub fn try_map_entities<T2, E>(
+        self,
+        f: impl FnMut(T) -> Result<T2, E>,
+    ) -> Result<PaginatedQueryRet<T2, C>, E> {
+        Ok(PaginatedQueryRet {
+            requested_size: self.requested_size,
+            entities: self.entities.into_iter().map(f).collect::<Result<_, E>>()?,
+            has_next_page: self.has_next_page,
+            end_cursor: self.end_cursor,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -280,5 +307,42 @@ mod tests {
         let next = next.expect("another page exists");
         assert_eq!(next.first, 10);
         assert_eq!(next.after, Some(6));
+    }
+
+    #[test]
+    fn mapping_entities_keeps_requested_size_and_cursor_on_a_short_last_page() {
+        let page = PaginatedQueryRet::new(vec![1u32, 2, 3], false, Some("last"), 10);
+
+        let mapped = page.map_entities(|n| n.to_string());
+
+        assert_eq!(mapped.entities(), ["1", "2", "3"]);
+        assert_eq!(
+            mapped.requested_size(),
+            10,
+            "requested size must survive an entity type change"
+        );
+        assert_eq!(
+            mapped.end_cursor,
+            Some("last"),
+            "end_cursor must survive on a page with no continuation"
+        );
+    }
+
+    #[test]
+    fn try_mapping_entities_keeps_metadata_and_propagates_the_first_failure() {
+        let page = PaginatedQueryRet::new(vec![1u32, 2], true, Some("last"), 10);
+        let mapped = page
+            .try_map_entities(|n| u8::try_from(n).map_err(|_| "unconvertible"))
+            .expect("all entities convert");
+        assert_eq!(mapped.entities(), [1u8, 2]);
+        assert_eq!(mapped.requested_size(), 10);
+        assert_eq!(mapped.end_cursor, Some("last"));
+
+        let page = PaginatedQueryRet::new(vec![1u32, u32::MAX], true, Some("last"), 10);
+        let err = page
+            .try_map_entities(|n| u8::try_from(n).map_err(|_| "unconvertible"))
+            .err()
+            .expect("the out-of-range entity must abort the conversion");
+        assert_eq!(err, "unconvertible");
     }
 }
