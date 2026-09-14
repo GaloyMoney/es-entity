@@ -126,47 +126,28 @@ impl<T: std::fmt::Debug> Default for PaginatedQueryArgs<T> {
 /// Returned by the [`EsRepo`][crate::EsRepo] functions like `list_by`, `list_for` and `list_for_filters`.
 /// Used with [`PaginatedQueryArgs`] to perform consistent and efficient pagination
 ///
-/// The requested [`Self::requested_size`] and [`Self::end_cursor`] remain available
-/// when callers move or filter [`Self::entities`]. [`Self::into_next_query`]
-/// uses that metadata to continue with the existing [`PaginatedQueryArgs`] type.
+/// Construction goes through [`Self::new`], which records the requested page size
+/// separately from the returned rows. [`Self::entities`] borrows the fetched entities;
+/// [`Self::into_parts`] consumes the page and hands back the entities together with the
+/// [`PaginatedQueryArgs`] for the next page, so the requested size is carried forward
+/// even when a page returns fewer rows than were asked for.
 ///
 /// # Examples
 ///
 /// ```ignore
-/// let query_args = PaginatedQueryArgs {
-///     first: 10,
-///     after: None,
-/// };
+/// let mut query = PaginatedQueryArgs { first: 10, after: None };
+/// let mut all_users = Vec::new();
 ///
-/// // Execute query and get the `result` of type `PaginatedQueryRet`
-/// let result = users.list_by_id(query_args, ListDirection::Ascending).await?;
+/// loop {
+///     let result = users.list_by_id(query, ListDirection::Ascending).await?;
+///     let (chunk, next) = result.into_parts();
+///     all_users.extend(chunk);
 ///
-/// // Continue pagination using the `next_query_args` argument updated using result
-/// // Will continue only if 'has_next_page` returned from `result` is true
-/// if result.has_next_page {
-///     let next_query_args = PaginatedQueryArgs {
-///         first: 10,
-///         after: result.end_cursor, // update with 'end_cursor' of previous result
-///     };
-///     let next_result = users.list_by_id(next_query_args, ListDirection::Ascending).await?;
+///     match next {
+///         Some(next_query) => query = next_query,
+///         None => break,
+///     }
 /// }
-///
-/// // Or use PaginatedQueryRet::into_next_query() convenience method
-/// if let Some(next_query_args) = result.into_next_query() {
-///     let next_result = users.list_by_id(next_query_args, ListDirection::Ascending).await?;
-/// }
-/// ```
-/// Construction is gated behind [`Self::new`] and the entities vec is private.
-/// The only way to move entities out is [`Self::drain`], which consumes the page
-/// and returns a [`Continuation`] with no entity access, so reading a drained
-/// page fails to compile instead of returning an empty list.
-///
-/// ```compile_fail
-/// use es_entity::PaginatedQueryRet;
-/// let page = PaginatedQueryRet::<u32, u32>::new(vec![1, 2, 3], false, None, 3);
-/// let (_, continuation) = page.drain();
-/// // The continuation no longer exposes the entities, so this does not compile.
-/// let _ = continuation.entities();
 /// ```
 pub struct PaginatedQueryRet<T, C> {
     /// The number of entities requested for the page, copied from [`PaginatedQueryArgs::first`].
@@ -208,21 +189,24 @@ impl<T, C> PaginatedQueryRet<T, C> {
         &self.entities
     }
 
-    /// Moves the entities out of the page, returning them alongside a
-    /// [`Continuation`] that describes how to keep paginating.
+    /// Moves the entities out of the page and returns the continuation decision
+    /// together with them.
     ///
-    /// Draining consumes the page: the returned [`Continuation`] has no access to
-    /// the entities, so reading a drained page fails to compile instead of
-    /// returning an empty list.
-    pub fn drain(self) -> (Vec<T>, Continuation<C>) {
-        (
-            self.entities,
-            Continuation {
-                requested_size: self.requested_size,
-                has_next_page: self.has_next_page,
-                end_cursor: self.end_cursor,
-            },
-        )
+    /// Consuming the page means there is no residual object that still exposes the
+    /// entities: callers take the entities and the next query in the same step.
+    pub fn into_parts(self) -> (Vec<T>, Option<PaginatedQueryArgs<C>>)
+    where
+        C: std::fmt::Debug,
+    {
+        let continuation = if self.has_next_page && self.requested_size > 0 {
+            Some(PaginatedQueryArgs {
+                first: self.requested_size,
+                after: self.end_cursor,
+            })
+        } else {
+            None
+        };
+        (self.entities, continuation)
     }
 
     /// Converts the cursor type while preserving the requested size.
@@ -232,49 +216,6 @@ impl<T, C> PaginatedQueryRet<T, C> {
             entities: self.entities,
             has_next_page: self.has_next_page,
             end_cursor: self.end_cursor.map(f),
-        }
-    }
-}
-
-/// The continuation of a page whose entities have already been drained.
-///
-/// It carries no entity access: only the metadata needed to fetch the next page.
-pub struct Continuation<C> {
-    requested_size: usize,
-    has_next_page: bool,
-    end_cursor: Option<C>,
-}
-
-impl<C> Continuation<C> {
-    /// The number of entities that were requested for the drained page.
-    pub fn requested_size(&self) -> usize {
-        self.requested_size
-    }
-
-    /// Whether the drained page reported more results to fetch.
-    pub fn has_next_page(&self) -> bool {
-        self.has_next_page
-    }
-
-    /// The cursor on the last entity of the drained page.
-    pub fn end_cursor(&self) -> Option<&C> {
-        self.end_cursor.as_ref()
-    }
-
-    /// Creates the next query using the requested size and end cursor.
-    ///
-    /// Returns `None` after the last page or when the requested size was zero.
-    pub fn into_next_query(self) -> Option<PaginatedQueryArgs<C>>
-    where
-        C: std::fmt::Debug,
-    {
-        if self.has_next_page && self.requested_size > 0 {
-            Some(PaginatedQueryArgs {
-                first: self.requested_size,
-                after: self.end_cursor,
-            })
-        } else {
-            None
         }
     }
 }
@@ -292,9 +233,9 @@ mod tests {
                 Some(page_size - 1),
                 page_size,
             );
-            let (collected, continuation) = page.drain();
+            let (collected, next) = page.into_parts();
+            let next = next.expect("another page exists");
 
-            let next = continuation.into_next_query().expect("another page exists");
             assert_eq!(next.first, page_size);
             assert_eq!(next.after, Some(page_size - 1));
             assert_eq!(collected.len(), page_size);
@@ -307,11 +248,7 @@ mod tests {
             let page =
                 PaginatedQueryRet::new(vec![(); count], true, Some("last-fetched-entity"), 7);
 
-            let next = page
-                .drain()
-                .1
-                .into_next_query()
-                .expect("another page exists");
+            let next = page.into_parts().1.expect("another page exists");
             assert_eq!(next.first, 7);
             assert_eq!(next.after, Some("last-fetched-entity"));
         }
@@ -322,7 +259,7 @@ mod tests {
         for count in [0, 1, 7] {
             let page = PaginatedQueryRet::new(vec![(); count], false, count.checked_sub(1), 7);
 
-            assert!(page.drain().1.into_next_query().is_none());
+            assert!(page.into_parts().1.is_none());
         }
     }
 
@@ -330,18 +267,18 @@ mod tests {
     fn zero_page_size_does_not_continue_even_when_more_entities_exist() {
         let page = PaginatedQueryRet::<(), usize>::new(Vec::new(), true, None, 0);
 
-        assert!(page.drain().1.into_next_query().is_none());
+        assert!(page.into_parts().1.is_none());
     }
 
     #[test]
-    fn drain_consumes_entities_and_keeps_the_requested_size() {
+    fn into_parts_returns_entities_together_with_the_next_query() {
         let page = PaginatedQueryRet::new(vec![(); 7], true, Some(6), 10);
         assert_eq!(page.requested_size(), 10);
 
-        let (entities, continuation) = page.drain();
+        let (entities, next) = page.into_parts();
         assert_eq!(entities.len(), 7);
-        assert_eq!(continuation.requested_size(), 10);
-        assert!(continuation.has_next_page());
-        assert_eq!(continuation.end_cursor(), Some(&6));
+        let next = next.expect("another page exists");
+        assert_eq!(next.first, 10);
+        assert_eq!(next.after, Some(6));
     }
 }

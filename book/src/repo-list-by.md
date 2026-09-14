@@ -99,15 +99,15 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     assert!(!page.entities().is_empty());
 
-    // To collect all entities in a loop you can use `into_next_query()`.
-    // The result keeps the requested size and cursor when the users are moved.
+    // To collect all entities in a loop you can use `into_parts()`, which yields
+    // the page's users alongside the query for the next page.
     let mut query = Default::default();
     let mut all_users = Vec::new();
     loop {
         let res = users.list_by_name(query, Default::default()).await?;
-        let (chunk, continuation) = res.drain();
+        let (chunk, next) = res.into_parts();
         all_users.extend(chunk);
-        if let Some(next_query) = continuation.into_next_query() {
+        if let Some(next_query) = next {
             query = next_query;
         } else {
             break;

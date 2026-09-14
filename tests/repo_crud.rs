@@ -225,9 +225,9 @@ async fn collecting_pages_preserves_requested_size() -> anyhow::Result<()> {
                         .await?
                 };
                 assert_eq!(page.requested_size(), first);
-                let (chunk, continuation) = page.drain();
+                let (chunk, next_page) = page.into_parts();
                 collected.extend(chunk);
-                next = continuation.into_next_query();
+                next = next_page;
                 if let Some(query) = &next {
                     assert_eq!(query.first, first);
                     assert!(query.after.is_some());
@@ -258,7 +258,7 @@ async fn collecting_pages_preserves_requested_size() -> anyhow::Result<()> {
     assert!(zero_page.entities().is_empty());
     assert!(zero_page.has_next_page);
     assert!(zero_page.end_cursor.is_none());
-    assert!(zero_page.drain().1.into_next_query().is_none());
+    assert!(zero_page.into_parts().1.is_none());
 
     Ok(())
 }
@@ -305,9 +305,9 @@ async fn collecting_filtered_pages_crosses_default_page_boundary() -> anyhow::Re
                         query,
                     )
                     .await?;
-                let (chunk, continuation) = page.drain();
+                let (chunk, next_page) = page.into_parts();
                 collected.extend(chunk);
-                next = continuation.into_next_query();
+                next = next_page;
             }
 
             assert_eq!(requests, count.div_ceil(100));

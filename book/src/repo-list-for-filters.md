@@ -207,7 +207,7 @@ async fn main() -> anyhow::Result<()> {
     ).await?;
 
     // Paginate through results
-    if let Some(next_query) = filtered.drain().1.into_next_query() {
+    if let Some(next_query) = filtered.into_parts().1 {
         let next_page = users.list_for_filters(
             UserFilters {
                 name: Some("Alice".to_string()),
