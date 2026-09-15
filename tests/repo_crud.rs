@@ -258,7 +258,7 @@ async fn collecting_pages_preserves_requested_size() -> anyhow::Result<()> {
     assert!(zero_page.entities().is_empty());
     assert!(zero_page.has_next_page);
     assert!(zero_page.end_cursor.is_none());
-    assert!(zero_page.into_parts().1.is_none());
+    assert!(zero_page.into_next_query().is_none());
 
     Ok(())
 }

@@ -130,7 +130,8 @@ impl<T: std::fmt::Debug> Default for PaginatedQueryArgs<T> {
 /// separately from the returned rows. [`Self::entities`] borrows the fetched entities;
 /// [`Self::into_parts`] consumes the page and hands back the entities together with the
 /// [`PaginatedQueryArgs`] for the next page, so the requested size is carried forward
-/// even when a page returns fewer rows than were asked for.
+/// even when a page returns fewer rows than were asked for. [`Self::into_next_query`]
+/// consumes it when only the continuation is wanted.
 ///
 /// # Examples
 ///
@@ -209,6 +210,16 @@ impl<T, C> PaginatedQueryRet<T, C> {
         (self.entities, continuation)
     }
 
+    /// Consumes the page and returns only the continuation, discarding the entities.
+    ///
+    /// Returns `None` after the last page or when the requested size was zero.
+    pub fn into_next_query(self) -> Option<PaginatedQueryArgs<C>>
+    where
+        C: std::fmt::Debug,
+    {
+        self.into_parts().1
+    }
+
     /// Converts the cursor type while preserving the requested size.
     pub fn map_end_cursor<C2>(self, f: impl FnOnce(C) -> C2) -> PaginatedQueryRet<T, C2> {
         PaginatedQueryRet {
@@ -275,7 +286,7 @@ mod tests {
             let page =
                 PaginatedQueryRet::new(vec![(); count], true, Some("last-fetched-entity"), 7);
 
-            let next = page.into_parts().1.expect("another page exists");
+            let next = page.into_next_query().expect("another page exists");
             assert_eq!(next.first, 7);
             assert_eq!(next.after, Some("last-fetched-entity"));
         }
@@ -286,7 +297,7 @@ mod tests {
         for count in [0, 1, 7] {
             let page = PaginatedQueryRet::new(vec![(); count], false, count.checked_sub(1), 7);
 
-            assert!(page.into_parts().1.is_none());
+            assert!(page.into_next_query().is_none());
         }
     }
 
@@ -294,7 +305,7 @@ mod tests {
     fn zero_page_size_does_not_continue_even_when_more_entities_exist() {
         let page = PaginatedQueryRet::<(), usize>::new(Vec::new(), true, None, 0);
 
-        assert!(page.into_parts().1.is_none());
+        assert!(page.into_next_query().is_none());
     }
 
     #[test]
