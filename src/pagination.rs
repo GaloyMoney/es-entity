@@ -126,13 +126,6 @@ impl<T: std::fmt::Debug> Default for PaginatedQueryArgs<T> {
 /// Returned by the [`EsRepo`][crate::EsRepo] functions like `list_by`, `list_for` and `list_for_filters`.
 /// Used with [`PaginatedQueryArgs`] to perform consistent and efficient pagination
 ///
-/// Construction goes through [`Self::new`], which records the requested page size
-/// separately from the returned rows. [`Self::entities`] borrows the fetched entities;
-/// [`Self::into_parts`] consumes the page and hands back the entities together with the
-/// [`PaginatedQueryArgs`] for the next page, so the requested size is carried forward
-/// even when a page returns fewer rows than were asked for. [`Self::into_next_query`]
-/// consumes it when only the continuation is wanted.
-///
 /// # Examples
 ///
 /// ```ignore
@@ -151,9 +144,7 @@ impl<T: std::fmt::Debug> Default for PaginatedQueryArgs<T> {
 /// }
 /// ```
 pub struct PaginatedQueryRet<T, C> {
-    /// The number of entities requested for the page, copied from [`PaginatedQueryArgs::first`].
     requested_size: usize,
-    /// [Vec] for the fetched `entities` by the paginated query
     entities: Vec<T>,
     /// [bool] for indicating if the list has been exhausted or more entities can be fetched
     pub has_next_page: bool,
@@ -162,10 +153,7 @@ pub struct PaginatedQueryRet<T, C> {
 }
 
 impl<T, C> PaginatedQueryRet<T, C> {
-    /// Creates a page result, recording how many entities were requested.
-    ///
-    /// Pass the same `first` that produced this page. It is stored independently of
-    /// [`Self::entities`], so consuming or filtering the entities does not change it.
+    /// `requested_size` must be the `first` that produced this page, not `entities.len()`.
     pub fn new(
         entities: Vec<T>,
         has_next_page: bool,
@@ -180,21 +168,14 @@ impl<T, C> PaginatedQueryRet<T, C> {
         }
     }
 
-    /// The number of entities that were requested for this page.
     pub fn requested_size(&self) -> usize {
         self.requested_size
     }
 
-    /// Borrows the fetched entities without draining them.
     pub fn entities(&self) -> &[T] {
         &self.entities
     }
 
-    /// Moves the entities out of the page and returns the continuation decision
-    /// together with them.
-    ///
-    /// Consuming the page means there is no residual object that still exposes the
-    /// entities: callers take the entities and the next query in the same step.
     pub fn into_parts(self) -> (Vec<T>, Option<PaginatedQueryArgs<C>>)
     where
         C: std::fmt::Debug,
@@ -210,9 +191,6 @@ impl<T, C> PaginatedQueryRet<T, C> {
         (self.entities, continuation)
     }
 
-    /// Consumes the page and returns only the continuation, discarding the entities.
-    ///
-    /// Returns `None` after the last page or when the requested size was zero.
     pub fn into_next_query(self) -> Option<PaginatedQueryArgs<C>>
     where
         C: std::fmt::Debug,
@@ -220,7 +198,6 @@ impl<T, C> PaginatedQueryRet<T, C> {
         self.into_parts().1
     }
 
-    /// Converts the cursor type while preserving the requested size.
     pub fn map_end_cursor<C2>(self, f: impl FnOnce(C) -> C2) -> PaginatedQueryRet<T, C2> {
         PaginatedQueryRet {
             requested_size: self.requested_size,
@@ -230,10 +207,6 @@ impl<T, C> PaginatedQueryRet<T, C> {
         }
     }
 
-    /// Converts the entity type while preserving the pagination metadata.
-    ///
-    /// Adapters that expose a repository page as their own type keep the requested
-    /// size and cursor without restating them.
     pub fn map_entities<T2>(self, f: impl FnMut(T) -> T2) -> PaginatedQueryRet<T2, C> {
         PaginatedQueryRet {
             requested_size: self.requested_size,
@@ -243,8 +216,6 @@ impl<T, C> PaginatedQueryRet<T, C> {
         }
     }
 
-    /// Converts the entity type with a fallible conversion, preserving the pagination
-    /// metadata. The first failing entity aborts the conversion.
     pub fn try_map_entities<T2, E>(
         self,
         f: impl FnMut(T) -> Result<T2, E>,

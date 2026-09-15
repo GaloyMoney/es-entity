@@ -99,8 +99,6 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     assert!(!page.entities().is_empty());
 
-    // To collect all entities in a loop you can use `into_parts()`, which yields
-    // the page's users alongside the query for the next page.
     let mut query = Default::default();
     let mut all_users = Vec::new();
     loop {
