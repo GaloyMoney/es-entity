@@ -1,3 +1,15 @@
+# [cala release v0.13.0](https://github.com/GaloyMoney/cala/releases/tag/0.13.0)
+
+
+
+### Bug Fixes
+
+- [**breaking**] Gate PaginatedQueryRet construction and take (#229)
+
+### Miscellaneous Tasks
+
+- Bump the all-dependencies group with 4 updates (#225)
+
 # [cala release v0.12.21](https://github.com/GaloyMoney/cala/releases/tag/0.12.21)
 
 
