@@ -91,7 +91,7 @@ async fn sargable_scope_column_filter_combinations() -> anyhow::Result<()> {
     assert!(
         ids_a
             .iter()
-            .all(|id| ret.entities.iter().any(|c| c.id == *id))
+            .all(|id| ret.entities().iter().any(|c| c.id == *id))
     );
 
     // All + Some(a)
@@ -106,8 +106,8 @@ async fn sargable_scope_column_filter_combinations() -> anyhow::Result<()> {
             query(),
         )
         .await?;
-    assert_eq!(ret.entities.len(), 2);
-    assert!(ret.entities.iter().all(|c| c.partner_id == partner_a));
+    assert_eq!(ret.entities().len(), 2);
+    assert!(ret.entities().iter().all(|c| c.partner_id == partner_a));
 
     // PartnerId(a) + Some(a): match — the conjunct is satisfiable, same rows
     let ret = contacts
@@ -121,7 +121,7 @@ async fn sargable_scope_column_filter_combinations() -> anyhow::Result<()> {
             query(),
         )
         .await?;
-    assert_eq!(ret.entities.len(), 2);
+    assert_eq!(ret.entities().len(), 2);
 
     // PartnerId(a) + Some(b): mismatch — contradictory conjunct, empty
     let ret = contacts
@@ -135,7 +135,7 @@ async fn sargable_scope_column_filter_combinations() -> anyhow::Result<()> {
             query(),
         )
         .await?;
-    assert!(ret.entities.is_empty());
+    assert!(ret.entities().is_empty());
     assert!(!ret.has_next_page);
 
     // multi-filter through the specialized scoped arms (partner_id filter,
@@ -151,8 +151,8 @@ async fn sargable_scope_column_filter_combinations() -> anyhow::Result<()> {
             query(),
         )
         .await?;
-    assert_eq!(ret.entities.len(), 1);
-    assert_eq!(ret.entities[0].status, "active");
+    assert_eq!(ret.entities().len(), 1);
+    assert_eq!(ret.entities()[0].status, "active");
     let ret = contacts
         .list_for_filters(
             partner_a,
@@ -164,7 +164,7 @@ async fn sargable_scope_column_filter_combinations() -> anyhow::Result<()> {
             query(),
         )
         .await?;
-    assert!(ret.entities.is_empty());
+    assert!(ret.entities().is_empty());
 
     Ok(())
 }
@@ -201,8 +201,8 @@ async fn sargable_scope_column_filter_cursor_pages() -> anyhow::Result<()> {
             )
             .await?;
         pages += 1;
-        assert!(ret.entities.iter().all(|c| c.partner_id == partner_a));
-        collected.extend(ret.entities.iter().map(|c| c.id));
+        assert!(ret.entities().iter().all(|c| c.partner_id == partner_a));
+        collected.extend(ret.entities().iter().map(|c| c.id));
         if !ret.has_next_page {
             break;
         }

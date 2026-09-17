@@ -89,12 +89,12 @@ async fn list_for_filters_none_skips_filter() -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(
-        result.entities.len(),
+        result.entities().len(),
         2,
         "Expected both tasks (None means skip filter), got {}",
-        result.entities.len()
+        result.entities().len()
     );
-    let ids: Vec<_> = result.entities.iter().map(|t| t.id).collect();
+    let ids: Vec<_> = result.entities().iter().map(|t| t.id).collect();
     assert!(ids.contains(&task_with_ws.id));
     assert!(ids.contains(&task_null_ws.id));
 
@@ -152,9 +152,9 @@ async fn list_for_filters_some_value_filters_correctly() -> anyhow::Result<()> {
         )
         .await?;
 
-    assert_eq!(result.entities.len(), 1);
-    assert_eq!(result.entities[0].id, task_with_ws.id);
-    assert!(result.entities.iter().all(|t| t.id != task_null_ws.id));
+    assert_eq!(result.entities().len(), 1);
+    assert_eq!(result.entities()[0].id, task_with_ws.id);
+    assert!(result.entities().iter().all(|t| t.id != task_null_ws.id));
 
     Ok(())
 }
@@ -208,11 +208,11 @@ async fn list_for_column_none_matches_only_null_rows() -> anyhow::Result<()> {
         .await?;
 
     assert!(
-        result.entities.iter().any(|t| t.id == task_null_ws.id),
+        result.entities().iter().any(|t| t.id == task_null_ws.id),
         "Task with NULL workspace_id should match a None filter"
     );
     assert!(
-        result.entities.iter().all(|t| t.id != task_with_ws.id),
+        result.entities().iter().all(|t| t.id != task_with_ws.id),
         "Task with non-NULL workspace_id should NOT match a None filter"
     );
 
@@ -262,9 +262,9 @@ async fn list_for_column_some_excludes_null_rows() -> anyhow::Result<()> {
         )
         .await?;
 
-    assert_eq!(result.entities.len(), 1);
-    assert_eq!(result.entities[0].id, task_with_ws.id);
-    assert!(result.entities.iter().all(|t| t.id != task_null_ws.id));
+    assert_eq!(result.entities().len(), 1);
+    assert_eq!(result.entities()[0].id, task_with_ws.id);
+    assert!(result.entities().iter().all(|t| t.id != task_null_ws.id));
 
     Ok(())
 }
@@ -322,14 +322,14 @@ async fn list_for_filters_some_none_matches_only_null_rows() -> anyhow::Result<(
         .await?;
 
     assert_eq!(
-        result.entities.len(),
+        result.entities().len(),
         1,
         "Expected only the NULL-workspace task, got {}",
-        result.entities.len()
+        result.entities().len()
     );
-    assert_eq!(result.entities[0].id, task_null_ws.id);
+    assert_eq!(result.entities()[0].id, task_null_ws.id);
     assert!(
-        result.entities.iter().all(|t| t.id != _task_with_ws.id),
+        result.entities().iter().all(|t| t.id != _task_with_ws.id),
         "Task with non-NULL workspace_id should NOT match a Some(None) filter"
     );
 

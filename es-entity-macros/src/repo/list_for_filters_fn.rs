@@ -933,11 +933,7 @@ impl<'a> ListForFiltersFn<'a> {
 
                     let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
 
-                    Ok(es_entity::PaginatedQueryRet {
-                        entities,
-                        has_next_page,
-                        end_cursor,
-                    })
+                    Ok(es_entity::PaginatedQueryRet::new(entities, has_next_page, end_cursor, first))
                 }.await;
 
                 #error_recording
@@ -996,16 +992,7 @@ impl ToTokens for ListForFiltersFn<'_> {
                             let after = after.map(#cursor_mod::#inner_cursor_ident::try_from).transpose()?;
                             let query = es_entity::PaginatedQueryArgs { first, after };
 
-                            let es_entity::PaginatedQueryRet {
-                                entities,
-                                has_next_page,
-                                end_cursor,
-                            } = #proxy_body;
-                            es_entity::PaginatedQueryRet {
-                                entities,
-                                has_next_page,
-                                end_cursor: end_cursor.map(#cursor_mod::#cursor_ident::from)
-                            }
+                            #proxy_body.map_end_cursor(#cursor_mod::#cursor_ident::from)
                         }
                     }
                 })
@@ -1048,7 +1035,7 @@ impl ToTokens for ListForFiltersFn<'_> {
                         tracing::Span::current().record("has_cursor", has_cursor);
                     },
                     quote! {
-                        let result_ids: Vec<_> = res.entities.iter().map(|e| &e.id).collect();
+                        let result_ids: Vec<_> = res.entities().iter().map(|e| &e.id).collect();
                         tracing::Span::current().record("count", result_ids.len());
                         tracing::Span::current().record("has_next_page", res.has_next_page);
                         tracing::Span::current().record("ids", tracing::field::debug(&result_ids));
@@ -1370,11 +1357,7 @@ mod tests {
 
                     let end_cursor = entities.last().map(cursor_mod::OrderByIdCursor::from);
 
-                    Ok(es_entity::PaginatedQueryRet {
-                        entities,
-                        has_next_page,
-                        end_cursor,
-                    })
+                    Ok(es_entity::PaginatedQueryRet::new(entities, has_next_page, end_cursor, first))
                 }.await;
 
                 __result
@@ -1410,11 +1393,7 @@ mod tests {
                             let after = after.map(cursor_mod::OrderByIdCursor::try_from).transpose()?;
                             let query = es_entity::PaginatedQueryArgs { first, after };
 
-                            let es_entity::PaginatedQueryRet {
-                                entities,
-                                has_next_page,
-                                end_cursor,
-                            } = if filters.customer_id.is_none() && filters.status.is_none() {
+                            if filters.customer_id.is_none() && filters.status.is_none() {
                                 self.list_by_id_in_op(op, query, direction).await?
                             } else if filters.status.is_none() {
                                 self.list_for_customer_id_by_id_in_op(op, filters.customer_id.unwrap(), query, direction).await?
@@ -1422,12 +1401,8 @@ mod tests {
                                 self.list_for_status_by_id_in_op(op, filters.status.unwrap(), query, direction).await?
                             } else {
                                 self.list_for_filters_by_id_in_op(op, filters, query, direction).await?
-                            };
-                            es_entity::PaginatedQueryRet {
-                                entities,
-                                has_next_page,
-                                end_cursor: end_cursor.map(cursor_mod::OrderCursor::from)
                             }
+                            .map_end_cursor(cursor_mod::OrderCursor::from)
                         }
                     };
 

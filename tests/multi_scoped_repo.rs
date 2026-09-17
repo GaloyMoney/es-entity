@@ -196,7 +196,7 @@ async fn multi_scoped_lists_paginate_per_dimension() -> anyhow::Result<()> {
                 ListDirection::Descending,
             )
             .await?;
-        collected.extend(ret.entities.iter().map(|f| f.id));
+        collected.extend(ret.entities().iter().map(|f| f.id));
         if !ret.has_next_page {
             break;
         }
@@ -218,8 +218,8 @@ async fn multi_scoped_lists_paginate_per_dimension() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert_eq!(ret.entities.len(), 2);
-    assert!(ret.entities.iter().all(|f| f.customer_id == customer_x));
+    assert_eq!(ret.entities().len(), 2);
+    assert!(ret.entities().iter().all(|f| f.customer_id == customer_x));
 
     Ok(())
 }
@@ -275,7 +275,7 @@ async fn multi_scoped_bound_view() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert!(ret.entities.iter().all(|f| f.customer_id == customer_x));
+    assert!(ret.entities().iter().all(|f| f.customer_id == customer_x));
 
     Ok(())
 }
@@ -300,9 +300,9 @@ async fn multi_scoped_filters_compose_per_dimension() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert_eq!(ret.entities.len(), 1);
-    assert_eq!(ret.entities[0].status, "active");
-    assert_eq!(ret.entities[0].customer_id, customer_x);
+    assert_eq!(ret.entities().len(), 1);
+    assert_eq!(ret.entities()[0].status, "active");
+    assert_eq!(ret.entities()[0].customer_id, customer_x);
 
     Ok(())
 }
@@ -346,7 +346,7 @@ async fn cursor_replay_across_dimensions_never_widens() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert!(ret.entities.iter().all(|f| f.customer_id == customer_x));
+    assert!(ret.entities().iter().all(|f| f.customer_id == customer_x));
 
     Ok(())
 }

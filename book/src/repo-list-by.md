@@ -85,11 +85,7 @@ async fn main() -> anyhow::Result<()> {
     let new_user = NewUser { id: UserId::new(), name: "Fred".to_string() };
     users.create(new_user).await?;
 
-    let PaginatedQueryRet {
-        entities,
-        has_next_page: _,
-        end_cursor: _,
-    } = users
+    let page = users
         .list_by_id(
             PaginatedQueryArgs {
                 first: 5,
@@ -101,16 +97,15 @@ async fn main() -> anyhow::Result<()> {
             ListDirection::Ascending,
         )
         .await?;
-    assert!(!entities.is_empty());
+    assert!(!page.entities().is_empty());
 
-    // To collect all entities in a loop you can use `into_next_query()`.
-    // This is not recommended - just to highlight the API.
     let mut query = Default::default();
     let mut all_users = Vec::new();
     loop {
-        let mut res = users.list_by_name(query, Default::default()).await?;
-        all_users.extend(res.entities.drain(..));
-        if let Some(next_query) = res.into_next_query() {
+        let res = users.list_by_name(query, Default::default()).await?;
+        let (chunk, next) = res.into_parts();
+        all_users.extend(chunk);
+        if let Some(next_query) = next {
             query = next_query;
         } else {
             break;

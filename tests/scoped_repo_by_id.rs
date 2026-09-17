@@ -147,8 +147,8 @@ async fn id_scoped_lists_return_own_row() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert_eq!(ret.entities.len(), 1);
-    assert_eq!(ret.entities[0].id, partner_a);
+    assert_eq!(ret.entities().len(), 1);
+    assert_eq!(ret.entities()[0].id, partner_a);
     assert!(!ret.has_next_page);
 
     // unified dispatch: no filter routes through the (scoped) list_by proxy
@@ -166,8 +166,8 @@ async fn id_scoped_lists_return_own_row() -> anyhow::Result<()> {
             },
         )
         .await?;
-    assert_eq!(ret.entities.len(), 1);
-    assert_eq!(ret.entities[0].id, partner_a);
+    assert_eq!(ret.entities().len(), 1);
+    assert_eq!(ret.entities()[0].id, partner_a);
 
     // All sees both rows (fresh seeds are newest under Descending).
     let ret = partners
@@ -180,8 +180,8 @@ async fn id_scoped_lists_return_own_row() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert!(ret.entities.iter().any(|p| p.id == partner_a));
-    assert!(ret.entities.iter().any(|p| p.id == partner_b));
+    assert!(ret.entities().iter().any(|p| p.id == partner_a));
+    assert!(ret.entities().iter().any(|p| p.id == partner_b));
 
     Ok(())
 }
@@ -212,7 +212,7 @@ async fn id_scoped_view_delegates() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    assert_eq!(ret.entities.len(), 1);
+    assert_eq!(ret.entities().len(), 1);
 
     // `_in_op` variants through the view
     let mut op = partners.begin_op().await?;
