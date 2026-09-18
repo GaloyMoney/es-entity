@@ -120,6 +120,25 @@ impl<T: std::fmt::Debug> Default for PaginatedQueryArgs<T> {
     }
 }
 
+/// A continuation to the next page, carrying the cursor it resumes from.
+///
+/// Unlike [`PaginatedQueryArgs`], whose cursor is optional because a query may
+/// start from the beginning, a continuation always has one.
+#[derive(Debug)]
+pub struct Continuation<C> {
+    pub after: C,
+    pub first: usize,
+}
+
+impl<C: std::fmt::Debug> From<Continuation<C>> for PaginatedQueryArgs<C> {
+    fn from(continuation: Continuation<C>) -> Self {
+        Self {
+            first: continuation.first,
+            after: Some(continuation.after),
+        }
+    }
+}
+
 /// Return type for paginated queries containing entities and pagination metadata
 ///
 /// `PaginatedQueryRet` contains the fetched entities and utilities for continuing pagination.
@@ -143,6 +162,7 @@ impl<T: std::fmt::Debug> Default for PaginatedQueryArgs<T> {
 ///     }
 /// }
 /// ```
+#[must_use = "pagination results may contain another page"]
 pub struct PaginatedQueryRet<T, C> {
     requested_size: usize,
     entities: Vec<T>,
@@ -150,6 +170,17 @@ pub struct PaginatedQueryRet<T, C> {
     pub has_next_page: bool,
     /// cursor on the last entity fetched to continue paginated queries.
     pub end_cursor: Option<C>,
+}
+
+#[must_use = "the next page must be handled explicitly"]
+pub enum Page<T, C: std::fmt::Debug> {
+    Last {
+        entities: Vec<T>,
+    },
+    HasNext {
+        entities: Vec<T>,
+        next: Continuation<C>,
+    },
 }
 
 impl<T, C> PaginatedQueryRet<T, C> {
@@ -176,19 +207,40 @@ impl<T, C> PaginatedQueryRet<T, C> {
         &self.entities
     }
 
+    pub fn has_next_page(&self) -> bool {
+        self.has_next_page
+    }
+
+    pub fn end_cursor(&self) -> Option<&C> {
+        self.end_cursor.as_ref()
+    }
+
+    pub fn into_page(self) -> Page<T, C>
+    where
+        C: std::fmt::Debug,
+    {
+        match self.end_cursor {
+            Some(after) if self.has_next_page && self.requested_size > 0 => Page::HasNext {
+                entities: self.entities,
+                next: Continuation {
+                    after,
+                    first: self.requested_size,
+                },
+            },
+            _ => Page::Last {
+                entities: self.entities,
+            },
+        }
+    }
+
     pub fn into_parts(self) -> (Vec<T>, Option<PaginatedQueryArgs<C>>)
     where
         C: std::fmt::Debug,
     {
-        let continuation = if self.has_next_page && self.requested_size > 0 {
-            Some(PaginatedQueryArgs {
-                first: self.requested_size,
-                after: self.end_cursor,
-            })
-        } else {
-            None
-        };
-        (self.entities, continuation)
+        match self.into_page() {
+            Page::Last { entities } => (entities, None),
+            Page::HasNext { entities, next } => (entities, Some(next.into())),
+        }
     }
 
     pub fn into_next_query(self) -> Option<PaginatedQueryArgs<C>>
@@ -275,6 +327,26 @@ mod tests {
     #[test]
     fn zero_page_size_does_not_continue_even_when_more_entities_exist() {
         let page = PaginatedQueryRet::<(), usize>::new(Vec::new(), true, None, 0);
+
+        assert!(page.into_next_query().is_none());
+    }
+
+    #[test]
+    fn into_page_distinguishes_last_page_from_continuation() {
+        let last = PaginatedQueryRet::new(vec![1], false, Some(1), 10);
+        assert!(matches!(last.into_page(), Page::Last { entities } if entities == [1]));
+
+        let continued = PaginatedQueryRet::new(vec![1, 2], true, Some(2), 2);
+        assert!(matches!(
+            continued.into_page(),
+            Page::HasNext { entities, next }
+                if entities == [1, 2] && next.first == 2 && next.after == 2
+        ));
+    }
+
+    #[test]
+    fn a_continuation_without_a_cursor_is_not_a_page() {
+        let page = PaginatedQueryRet::<(), usize>::new(vec![()], true, None, 10);
 
         assert!(page.into_next_query().is_none());
     }
