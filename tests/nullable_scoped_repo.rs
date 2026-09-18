@@ -175,10 +175,10 @@ async fn list_excludes_null_scoped_rows_across_pagination() -> anyhow::Result<()
             )
             .await?;
         collected.extend(ret.entities().iter().map(|p| p.id));
-        if !ret.has_next_page {
+        if !ret.has_next_page() {
             break;
         }
-        after = ret.end_cursor;
+        after = ret.into_next_query().and_then(|query| query.after);
     }
 
     let expected: std::collections::HashSet<_> = [owned_a, owned_b].into_iter().collect();

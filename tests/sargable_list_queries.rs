@@ -157,10 +157,10 @@ async fn list_for_filters_matches_reference_for_all_combos() -> anyhow::Result<(
                                 )
                                 .await?;
                             actual.extend(ret.entities().iter().map(|t| uuid::Uuid::from(t.id)));
-                            if !ret.has_next_page {
+                            if !ret.has_next_page() {
                                 break;
                             }
-                            after = ret.end_cursor;
+                            after = ret.into_next_query().and_then(|query| query.after);
                             assert!(after.is_some(), "has_next_page without end_cursor");
                         }
                         actual.retain(|id| truth_ids.contains(id));
@@ -270,10 +270,10 @@ async fn list_by_score_paginates_through_nulls() -> anyhow::Result<()> {
                 .await?;
             pages += 1;
             actual.extend(ret.entities().iter().map(|t| uuid::Uuid::from(t.id)));
-            if !ret.has_next_page {
+            if !ret.has_next_page() {
                 break;
             }
-            after = ret.end_cursor;
+            after = ret.into_next_query().and_then(|query| query.after);
             assert!(after.is_some(), "has_next_page without end_cursor");
         }
         actual.retain(|id| truth_ids.contains(id));
@@ -319,10 +319,10 @@ async fn list_for_account_id_by_created_at_paginates() -> anyhow::Result<()> {
             )
             .await?;
         actual.extend(ret.entities().iter().map(|t| uuid::Uuid::from(t.id)));
-        if !ret.has_next_page {
+        if !ret.has_next_page() {
             break;
         }
-        after = ret.end_cursor;
+        after = ret.into_next_query().and_then(|query| query.after);
     }
 
     assert_eq!(actual, expected);
