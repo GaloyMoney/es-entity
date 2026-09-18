@@ -200,7 +200,7 @@ async fn multi_scoped_lists_paginate_per_dimension() -> anyhow::Result<()> {
         if !ret.has_next_page() {
             break;
         }
-        after = ret.into_next_query().and_then(|query| query.after);
+        after = ret.into_end_cursor();
     }
     let expected: std::collections::HashSet<_> =
         ids_x.iter().chain(ids_y.iter()).copied().collect();
@@ -332,10 +332,7 @@ async fn cursor_replay_across_dimensions_never_widens() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    let cursor = ret
-        .into_next_query()
-        .and_then(|query| query.after)
-        .expect("expected a next page");
+    let cursor = ret.into_end_cursor().expect("expected an end cursor");
 
     // replay it under CustomerId(x): every row returned must still belong to
     // customer_x — the foreign cursor repositions but cannot leak rows
