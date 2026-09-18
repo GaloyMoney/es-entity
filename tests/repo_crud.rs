@@ -180,9 +180,7 @@ async fn list_for_filters() -> anyhow::Result<()> {
             },
             PaginatedQueryArgs {
                 first: 1,
-                after: paginated_result
-                    .into_next_query()
-                    .and_then(|query| query.after),
+                after: paginated_result.into_end_cursor(),
             },
         )
         .await?;

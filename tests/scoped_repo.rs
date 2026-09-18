@@ -195,7 +195,7 @@ async fn scoped_list_by_paginates_within_scope() -> anyhow::Result<()> {
         if !ret.has_next_page() {
             break;
         }
-        after = ret.into_next_query().and_then(|query| query.after);
+        after = ret.into_end_cursor();
     }
     assert!(pages >= 3, "expected pagination across pages, got {pages}");
     assert_eq!(collected.len(), 5);
@@ -317,7 +317,7 @@ async fn foreign_cursor_cannot_leak_rows() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    let cursor_from_a = page_a.into_next_query().and_then(|query| query.after);
+    let cursor_from_a = page_a.into_end_cursor();
 
     let ret = contacts
         .list_by_created_at(
@@ -712,7 +712,7 @@ async fn scope_column_filter_cursor_pagination() -> anyhow::Result<()> {
         if !ret.has_next_page() {
             break;
         }
-        after = ret.into_next_query().and_then(|query| query.after);
+        after = ret.into_end_cursor();
     }
     assert!(pages >= 3, "expected pagination across pages, got {pages}");
     let expected: std::collections::HashSet<_> = ids_a.into_iter().collect();
@@ -737,7 +737,7 @@ async fn scope_column_filter_cursor_pagination() -> anyhow::Result<()> {
             partner_a,
             PaginatedQueryArgs {
                 first: 100,
-                after: cursor_page.into_next_query().and_then(|query| query.after),
+                after: cursor_page.into_end_cursor(),
             },
             ListDirection::Descending,
         )

@@ -240,6 +240,10 @@ impl<T, C> PaginatedQueryRet<T, C> {
         }
     }
 
+    pub fn into_end_cursor(self) -> Option<C> {
+        self.end_cursor
+    }
+
     pub fn map_end_cursor<C2>(self, f: impl FnOnce(C) -> C2) -> PaginatedQueryRet<T, C2> {
         PaginatedQueryRet {
             requested_size: self.requested_size,
@@ -320,6 +324,14 @@ mod tests {
         let page = PaginatedQueryRet::<(), usize>::new(Vec::new(), true, None, 0);
 
         assert!(page.into_next_query().is_none());
+    }
+
+    #[test]
+    fn owned_end_cursor_is_not_a_continuation_cursor() {
+        let page = PaginatedQueryRet::new(vec![()], false, Some(7), 10);
+
+        assert!(!page.has_next_page());
+        assert_eq!(page.into_end_cursor(), Some(7));
     }
 
     #[test]

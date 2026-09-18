@@ -206,7 +206,7 @@ async fn sargable_scope_column_filter_cursor_pages() -> anyhow::Result<()> {
         if !ret.has_next_page() {
             break;
         }
-        after = ret.into_next_query().and_then(|query| query.after);
+        after = ret.into_end_cursor();
     }
     assert!(pages >= 3, "expected pagination across pages, got {pages}");
     let expected: std::collections::HashSet<_> = ids_a.into_iter().collect();
