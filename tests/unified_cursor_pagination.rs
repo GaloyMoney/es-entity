@@ -100,9 +100,19 @@ async fn paginate(
     while let Some(query) = next.take() {
         let ret = repo.list_by_score(query, direction).await?;
         assert_eq!(ret.requested_size(), first);
-        let (chunk, next_page) = ret.into_parts();
-        out.extend(chunk.into_iter().map(|t| uuid::Uuid::from(t.id)));
-        next = next_page;
+        match ret.into_page() {
+            Page::Last { entities } => {
+                out.extend(entities.into_iter().map(|t| uuid::Uuid::from(t.id)));
+                next = None;
+            }
+            Page::HasNext {
+                entities,
+                next: query,
+            } => {
+                out.extend(entities.into_iter().map(|t| uuid::Uuid::from(t.id)));
+                next = Some(query.into());
+            }
+        }
         if let Some(query) = &next {
             assert_eq!(query.first, first);
             assert!(query.after.is_some(), "has_next_page without end_cursor");

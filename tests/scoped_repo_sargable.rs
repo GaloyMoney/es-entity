@@ -136,7 +136,7 @@ async fn sargable_scope_column_filter_combinations() -> anyhow::Result<()> {
         )
         .await?;
     assert!(ret.entities().is_empty());
-    assert!(!ret.has_next_page);
+    assert!(!ret.has_next_page());
 
     // multi-filter through the specialized scoped arms (partner_id filter,
     // status filter and the scope conjunct all present)
@@ -203,10 +203,10 @@ async fn sargable_scope_column_filter_cursor_pages() -> anyhow::Result<()> {
         pages += 1;
         assert!(ret.entities().iter().all(|c| c.partner_id == partner_a));
         collected.extend(ret.entities().iter().map(|c| c.id));
-        if !ret.has_next_page {
+        if !ret.has_next_page() {
             break;
         }
-        after = ret.end_cursor;
+        after = ret.into_next_query().and_then(|query| query.after);
     }
     assert!(pages >= 3, "expected pagination across pages, got {pages}");
     let expected: std::collections::HashSet<_> = ids_a.into_iter().collect();

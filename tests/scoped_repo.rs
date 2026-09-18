@@ -192,10 +192,10 @@ async fn scoped_list_by_paginates_within_scope() -> anyhow::Result<()> {
             );
         }
         collected.extend(ret.entities().iter().map(|c| c.id));
-        if !ret.has_next_page {
+        if !ret.has_next_page() {
             break;
         }
-        after = ret.end_cursor;
+        after = ret.into_next_query().and_then(|query| query.after);
     }
     assert!(pages >= 3, "expected pagination across pages, got {pages}");
     assert_eq!(collected.len(), 5);
@@ -317,7 +317,7 @@ async fn foreign_cursor_cannot_leak_rows() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    let cursor_from_a = page_a.end_cursor;
+    let cursor_from_a = page_a.into_next_query().and_then(|query| query.after);
 
     let ret = contacts
         .list_by_created_at(
@@ -597,8 +597,8 @@ async fn scope_column_filter_combinations() -> anyhow::Result<()> {
         .list_for_filters(partner_a, partner_filter(partner_b), sort(), query())
         .await?;
     assert!(ret.entities().is_empty());
-    assert!(!ret.has_next_page);
-    assert!(ret.end_cursor.is_none());
+    assert!(!ret.has_next_page());
+    assert!(ret.end_cursor().is_none());
 
     // dedicated single-filter fn composes the same way
     let ret = contacts
@@ -709,10 +709,10 @@ async fn scope_column_filter_cursor_pagination() -> anyhow::Result<()> {
             );
         }
         collected.extend(ret.entities().iter().map(|c| c.id));
-        if !ret.has_next_page {
+        if !ret.has_next_page() {
             break;
         }
-        after = ret.end_cursor;
+        after = ret.into_next_query().and_then(|query| query.after);
     }
     assert!(pages >= 3, "expected pagination across pages, got {pages}");
     let expected: std::collections::HashSet<_> = ids_a.into_iter().collect();
@@ -737,13 +737,13 @@ async fn scope_column_filter_cursor_pagination() -> anyhow::Result<()> {
             partner_a,
             PaginatedQueryArgs {
                 first: 100,
-                after: cursor_page.end_cursor,
+                after: cursor_page.into_next_query().and_then(|query| query.after),
             },
             ListDirection::Descending,
         )
         .await?;
     assert!(ret.entities().is_empty());
-    assert!(!ret.has_next_page);
+    assert!(!ret.has_next_page());
 
     Ok(())
 }
