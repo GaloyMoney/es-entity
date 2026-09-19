@@ -1100,9 +1100,12 @@ impl<'a> ListForFiltersFn<'a> {
                     #post_hydrate_check
                     #record_results
 
-                    let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
-
-                    Ok(es_entity::PaginatedQueryRet::new(entities, has_next_page, end_cursor, first))
+                    let next_page = if has_next_page {
+                        entities.last().map(#cursor_mod::#cursor_ident::from)
+                    } else {
+                        None
+                    };
+                    Ok(es_entity::PaginatedQueryRet::new(entities, next_page, first))
                 }.await;
 
                 #error_recording
@@ -1161,7 +1164,7 @@ impl ToTokens for ListForFiltersFn<'_> {
                             let after = after.map(#cursor_mod::#inner_cursor_ident::try_from).transpose()?;
                             let query = es_entity::PaginatedQueryArgs { first, after };
 
-                            #proxy_body.map_end_cursor(#cursor_mod::#cursor_ident::from)
+                            #proxy_body.map_next_cursor(#cursor_mod::#cursor_ident::from)
                         }
                     }
                 })
@@ -1525,9 +1528,12 @@ mod tests {
                         }
                     };
 
-                    let end_cursor = entities.last().map(cursor_mod::OrderByIdCursor::from);
-
-                    Ok(es_entity::PaginatedQueryRet::new(entities, has_next_page, end_cursor, first))
+                    let next_page = if has_next_page {
+                        entities.last().map(cursor_mod::OrderByIdCursor::from)
+                    } else {
+                        None
+                    };
+                    Ok(es_entity::PaginatedQueryRet::new(entities, next_page, first))
                 }.await;
 
                 __result
@@ -1572,7 +1578,7 @@ mod tests {
                             } else {
                                 self.list_for_filters_by_id_in_op(op, filters, query, direction).await?
                             }
-                            .map_end_cursor(cursor_mod::OrderCursor::from)
+                            .map_next_cursor(cursor_mod::OrderCursor::from)
                         }
                     };
 
