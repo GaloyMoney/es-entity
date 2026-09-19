@@ -103,12 +103,15 @@ async fn main() -> anyhow::Result<()> {
     let mut all_users = Vec::new();
     loop {
         let res = users.list_by_name(query, Default::default()).await?;
-        let (chunk, next) = res.into_parts();
-        all_users.extend(chunk);
-        if let Some(next_query) = next {
-            query = next_query;
-        } else {
-            break;
+        match res.into_page() {
+            Page::Last { entities } => {
+                all_users.extend(entities);
+                break;
+            }
+            Page::HasNext { entities, next } => {
+                all_users.extend(entities);
+                query = next.into();
+            }
         }
     }
     assert!(!all_users.is_empty());
