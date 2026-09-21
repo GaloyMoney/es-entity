@@ -268,7 +268,7 @@ async fn value_virtual_paginates_correctly() -> anyhow::Result<()> {
                 query,
             )
             .await?;
-        let has_next_page = page.has_next_page;
+        let has_next_page = page.has_next_page();
         seen.extend(page.entities().iter().map(|e| e.id));
         match page.into_next_query() {
             Some(next) => {
