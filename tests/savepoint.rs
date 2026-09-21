@@ -1010,7 +1010,7 @@ async fn nested_savepoint_under_force_executed_hook_refuses_hooks() -> anyhow::R
     let supported = Arc::new(Mutex::new(None));
     let accepted = Arc::new(Mutex::new(None));
 
-    let mut op = DbOp::init(&pool).await?;
+    let op = DbOp::init(&pool).await?;
     let hook = NestingForceExecutedHook {
         probe: probe.clone(),
         accepted_at_depth_2: accepted.clone(),

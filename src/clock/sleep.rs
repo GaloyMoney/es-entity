@@ -24,7 +24,7 @@ fn next_sleep_id() -> u64 {
 
 /// A future that completes after a duration has elapsed on the clock.
 ///
-/// Created by [`ClockHandle::sleep`](crate::ClockHandle::sleep).
+/// Created by [`ClockHandle::sleep`](crate::clock::ClockHandle::sleep).
 #[pin_project(PinnedDrop)]
 pub struct ClockSleep {
     #[pin]
@@ -134,7 +134,7 @@ impl PinnedDrop for ClockSleep {
 
 /// A future that completes with a timeout after a duration has elapsed on the clock.
 ///
-/// Created by [`ClockHandle::timeout`](crate::ClockHandle::timeout).
+/// Created by [`ClockHandle::timeout`](crate::clock::ClockHandle::timeout).
 #[pin_project]
 pub struct ClockTimeout<F> {
     #[pin]

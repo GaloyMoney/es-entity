@@ -136,7 +136,7 @@ impl ClockHandle {
     /// Sleep for the given duration with coalesceable wake-up behavior.
     ///
     /// Unlike [`sleep`](Self::sleep), coalesceable sleeps are processed **once**
-    /// at the end of [`advance()`](crate::ClockController::advance) rather than
+    /// at the end of [`advance()`](crate::clock::ClockController::advance) rather than
     /// at every intermediate boundary. This prevents housekeeping loops from
     /// waking repeatedly during large time advances.
     ///

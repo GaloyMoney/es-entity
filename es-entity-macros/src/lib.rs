@@ -47,14 +47,14 @@ pub fn retry_on_concurrent_modification(args: TokenStream, input: TokenStream) -
 /// Automatically captures function arguments into the event context.
 ///
 /// This attribute macro wraps functions to automatically insert specified arguments
-/// into the current [`EventContext`](es_entity::context::EventContext), making them
+/// into the current `EventContext` (`es_entity::context::EventContext`), making them
 /// available for audit trails when events are persisted.
 ///
 /// # Behavior
 ///
-/// - **For async functions**: Uses the [`WithEventContext`](es_entity::context::WithEventContext)
-///   trait to propagate context across async boundaries
-/// - **For sync functions**: Uses [`EventContext::fork()`](es_entity::context::EventContext::fork)
+/// - **For async functions**: Uses the `WithEventContext` trait
+///   (`es_entity::context::WithEventContext`) to propagate context across async boundaries
+/// - **For sync functions**: Uses `EventContext::fork()` (`es_entity::context::EventContext::fork`)
 ///   to create an isolated child context
 ///
 /// # Syntax
@@ -119,8 +119,8 @@ pub fn retry_on_concurrent_modification(args: TokenStream, input: TokenStream) -
 ///
 /// # See Also
 ///
-/// - [`EventContext`](es_entity::context::EventContext) - The context management system
-/// - [`WithEventContext`](es_entity::context::WithEventContext) - Async context propagation
+/// - `EventContext` (`es_entity::context::EventContext`) - The context management system
+/// - `WithEventContext` (`es_entity::context::WithEventContext`) - Async context propagation
 /// - Event Context chapter in the book for complete usage patterns
 #[proc_macro_attribute]
 pub fn es_event_context(args: TokenStream, input: TokenStream) -> TokenStream {

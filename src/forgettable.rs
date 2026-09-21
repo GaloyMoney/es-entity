@@ -21,8 +21,8 @@ use std::{fmt, hash, ops::Deref};
 /// - **Both** set and forgotten values serialize as `null` to prevent data
 ///   leakage when events are serialized to secondary stores.
 /// - Deserializing `null` produces a forgotten value, non-null produces a set value.
-/// - Real values are extracted via [`__extract_payload_value`] **before** serde runs,
-///   and stored in the forgettable payloads table.
+/// - Real values are extracted via `__extract_payload_value` (internal, `#[doc(hidden)]`)
+///   **before** serde runs, and stored in the forgettable payloads table.
 ///
 /// # JSON Schema
 ///

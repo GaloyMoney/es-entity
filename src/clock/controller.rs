@@ -9,8 +9,8 @@ use super::manual::ManualClock;
 /// This is only available for manual clocks and provides methods to
 /// advance time and inspect pending wake events.
 ///
-/// Created alongside a [`ClockHandle`](crate::ClockHandle) via
-/// [`ClockHandle::manual()`](crate::ClockHandle::manual).
+/// Created alongside a [`ClockHandle`](crate::clock::ClockHandle) via
+/// [`ClockHandle::manual()`](crate::clock::ClockHandle::manual).
 #[derive(Clone)]
 pub struct ClockController {
     pub(crate) clock: Arc<ManualClock>,
