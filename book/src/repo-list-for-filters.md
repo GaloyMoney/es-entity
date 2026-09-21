@@ -120,19 +120,19 @@ column with `virtual = "<sql>"` plus bare `list_for`:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "CreditFacility",
+    entity = "Order",
     columns(
-        status(ty = "CreditFacilityStatus", list_for),
-        has_due_obligations(
+        status(ty = "OrderStatus", list_for),
+        has_open_ticket(
             ty = "bool",
-            virtual = "EXISTS (SELECT 1 FROM core_obligations o
-                       WHERE o.beneficiary_id = core_credit_facilities.id
-                         AND o.status = 'due')",
+            virtual = "EXISTS (SELECT 1 FROM support_tickets t
+                       WHERE t.order_id = orders.id
+                         AND t.status = 'open')",
             list_for
         ),
     ),
 )]
-pub struct CreditFacilityRepo { /* .. */ }
+pub struct OrderRepo { /* .. */ }
 ```
 
 This is for filtering an entity by a fact that lives on *another* table —
@@ -152,9 +152,9 @@ spliced verbatim into the generated queries (still validated against your
 schema by sqlx at compile time):
 
 - It must reference the outer row by the repo's **full table name** — the
-  generated queries select `FROM {table}` with no alias, so
-  `core_credit_facilities.id` (not a bare `id`, which would ambiguously
-  resolve inside a correlated subquery) is what's in scope.
+  generated queries select `FROM {table}` with no alias, so `orders.id`
+  (not a bare `id`, which would ambiguously resolve inside a correlated
+  subquery) is what's in scope.
 - It binds **no query parameters** of its own.
 - A virtual column never gets a per-column `list_for_{name}_by_{sort}` fn —
   it only ever participates in the unified `list_for_filters*` path. As soon
