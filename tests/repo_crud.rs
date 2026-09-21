@@ -167,7 +167,7 @@ async fn list_for_filters() -> anyhow::Result<()> {
 
     assert_eq!(paginated_result.entities().len(), 1);
     assert_eq!(paginated_result.requested_size(), 1);
-    assert!(paginated_result.has_next_page);
+    assert!(paginated_result.has_next_page());
     let first_id = paginated_result.entities()[0].id;
 
     // Use cursor for next page
@@ -180,7 +180,7 @@ async fn list_for_filters() -> anyhow::Result<()> {
             },
             PaginatedQueryArgs {
                 first: 1,
-                after: paginated_result.end_cursor,
+                after: paginated_result.into_end_cursor(),
             },
         )
         .await?;
@@ -225,9 +225,19 @@ async fn collecting_pages_preserves_requested_size() -> anyhow::Result<()> {
                         .await?
                 };
                 assert_eq!(page.requested_size(), first);
-                let (chunk, next_page) = page.into_parts();
-                collected.extend(chunk);
-                next = next_page;
+                match page.into_page() {
+                    Page::Last { entities } => {
+                        collected.extend(entities);
+                        next = None;
+                    }
+                    Page::HasNext {
+                        entities,
+                        next: query,
+                    } => {
+                        collected.extend(entities);
+                        next = Some(query.into());
+                    }
+                }
                 if let Some(query) = &next {
                     assert_eq!(query.first, first);
                     assert!(query.after.is_some());
@@ -256,8 +266,8 @@ async fn collecting_pages_preserves_requested_size() -> anyhow::Result<()> {
         .await?;
     assert_eq!(zero_page.requested_size(), 0);
     assert!(zero_page.entities().is_empty());
-    assert!(zero_page.has_next_page);
-    assert!(zero_page.end_cursor.is_none());
+    assert!(zero_page.has_next_page());
+    assert!(zero_page.end_cursor().is_none());
     assert!(zero_page.into_next_query().is_none());
 
     Ok(())
@@ -305,9 +315,19 @@ async fn collecting_filtered_pages_crosses_default_page_boundary() -> anyhow::Re
                         query,
                     )
                     .await?;
-                let (chunk, next_page) = page.into_parts();
-                collected.extend(chunk);
-                next = next_page;
+                match page.into_page() {
+                    Page::Last { entities } => {
+                        collected.extend(entities);
+                        next = None;
+                    }
+                    Page::HasNext {
+                        entities,
+                        next: query,
+                    } => {
+                        collected.extend(entities);
+                        next = Some(query.into());
+                    }
+                }
             }
 
             assert_eq!(requests, count.div_ceil(100));

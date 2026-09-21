@@ -149,7 +149,7 @@ async fn id_scoped_lists_return_own_row() -> anyhow::Result<()> {
         .await?;
     assert_eq!(ret.entities().len(), 1);
     assert_eq!(ret.entities()[0].id, partner_a);
-    assert!(!ret.has_next_page);
+    assert!(!ret.has_next_page());
 
     // unified dispatch: no filter routes through the (scoped) list_by proxy
     let ret = partners
