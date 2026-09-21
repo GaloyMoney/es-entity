@@ -192,20 +192,43 @@ impl Columns {
         errors.finish()
     }
 
-    /// Validates every `virtual = "<sql>"` column: `ty` must be exactly
-    /// `bool`, `list_for` must be present as the bare word (`list_for(by(...))`
-    /// is rejected — a virtual column never gets a per-column
-    /// `list_for_{name}_by_{sort}` fn, so there is no `by` to declare), no
-    /// other column option may be set, and the predicate must be non-empty
-    /// after trimming.
+    /// Validates every `virtual = "<sql>"` column: `list_for` must be present
+    /// as the bare word (`list_for(by(...))` is rejected — a virtual column
+    /// never gets a per-column `list_for_{name}_by_{sort}` fn, so there is no
+    /// `by` to declare), no other column option may be set, and the
+    /// predicate must be non-empty after trimming.
+    ///
+    /// `ty` discriminates two kinds (see [`is_bare_bool`],
+    /// [`Column::is_value_virtual`]):
+    /// - `ty = "bool"` is the "polarity" form: its predicate must **not**
+    ///   reference the `{value}` placeholder (there is no value to bind).
+    /// - any other `ty` is a "value" virtual: its predicate **must**
+    ///   reference `{value}` (checked via [`substitute_value_placeholder`]),
+    ///   and `ty` must not itself be syntactically `Option<..>` — value
+    ///   virtuals have no NULL-filtering state, only `Absent`/`Present`.
     pub fn validate_virtual(&self) -> darling::Result<()> {
         let mut errors = darling::Error::accumulator();
         for col in &self.virtual_columns {
             let name = col.name();
-            if !is_bare_bool(&col.opts.ty) {
-                errors.push(darling::Error::custom(format!(
-                    "virtual column '{name}' must declare `ty = \"bool\"`"
-                )));
+            let predicate = col.opts.virtual_predicate.as_deref().unwrap_or("");
+            let has_value_placeholder = substitute_value_placeholder(predicate, 0).is_some();
+            if is_bare_bool(&col.opts.ty) {
+                if has_value_placeholder {
+                    errors.push(darling::Error::custom(format!(
+                        "virtual column '{name}' with ty = \"bool\" must not use {{value}} — declare a non-bool ty to bind a value"
+                    )));
+                }
+            } else {
+                if !has_value_placeholder {
+                    errors.push(darling::Error::custom(format!(
+                        "virtual column '{name}' must reference {{value}} in its predicate"
+                    )));
+                }
+                if col.is_optional() {
+                    errors.push(darling::Error::custom(format!(
+                        "virtual column '{name}' cannot declare an Option<..> ty — value virtuals have no NULL-filtering state"
+                    )));
+                }
             }
             match &col.opts.list_for_opts {
                 None => {
@@ -737,6 +760,24 @@ impl Column {
         }
     }
 
+    /// Test-only constructor for a valid *value* virtual filter column:
+    /// non-`bool` `ty`, bare `list_for`, predicate as given (expected to
+    /// reference `{value}`).
+    #[cfg(test)]
+    pub fn new_virtual_value(name: syn::Ident, ty: syn::Type, predicate: &str) -> Self {
+        Column {
+            name,
+            opts: ColumnOpts {
+                list_for_opts: Some(ListForOpts {
+                    by_columns: vec![syn::Ident::new("id", proc_macro2::Span::call_site())],
+                    is_bare: true,
+                }),
+                virtual_predicate: Some(predicate.to_string()),
+                ..ColumnOpts::new(ty)
+            },
+        }
+    }
+
     pub fn for_id(ty: syn::Type) -> Self {
         Column {
             name: syn::Ident::new("id", proc_macro2::Span::call_site()),
@@ -811,6 +852,20 @@ impl Column {
             .virtual_predicate
             .as_deref()
             .expect("virtual_predicate called on a non-virtual column")
+    }
+
+    /// True iff this is a *value* virtual column: `virtual = "<sql>"` with a
+    /// non-`bool` `ty`. Its predicate carries a `{value}` placeholder the
+    /// macro rewrites to a bound `$k` parameter at codegen time, and its
+    /// filters-struct field is a genuine `Option<T>` — `None` omits the
+    /// conjunct, `Some(v)` applies it with `v` bound through the same path a
+    /// physical `list_for` column uses.
+    ///
+    /// Contrast the `ty = "bool"` "polarity" virtual (`!is_value_virtual()`):
+    /// its `Option<bool>` field selects one of three pre-expanded static SQL
+    /// arms (`Absent`/`True`/`False`) and binds no parameter.
+    pub fn is_value_virtual(&self) -> bool {
+        self.opts.is_virtual() && !is_bare_bool(&self.opts.ty)
     }
 
     /// The scope enum variant ident for this column: the explicit
@@ -1004,10 +1059,67 @@ fn forgettable_inner(ty: &syn::Type) -> Option<syn::Type> {
 }
 
 /// True iff `ty` is syntactically the bare `bool` path, with no
-/// qualification. Used to enforce that a `virtual = "<sql>"` column declares
-/// `ty = "bool"` — the only Rust type a SQL predicate conjunct can mean.
+/// qualification. Discriminates the two virtual-column kinds a `virtual =
+/// "<sql>"` column may declare: `ty = "bool"` is the "polarity" form
+/// (`Absent`/`True`/`False`, no bound value); any other `ty` is a "value"
+/// virtual, whose predicate must reference `{value}` — see
+/// [`Columns::validate_virtual`] and [`Column::is_value_virtual`].
 fn is_bare_bool(ty: &syn::Type) -> bool {
     matches!(ty, syn::Type::Path(type_path) if type_path.path.is_ident("bool"))
+}
+
+/// Rewrites every occurrence of the literal placeholder `{value}` in `pred`
+/// to the bind parameter `$k`, honouring `{{`/`}}` as escapes for a literal
+/// `{`/`}` and leaving content inside single-quoted SQL string literals
+/// (`''` the escaped quote) untouched. Returns `None` when `pred` contains
+/// no unescaped `{value}` — callers use that both to validate a virtual
+/// column's predicate against its declared kind
+/// ([`Columns::validate_virtual`]) and to substitute the bind parameter at
+/// codegen time (`list_for_filters_fn`). The predicate otherwise stays
+/// opaque, verbatim SQL text — this is a light single-quote-aware scan, not
+/// a SQL parser.
+pub fn substitute_value_placeholder(pred: &str, k: u32) -> Option<String> {
+    let mut out = String::with_capacity(pred.len());
+    let mut in_string = false;
+    let mut found = false;
+    let mut chars = pred.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if in_string {
+            out.push(c);
+            if c == '\'' {
+                if matches!(chars.peek(), Some((_, '\''))) {
+                    out.push('\'');
+                    chars.next();
+                } else {
+                    in_string = false;
+                }
+            }
+            continue;
+        }
+        match c {
+            '\'' => {
+                in_string = true;
+                out.push(c);
+            }
+            '{' if matches!(chars.peek(), Some((_, '{'))) => {
+                out.push('{');
+                chars.next();
+            }
+            '}' if matches!(chars.peek(), Some((_, '}'))) => {
+                out.push('}');
+                chars.next();
+            }
+            '{' if pred[i..].starts_with("{value}") => {
+                out.push_str(&format!("${k}"));
+                found = true;
+                for _ in 0.."value}".len() {
+                    chars.next();
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    found.then_some(out)
 }
 
 /// If `ty` is `Option<Inner>`, returns `Inner`; otherwise `None`.
@@ -1068,8 +1180,11 @@ struct ColumnOpts {
     #[darling(default, rename = "update")]
     update_opts: Option<UpdateOpts>,
     /// `virtual = "<sql predicate>"`: marks this a virtual filter column — a
-    /// SQL predicate spliced verbatim into `list_for_filters*` as a conjunct,
-    /// rather than a physical index column. Validated by
+    /// SQL predicate spliced into `list_for_filters*` as a conjunct, rather
+    /// than a physical index column. `ty = "bool"` splices the predicate
+    /// verbatim (`(pred)` / `NOT (pred)`, no bound parameter); any other
+    /// `ty` requires a `{value}` placeholder, rewritten to a bound `$k` (see
+    /// [`substitute_value_placeholder`]). Validated by
     /// [`Columns::validate_virtual`].
     #[darling(default, rename = "virtual")]
     virtual_predicate: Option<String>,
@@ -1777,15 +1892,138 @@ mod tests {
     }
 
     #[test]
-    fn virtual_column_rejects_non_bool_ty() {
-        let input: syn::Meta = parse_quote!(columns(flagged(
-            ty = "String",
+    fn value_virtual_with_placeholder_passes_validation() {
+        let input: syn::Meta = parse_quote!(columns(min_flags(
+            ty = "i64",
+            virtual = "(SELECT COUNT(*) FROM flags f WHERE f.id = t.id) >= {value}",
+            list_for
+        )));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        assert!(columns.validate_virtual().is_ok());
+        let col = &columns.virtual_columns[0];
+        assert!(col.is_value_virtual());
+    }
+
+    #[test]
+    fn value_virtual_without_placeholder_rejected() {
+        let input: syn::Meta = parse_quote!(columns(min_flags(
+            ty = "i64",
             virtual = "TRUE",
             list_for
         )));
         let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
         let err = columns.validate_virtual().unwrap_err().to_string();
-        assert!(err.contains("ty = \"bool\""), "unexpected error: {err}");
+        assert!(
+            err.contains("must reference {value}"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bool_virtual_with_placeholder_rejected() {
+        let input: syn::Meta = parse_quote!(columns(flagged(
+            ty = "bool",
+            virtual = "count(*) >= {value}",
+            list_for
+        )));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_virtual().unwrap_err().to_string();
+        assert!(
+            err.contains("must not use {value}"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn value_virtual_rejects_option_ty() {
+        let input: syn::Meta = parse_quote!(columns(min_flags(
+            ty = "Option<i64>",
+            virtual = "count(*) >= {value}",
+            list_for
+        )));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_virtual().unwrap_err().to_string();
+        assert!(err.contains("NULL-filtering"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn value_virtual_rejects_other_options() {
+        for extra in [
+            "find_by = true",
+            "list_by = true",
+            "scope",
+            "nullable = true",
+            "create(persist = false)",
+            "update(persist = false)",
+        ] {
+            let src = format!(
+                r#"columns(min_flags(ty = "i64", virtual = "count(*) >= {{value}}", list_for, {extra}))"#
+            );
+            let input: syn::Meta = syn::parse_str(&src).unwrap();
+            let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+            let err = columns.validate_virtual();
+            assert!(
+                err.is_err(),
+                "expected `{extra}` to be rejected on a value virtual column"
+            );
+        }
+    }
+
+    #[test]
+    fn value_virtual_does_not_persist_on_create_or_update() {
+        let input: syn::Meta = parse_quote!(columns(min_flags(
+            ty = "i64",
+            virtual = "count(*) >= {value}",
+            list_for
+        )));
+        let mut columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        columns.set_id_column(&parse_quote!(TestId));
+        assert!(
+            !columns
+                .insert_column_names()
+                .contains(&"min_flags".to_string())
+        );
+        assert!(!columns.sql_updates().contains("min_flags"));
+    }
+
+    #[test]
+    fn substitute_value_placeholder_rewrites_single_occurrence() {
+        let out = substitute_value_placeholder("col >= {value}", 3).unwrap();
+        assert_eq!(out, "col >= $3");
+    }
+
+    #[test]
+    fn substitute_value_placeholder_rewrites_repeated_occurrence_to_same_param() {
+        let out = substitute_value_placeholder("{value} = {value}", 5).unwrap();
+        assert_eq!(out, "$5 = $5");
+    }
+
+    #[test]
+    fn substitute_value_placeholder_honours_double_brace_escape() {
+        // `{{value}}` is an escaped literal, not a placeholder — it must not
+        // count toward `found` on its own (a predicate with only escaped
+        // braces and no real `{value}` correctly reports "no placeholder",
+        // same as one with none at all).
+        assert_eq!(
+            substitute_value_placeholder("literal {{value}} here", 1),
+            None
+        );
+
+        // Paired with a real occurrence, the escape still resolves to a
+        // literal `{value}` while the real placeholder is rewritten.
+        let out = substitute_value_placeholder("literal {{value}} and {value} here", 1).unwrap();
+        assert_eq!(out, "literal {value} and $1 here");
+    }
+
+    #[test]
+    fn substitute_value_placeholder_skips_single_quoted_string() {
+        let out = substitute_value_placeholder("col = '{value}' OR x >= {value}", 2).unwrap();
+        assert_eq!(out, "col = '{value}' OR x >= $2");
+    }
+
+    #[test]
+    fn substitute_value_placeholder_returns_none_without_placeholder() {
+        assert_eq!(substitute_value_placeholder("TRUE", 1), None);
     }
 
     #[test]

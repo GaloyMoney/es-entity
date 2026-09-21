@@ -138,8 +138,17 @@ pub struct OrderRepo { /* .. */ }
 This is for filtering an entity by a fact that lives on *another* table —
 composing that fact into the ordinary `list_for_filters` query (same sort,
 same cursor, same scope) instead of hand-writing a bespoke query outside the
-repo. `ty` must be `bool`; nothing else about the entity, the DB table, or
-any other generated fn changes.
+repo. Nothing else about the entity, the DB table, or any other generated fn
+changes.
+
+`ty` picks one of two kinds:
+
+| `ty`            | Kind             | Filter field   | States                                | Binds a parameter |
+|-----------------|------------------|----------------|----------------------------------------|--------------------|
+| `bool`          | polarity virtual | `Option<bool>` | `None` / `Some(true)` / `Some(false)`  | no                 |
+| anything else   | value virtual    | `Option<T>`    | `None` / `Some(v)`                     | yes, one `$k`      |
+
+### Polarity virtuals (`ty = "bool"`)
 
 The filters struct gains a matching `Option<bool>` field with three states:
 
@@ -147,15 +156,58 @@ The filters struct gains a matching `Option<bool>` field with three states:
 - `Some(true)` — the predicate is added as `AND (<sql>)`.
 - `Some(false)` — the predicate is added as `AND NOT (<sql>)`.
 
-A few things follow from the predicate being **opaque, unparameterized SQL**
-spliced verbatim into the generated queries (still validated against your
-schema by sqlx at compile time):
+The predicate is **opaque, unparameterized SQL** spliced verbatim into the
+generated queries (still validated against your schema by sqlx at compile
+time) — it binds no query parameters of its own.
 
-- It must reference the outer row by the repo's **full table name** — the
-  generated queries select `FROM {table}` with no alias, so `orders.id`
-  (not a bare `id`, which would ambiguously resolve inside a correlated
-  subquery) is what's in scope.
-- It binds **no query parameters** of its own.
+### Value virtuals (any other `ty`)
+
+Any `ty` other than `bool` is a *value* virtual: the predicate must contain
+the placeholder `{value}`, which the macro rewrites to a bound `$k` query
+parameter — the filter value is genuinely bound, not interpolated into the
+SQL text:
+
+```rust,ignore
+#[derive(EsRepo)]
+#[es_repo(
+    entity = "Order",
+    columns(
+        status(ty = "OrderStatus", list_for),
+        min_open_tickets(
+            ty = "i64",
+            virtual = "(SELECT COUNT(*) FROM support_tickets t
+                        WHERE t.order_id = orders.id
+                          AND t.status = 'open') >= {value}",
+            list_for
+        ),
+    ),
+)]
+pub struct OrderRepo { /* .. */ }
+```
+
+The filters struct gains `min_open_tickets: Option<i64>`: `None` adds no
+conjunct; `Some(3)` adds `AND ((SELECT COUNT(*) ... ) >= $k)` with `3` bound
+at `$k` through the same path a physical `list_for` column's value is bound
+— any type that already works as a physical `list_for` column (including a
+custom `entity_id!` type) works here too.
+
+`{value}` rules:
+
+- Every occurrence of `{value}` in the predicate rewrites to the same `$k` —
+  one column, one value.
+- `{{` and `}}` are escapes for a literal `{` / `}`, mirroring `format!`.
+- `{value}` is **not** rewritten inside a single-quoted SQL string literal.
+- The token is purely positional; a Postgres-side cast is your own SQL —
+  `{value}::int4`.
+- A value virtual has **no `NOT` form and no NULL-filtering** — negation and
+  `Option<Option<T>>` belong in your own SQL/schema, not this mechanism.
+
+### Common to both kinds
+
+- The predicate must reference the outer row by the repo's **full table
+  name** — the generated queries select `FROM {table}` with no alias, so
+  `orders.id` (not a bare `id`, which would ambiguously resolve inside a
+  correlated subquery) is what's in scope.
 - A virtual column never gets a per-column `list_for_{name}_by_{sort}` fn —
   it only ever participates in the unified `list_for_filters*` path. As soon
   as any virtual filter is set, dispatch always goes through that path, even
@@ -163,10 +215,12 @@ schema by sqlx at compile time):
 - It never affects index-catalog specialization: it is not an equality
   column, so it rides along as an extra conjunct on whichever arm (specialized
   or catch-all) the *physical* filters already selected.
-- Each virtual column triples the static-query matrix for its `list_for_filters_by_{sort}`
-  fns (one arm per `None` / `Some(true)` / `Some(false)`) — fine for the
-  handful of virtual columns a repo is ever expected to declare, but keep
-  that build-cost multiplier in mind before adding several.
+- Build cost: each **polarity** virtual triples the static-query matrix for
+  its `list_for_filters_by_{sort}` fns (one arm per `None` / `Some(true)` /
+  `Some(false)`); each **value** virtual doubles it (one arm per `None` /
+  `Some(v)`) — fine for the handful of virtual columns a repo is ever
+  expected to declare, but keep that build-cost multiplier in mind before
+  adding several.
 
 ## Example
 
