@@ -8,3 +8,4 @@ pub mod profile;
 pub mod task;
 pub mod transfer;
 pub mod user;
+pub mod vf_account;

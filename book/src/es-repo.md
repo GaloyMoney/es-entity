@@ -136,5 +136,6 @@ Each column supports the following options:
 | `update(persist = false)` | Skip this column during update |
 | `list_by` | Generate `list_by_<column>` pagination query |
 | `list_for` | Include in `list_for_<column>` filtering |
+| `virtual = "<sql>"` | A [virtual filter column](./repo-list-for-filters.md#virtual-filters): a SQL predicate, not a physical column. Requires `ty = "bool"` and bare `list_for`; no other option may be combined with it |
 
 Take a look at the next sections to see more information on how the options modify the generated code.

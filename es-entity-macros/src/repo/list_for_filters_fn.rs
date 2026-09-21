@@ -32,6 +32,30 @@ impl FilterState {
     }
 }
 
+/// Runtime `Some`-ness state of one virtual filter column (`virtual =
+/// "<sql>"`). Unlike a physical [`FilterState`], there is no notion of
+/// filtering "for NULL" — the predicate is opaque SQL with no bound
+/// parameters, so each state compiles to its own static conjunct: `Absent`
+/// omits it, `True` includes `(pred)`, `False` includes `NOT (pred)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VirtualState {
+    Absent,
+    True,
+    False,
+}
+
+impl VirtualState {
+    /// Pattern element matching this state against the raw `Option<bool>`
+    /// filter local (see [`ListForFiltersFn::filter_scrutinee_elems`]).
+    fn pattern_elem(self) -> TokenStream {
+        match self {
+            VirtualState::Absent => quote! { None },
+            VirtualState::True => quote! { Some(true) },
+            VirtualState::False => quote! { Some(false) },
+        }
+    }
+}
+
 /// Cartesian product of the per-column filter states.
 fn filter_state_combos(columns: &[&Column]) -> Vec<Vec<FilterState>> {
     columns.iter().fold(vec![vec![]], |combos, col| {
@@ -56,22 +80,94 @@ fn filter_state_combos(columns: &[&Column]) -> Vec<Vec<FilterState>> {
     })
 }
 
+/// Cartesian product of the per-virtual-column states. With no virtual
+/// columns this is `vec![vec![]]` — a single empty combo — so every call
+/// site that loops over it degrades to exactly one (no-op) iteration,
+/// keeping output byte-identical for a repo with no virtual columns.
+fn virtual_state_combos(columns: &[&Column]) -> Vec<Vec<VirtualState>> {
+    const STATES: [VirtualState; 3] = [
+        VirtualState::Absent,
+        VirtualState::True,
+        VirtualState::False,
+    ];
+    columns.iter().fold(vec![vec![]], |combos, _| {
+        let mut next = Vec::with_capacity(combos.len() * STATES.len());
+        for combo in &combos {
+            for state in STATES {
+                let mut combo = combo.clone();
+                combo.push(state);
+                next.push(combo);
+            }
+        }
+        next
+    })
+}
+
+/// Local variable name a virtual column's raw `Option<bool>` filter value is
+/// destructured into: `filters.flagged` -> `let virtual_flagged = ...`.
+fn virtual_local_ident(name: &syn::Ident) -> syn::Ident {
+    syn::Ident::new(&format!("virtual_{name}"), Span::call_site())
+}
+
+/// The static SQL conjuncts contributed by one virtual-state combo: `(pred)`
+/// for `True`, `NOT (pred)` for `False`, nothing for `Absent`. Meant to be
+/// appended to the `trailing` conjuncts of [`assemble_union_select`] — same
+/// place the soft-delete `deleted = FALSE` predicate lands, since both are
+/// unparameterized.
+fn virtual_trailing(columns: &[&Column], combo: &[VirtualState]) -> Vec<String> {
+    columns
+        .iter()
+        .zip(combo.iter())
+        .filter_map(|(col, state)| {
+            let pred = col.virtual_predicate();
+            match state {
+                VirtualState::Absent => None,
+                VirtualState::True => Some(format!("({pred})")),
+                VirtualState::False => Some(format!("NOT ({pred})")),
+            }
+        })
+        .collect()
+}
+
 pub struct FiltersStruct<'a> {
     columns: Vec<&'a Column>,
+    virtual_columns: Vec<&'a Column>,
     entity: &'a syn::Ident,
 }
 
 impl<'a> FiltersStruct<'a> {
-    pub fn new(opts: &'a RepositoryOptions, columns: Vec<&'a Column>) -> Self {
+    pub fn new(
+        opts: &'a RepositoryOptions,
+        columns: Vec<&'a Column>,
+        virtual_columns: Vec<&'a Column>,
+    ) -> Self {
         Self {
             entity: opts.entity(),
             columns,
+            virtual_columns,
         }
     }
 
     #[cfg(test)]
     fn new_test(entity: &'a syn::Ident, columns: Vec<&'a Column>) -> Self {
-        Self { entity, columns }
+        Self {
+            entity,
+            columns,
+            virtual_columns: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn new_test_with_virtual(
+        entity: &'a syn::Ident,
+        columns: Vec<&'a Column>,
+        virtual_columns: Vec<&'a Column>,
+    ) -> Self {
+        Self {
+            entity,
+            columns,
+            virtual_columns,
+        }
     }
 
     pub fn ident(&self) -> syn::Ident {
@@ -85,6 +181,7 @@ impl<'a> FiltersStruct<'a> {
     fn fields(&self) -> TokenStream {
         self.columns
             .iter()
+            .chain(self.virtual_columns.iter())
             .map(|column| {
                 let name = column.name();
                 let ty = column.ty();
@@ -166,6 +263,7 @@ pub struct ListForFiltersFn<'a> {
     entity: &'a syn::Ident,
     query_error: syn::Ident,
     for_columns: Vec<&'a Column>,
+    virtual_columns: Vec<&'a Column>,
     by_columns: Vec<&'a Column>,
     cursor: &'a ComboCursor<'a>,
     delete: DeleteOption,
@@ -185,15 +283,17 @@ impl<'a> ListForFiltersFn<'a> {
     pub fn new(
         opts: &'a RepositoryOptions,
         for_columns: Vec<&'a Column>,
+        virtual_columns: Vec<&'a Column>,
         by_columns: Vec<&'a Column>,
         cursor: &'a ComboCursor<'a>,
     ) -> Self {
         Self {
             in_op_only: opts.in_op_only(),
-            filters_struct: FiltersStruct::new(opts, for_columns.clone()),
+            filters_struct: FiltersStruct::new(opts, for_columns.clone(), virtual_columns.clone()),
             entity: opts.entity(),
             query_error: opts.query_error(),
             for_columns,
+            virtual_columns,
             by_columns,
             cursor,
             delete: opts.delete,
@@ -329,9 +429,12 @@ impl<'a> ListForFiltersFn<'a> {
     /// Scrutinee elements (bools over the destructured filter locals)
     /// identifying each filter's [`FilterState`] at runtime: one bool per
     /// non-optional column (`is_some`), two per optional column (`apply`,
-    /// value `is_some`).
+    /// value `is_some`), one raw `Option<bool>` per virtual column (matched
+    /// directly against `None` / `Some(true)` / `Some(false)` — see
+    /// [`VirtualState::pattern_elem`]).
     fn filter_scrutinee_elems(&self) -> Vec<TokenStream> {
-        self.for_columns
+        let mut elems: Vec<TokenStream> = self
+            .for_columns
             .iter()
             .flat_map(|c| {
                 let col_name = c.name();
@@ -345,7 +448,14 @@ impl<'a> ListForFiltersFn<'a> {
                     vec![quote! { #filter_name.is_some() }]
                 }
             })
-            .collect()
+            .collect();
+        elems.extend(
+            self.virtual_columns
+                .iter()
+                .map(|c| virtual_local_ident(c.name()))
+                .map(|local| quote! { #local }),
+        );
+        elems
     }
 
     /// Pattern elements matching [`Self::filter_scrutinee_elems`] for one
@@ -430,9 +540,18 @@ impl<'a> ListForFiltersFn<'a> {
             Span::call_site(),
         );
 
-        if self.for_columns.is_empty() {
+        if self.for_columns.is_empty() && self.virtual_columns.is_empty() {
             return quote! { self.#list_by_fn(#op_pass #scope_pass query, direction).await? };
         }
+
+        let virtual_none_checks: Vec<TokenStream> = self
+            .virtual_columns
+            .iter()
+            .map(|c| {
+                let name = c.name();
+                quote! { filters.#name.is_none() }
+            })
+            .collect();
 
         let all_none_checks: Vec<_> = self
             .for_columns
@@ -441,6 +560,7 @@ impl<'a> ListForFiltersFn<'a> {
                 let name = c.name();
                 quote! { filters.#name.is_none() }
             })
+            .chain(virtual_none_checks.iter().cloned())
             .collect();
 
         // Determine which for_columns have individual methods for this by_col.
@@ -453,6 +573,10 @@ impl<'a> ListForFiltersFn<'a> {
         let single_filter_branches: TokenStream = paired_for_columns
             .iter()
             .map(|for_col| {
+                // Every other physical filter, and — critically — every
+                // virtual filter, must also be absent: a virtual `Some`
+                // always needs the unified conjunct path, never the
+                // dedicated per-column fn.
                 let others_none: Vec<_> = self
                     .for_columns
                     .iter()
@@ -461,6 +585,7 @@ impl<'a> ListForFiltersFn<'a> {
                         let name = c.name();
                         quote! { filters.#name.is_none() }
                     })
+                    .chain(virtual_none_checks.iter().cloned())
                     .collect();
 
                 let for_col_name = for_col.name();
@@ -491,8 +616,11 @@ impl<'a> ListForFiltersFn<'a> {
         // - there are unpaired for_columns (they need COALESCE)
         // - there are 2+ paired columns (multi-filter case)
         // - there are 2+ for_columns total (multi-filter case)
+        // - there is any virtual column: it always routes through the
+        //   unified conjunct path, never a per-column shortcut
         let has_unpaired = paired_for_columns.len() < self.for_columns.len();
-        let needs_fallback = has_unpaired || self.for_columns.len() >= 2;
+        let needs_fallback =
+            has_unpaired || self.for_columns.len() >= 2 || !self.virtual_columns.is_empty();
         let multi_filter_fallback = if needs_fallback {
             let list_for_filters_fn = syn::Ident::new(
                 &format!("list_for_filters_by_{by_col_name}{delete_postfix}{in_op_postfix}"),
@@ -578,6 +706,13 @@ impl<'a> ListForFiltersFn<'a> {
                     }
                 }
             })
+            .chain(self.virtual_columns.iter().map(|c| {
+                let col_name = c.name();
+                let local = virtual_local_ident(col_name);
+                quote! {
+                    let #local = filters.#col_name;
+                }
+            }))
             .collect();
 
         // Generate the non-specialized fallback query: correct for every filter
@@ -586,7 +721,9 @@ impl<'a> ListForFiltersFn<'a> {
         // conjuncts shared by every unified-cursor `UNION ALL` branch.
         // Parameterized over the scope: each scope-column arm binds its
         // column at `$1` and shifts every other parameter by one.
-        let build_fallback = |scope: Option<&ScopeCol>| -> (String, String, TokenStream) {
+        let build_fallback = |scope: Option<&ScopeCol>,
+                              virtual_combo: &[VirtualState]|
+         -> (String, String, TokenStream) {
             let scope_offset: u32 = if scope.is_some() { 1 } else { 0 };
             let mut param_idx = 1u32 + scope_offset;
             let where_fragments: Vec<String> = self
@@ -607,6 +744,7 @@ impl<'a> ListForFiltersFn<'a> {
             {
                 trailing.push(not_deleted);
             }
+            trailing.extend(virtual_trailing(&self.virtual_columns, virtual_combo));
 
             let filter_arg_bindings: TokenStream = self
                 .for_columns
@@ -640,8 +778,6 @@ impl<'a> ListForFiltersFn<'a> {
             );
             (asc_query, desc_query, fallback_arg_tokens)
         };
-        let (asc_query, desc_query, fallback_arg_tokens) = build_fallback(None);
-
         let forgettable_tbl_arg = if let Some(tbl) = self.forgettable_table_name {
             quote! { forgettable_tbl = #tbl, }
         } else {
@@ -681,87 +817,111 @@ impl<'a> ListForFiltersFn<'a> {
                 let mut asc_arms = TokenStream::new();
                 let mut desc_arms = TokenStream::new();
                 let mut all_combos_specialized = true;
-                for combo in filter_state_combos(&self.for_columns) {
-                    if !self.is_specialized_combo(&combo, cursor_struct.column, scope) {
-                        all_combos_specialized = false;
-                        continue;
-                    }
-                    let filter_patterns: Vec<TokenStream> = self
-                        .for_columns
-                        .iter()
-                        .zip(combo.iter())
-                        .flat_map(|(col, state)| Self::filter_pattern_elems(col, *state))
-                        .collect();
+                // Virtual state is orthogonal to physical specialization (it
+                // is never an equality column considered by the index
+                // catalog), so it wraps the physical combo loop: every
+                // specialized physical combo gets one explicit arm per
+                // virtual state. With no virtual columns this loop runs
+                // exactly once with an empty combo, reproducing the prior
+                // output byte-for-byte.
+                for virtual_combo in virtual_state_combos(&self.virtual_columns) {
+                    let virtual_patterns: Vec<TokenStream> =
+                        virtual_combo.iter().map(|s| s.pattern_elem()).collect();
+                    let virtual_trailing_conds =
+                        virtual_trailing(&self.virtual_columns, &virtual_combo);
 
-                    let mut filter_conditions: Vec<String> = Vec::new();
-                    let mut filter_args = TokenStream::new();
-                    let mut param_idx = 1u32;
-                    if let Some(scope) = scope {
-                        filter_conditions.push(scope.predicate(1));
-                        filter_args.append_all(scope.arg_tokens());
-                        param_idx += 1;
-                    }
-                    for (col, state) in self.for_columns.iter().zip(combo.iter()) {
-                        match state {
-                            FilterState::Absent => {}
-                            FilterState::Present => {
-                                filter_conditions.push(format!("{} = ${}", col.name(), param_idx));
-                                param_idx += 1;
-                                filter_args.append_all(FiltersStruct::filter_arg_tokens(col));
-                            }
-                            FilterState::PresentNull => {
-                                filter_conditions.push(format!("{} IS NULL", col.name()));
-                            }
-                            FilterState::PresentValue => {
-                                filter_conditions.push(format!("{} = ${}", col.name(), param_idx));
-                                param_idx += 1;
-                                filter_args.append_all(FiltersStruct::filter_value_arg_tokens(col));
+                    for combo in filter_state_combos(&self.for_columns) {
+                        if !self.is_specialized_combo(&combo, cursor_struct.column, scope) {
+                            all_combos_specialized = false;
+                            continue;
+                        }
+                        let filter_patterns: Vec<TokenStream> = self
+                            .for_columns
+                            .iter()
+                            .zip(combo.iter())
+                            .flat_map(|(col, state)| Self::filter_pattern_elems(col, *state))
+                            .collect();
+
+                        let mut filter_conditions: Vec<String> = Vec::new();
+                        let mut filter_args = TokenStream::new();
+                        let mut param_idx = 1u32;
+                        if let Some(scope) = scope {
+                            filter_conditions.push(scope.predicate(1));
+                            filter_args.append_all(scope.arg_tokens());
+                            param_idx += 1;
+                        }
+                        for (col, state) in self.for_columns.iter().zip(combo.iter()) {
+                            match state {
+                                FilterState::Absent => {}
+                                FilterState::Present => {
+                                    filter_conditions.push(format!(
+                                        "{} = ${}",
+                                        col.name(),
+                                        param_idx
+                                    ));
+                                    param_idx += 1;
+                                    filter_args.append_all(FiltersStruct::filter_arg_tokens(col));
+                                }
+                                FilterState::PresentNull => {
+                                    filter_conditions.push(format!("{} IS NULL", col.name()));
+                                }
+                                FilterState::PresentValue => {
+                                    filter_conditions.push(format!(
+                                        "{} = ${}",
+                                        col.name(),
+                                        param_idx
+                                    ));
+                                    param_idx += 1;
+                                    filter_args
+                                        .append_all(FiltersStruct::filter_value_arg_tokens(col));
+                                }
                             }
                         }
-                    }
 
-                    // The cursor-state dimension collapses into one unified
-                    // `UNION ALL` query per direction (the specialized filter
-                    // predicates are the leading conjuncts of every branch), so
-                    // the arm matches on the filter scrutinee alone.
-                    let pattern = quote! { (#(#filter_patterns,)*) };
-                    let cursor_args = cursor_struct.cursor_arg_tokens();
-                    let args = quote! {
-                        #filter_args
-                        (first + 1) as i64,
-                        #cursor_args
-                    };
+                        // The cursor-state dimension collapses into one unified
+                        // `UNION ALL` query per direction (the specialized filter
+                        // predicates are the leading conjuncts of every branch), so
+                        // the arm matches on the filter scrutinee alone.
+                        let pattern = quote! { (#(#filter_patterns,)* #(#virtual_patterns,)*) };
+                        let cursor_args = cursor_struct.cursor_arg_tokens();
+                        let args = quote! {
+                            #filter_args
+                            (first + 1) as i64,
+                            #cursor_args
+                        };
 
-                    let mut trailing: Vec<String> = Vec::new();
-                    if delete == DeleteOption::No
-                        && let Some(not_deleted) = not_deleted_predicate(self.delete)
-                    {
-                        trailing.push(not_deleted);
-                    }
+                        let mut trailing: Vec<String> = Vec::new();
+                        if delete == DeleteOption::No
+                            && let Some(not_deleted) = not_deleted_predicate(self.delete)
+                        {
+                            trailing.push(not_deleted);
+                        }
+                        trailing.extend(virtual_trailing_conds.iter().cloned());
 
-                    for ascending in [true, false] {
-                        let query = assemble_union_select(
-                            &select_columns,
-                            self.table_name,
-                            &filter_conditions,
-                            &cursor_struct.cursor_branches(param_idx - 1, ascending),
-                            &trailing,
-                            &cursor_struct.order_by(ascending),
-                            param_idx,
-                        );
-                        let es_query_call = make_es_query(&query, &args);
-                        if ascending {
-                            asc_arms.append_all(quote! {
-                                #pattern => {
-                                    #es_query_call.fetch_n(op, first).await?
-                                },
-                            });
-                        } else {
-                            desc_arms.append_all(quote! {
-                                #pattern => {
-                                    #es_query_call.fetch_n(op, first).await?
-                                },
-                            });
+                        for ascending in [true, false] {
+                            let query = assemble_union_select(
+                                &select_columns,
+                                self.table_name,
+                                &filter_conditions,
+                                &cursor_struct.cursor_branches(param_idx - 1, ascending),
+                                &trailing,
+                                &cursor_struct.order_by(ascending),
+                                param_idx,
+                            );
+                            let es_query_call = make_es_query(&query, &args);
+                            if ascending {
+                                asc_arms.append_all(quote! {
+                                    #pattern => {
+                                        #es_query_call.fetch_n(op, first).await?
+                                    },
+                                });
+                            } else {
+                                desc_arms.append_all(quote! {
+                                    #pattern => {
+                                        #es_query_call.fetch_n(op, first).await?
+                                    },
+                                });
+                            }
                         }
                     }
                 }
@@ -773,29 +933,44 @@ impl<'a> ListForFiltersFn<'a> {
 
         // When every filter combination is specialized the explicit arms
         // already cover the entire pattern space, so no wildcard fallback arm
-        // (nor its catch-all COALESCE queries) is emitted.
-        let build_fallback_arms = |asc_query: &str,
-                                   desc_query: &str,
-                                   args: &TokenStream,
+        // (nor its catch-all COALESCE queries) is emitted. With no virtual
+        // columns this is the single `_ =>` catch-all as before; with
+        // virtual columns — whose predicate is opaque SQL binding no
+        // parameters, so it cannot ride the same COALESCE trick physical
+        // optional columns use — it becomes one static fallback query per
+        // virtual state combo, wildcarding the (already-COALESCEd) physical
+        // dimension via a `..` rest pattern.
+        let build_fallback_arms = |scope: Option<&ScopeCol>,
                                    all_specialized: bool|
          -> (TokenStream, TokenStream) {
             if all_specialized {
-                (quote! {}, quote! {})
-            } else {
-                let asc_call = make_es_query(asc_query, args);
-                let desc_call = make_es_query(desc_query, args);
-                (
+                return (quote! {}, quote! {});
+            }
+            if self.virtual_columns.is_empty() {
+                let (asc_query, desc_query, args) = build_fallback(scope, &[]);
+                let asc_call = make_es_query(&asc_query, &args);
+                let desc_call = make_es_query(&desc_query, &args);
+                return (
                     quote! { _ => #asc_call.fetch_n(op, first).await?, },
                     quote! { _ => #desc_call.fetch_n(op, first).await?, },
-                )
+                );
             }
+            let mut asc_arms = TokenStream::new();
+            let mut desc_arms = TokenStream::new();
+            for virtual_combo in virtual_state_combos(&self.virtual_columns) {
+                let (asc_query, desc_query, args) = build_fallback(scope, &virtual_combo);
+                let asc_call = make_es_query(&asc_query, &args);
+                let desc_call = make_es_query(&desc_query, &args);
+                let virtual_patterns: Vec<TokenStream> =
+                    virtual_combo.iter().map(|s| s.pattern_elem()).collect();
+                let pattern = quote! { (.., #(#virtual_patterns,)*) };
+                asc_arms.append_all(quote! { #pattern => #asc_call.fetch_n(op, first).await?, });
+                desc_arms.append_all(quote! { #pattern => #desc_call.fetch_n(op, first).await?, });
+            }
+            (asc_arms, desc_arms)
         };
-        let (asc_fallback_arm, desc_fallback_arm) = build_fallback_arms(
-            &asc_query,
-            &desc_query,
-            &fallback_arg_tokens,
-            all_combos_specialized,
-        );
+        let (asc_fallback_arm, desc_fallback_arm) =
+            build_fallback_arms(None, all_combos_specialized);
 
         let direction_match = |asc_arms: &TokenStream,
                                asc_fallback: &TokenStream,
@@ -825,14 +1000,8 @@ impl<'a> ListForFiltersFn<'a> {
                 |col| {
                     let (scoped_asc_arms, scoped_desc_arms, scoped_all_specialized) =
                         build_specialized_arms(Some(col));
-                    let (scoped_asc_query, scoped_desc_query, scoped_fallback_args) =
-                        build_fallback(Some(col));
-                    let (scoped_asc_fallback, scoped_desc_fallback) = build_fallback_arms(
-                        &scoped_asc_query,
-                        &scoped_desc_query,
-                        &scoped_fallback_args,
-                        scoped_all_specialized,
-                    );
+                    let (scoped_asc_fallback, scoped_desc_fallback) =
+                        build_fallback_arms(Some(col), scoped_all_specialized);
                     direction_match(
                         &scoped_asc_arms,
                         &scoped_asc_fallback,
@@ -1207,6 +1376,7 @@ mod tests {
             entity: &entity,
             query_error,
             for_columns,
+            virtual_columns: Vec::new(),
             by_columns,
             cursor: &combo_cursor,
             delete: DeleteOption::No,
@@ -1455,6 +1625,7 @@ mod tests {
             entity: &entity,
             query_error,
             for_columns,
+            virtual_columns: Vec::new(),
             by_columns,
             cursor: &combo_cursor,
             delete: DeleteOption::No,
@@ -1525,6 +1696,7 @@ mod tests {
             entity: &entity,
             query_error,
             for_columns,
+            virtual_columns: Vec::new(),
             by_columns,
             cursor: &combo_cursor,
             delete: DeleteOption::No,
@@ -1611,6 +1783,7 @@ mod tests {
             entity: &entity,
             query_error,
             for_columns,
+            virtual_columns: Vec::new(),
             by_columns,
             cursor: &combo_cursor,
             delete: DeleteOption::No,
@@ -1696,6 +1869,7 @@ mod tests {
             entity: &entity,
             query_error,
             for_columns,
+            virtual_columns: Vec::new(),
             by_columns,
             cursor: &combo_cursor,
             delete: DeleteOption::No,
@@ -1796,6 +1970,7 @@ mod tests {
             entity: &entity,
             query_error,
             for_columns,
+            virtual_columns: Vec::new(),
             by_columns,
             cursor: &combo_cursor,
             delete: DeleteOption::No,
@@ -1886,6 +2061,7 @@ mod tests {
                 entity: &entity,
                 query_error: query_error.clone(),
                 for_columns: for_columns.clone(),
+                virtual_columns: Vec::new(),
                 by_columns: by_columns.clone(),
                 cursor: &combo_cursor,
                 delete: DeleteOption::No,
@@ -1931,6 +2107,225 @@ mod tests {
         assert!(
             !on.contains("COALESCE"),
             "fully-indexed catalog should not need the COALESCE fallback"
+        );
+    }
+
+    /// A virtual column alongside a physical `list_for` column: the filters
+    /// struct gains an `Option<bool>` field, the "no filters" and
+    /// single-physical-filter dispatch checks both require it to be absent,
+    /// and — with no index catalog to specialize anything — the fallback
+    /// query carries the predicate as a static `AND (EXISTS (...))`
+    /// conjunct with no bind parameter of its own.
+    #[test]
+    fn virtual_filter_column_generates_option_bool_field_and_none_checks() {
+        let entity = Ident::new("Task", Span::call_site());
+        let query_error = syn::Ident::new("TaskQueryError", Span::call_site());
+        let id = syn::Ident::new("TaskId", proc_macro2::Span::call_site());
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        let id_column = Column::for_id(syn::parse_str("TaskId").unwrap());
+        let id_ident = syn::Ident::new("id", proc_macro2::Span::call_site());
+        let status_column = Column::new_list_for(
+            syn::Ident::new("status", proc_macro2::Span::call_site()),
+            syn::parse_str("String").unwrap(),
+            vec![id_ident],
+        );
+        let flagged_column = Column::new_virtual(
+            syn::Ident::new("flagged", proc_macro2::Span::call_site()),
+            "EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)",
+        );
+
+        let for_columns = vec![&status_column];
+        let virtual_columns = vec![&flagged_column];
+        let by_columns = vec![&id_column];
+
+        let id_cursor = CursorStruct {
+            column: &id_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+        let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
+
+        let list_for_filters_fn = ListForFiltersFn {
+            in_op_only: false,
+            filters_struct: FiltersStruct::new_test_with_virtual(
+                &entity,
+                for_columns.clone(),
+                virtual_columns.clone(),
+            ),
+            entity: &entity,
+            query_error,
+            for_columns,
+            virtual_columns,
+            by_columns,
+            cursor: &combo_cursor,
+            delete: DeleteOption::No,
+            cursor_mod: cursor_mod.clone(),
+            table_name: "tasks",
+            ignore_prefix: None,
+            id: &id,
+            post_hydrate_error: None,
+            forgettable_table_name: None,
+            scope: None,
+            index_catalog: Default::default(),
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut struct_tokens = TokenStream::new();
+        list_for_filters_fn
+            .filters_struct
+            .to_tokens(&mut struct_tokens);
+        let struct_str = struct_tokens.to_string();
+
+        // The filters struct carries the virtual column as `Option<bool>`,
+        // after the physical fields.
+        assert!(
+            struct_str.contains("pub status : Option < String > , pub flagged : Option < bool > ,"),
+            "unexpected filters struct fields:\n{struct_str}"
+        );
+
+        let mut tokens = TokenStream::new();
+        list_for_filters_fn.to_tokens(&mut tokens);
+        let token_str = tokens.to_string();
+
+        // The "no filters at all" proxy check requires the virtual field to
+        // be absent too.
+        assert!(
+            token_str.contains("filters . status . is_none () && filters . flagged . is_none ()"),
+            "expected the virtual column in the all-none dispatch check:\n{token_str}"
+        );
+        // `status` alone has a dedicated `list_for_status_by_id` fn, but a
+        // virtual `Some` must never take that shortcut.
+        assert!(
+            token_str.contains("filters . flagged . is_none ()"),
+            "expected a virtual none-check gating the single-column shortcut:\n{token_str}"
+        );
+
+        // With no index catalog, the unified fallback query carries the
+        // predicate as an unparameterized static conjunct.
+        assert!(
+            token_str
+                .contains("AND (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id))"),
+            "expected the virtual predicate as a static AND conjunct:\n{token_str}"
+        );
+        // It binds no query parameter of its own — every bind in the
+        // fallback query is still `filter_status` (the only physical
+        // for_column) or a cursor argument.
+        assert!(
+            !token_str.contains("flagged as"),
+            "the virtual predicate must not bind a query parameter:\n{token_str}"
+        );
+    }
+
+    /// A repo with *only* a virtual filter column (no physical `list_for`
+    /// columns) still emits the full `list_for_filters*` apparatus, and the
+    /// dispatch proxy routes through it whenever the virtual filter is set
+    /// — it must never silently degrade to plain `list_by`.
+    #[test]
+    fn virtual_only_filter_column_still_dispatches_through_list_for_filters() {
+        let entity = Ident::new("Task", Span::call_site());
+        let query_error = syn::Ident::new("TaskQueryError", Span::call_site());
+        let id = syn::Ident::new("TaskId", proc_macro2::Span::call_site());
+        let cursor_mod = Ident::new("cursor_mod", Span::call_site());
+
+        let id_column = Column::for_id(syn::parse_str("TaskId").unwrap());
+        let flagged_column = Column::new_virtual(
+            syn::Ident::new("flagged", proc_macro2::Span::call_site()),
+            "EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)",
+        );
+
+        let for_columns: Vec<&Column> = vec![];
+        let virtual_columns = vec![&flagged_column];
+        let by_columns = vec![&id_column];
+
+        let id_cursor = CursorStruct {
+            column: &id_column,
+            id: &id,
+            entity: &entity,
+            cursor_mod: &cursor_mod,
+        };
+        let combo_cursor = ComboCursor::new_test(&entity, vec![id_cursor]);
+
+        let list_for_filters_fn = ListForFiltersFn {
+            in_op_only: false,
+            filters_struct: FiltersStruct::new_test_with_virtual(
+                &entity,
+                for_columns.clone(),
+                virtual_columns.clone(),
+            ),
+            entity: &entity,
+            query_error,
+            for_columns,
+            virtual_columns,
+            by_columns,
+            cursor: &combo_cursor,
+            delete: DeleteOption::No,
+            cursor_mod: cursor_mod.clone(),
+            table_name: "tasks",
+            ignore_prefix: None,
+            id: &id,
+            post_hydrate_error: None,
+            forgettable_table_name: None,
+            scope: None,
+            index_catalog: Default::default(),
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut struct_tokens = TokenStream::new();
+        list_for_filters_fn
+            .filters_struct
+            .to_tokens(&mut struct_tokens);
+        let struct_str = struct_tokens.to_string();
+        assert!(struct_str.contains("pub struct TaskFilters"));
+        assert!(struct_str.contains("pub flagged : Option < bool > ,"));
+
+        let mut tokens = TokenStream::new();
+        list_for_filters_fn.to_tokens(&mut tokens);
+        let token_str = tokens.to_string();
+        // The proxy must check the virtual filter before falling back to
+        // plain `list_by`, and route to `list_for_filters_by_id` (never a
+        // per-column fn — none exists for a virtual column) when it's set.
+        assert!(
+            token_str.contains(
+                "if filters . flagged . is_none () { self . list_by_id_in_op (op , query , direction) . await ? }"
+            ),
+            "unexpected proxy body:\n{token_str}"
+        );
+        assert!(
+            token_str.contains(
+                "self . list_for_filters_by_id_in_op (op , filters , query , direction) . await ?"
+            ),
+            "expected the virtual-only case to fall back to the unified filters fn:\n{token_str}"
+        );
+        assert!(
+            token_str
+                .contains("AND (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id))"),
+            "expected the virtual predicate in the fallback query:\n{token_str}"
+        );
+    }
+
+    /// `virtual = "..."` is rejected outright when it isn't paired with a
+    /// bare `list_for` — asserted at the full-derive level (rather than
+    /// [`super::super::options::columns`]'s narrower unit tests) so the
+    /// error surfaces exactly the way a consumer would see it.
+    #[test]
+    fn virtual_column_without_list_for_is_rejected_by_derive() {
+        let input: syn::DeriveInput = syn::parse_quote! {
+            #[es_repo(
+                entity = "Task",
+                columns(flagged(ty = "bool", virtual = "TRUE"))
+            )]
+            struct Tasks {
+                pool: sqlx::PgPool,
+            }
+        };
+        let err = super::super::derive(input).unwrap_err();
+        assert!(
+            err.to_string().contains("must be marked `list_for`"),
+            "unexpected error: {err}"
         );
     }
 }

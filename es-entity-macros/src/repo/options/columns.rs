@@ -4,6 +4,12 @@ use quote::quote;
 #[derive(Default)]
 pub struct Columns {
     all: Vec<Column>,
+    /// Columns declared with `virtual = "<sql predicate>"`: a SQL predicate
+    /// spliced verbatim into `list_for_filters*` as a conjunct, rather than a
+    /// physical column. Kept out of `all` so every existing iterator over it
+    /// (create/update persistence, scope, find_by/list_by, the Column enum,
+    /// …) never sees one — see [`Self::validate_virtual`].
+    virtual_columns: Vec<Column>,
     /// Set by an `id(scope)` / `id(scope(variant = "..."))` entry in
     /// `columns(...)`: marks the implicit `id` column as the repo's scope
     /// column (applied in [`Self::set_id_column`]). Used by tenancy-root
@@ -13,12 +19,19 @@ pub struct Columns {
     id_scope_opts: Option<ScopeOpts>,
 }
 
+/// Splits parsed columns into physical (`all`) and `virtual = "..."`
+/// (`virtual_columns`) buckets, in declaration order within each bucket.
+fn partition_virtual(columns: Vec<Column>) -> (Vec<Column>, Vec<Column>) {
+    columns.into_iter().partition(|c| !c.opts.is_virtual())
+}
+
 impl Columns {
     #[cfg(test)]
     pub fn new(id: &syn::Ident, columns: impl IntoIterator<Item = Column>) -> Self {
-        let all = columns.into_iter().collect();
+        let (all, virtual_columns) = partition_virtual(columns.into_iter().collect());
         let mut res = Columns {
             all,
+            virtual_columns,
             id_scope_opts: None,
         };
         res.set_id_column(id);
@@ -43,6 +56,13 @@ impl Columns {
 
     pub fn all_list_for(&self) -> impl Iterator<Item = &Column> {
         self.all.iter().filter(|c| c.opts.list_for())
+    }
+
+    /// Virtual filter columns (`virtual = "<sql>"`), in declaration order.
+    /// These participate only in `list_for_filters*` — never `list_by`,
+    /// `find_by`, or a per-column `list_for_{name}_by_{sort}` fn.
+    pub fn all_virtual_filters(&self) -> impl Iterator<Item = &Column> {
+        self.virtual_columns.iter()
     }
 
     /// The columns marked `scope`, in declaration order (declaration order
@@ -167,6 +187,85 @@ impl Columns {
                         available.join(", "),
                     )));
                 }
+            }
+        }
+        errors.finish()
+    }
+
+    /// Validates every `virtual = "<sql>"` column: `ty` must be exactly
+    /// `bool`, `list_for` must be present as the bare word (`list_for(by(...))`
+    /// is rejected — a virtual column never gets a per-column
+    /// `list_for_{name}_by_{sort}` fn, so there is no `by` to declare), no
+    /// other column option may be set, and the predicate must be non-empty
+    /// after trimming.
+    pub fn validate_virtual(&self) -> darling::Result<()> {
+        let mut errors = darling::Error::accumulator();
+        for col in &self.virtual_columns {
+            let name = col.name();
+            if !is_bare_bool(&col.opts.ty) {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' must declare `ty = \"bool\"`"
+                )));
+            }
+            match &col.opts.list_for_opts {
+                None => {
+                    errors.push(darling::Error::custom(format!(
+                        "virtual column '{name}' must be marked `list_for`"
+                    )));
+                }
+                Some(opts) if !opts.is_bare => {
+                    errors.push(darling::Error::custom(format!(
+                        "virtual column '{name}' must use bare `list_for` — `list_for(by(...))` is not supported on virtual columns (no per-column list_for fn is generated for them)"
+                    )));
+                }
+                _ => {}
+            }
+            if col.opts.find_by.is_some() {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' cannot set `find_by`"
+                )));
+            }
+            if col.opts.list_by.is_some() {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' cannot set `list_by`"
+                )));
+            }
+            if col.opts.scope_opts.is_some() {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' cannot be `scope`"
+                )));
+            }
+            if col.opts.parent_opts.is_some() {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' cannot be `parent`"
+                )));
+            }
+            if col.opts.nullable.is_some() {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' cannot set `nullable`"
+                )));
+            }
+            if col.opts.create_opts.is_some() {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' cannot set `create`"
+                )));
+            }
+            if col.opts.update_opts.is_some() {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' cannot set `update`"
+                )));
+            }
+            if col
+                .opts
+                .virtual_predicate
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .is_empty()
+            {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' has an empty predicate"
+                )));
             }
         }
         errors.finish()
@@ -507,7 +606,12 @@ impl FromMeta for Columns {
             }
             all.push(Column::from_nested_meta(item)?);
         }
-        Ok(Columns { all, id_scope_opts })
+        let (all, virtual_columns) = partition_virtual(all);
+        Ok(Columns {
+            all,
+            virtual_columns,
+            id_scope_opts,
+        })
     }
 }
 
@@ -596,7 +700,10 @@ impl Column {
         Column {
             name,
             opts: ColumnOpts {
-                list_for_opts: Some(ListForOpts { by_columns }),
+                list_for_opts: Some(ListForOpts {
+                    by_columns,
+                    is_bare: false,
+                }),
                 ..ColumnOpts::new(ty)
             },
         }
@@ -609,6 +716,23 @@ impl Column {
             opts: ColumnOpts {
                 nullable: Some(true),
                 ..ColumnOpts::new(ty)
+            },
+        }
+    }
+
+    /// Test-only constructor for a valid `virtual = "<sql>"` filter column:
+    /// `ty = bool`, bare `list_for`, predicate as given.
+    #[cfg(test)]
+    pub fn new_virtual(name: syn::Ident, predicate: &str) -> Self {
+        Column {
+            name,
+            opts: ColumnOpts {
+                list_for_opts: Some(ListForOpts {
+                    by_columns: vec![syn::Ident::new("id", proc_macro2::Span::call_site())],
+                    is_bare: true,
+                }),
+                virtual_predicate: Some(predicate.to_string()),
+                ..ColumnOpts::new(syn::parse_quote!(bool))
             },
         }
     }
@@ -634,6 +758,7 @@ impl Column {
                     persist: Some(false),
                     accessor: None,
                 }),
+                virtual_predicate: None,
             },
         }
     }
@@ -665,6 +790,7 @@ impl Column {
                             .expect("entity not persisted")
                     )),
                 }),
+                virtual_predicate: None,
             },
         }
     }
@@ -675,6 +801,16 @@ impl Column {
 
     pub fn is_id(&self) -> bool {
         self.opts.is_id
+    }
+
+    /// The verbatim SQL predicate of a `virtual = "<sql>"` column. Panics on
+    /// a non-virtual column — callers only ever hold virtual columns via
+    /// [`Columns::all_virtual_filters`].
+    pub fn virtual_predicate(&self) -> &str {
+        self.opts
+            .virtual_predicate
+            .as_deref()
+            .expect("virtual_predicate called on a non-virtual column")
     }
 
     /// The scope enum variant ident for this column: the explicit
@@ -867,6 +1003,13 @@ fn forgettable_inner(ty: &syn::Type) -> Option<syn::Type> {
     None
 }
 
+/// True iff `ty` is syntactically the bare `bool` path, with no
+/// qualification. Used to enforce that a `virtual = "<sql>"` column declares
+/// `ty = "bool"` — the only Rust type a SQL predicate conjunct can mean.
+fn is_bare_bool(ty: &syn::Type) -> bool {
+    matches!(ty, syn::Type::Path(type_path) if type_path.path.is_ident("bool"))
+}
+
 /// If `ty` is `Option<Inner>`, returns `Inner`; otherwise `None`.
 fn option_inner(ty: &syn::Type) -> Option<syn::Type> {
     if let syn::Type::Path(type_path) = ty
@@ -924,6 +1067,12 @@ struct ColumnOpts {
     create_opts: Option<CreateOpts>,
     #[darling(default, rename = "update")]
     update_opts: Option<UpdateOpts>,
+    /// `virtual = "<sql predicate>"`: marks this a virtual filter column — a
+    /// SQL predicate spliced verbatim into `list_for_filters*` as a conjunct,
+    /// rather than a physical index column. Validated by
+    /// [`Columns::validate_virtual`].
+    #[darling(default, rename = "virtual")]
+    virtual_predicate: Option<String>,
 }
 
 impl ColumnOpts {
@@ -940,6 +1089,7 @@ impl ColumnOpts {
             parent_opts: None,
             create_opts: None,
             update_opts: None,
+            virtual_predicate: None,
         };
         opts.normalize_forgettable();
         opts
@@ -970,6 +1120,10 @@ impl ColumnOpts {
 
     fn list_for(&self) -> bool {
         self.list_for_opts.is_some()
+    }
+
+    fn is_virtual(&self) -> bool {
+        self.virtual_predicate.is_some()
     }
 
     fn list_for_by_columns(&self) -> &[syn::Ident] {
@@ -1062,12 +1216,17 @@ struct UpdateOpts {
 #[derive(PartialEq, Debug, Default)]
 struct ListForOpts {
     by_columns: Vec<syn::Ident>,
+    /// True iff this was the bare `list_for` word (or `list_for = true`), as
+    /// opposed to `list_for(by(...))`. A virtual filter column requires the
+    /// bare form — see [`Columns::validate_virtual`].
+    is_bare: bool,
 }
 
 impl FromMeta for ListForOpts {
     fn from_word() -> darling::Result<Self> {
         Ok(ListForOpts {
             by_columns: vec![syn::Ident::new("id", proc_macro2::Span::call_site())],
+            is_bare: true,
         })
     }
 
@@ -1099,7 +1258,10 @@ impl FromMeta for ListForOpts {
                 }
             }
         }
-        Ok(ListForOpts { by_columns })
+        Ok(ListForOpts {
+            by_columns,
+            is_bare: false,
+        })
     }
 }
 
@@ -1585,5 +1747,118 @@ mod tests {
         let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
         let err = columns.validate_scope().unwrap_err().to_string();
         assert!(err.contains("same Rust type"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn virtual_column_is_partitioned_out_of_all() {
+        let input: syn::Meta = parse_quote!(columns(
+            status(ty = "String", list_for),
+            flagged(
+                ty = "bool",
+                virtual = "EXISTS (SELECT 1 FROM flags f WHERE f.id = t.id)",
+                list_for
+            )
+        ));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        assert_eq!(columns.all.len(), 1);
+        assert_eq!(columns.all[0].name().to_string(), "status");
+        assert_eq!(columns.virtual_columns.len(), 1);
+        let flagged = &columns.virtual_columns[0];
+        assert_eq!(flagged.name().to_string(), "flagged");
+        assert_eq!(
+            flagged.virtual_predicate(),
+            "EXISTS (SELECT 1 FROM flags f WHERE f.id = t.id)"
+        );
+        // `all_list_for` (drives the per-column `list_for_{name}_by_{sort}`
+        // fns) must not see the virtual column.
+        assert_eq!(columns.all_list_for().count(), 1);
+        assert_eq!(columns.all_virtual_filters().count(), 1);
+        assert!(columns.validate_virtual().is_ok());
+    }
+
+    #[test]
+    fn virtual_column_rejects_non_bool_ty() {
+        let input: syn::Meta = parse_quote!(columns(flagged(
+            ty = "String",
+            virtual = "TRUE",
+            list_for
+        )));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_virtual().unwrap_err().to_string();
+        assert!(err.contains("ty = \"bool\""), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn virtual_column_requires_list_for() {
+        let input: syn::Meta = parse_quote!(columns(flagged(ty = "bool", virtual = "TRUE")));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_virtual().unwrap_err().to_string();
+        assert!(
+            err.contains("must be marked `list_for`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn virtual_column_rejects_list_for_by() {
+        let input: syn::Meta = parse_quote!(columns(flagged(
+            ty = "bool",
+            virtual = "TRUE",
+            list_for(by(created_at))
+        )));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_virtual().unwrap_err().to_string();
+        assert!(err.contains("bare `list_for`"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn virtual_column_rejects_other_options() {
+        for extra in [
+            "find_by = true",
+            "list_by = true",
+            "scope",
+            "nullable = true",
+            "create(persist = false)",
+            "update(persist = false)",
+        ] {
+            let src =
+                format!(r#"columns(flagged(ty = "bool", virtual = "TRUE", list_for, {extra}))"#);
+            let input: syn::Meta = syn::parse_str(&src).unwrap();
+            let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+            let err = columns.validate_virtual();
+            assert!(
+                err.is_err(),
+                "expected `{extra}` to be rejected on a virtual column"
+            );
+        }
+    }
+
+    #[test]
+    fn virtual_column_rejects_empty_predicate() {
+        let input: syn::Meta =
+            parse_quote!(columns(flagged(ty = "bool", virtual = "   ", list_for)));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_virtual().unwrap_err().to_string();
+        assert!(err.contains("empty predicate"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn virtual_column_does_not_persist_on_create_or_update() {
+        // Regression guard for the partitioning itself: were a virtual
+        // column left in `all`, its default persist-on-create/update would
+        // silently add it to the INSERT/UPDATE column lists.
+        let input: syn::Meta = parse_quote!(columns(flagged(
+            ty = "bool",
+            virtual = "TRUE",
+            list_for
+        )));
+        let mut columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        columns.set_id_column(&parse_quote!(TestId));
+        assert!(
+            !columns
+                .insert_column_names()
+                .contains(&"flagged".to_string())
+        );
+        assert!(!columns.sql_updates().contains("flagged"));
     }
 }
