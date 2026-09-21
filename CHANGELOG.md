@@ -1,3 +1,11 @@
+# [cala release v0.13.1](https://github.com/GaloyMoney/cala/releases/tag/0.13.1)
+
+
+
+### Features
+
+- Virtual filter columns — SQL predicate as a list_for_filters field (#236)
+
 # [cala release v0.13.0](https://github.com/GaloyMoney/cala/releases/tag/0.13.0)
 
 
