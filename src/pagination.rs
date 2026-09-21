@@ -87,17 +87,14 @@ pub struct Sort<T> {
 /// }
 /// ```
 #[derive(Debug)]
-pub struct PaginatedQueryArgs<T: std::fmt::Debug> {
+pub struct PaginatedQueryArgs<T> {
     /// Specifies the number of entities to fetch per query
     pub first: usize,
     /// Specifies the cursor/marker to start from for current query
     pub after: Option<T>,
 }
 
-impl<T: std::fmt::Debug> Clone for PaginatedQueryArgs<T>
-where
-    T: Clone,
-{
+impl<T: Clone> Clone for PaginatedQueryArgs<T> {
     fn clone(&self) -> Self {
         Self {
             first: self.first,
@@ -106,7 +103,7 @@ where
     }
 }
 
-impl<T: std::fmt::Debug> Default for PaginatedQueryArgs<T> {
+impl<T> Default for PaginatedQueryArgs<T> {
     /// Default value fetches first 100 entities
     fn default() -> Self {
         Self {
@@ -126,7 +123,7 @@ pub struct Continuation<C> {
     pub first: usize,
 }
 
-impl<C: std::fmt::Debug> From<Continuation<C>> for PaginatedQueryArgs<C> {
+impl<C> From<Continuation<C>> for PaginatedQueryArgs<C> {
     fn from(continuation: Continuation<C>) -> Self {
         Self {
             first: continuation.first,
@@ -227,10 +224,7 @@ impl<T, C> PaginatedQueryRet<T, C> {
         }
     }
 
-    pub fn into_next_query(self) -> Option<PaginatedQueryArgs<C>>
-    where
-        C: std::fmt::Debug,
-    {
+    pub fn into_next_query(self) -> Option<PaginatedQueryArgs<C>> {
         match self.into_page() {
             Page::Last { .. } => None,
             Page::HasNext { next, .. } => Some(next.into()),
