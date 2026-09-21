@@ -938,8 +938,8 @@ impl<'a> ListForFiltersFn<'a> {
         // virtual columns — whose predicate is opaque SQL binding no
         // parameters, so it cannot ride the same COALESCE trick physical
         // optional columns use — it becomes one static fallback query per
-        // virtual state combo, wildcarding the (already-COALESCEd) physical
-        // dimension via a `..` rest pattern.
+        // virtual state combo, wildcarding the (already COALESCE-based)
+        // physical dimension via a `..` rest pattern.
         let build_fallback_arms = |scope: Option<&ScopeCol>,
                                    all_specialized: bool|
          -> (TokenStream, TokenStream) {
