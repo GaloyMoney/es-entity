@@ -112,6 +112,62 @@ The `list_for_filters` function matches on the sort column and intelligently del
 
 **Column Options**: Filter fields are generated for columns with the `list_for` option. Sort options are generated for columns with `list_by` (ID and created_at are included by default).
 
+## Virtual filters
+
+A `columns(...)` entry may declare a SQL predicate instead of a physical
+column with `virtual = "<sql>"` plus bare `list_for`:
+
+```rust,ignore
+#[derive(EsRepo)]
+#[es_repo(
+    entity = "Order",
+    columns(
+        status(ty = "OrderStatus", list_for),
+        has_open_ticket(
+            ty = "bool",
+            virtual = "EXISTS (SELECT 1 FROM support_tickets t
+                       WHERE t.order_id = orders.id
+                         AND t.status = 'open')",
+            list_for
+        ),
+    ),
+)]
+pub struct OrderRepo { /* .. */ }
+```
+
+This is for filtering an entity by a fact that lives on *another* table —
+composing that fact into the ordinary `list_for_filters` query (same sort,
+same cursor, same scope) instead of hand-writing a bespoke query outside the
+repo. `ty` must be `bool`; nothing else about the entity, the DB table, or
+any other generated fn changes.
+
+The filters struct gains a matching `Option<bool>` field with three states:
+
+- `None` — no conjunct is added; the predicate plays no part in the query.
+- `Some(true)` — the predicate is added as `AND (<sql>)`.
+- `Some(false)` — the predicate is added as `AND NOT (<sql>)`.
+
+A few things follow from the predicate being **opaque, unparameterized SQL**
+spliced verbatim into the generated queries (still validated against your
+schema by sqlx at compile time):
+
+- It must reference the outer row by the repo's **full table name** — the
+  generated queries select `FROM {table}` with no alias, so `orders.id`
+  (not a bare `id`, which would ambiguously resolve inside a correlated
+  subquery) is what's in scope.
+- It binds **no query parameters** of its own.
+- A virtual column never gets a per-column `list_for_{name}_by_{sort}` fn —
+  it only ever participates in the unified `list_for_filters*` path. As soon
+  as any virtual filter is set, dispatch always goes through that path, even
+  for a repo with no *physical* `list_for` columns at all.
+- It never affects index-catalog specialization: it is not an equality
+  column, so it rides along as an extra conjunct on whichever arm (specialized
+  or catch-all) the *physical* filters already selected.
+- Each virtual column triples the static-query matrix for its `list_for_filters_by_{sort}`
+  fns (one arm per `None` / `Some(true)` / `Some(false)`) — fine for the
+  handful of virtual columns a repo is ever expected to declare, but keep
+  that build-cost multiplier in mind before adding several.
+
 ## Example
 
 ```rust

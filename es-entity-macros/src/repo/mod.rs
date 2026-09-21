@@ -33,6 +33,7 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
     let opts = RepositoryOptions::from_derive_input(&ast)?;
     opts.columns.validate_list_for_by_columns()?;
     opts.columns.validate_scope()?;
+    opts.columns.validate_virtual()?;
     opts.validate_forgettable()?;
     opts.validate_in_op_only()?;
     // `include_bytes!` the resolved migrations so Cargo re-runs this derive when
@@ -188,6 +189,7 @@ impl ToTokens for EsRepo<'_> {
         let list_for_filters = list_for_filters_fn::ListForFiltersFn::new(
             self.opts,
             self.opts.columns.all_list_for().collect(),
+            self.opts.columns.all_virtual_filters().collect(),
             self.opts.columns.all_list_by().collect(),
             &combo_cursor,
         );
