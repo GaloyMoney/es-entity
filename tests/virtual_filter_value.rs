@@ -173,11 +173,11 @@ async fn value_virtual_some_two_excludes_once_flagged() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Case 4: the two virtual dimensions compose — `min_flags: Some(1)` ANDed
-/// with `flagged: Some(false)` is a contradiction (an account cannot have
-/// zero matching rows in the `EXISTS` sense and simultaneously satisfy
-/// `count >= 1`) and returns nothing; ANDed with `flagged: Some(true)` it
-/// returns the flagged account.
+/// Case 4: the two virtual dimensions compose — `min_flags: Some(1)`
+/// combined (AND) with `flagged: Some(false)` is a contradiction (an
+/// account cannot have zero matching rows in the `EXISTS` sense and
+/// simultaneously satisfy `count >= 1`) and returns nothing; combined with
+/// `flagged: Some(true)` it returns the flagged account.
 #[tokio::test]
 async fn value_virtual_composes_with_bool_virtual() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
