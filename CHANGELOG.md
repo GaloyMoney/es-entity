@@ -1,3 +1,19 @@
+# [cala release v0.14.1](https://github.com/GaloyMoney/cala/releases/tag/0.14.1)
+
+
+
+### Bug Fixes
+
+- Use has_next_page() accessor in virtual_filter_value (#239)
+
+### Features
+
+- Parameterized virtual filter columns (#238)
+
+### Miscellaneous Tasks
+
+- Bump the all-dependencies group across 1 directory with 3 updates (#237)
+
 # [cala release v0.14.0](https://github.com/GaloyMoney/cala/releases/tag/0.14.0)
 
 
