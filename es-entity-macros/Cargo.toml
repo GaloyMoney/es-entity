@@ -30,4 +30,4 @@ regex = "1.12"
 # recursive -> stacker -> psm (C + build.rs) + libc and the
 # `Apache-2.0 WITH LLVM-exception` license. Migrations are shallow DDL, so the
 # stack-overflow guard is unnecessary; this leaves `log` as the only new dep.
-sqlparser = { version = "0.62", default-features = false, features = ["std"] }
+sqlparser = { version = "0.63", default-features = false, features = ["std"] }
