@@ -20,6 +20,7 @@ mod persist_events_fn;
 mod post_hydrate_hook;
 mod post_persist_hook;
 mod scope;
+mod snapshot_fns;
 mod update_all_fn;
 mod update_fn;
 
@@ -68,6 +69,7 @@ pub struct EsRepo<'a> {
     nested: Vec<nested::Nested<'a>>,
     hydrate_nested: Option<hydrate_nested::HydrateNested<'a>>,
     error_types: error_types::ErrorTypes<'a>,
+    snapshot_fns: Option<snapshot_fns::SnapshotFns<'a>>,
     opts: &'a RepositoryOptions,
 }
 
@@ -158,6 +160,7 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             nested,
             hydrate_nested,
             error_types: error_types::ErrorTypes::new(opts),
+            snapshot_fns: snapshot_fns::SnapshotFns::from(opts),
             opts,
         }
     }
@@ -220,6 +223,8 @@ impl ToTokens for EsRepo<'_> {
         let hydrate_nested_fns = &self.hydrate_nested_fns;
         let nested = &self.nested;
         let hydrate_nested = &self.hydrate_nested;
+        let snapshot_fns_in_impl = self.snapshot_fns.as_ref().map(|s| s.in_impl_tokens());
+        let snapshot_fns_outer = self.snapshot_fns.as_ref().map(|s| s.outer_tokens());
 
         let pool_fn = self.opts.pool_field().map(|pool_field| {
             quote! {
@@ -440,9 +445,11 @@ impl ToTokens for EsRepo<'_> {
                 #(#list_by_fns)*
                 #(#list_for_fns)*
                 #(#nested)*
+                #snapshot_fns_in_impl
             }
 
             #hydrate_nested
+            #snapshot_fns_outer
 
             impl #impl_generics es_entity::EsRepo for #repo #ty_generics #where_clause {
                 type Entity = #entity;

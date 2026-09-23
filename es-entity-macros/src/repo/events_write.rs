@@ -442,31 +442,6 @@ impl SnapshotUpsert<'_> {
         )
     }
 
-    /// The batch form: one row per entity whose `snapshot()` returned
-    /// `Some` (Rust filters `None`s out before building the arrays, so no
-    /// `WHERE ... IS NOT NULL` guard is needed here).
-    #[allow(clippy::too_many_arguments)]
-    pub fn cte_batch(
-        &self,
-        ids_p: usize,
-        seqs_p: usize,
-        snaps_p: usize,
-        firsts_p: usize,
-        fp_p: usize,
-        now_p: usize,
-    ) -> String {
-        let table = self.table;
-        format!(
-            "snap AS (INSERT INTO {table} (id, sequence, fingerprint, snapshot, first_recorded_at, recorded_at) \
-             SELECT u.id, u.sequence, ${fp_p}::BIGINT, u.snapshot, \
-             COALESCE(u.first, COALESCE(${now_p}, NOW())), COALESCE(${now_p}, NOW()) \
-             FROM UNNEST(${ids_p}, ${seqs_p}::INT[], ${snaps_p}::JSONB[], ${firsts_p}::TIMESTAMPTZ[]) AS u(id, sequence, snapshot, first) \
-             ON CONFLICT (id) DO UPDATE SET sequence = EXCLUDED.sequence, fingerprint = EXCLUDED.fingerprint, \
-             snapshot = EXCLUDED.snapshot, first_recorded_at = EXCLUDED.first_recorded_at, recorded_at = EXCLUDED.recorded_at \
-             WHERE EXCLUDED.sequence > {table}.sequence)"
-        )
-    }
-
     /// Calls `snapshot()` on the (already-staged) entity and gathers the
     /// bind values. Must run before the write statement. `entity` evaluates
     /// to `&Entity` (or `&mut Entity` via auto-deref); `events` to
@@ -484,42 +459,6 @@ impl SnapshotUpsert<'_> {
             });
             let __snapshot_head = (#events.len_persisted() + #events.len_new()) as i32;
             let __snapshot_first = #events.entity_first_persisted_at();
-        }
-    }
-
-    /// Declarations for the batch snapshot accumulators.
-    pub fn batch_declarations(&self) -> TokenStream {
-        quote! {
-            let mut snap_ids = Vec::new();
-            let mut snap_seqs: Vec<i32> = Vec::new();
-            let mut snap_jsons: Vec<es_entity::prelude::serde_json::Value> = Vec::new();
-            let mut snap_firsts: Vec<Option<chrono::DateTime<chrono::Utc>>> = Vec::new();
-            let mut snap_states = Vec::new();
-        }
-    }
-
-    /// Per-entity body of the batch gather loop: pushes into the
-    /// accumulators only when `snapshot()` returned `Some`, and remembers
-    /// the state (keyed by position, matching iteration order) for
-    /// compaction after the write. `id` evaluates to `&IdType`.
-    pub fn gather_batch(
-        &self,
-        entity: TokenStream,
-        events: TokenStream,
-        id: TokenStream,
-        entity_ty: &syn::Ident,
-    ) -> TokenStream {
-        quote! {
-            let __snapshot = <#entity_ty as es_entity::Snapshotting>::snapshot(&*#entity);
-            if let Some(ref s) = __snapshot {
-                snap_ids.push(#id);
-                snap_seqs.push((#events.len_persisted() + #events.len_new()) as i32);
-                snap_jsons.push(
-                    es_entity::prelude::serde_json::to_value(s).expect("Failed to serialize snapshot"),
-                );
-                snap_firsts.push(#events.entity_first_persisted_at());
-            }
-            snap_states.push(__snapshot);
         }
     }
 

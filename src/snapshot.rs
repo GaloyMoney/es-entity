@@ -183,3 +183,5 @@ impl std::fmt::Display for SnapshotMismatch {
         )
     }
 }
+
+impl std::error::Error for SnapshotMismatch {}

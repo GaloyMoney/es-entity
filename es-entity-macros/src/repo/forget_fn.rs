@@ -14,11 +14,13 @@ pub struct ForgetFn<'a> {
     entity: &'a syn::Ident,
     event: &'a syn::Ident,
     error: syn::Ident,
+    find_error: syn::Ident,
     table_name: &'a str,
     events_table_name: &'a str,
     event_ctx: bool,
     forgettable_table_name: &'a str,
     forgettable_columns: Vec<&'a syn::Ident>,
+    snapshot_table_name: Option<&'a str>,
     post_persist_error: Option<&'a syn::Type>,
 }
 
@@ -30,6 +32,7 @@ impl<'a> ForgetFn<'a> {
             entity: opts.entity(),
             event: opts.event(),
             error: opts.forget_error(),
+            find_error: opts.find_error(),
             table_name: opts.table_name(),
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
@@ -37,6 +40,7 @@ impl<'a> ForgetFn<'a> {
                 .forgettable_table_name()
                 .expect("forgettable must be enabled"),
             forgettable_columns: opts.columns.forgettable_column_names(),
+            snapshot_table_name: opts.snapshot_table_name(),
             post_persist_error: opts.post_persist_hook.as_ref().map(|h| &h.error),
         }
     }
@@ -183,6 +187,47 @@ impl ToTokens for ForgetFn<'_> {
             quote! {}
         };
 
+        let find_error = &self.find_error;
+        let (delete_snapshot_row, rebuild, re_snapshot) = match self.snapshot_table_name {
+            Some(snapshot_tbl) => {
+                let delete_query = format!("DELETE FROM {snapshot_tbl} WHERE id = $1");
+                (
+                    quote! {
+                        sqlx::query!(#delete_query, &entity.id as &#id_type)
+                            .execute(op.as_executor())
+                            .await?;
+                    },
+                    quote! {
+                        let mut entity: #entity_type = self
+                            .full_history()
+                            .find_by_id_in_op(&mut *op, entity.id)
+                            .await
+                            .map_err(|e| match e {
+                                #find_error::NotFound { .. } => #error::ConcurrentModification,
+                                #find_error::Sqlx(e) => #error::Sqlx(e),
+                                #find_error::HydrationError(e) => #error::HydrationError(e),
+                                _ => unreachable!(
+                                    "full_history().find_by_id_in_op cannot produce this error"
+                                ),
+                            })?;
+                    },
+                    quote! {
+                        self.persist_snapshot_in_op(op, &mut entity).await?;
+                    },
+                )
+            }
+            None => (
+                quote! {},
+                quote! {
+                    let events = entity.events_mut().forget_and_take(
+                        #event_type::forget_forgettable_payloads
+                    );
+                    let entity: #entity_type = es_entity::TryFromEvents::try_from_events(events)?;
+                },
+                quote! {},
+            ),
+        };
+
         let standalone = (!self.in_op_only).then(|| {
             quote! {
                 /// Permanently forgets the entity's forgettable data. Consumes the
@@ -254,11 +299,10 @@ impl ToTokens for ForgetFn<'_> {
                     .await?;
                 }
                 #count_persisted
-                let events = entity.events_mut().forget_and_take(
-                    #event_type::forget_forgettable_payloads
-                );
-                let entity: #entity_type = es_entity::TryFromEvents::try_from_events(events)?;
+                #delete_snapshot_row
+                #rebuild
                 #post_persist_check
+                #re_snapshot
                 Ok(entity)
             }
         });
@@ -435,11 +479,13 @@ mod tests {
             entity: &entity,
             event: &event,
             error,
+            find_error: Ident::new("EntityFindError", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: Vec::new(),
+            snapshot_table_name: None,
             post_persist_error: None,
         };
 
@@ -486,11 +532,13 @@ mod tests {
             entity: &entity,
             event: &event,
             error,
+            find_error: Ident::new("EntityFindError", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: vec![&email],
+            snapshot_table_name: None,
             post_persist_error: None,
         };
 
@@ -532,11 +580,13 @@ mod tests {
             entity: &entity,
             event: &event,
             error,
+            find_error: Ident::new("EntityFindError", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: Vec::new(),
+            snapshot_table_name: None,
             post_persist_error: Some(&hook_error),
         };
 
@@ -580,11 +630,13 @@ mod tests {
             entity: &entity,
             event: &event,
             error,
+            find_error: Ident::new("EntityFindError", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: vec![&email],
+            snapshot_table_name: None,
             post_persist_error: Some(&hook_error),
         };
 
