@@ -36,6 +36,7 @@ pub mod one_time_executor;
 pub mod operation;
 pub mod pagination;
 pub mod query;
+pub mod snapshot;
 pub mod sql_commenter;
 pub mod traits;
 pub mod tree_query;
@@ -80,6 +81,8 @@ pub use operation::*;
 pub use pagination::*;
 #[doc(inline)]
 pub use query::*;
+#[doc(inline)]
+pub use snapshot::*;
 #[doc(inline)]
 pub use traits::*;
 #[doc(inline)]

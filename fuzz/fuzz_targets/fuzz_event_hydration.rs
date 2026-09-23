@@ -51,6 +51,7 @@ struct FuzzEntity {
 impl EsEntity for FuzzEntity {
     type Event = FuzzEvent;
     type New = NewFuzzEntity;
+    type Snapshot = es_entity::NoSnapshot;
 
     fn events(&self) -> &EntityEvents<FuzzEvent> {
         &self.events
@@ -100,11 +101,11 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
 
-    let _ = EntityEvents::<FuzzEvent>::load_first::<FuzzEntity>(make_events(&values));
+    let _ = EntityEvents::<FuzzEvent>::load_first::<FuzzEntity, _>(make_events(&values));
 
     let n = (values.len() % 8) + 1;
     if let Ok((entities, _more)) =
-        EntityEvents::<FuzzEvent>::load_n::<FuzzEntity>(make_events(&values), n)
+        EntityEvents::<FuzzEvent>::load_n::<FuzzEntity, _>(make_events(&values), n)
     {
         assert!(entities.len() <= n, "load_n exceeded the requested limit");
     }

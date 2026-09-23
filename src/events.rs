@@ -2,7 +2,11 @@
 
 use chrono::{DateTime, Utc};
 
-use super::{error::EntityHydrationError, traits::*};
+use super::{
+    error::EntityHydrationError,
+    snapshot::{EsSnapshot, NoSnapshot, Replay, SnapshotRecord},
+    traits::*,
+};
 
 /// An alias for iterator over the persisted events
 pub type LastPersisted<'a, E> = std::slice::Iter<'a, PersistedEvent<E>>;
@@ -19,6 +23,76 @@ pub struct GenericEvent<Id> {
     pub context: Option<crate::ContextData>,
     pub recorded_at: DateTime<Utc>,
     pub forgettable_payload: Option<serde_json::Value>,
+}
+
+/// Row type of every loader on a `snapshot` repo (aliased as `Repo__DbEvent`
+/// there). `GenericEvent<Id>` itself is untouched — every existing repo's
+/// `query_as!` and `.sqlx` entry stay as is; this confines the wider row
+/// shape to snapshot repos only.
+pub struct SnapshotGenericEvent<Id> {
+    pub entity_id: Id,
+    pub sequence: i32,
+    pub event: Option<serde_json::Value>,
+    pub context: Option<crate::ContextData>,
+    pub recorded_at: Option<DateTime<Utc>>,
+    pub forgettable_payload: Option<serde_json::Value>,
+    pub snapshot: Option<serde_json::Value>,
+    pub snapshot_sequence: Option<i32>,
+    pub snapshot_recorded_at: Option<DateTime<Utc>>,
+    pub snapshot_first_recorded_at: Option<DateTime<Utc>>,
+    pub snapshot_forgettable_payload: Option<serde_json::Value>,
+}
+
+/// Internal common shape loaders normalise into before decoding a container.
+#[doc(hidden)]
+pub struct HydrationRow<Id> {
+    pub entity_id: Id,
+    pub sequence: i32,
+    pub event: Option<serde_json::Value>,
+    pub context: Option<crate::ContextData>,
+    pub recorded_at: Option<DateTime<Utc>>,
+    pub forgettable_payload: Option<serde_json::Value>,
+    pub snapshot: Option<serde_json::Value>,
+    pub snapshot_sequence: Option<i32>,
+    pub snapshot_recorded_at: Option<DateTime<Utc>>,
+    pub snapshot_first_recorded_at: Option<DateTime<Utc>>,
+    pub snapshot_forgettable_payload: Option<serde_json::Value>,
+}
+
+impl<Id> From<GenericEvent<Id>> for HydrationRow<Id> {
+    fn from(e: GenericEvent<Id>) -> Self {
+        Self {
+            entity_id: e.entity_id,
+            sequence: e.sequence,
+            event: Some(e.event),
+            context: e.context,
+            recorded_at: Some(e.recorded_at),
+            forgettable_payload: e.forgettable_payload,
+            snapshot: None,
+            snapshot_sequence: None,
+            snapshot_recorded_at: None,
+            snapshot_first_recorded_at: None,
+            snapshot_forgettable_payload: None,
+        }
+    }
+}
+
+impl<Id> From<SnapshotGenericEvent<Id>> for HydrationRow<Id> {
+    fn from(e: SnapshotGenericEvent<Id>) -> Self {
+        Self {
+            entity_id: e.entity_id,
+            sequence: e.sequence,
+            event: e.event,
+            context: e.context,
+            recorded_at: e.recorded_at,
+            forgettable_payload: e.forgettable_payload,
+            snapshot: e.snapshot,
+            snapshot_sequence: e.snapshot_sequence,
+            snapshot_recorded_at: e.snapshot_recorded_at,
+            snapshot_first_recorded_at: e.snapshot_first_recorded_at,
+            snapshot_forgettable_payload: e.snapshot_forgettable_payload,
+        }
+    }
 }
 
 /// Strongly-typed event wrapper with metadata for successfully stored events.
@@ -70,28 +144,37 @@ impl<E: Clone + EsEvent> Clone for EventWithContext<E> {
 ///
 /// Provides event sourcing operations for loading, appending, and persisting events in chronological
 /// sequence. Required field for all event-sourced entities to maintain their state change history.
-pub struct EntityEvents<T: EsEvent> {
+pub struct EntityEvents<T: EsEvent, S: EsSnapshot = NoSnapshot> {
     /// The entity's id
     pub entity_id: <T as EsEvent>::EntityId,
-    /// Events that have been persisted in database and marked
+    /// Sequence of the last event folded into `snapshot` (0 when none). The
+    /// tail (`persisted_events`) starts at `base_sequence + 1`.
+    base_sequence: usize,
+    /// The loaded snapshot, if any.
+    snapshot: Option<SnapshotRecord<S>>,
+    /// Events that have been persisted in database and marked (the tail,
+    /// after the snapshot).
     persisted_events: Vec<PersistedEvent<T>>,
     /// New events that are yet to be persisted to track state changes
     new_events: Vec<EventWithContext<T>>,
 }
 
-impl<T: Clone + EsEvent> Clone for EntityEvents<T> {
+impl<T: Clone + EsEvent, S: EsSnapshot + Clone> Clone for EntityEvents<T, S> {
     fn clone(&self) -> Self {
         Self {
             entity_id: self.entity_id.clone(),
+            base_sequence: self.base_sequence,
+            snapshot: self.snapshot.clone(),
             persisted_events: self.persisted_events.clone(),
             new_events: self.new_events.clone(),
         }
     }
 }
 
-impl<T> EntityEvents<T>
+impl<T, S> EntityEvents<T, S>
 where
     T: EsEvent,
+    S: EsSnapshot,
 {
     /// Initializes a new `EntityEvents` instance with the given entity ID and initial events which is returned by [`IntoEvents`] method
     pub fn init(id: <T as EsEvent>::EntityId, initial_events: impl IntoIterator<Item = T>) -> Self {
@@ -109,6 +192,8 @@ where
             .collect();
         Self {
             entity_id: id,
+            base_sequence: 0,
+            snapshot: None,
             persisted_events: Vec::new(),
             new_events,
         }
@@ -121,12 +206,18 @@ where
 
     /// Returns the timestamp of the first persisted event, indicating when the entity was created
     pub fn entity_first_persisted_at(&self) -> Option<DateTime<Utc>> {
-        self.persisted_events.first().map(|e| e.recorded_at)
+        self.snapshot
+            .as_ref()
+            .map(|s| s.first_recorded_at)
+            .or_else(|| self.persisted_events.first().map(|e| e.recorded_at))
     }
 
     /// Returns the timestamp of the last persisted event, indicating when the entity was last modified
     pub fn entity_last_modified_at(&self) -> Option<DateTime<Utc>> {
-        self.persisted_events.last().map(|e| e.recorded_at)
+        self.persisted_events
+            .last()
+            .map(|e| e.recorded_at)
+            .or_else(|| self.snapshot.as_ref().map(|s| s.recorded_at))
     }
 
     /// Appends a single new event to the entity's event stream to be persisted later
@@ -158,65 +249,172 @@ where
         !self.new_events.is_empty()
     }
 
-    /// Returns the count of persisted events
+    /// Returns the count of persisted events, including those folded into the
+    /// snapshot. This is the OCC offset used by every write path.
     pub fn len_persisted(&self) -> usize {
+        self.base_sequence + self.persisted_events.len()
+    }
+
+    /// Returns the count of persisted events after the snapshot (the tail).
+    pub fn tail_len(&self) -> usize {
         self.persisted_events.len()
     }
 
-    /// Returns an iterator over all persisted events
-    pub fn iter_persisted(&self) -> impl DoubleEndedIterator<Item = &PersistedEvent<T>> + Clone {
-        self.persisted_events.iter()
+    #[doc(hidden)]
+    pub fn len_new(&self) -> usize {
+        self.new_events.len()
     }
 
-    /// Returns an iterator over the last `n` persisted events
-    ///
-    /// If fewer than `n` events have been persisted, all persisted events are
-    /// returned instead of panicking.
+    /// Returns the loaded snapshot, if any.
+    pub fn snapshot(&self) -> Option<&SnapshotRecord<S>> {
+        self.snapshot.as_ref()
+    }
+
+    /// Returns an iterator over the last `n` persisted events after the
+    /// snapshot, if any. This is what post-persist hooks receive.
     pub fn last_persisted(&self, n: usize) -> LastPersisted<'_, T> {
         let start = self.persisted_events.len().saturating_sub(n);
         self.persisted_events[start..].iter()
     }
 
-    /// Returns an iterator over all events (both persisted and new) in chronological order
-    pub fn iter_all(&self) -> impl DoubleEndedIterator<Item = &T> + Clone {
-        self.persisted_events
+    /// Returns an iterator over the full replay: the snapshot (if any),
+    /// first, followed by the tail and any new events, in chronological
+    /// order.
+    pub fn replay(&self) -> impl DoubleEndedIterator<Item = Replay<'_, T, S>> + Clone {
+        self.snapshot
             .iter()
-            .map(|e| &e.event)
-            .chain(self.new_events.iter().map(|e| &e.event))
+            .map(|r| Replay::Snapshot(&r.state))
+            .chain(
+                self.persisted_events
+                    .iter()
+                    .map(|e| Replay::Event(&e.event)),
+            )
+            .chain(self.new_events.iter().map(|e| Replay::Event(&e.event)))
     }
 
-    /// Loads and reconstructs the first entity from a stream of GenericEvents, marking events as `persisted`.
+    /// Like [`replay`][Self::replay] but only over persisted state: the
+    /// snapshot record (if any) followed by the persisted tail. No new
+    /// events.
+    pub fn replay_persisted(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = Replay<'_, PersistedEvent<T>, SnapshotRecord<S>>> + Clone
+    {
+        self.snapshot
+            .iter()
+            .map(Replay::Snapshot)
+            .chain(self.persisted_events.iter().map(Replay::Event))
+    }
+
+    /// Compacts the tail into a snapshot after a write that took one: the
+    /// persisted tail is dropped and replaced by the given state at the
+    /// current head. An entity in memory then looks exactly like a reload.
+    #[doc(hidden)]
+    pub fn compact_to_snapshot(
+        &mut self,
+        state: S,
+        recorded_at: DateTime<Utc>,
+        first_recorded_at: DateTime<Utc>,
+    ) {
+        debug_assert!(self.new_events.is_empty());
+        let sequence = self.len_persisted();
+        self.persisted_events.clear();
+        self.base_sequence = sequence;
+        self.snapshot = Some(SnapshotRecord {
+            sequence,
+            state,
+            recorded_at,
+            first_recorded_at,
+        });
+    }
+
+    /// Applies one hydration row (snapshot fields and/or an event) to this
+    /// container. Shared by `load_first` and `load_n`.
+    fn apply_hydration_row(
+        &mut self,
+        row: HydrationRow<<T as EsEvent>::EntityId>,
+    ) -> Result<(), EntityHydrationError> {
+        if let Some(mut snapshot_json) = row.snapshot
+            && S::IS_SNAPSHOT
+        {
+            if let Some(payload) = row.snapshot_forgettable_payload {
+                crate::forgettable::inject_forgettable_payload(&mut snapshot_json, payload);
+            }
+            let sequence = row
+                .snapshot_sequence
+                .expect("snapshot row missing snapshot_sequence");
+            let state: S = serde_json::from_value(snapshot_json)
+                .map_err(|source| EntityHydrationError::SnapshotDecode { sequence, source })?;
+            self.base_sequence = sequence as usize;
+            self.snapshot = Some(SnapshotRecord {
+                sequence: sequence as usize,
+                state,
+                recorded_at: row
+                    .snapshot_recorded_at
+                    .expect("snapshot row missing snapshot_recorded_at"),
+                first_recorded_at: row
+                    .snapshot_first_recorded_at
+                    .expect("snapshot row missing snapshot_first_recorded_at"),
+            });
+        }
+
+        match row.event {
+            Some(mut event_json) => {
+                if self.persisted_events.is_empty()
+                    && self.snapshot.is_some()
+                    && row.sequence as usize != self.base_sequence + 1
+                {
+                    return Err(EntityHydrationError::SnapshotGap {
+                        snapshot_sequence: self.base_sequence as i32,
+                        next_event_sequence: row.sequence,
+                    });
+                }
+                if let Some(payload) = row.forgettable_payload {
+                    crate::forgettable::inject_forgettable_payload(&mut event_json, payload);
+                }
+                self.persisted_events.push(PersistedEvent {
+                    entity_id: row.entity_id,
+                    recorded_at: row.recorded_at.expect("event row missing recorded_at"),
+                    sequence: row.sequence as usize,
+                    event: serde_json::from_value(event_json)?,
+                    context: row.context,
+                });
+                Ok(())
+            }
+            None if self.snapshot.is_some() => Ok(()),
+            None => Err(EntityHydrationError::NoEvents),
+        }
+    }
+
+    /// Loads and reconstructs the first entity from a stream of hydration
+    /// rows, marking events as `persisted`.
     ///
     /// Returns `Ok(None)` if no events are present, `Ok(Some(entity))` on success.
-    pub fn load_first<E: EsEntity<Event = T>>(
-        events: impl IntoIterator<Item = GenericEvent<<T as EsEvent>::EntityId>>,
-    ) -> Result<Option<E>, EntityHydrationError> {
+    pub fn load_first<E, R>(
+        events: impl IntoIterator<Item = R>,
+    ) -> Result<Option<E>, EntityHydrationError>
+    where
+        E: EsEntity<Event = T, Snapshot = S>,
+        R: Into<HydrationRow<<T as EsEvent>::EntityId>>,
+    {
         let mut current_id = None;
-        let mut current = None;
+        let mut current: Option<Self> = None;
         for e in events {
+            let row: HydrationRow<<T as EsEvent>::EntityId> = e.into();
             if current_id.is_none() {
-                current_id = Some(e.entity_id.clone());
+                current_id = Some(row.entity_id.clone());
                 current = Some(Self {
-                    entity_id: e.entity_id.clone(),
+                    entity_id: row.entity_id.clone(),
+                    base_sequence: 0,
+                    snapshot: None,
                     persisted_events: Vec::new(),
                     new_events: Vec::new(),
                 });
             }
-            if current_id.as_ref() != Some(&e.entity_id) {
+            if current_id.as_ref() != Some(&row.entity_id) {
                 break;
             }
             let cur = current.as_mut().expect("Could not get current");
-            let mut event_json = e.event;
-            if let Some(payload) = e.forgettable_payload {
-                crate::forgettable::inject_forgettable_payload(&mut event_json, payload);
-            }
-            cur.persisted_events.push(PersistedEvent {
-                entity_id: e.entity_id,
-                recorded_at: e.recorded_at,
-                sequence: e.sequence as usize,
-                event: serde_json::from_value(event_json)?,
-                context: e.context,
-            });
+            cur.apply_hydration_row(row)?;
         }
         if let Some(current) = current {
             Ok(Some(E::try_from_events(current)?))
@@ -225,14 +423,19 @@ where
         }
     }
 
-    /// Loads and reconstructs up to `n` entities from a stream of GenericEvents.
-    /// Assumes the events are grouped by `id` and ordered by `sequence` per `id`.
+    /// Loads and reconstructs up to `n` entities from a stream of hydration
+    /// rows. Assumes the rows are grouped by `id` and ordered by `sequence`
+    /// per `id`.
     ///
     /// Returns both the entities and a flag indicating whether more entities were available in the stream.
-    pub fn load_n<E: EsEntity<Event = T>>(
-        events: impl IntoIterator<Item = GenericEvent<<T as EsEvent>::EntityId>>,
+    pub fn load_n<E, R>(
+        events: impl IntoIterator<Item = R>,
         n: usize,
-    ) -> Result<(Vec<E>, bool), EntityHydrationError> {
+    ) -> Result<(Vec<E>, bool), EntityHydrationError>
+    where
+        E: EsEntity<Event = T, Snapshot = S>,
+        R: Into<HydrationRow<<T as EsEvent>::EntityId>>,
+    {
         if n == 0 {
             // Asking for zero entities yields zero entities. `has_more` reports
             // whether the stream was non-empty, mirroring the `LIMIT n + 1`
@@ -243,9 +446,10 @@ where
         }
         let mut ret: Vec<E> = Vec::new();
         let mut current_id = None;
-        let mut current = None;
+        let mut current: Option<Self> = None;
         for e in events {
-            if current_id.as_ref() != Some(&e.entity_id) {
+            let row: HydrationRow<<T as EsEvent>::EntityId> = e.into();
+            if current_id.as_ref() != Some(&row.entity_id) {
                 if let Some(current) = current.take() {
                     ret.push(E::try_from_events(current)?);
                     if ret.len() == n {
@@ -253,25 +457,17 @@ where
                     }
                 }
 
-                current_id = Some(e.entity_id.clone());
+                current_id = Some(row.entity_id.clone());
                 current = Some(Self {
-                    entity_id: e.entity_id.clone(),
+                    entity_id: row.entity_id.clone(),
+                    base_sequence: 0,
+                    snapshot: None,
                     persisted_events: Vec::new(),
                     new_events: Vec::new(),
                 });
             }
             let cur = current.as_mut().expect("Could not get current");
-            let mut event_json = e.event;
-            if let Some(payload) = e.forgettable_payload {
-                crate::forgettable::inject_forgettable_payload(&mut event_json, payload);
-            }
-            cur.persisted_events.push(PersistedEvent {
-                entity_id: e.entity_id,
-                recorded_at: e.recorded_at,
-                sequence: e.sequence as usize,
-                event: serde_json::from_value(event_json)?,
-                context: e.context,
-            });
+            cur.apply_hydration_row(row)?;
         }
         if let Some(current) = current.take() {
             ret.push(E::try_from_events(current)?);
@@ -290,7 +486,7 @@ where
         recorded_at: chrono::DateTime<chrono::Utc>,
     ) -> usize {
         let n = self.new_events.len();
-        let offset = self.persisted_events.len() + 1;
+        let offset = self.len_persisted() + 1;
         self.persisted_events
             .extend(
                 self.new_events
@@ -328,6 +524,10 @@ where
     /// Applies `forget_fn` to each persisted event, then takes ownership of the event
     /// stream, leaving `self` as an empty shell. The returned `EntityEvents` can be passed
     /// to `TryFromEvents::try_from_events` to rebuild the entity with forgotten fields.
+    ///
+    /// Only used by non-snapshot repos: snapshot repos rebuild via a
+    /// full-history reload (the in-memory tail lacks events folded into the
+    /// snapshot).
     #[doc(hidden)]
     pub fn forget_and_take(&mut self, mut forget_fn: impl FnMut(&mut T)) -> Self {
         for persisted in &mut self.persisted_events {
@@ -338,6 +538,8 @@ where
             self,
             Self {
                 entity_id,
+                base_sequence: 0,
+                snapshot: None,
                 persisted_events: Vec::new(),
                 new_events: Vec::new(),
             },
@@ -356,6 +558,38 @@ where
             Some(contexts)
         } else {
             None
+        }
+    }
+}
+
+impl<T: EsEvent> EntityEvents<T, NoSnapshot> {
+    /// Returns an iterator over all persisted events
+    pub fn iter_persisted(&self) -> impl DoubleEndedIterator<Item = &PersistedEvent<T>> + Clone {
+        self.persisted_events.iter()
+    }
+
+    /// Returns an iterator over all events (both persisted and new) in chronological order
+    pub fn iter_all(&self) -> impl DoubleEndedIterator<Item = &T> + Clone {
+        self.persisted_events
+            .iter()
+            .map(|e| &e.event)
+            .chain(self.new_events.iter().map(|e| &e.event))
+    }
+
+    /// Widens a freshly-initialized container (as produced by
+    /// `IntoEvents::into_events`) into one carrying a real snapshot type. A
+    /// brand-new entity has no persisted snapshot regardless of whether its
+    /// repo enables `snapshot`, so this conversion is always exact — used by
+    /// generated `create`/`create_all` code between `IntoEvents::into_events`
+    /// (fixed at `NoSnapshot`) and the entity's real `Snapshot` type.
+    #[doc(hidden)]
+    pub fn widen_snapshot<S: EsSnapshot>(self) -> EntityEvents<T, S> {
+        EntityEvents {
+            entity_id: self.entity_id,
+            base_sequence: 0,
+            snapshot: None,
+            persisted_events: self.persisted_events,
+            new_events: self.new_events,
         }
     }
 }
@@ -430,6 +664,7 @@ mod tests {
     impl EsEntity for DummyEntity {
         type Event = DummyEntityEvent;
         type New = NewDummyEntity;
+        type Snapshot = NoSnapshot;
 
         fn events_mut(&mut self) -> &mut EntityEvents<DummyEntityEvent> {
             &mut self.events
@@ -467,8 +702,8 @@ mod tests {
 
     #[test]
     fn load_zero_events() {
-        let generic_events = vec![];
-        let res = EntityEvents::load_first::<DummyEntity>(generic_events);
+        let generic_events: Vec<GenericEvent<Uuid>> = vec![];
+        let res = EntityEvents::load_first::<DummyEntity, _>(generic_events);
         assert!(matches!(res, Ok(None)));
     }
 
@@ -544,7 +779,9 @@ mod tests {
     proptest! {
         #[test]
         fn load_first_empty_input_returns_none(_ in Just(())) {
-            let res = EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity>(vec![]);
+            let res = EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity, GenericEvent<Uuid>>(
+                vec![],
+            );
             prop_assert!(matches!(res, Ok(None)));
         }
 
@@ -558,7 +795,7 @@ mod tests {
                 .zip(names.iter())
                 .map(|(s, n)| valid_event(id, s, n))
                 .collect();
-            let res = EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity>(events);
+            let res = EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity, _>(events);
             prop_assert!(matches!(res, Ok(Some(_))));
         }
 
@@ -581,7 +818,7 @@ mod tests {
                 })
                 .collect();
             let is_empty = events.is_empty();
-            let res = EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity>(events);
+            let res = EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity, _>(events);
             if let Ok(None) = res {
                 prop_assert!(is_empty);
             }
@@ -604,7 +841,7 @@ mod tests {
                 }
             }
             let (entities, has_more) =
-                EntityEvents::<DummyEntityEvent>::load_n::<DummyEntity>(events, n as usize)
+                EntityEvents::<DummyEntityEvent>::load_n::<DummyEntity, _>(events, n as usize)
                     .expect("valid events hydrate");
             prop_assert_eq!(entities.len(), (n as usize).min(k as usize));
             prop_assert_eq!(has_more, n < k);
@@ -623,7 +860,7 @@ mod tests {
                 }
             }
             let (entities, has_more) =
-                EntityEvents::<DummyEntityEvent>::load_n::<DummyEntity>(events, 0)
+                EntityEvents::<DummyEntityEvent>::load_n::<DummyEntity, _>(events, 0)
                     .expect("valid events hydrate");
             prop_assert!(entities.is_empty());
             prop_assert_eq!(has_more, k > 0);
@@ -646,7 +883,7 @@ mod tests {
                     forgettable_payload: None,
                 })
                 .collect();
-            let _ = EntityEvents::<DummyEntityEvent>::load_n::<DummyEntity>(events, n as usize);
+            let _ = EntityEvents::<DummyEntityEvent>::load_n::<DummyEntity, _>(events, n as usize);
         }
 
         /// `last_persisted(n)` must clamp to the available events for any `n`,
@@ -661,7 +898,7 @@ mod tests {
                 .map(|s| valid_event(id, s, &format!("n{s}")))
                 .collect();
             let entity: DummyEntity =
-                EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity>(events)
+                EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity, _>(events)
                     .expect("load")
                     .expect("some");
             let count = entity.events().last_persisted(n as usize).count();

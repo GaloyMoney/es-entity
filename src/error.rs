@@ -9,6 +9,26 @@ pub enum EntityHydrationError {
     UninitializedFieldError(#[from] derive_builder::UninitializedFieldError),
     #[error("EntityHydrationError - Deserialization: {0}")]
     EventDeserialization(#[from] serde_json::Error),
+    /// A snapshot row matched the fingerprint bind but failed to deserialize
+    /// into `S`. Never silently ignored, unlike a fingerprint mismatch — the
+    /// operator fix is `DELETE FROM <tbl>_snapshots WHERE id = …`.
+    #[error("EntityHydrationError - SnapshotDecode at sequence {sequence}: {source}")]
+    SnapshotDecode {
+        sequence: i32,
+        #[source]
+        source: serde_json::Error,
+    },
+    /// The first tail event after a snapshot did not immediately follow it.
+    #[error(
+        "EntityHydrationError - SnapshotGap: snapshot at sequence {snapshot_sequence}, next event at {next_event_sequence}"
+    )]
+    SnapshotGap {
+        snapshot_sequence: i32,
+        next_event_sequence: i32,
+    },
+    /// A hydration row carried neither an event nor a usable snapshot.
+    #[error("EntityHydrationError - NoEvents")]
+    NoEvents,
 }
 
 #[derive(Error, Debug)]

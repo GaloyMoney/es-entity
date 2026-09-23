@@ -232,7 +232,7 @@ where
         let (root, mut by_tag) = self
             .fetch_tree_rows::<<Repo as EsRepo>::QueryError>(op, include_deleted)
             .await?;
-        let Some(entity) = EntityEvents::load_first::<<Repo as EsRepo>::Entity>(root)? else {
+        let Some(entity) = EntityEvents::load_first::<<Repo as EsRepo>::Entity, _>(root)? else {
             return Ok(None);
         };
         let mut entities = [entity];
@@ -255,7 +255,8 @@ where
         let (root, mut by_tag) = self
             .fetch_tree_rows::<<Repo as EsRepo>::QueryError>(op, include_deleted)
             .await?;
-        let (mut entities, more) = EntityEvents::load_n::<<Repo as EsRepo>::Entity>(root, first)?;
+        let (mut entities, more) =
+            EntityEvents::load_n::<<Repo as EsRepo>::Entity, _>(root, first)?;
         let mut cursor = 1i32;
         <Repo as EsRepo>::hydrate_nested_from_rows::<<Repo as EsRepo>::QueryError>(
             &mut by_tag,

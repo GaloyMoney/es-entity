@@ -192,10 +192,11 @@ impl ToTokens for UpdateFn<'_> {
 
         tokens.append_all(quote! {
             #[inline(always)]
-            fn extract_events<Entity, Event>(entity: &mut Entity) -> &mut es_entity::EntityEvents<Event>
+            fn extract_events<Entity, Event, Snapshot>(entity: &mut Entity) -> &mut es_entity::EntityEvents<Event, Snapshot>
             where
-                Entity: es_entity::EsEntity<Event = Event>,
+                Entity: es_entity::EsEntity<Event = Event, Snapshot = Snapshot>,
                 Event: es_entity::EsEvent,
+                Snapshot: es_entity::EsSnapshot,
             {
                 entity.events_mut()
             }
@@ -275,10 +276,11 @@ mod tests {
 
         let expected = quote! {
             #[inline(always)]
-            fn extract_events<Entity, Event>(entity: &mut Entity) -> &mut es_entity::EntityEvents<Event>
+            fn extract_events<Entity, Event, Snapshot>(entity: &mut Entity) -> &mut es_entity::EntityEvents<Event, Snapshot>
             where
-                Entity: es_entity::EsEntity<Event = Event>,
+                Entity: es_entity::EsEntity<Event = Event, Snapshot = Snapshot>,
                 Event: es_entity::EsEvent,
+                Snapshot: es_entity::EsSnapshot,
             {
                 entity.events_mut()
             }
@@ -372,10 +374,11 @@ mod tests {
 
         let expected = quote! {
             #[inline(always)]
-            fn extract_events<Entity, Event>(entity: &mut Entity) -> &mut es_entity::EntityEvents<Event>
+            fn extract_events<Entity, Event, Snapshot>(entity: &mut Entity) -> &mut es_entity::EntityEvents<Event, Snapshot>
             where
-                Entity: es_entity::EsEntity<Event = Event>,
+                Entity: es_entity::EsEntity<Event = Event, Snapshot = Snapshot>,
                 Event: es_entity::EsEvent,
+                Snapshot: es_entity::EsSnapshot,
             {
                 entity.events_mut()
             }

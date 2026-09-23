@@ -250,7 +250,7 @@ impl ToTokens for CreateAllFn<'_> {
                     #arg_collection
                     #(#arg_adds)*
 
-                    let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event>> = new_entities.into_iter().map(Self::convert_new).collect();
+                    let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event, <#entity as es_entity::EsEntity>::Snapshot>> = new_entities.into_iter().map(Self::convert_new).collect();
 
                     #batch_declarations
                     let mut n_persisted: Vec<usize> = Vec::new();
@@ -384,7 +384,7 @@ mod tests {
                     __query_args.add(id_collection).map_err(sqlx::Error::Encode)?;
                     __query_args.add(name_collection).map_err(sqlx::Error::Encode)?;
 
-                    let mut all_events: Vec<es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event>> = new_entities.into_iter().map(Self::convert_new).collect();
+                    let mut all_events: Vec<es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event, <Entity as es_entity::EsEntity>::Snapshot>> = new_entities.into_iter().map(Self::convert_new).collect();
 
                     let mut all_ids: Vec<&EntityId> = Vec::new();
                     let mut all_sequences: Vec<i32> = Vec::new();

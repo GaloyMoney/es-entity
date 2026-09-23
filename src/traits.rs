@@ -4,7 +4,13 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use std::collections::HashMap;
 
-use super::{db, error::EntityHydrationError, events::EntityEvents, tree_query::TreeSpec};
+use super::{
+    db,
+    error::EntityHydrationError,
+    events::EntityEvents,
+    snapshot::{EsSnapshot, NoSnapshot},
+    tree_query::TreeSpec,
+};
 
 /// Required trait for all event enums to be compatible and recognised by es-entity.
 ///
@@ -207,9 +213,9 @@ pub trait IntoEvents<E: EsEvent> {
 ///     }
 /// }
 /// ```
-pub trait TryFromEvents<E: EsEvent> {
+pub trait TryFromEvents<E: EsEvent, S: EsSnapshot = NoSnapshot> {
     /// Method to implement which hydrates `Entity` by replaying its events chronologically
-    fn try_from_events(events: EntityEvents<E>) -> Result<Self, EntityHydrationError>
+    fn try_from_events(events: EntityEvents<E, S>) -> Result<Self, EntityHydrationError>
     where
         Self: Sized;
 }
@@ -247,12 +253,16 @@ pub trait TryFromEvents<E: EsEvent> {
 ///     events: EntityEvents<UserEvent>,
 /// }
 /// ```
-pub trait EsEntity: TryFromEvents<Self::Event> + Send {
+pub trait EsEntity: TryFromEvents<Self::Event, Self::Snapshot> + Send {
     type Event: EsEvent;
     type New: IntoEvents<Self::Event>;
+    /// The entity's snapshot state, or [`NoSnapshot`] for an entity whose
+    /// repo does not enable `snapshot`. No default: associated type defaults
+    /// are unstable, so every hand-written impl adds one line.
+    type Snapshot: EsSnapshot;
 
     /// Returns an immutable reference to the entity's events
-    fn events(&self) -> &EntityEvents<Self::Event>;
+    fn events(&self) -> &EntityEvents<Self::Event, Self::Snapshot>;
 
     /// Returns the last `n` persisted events
     fn last_persisted(&self, n: usize) -> crate::events::LastPersisted<'_, Self::Event> {
@@ -260,7 +270,7 @@ pub trait EsEntity: TryFromEvents<Self::Event> + Send {
     }
 
     /// Returns mutable reference to the entity's events
-    fn events_mut(&mut self) -> &mut EntityEvents<Self::Event>;
+    fn events_mut(&mut self) -> &mut EntityEvents<Self::Event, Self::Snapshot>;
 }
 
 /// Required trait for all repositories to be compatible with es-entity and generate functions.

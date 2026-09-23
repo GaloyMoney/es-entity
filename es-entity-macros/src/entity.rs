@@ -19,6 +19,20 @@ impl Field {
         self.events || self.ident.as_ref().is_some_and(|i| i == "events")
     }
 
+    /// The `S` in `EntityEvents<E, S>`, or `es_entity::NoSnapshot` when the
+    /// field is bare `EntityEvents<E>`.
+    fn snapshot_type(&self) -> TokenStream {
+        if let Type::Path(type_path) = &self.ty
+            && let Some(segment) = type_path.path.segments.last()
+            && segment.ident == "EntityEvents"
+            && let syn::PathArguments::AngleBracketed(generic_args) = &segment.arguments
+            && let Some(syn::GenericArgument::Type(snapshot_ty)) = generic_args.args.get(1)
+        {
+            return quote! { #snapshot_ty };
+        }
+        quote! { es_entity::NoSnapshot }
+    }
+
     fn extract_nested_entity_type(&self) -> &Type {
         if let Type::Path(type_path) = &self.ty
             && let Some(segment) = type_path.path.segments.last()
@@ -71,12 +85,14 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
 impl ToTokens for EsEntity {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let ident = &self.ident;
-        let events_field = self
+        let events_field_def = self
             .find_events_field()
-            .expect("Struct must have a field marked with #[es_entity(events)]")
+            .expect("Struct must have a field marked with #[es_entity(events)]");
+        let events_field = events_field_def
             .ident
             .as_ref()
             .expect("Not ident on #[events]");
+        let snapshot = events_field_def.snapshot_type();
 
         let event = self.event_ident.clone().unwrap_or_else(|| {
             syn::Ident::new(
@@ -118,11 +134,12 @@ impl ToTokens for EsEntity {
             impl es_entity::EsEntity for #ident {
                 type Event = #event;
                 type New = #new;
+                type Snapshot = #snapshot;
 
-                fn events_mut(&mut self) -> &mut es_entity::EntityEvents<#event> {
+                fn events_mut(&mut self) -> &mut es_entity::EntityEvents<#event, #snapshot> {
                     &mut self.#events_field
                 }
-                fn events(&self) -> &es_entity::EntityEvents<#event> {
+                fn events(&self) -> &es_entity::EntityEvents<#event, #snapshot> {
                     &self.#events_field
                 }
             }
@@ -155,10 +172,11 @@ mod tests {
             impl es_entity::EsEntity for User {
                 type Event = UserEvent;
                 type New = NewUser;
-                fn events_mut(&mut self) -> &mut es_entity::EntityEvents<UserEvent> {
+                type Snapshot = es_entity::NoSnapshot;
+                fn events_mut(&mut self) -> &mut es_entity::EntityEvents<UserEvent, es_entity::NoSnapshot> {
                     &mut self.the_events
                 }
-                fn events(&self) -> &es_entity::EntityEvents<UserEvent> {
+                fn events(&self) -> &es_entity::EntityEvents<UserEvent, es_entity::NoSnapshot> {
                     &self.the_events
                 }
             }
@@ -182,10 +200,11 @@ mod tests {
             impl es_entity::EsEntity for User {
                 type Event = UserEvent;
                 type New = NewUser;
-                fn events_mut(&mut self) -> &mut es_entity::EntityEvents<UserEvent> {
+                type Snapshot = es_entity::NoSnapshot;
+                fn events_mut(&mut self) -> &mut es_entity::EntityEvents<UserEvent, es_entity::NoSnapshot> {
                     &mut self.events
                 }
-                fn events(&self) -> &es_entity::EntityEvents<UserEvent> {
+                fn events(&self) -> &es_entity::EntityEvents<UserEvent, es_entity::NoSnapshot> {
                     &self.events
                 }
             }
@@ -211,10 +230,11 @@ mod tests {
             impl es_entity::EsEntity for User {
                 type Event = UserEvent;
                 type New = NewUser;
-                fn events_mut(&mut self) -> &mut es_entity::EntityEvents<UserEvent> {
+                type Snapshot = es_entity::NoSnapshot;
+                fn events_mut(&mut self) -> &mut es_entity::EntityEvents<UserEvent, es_entity::NoSnapshot> {
                     &mut self.events
                 }
-                fn events(&self) -> &es_entity::EntityEvents<UserEvent> {
+                fn events(&self) -> &es_entity::EntityEvents<UserEvent, es_entity::NoSnapshot> {
                     &self.events
                 }
             }
