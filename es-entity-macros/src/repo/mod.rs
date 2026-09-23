@@ -35,6 +35,7 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
     opts.columns.validate_scope()?;
     opts.columns.validate_virtual()?;
     opts.validate_forgettable()?;
+    opts.validate_snapshot()?;
     opts.validate_in_op_only()?;
     // `include_bytes!` the resolved migrations so Cargo re-runs this derive when
     // they change (keeps the migration-derived index catalog and error mapping
@@ -251,6 +252,10 @@ impl ToTokens for EsRepo<'_> {
             Some(tbl) => quote! { Some(#tbl) },
             None => quote! { None },
         };
+        let tree_snapshot_table_name = match self.opts.snapshot_table_name() {
+            Some(tbl) => quote! { Some(#tbl) },
+            None => quote! { None },
+        };
         let tree_child_tys: Vec<_> = self.opts.all_nested().map(|f| &f.ty).collect();
 
         let create_error = self.opts.create_error();
@@ -350,6 +355,25 @@ impl ToTokens for EsRepo<'_> {
             }
         };
 
+        let repo_has_snapshot = self.opts.snapshot_enabled();
+        let has_forgettable_flag = self.opts.forgettable_enabled();
+        let repo_db_event = if repo_has_snapshot {
+            quote! { es_entity::SnapshotGenericEvent<#id> }
+        } else {
+            quote! { es_entity::GenericEvent<#id> }
+        };
+        let snapshot_guards = quote! {
+            const _: () = assert!(
+                <<#entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::IS_SNAPSHOT == #repo_has_snapshot,
+                "entity snapshot type and `#[es_repo(snapshot)]` disagree: a snapshotted entity needs `snapshot` on its repo and vice versa"
+            );
+            const _: () = assert!(
+                !<<#entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::HAS_FORGETTABLE_FIELDS
+                    || #has_forgettable_flag,
+                "snapshot type has Forgettable fields but this repo does not enable `forgettable`"
+            );
+        };
+
         tokens.append_all(quote! {
             pub mod #cursor_mod {
                 use super::*;
@@ -372,11 +396,14 @@ impl ToTokens for EsRepo<'_> {
                 #[allow(non_camel_case_types)]
                 pub(super) type Repo__Entity = #entity;
                 #[allow(non_camel_case_types)]
-                pub(super) type Repo__DbEvent = es_entity::GenericEvent<#id>;
+                pub(super) type Repo__DbEvent = #repo_db_event;
                 #[allow(dead_code)]
                 pub(super) const REPO__HAS_TBL_PREFIX: bool = #has_tbl_prefix;
+                #[allow(dead_code)]
+                pub(super) const REPO__HAS_SNAPSHOT: bool = #repo_has_snapshot;
 
                 #forgettable_event_guard
+                #snapshot_guards
             }
 
             #error_types
@@ -434,6 +461,8 @@ impl ToTokens for EsRepo<'_> {
                        soft_delete: #tree_soft_delete,
                        forgettable_table_name: #tree_forgettable_table_name,
                        event_context: <#types_mod::Repo__Event as EsEvent>::event_context(),
+                       snapshot_table_name: #tree_snapshot_table_name,
+                       snapshot_fingerprint: <<#entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::FINGERPRINT,
                        children: vec![ #( <#tree_child_tys as es_entity::EsRepo>::nested_tree_spec(), )* ],
                    }
                }

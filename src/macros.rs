@@ -329,6 +329,63 @@ macro_rules! idempotency_guard {
 /// ```
 #[macro_export]
 macro_rules! es_query {
+    // With entity override + forgettable + snapshot
+    (
+        entity = $entity:ident,
+        forgettable_tbl = $forgettable_tbl:literal,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            entity = $entity,
+            forgettable_tbl = $forgettable_tbl,
+            snapshot_tbl = $snapshot_tbl,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // With entity override + forgettable + snapshot - no args
+    (
+        entity = $entity:ident,
+        forgettable_tbl = $forgettable_tbl:literal,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            entity = $entity,
+            forgettable_tbl = $forgettable_tbl,
+            snapshot_tbl = $snapshot_tbl,
+            sql = $query
+        )
+    });
+    // With entity override + snapshot (no forgettable)
+    (
+        entity = $entity:ident,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            entity = $entity,
+            snapshot_tbl = $snapshot_tbl,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // With entity override + snapshot (no forgettable) - no args
+    (
+        entity = $entity:ident,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            entity = $entity,
+            snapshot_tbl = $snapshot_tbl,
+            sql = $query
+        )
+    });
+
     // With entity override + forgettable
     (
         entity = $entity:ident,
@@ -375,6 +432,63 @@ macro_rules! es_query {
     ) => ({
         $crate::expand_es_query!(
             entity = $entity,
+            sql = $query
+        )
+    });
+
+    // With tbl_prefix + forgettable + snapshot
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        forgettable_tbl = $forgettable_tbl:literal,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            forgettable_tbl = $forgettable_tbl,
+            snapshot_tbl = $snapshot_tbl,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // With tbl_prefix + forgettable + snapshot - no args
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        forgettable_tbl = $forgettable_tbl:literal,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            forgettable_tbl = $forgettable_tbl,
+            snapshot_tbl = $snapshot_tbl,
+            sql = $query
+        )
+    });
+    // With tbl_prefix + snapshot (no forgettable)
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            snapshot_tbl = $snapshot_tbl,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // With tbl_prefix + snapshot (no forgettable) - no args
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            snapshot_tbl = $snapshot_tbl,
             sql = $query
         )
     });
