@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT e.event_type AS \"event_type!\", f.field AS \"field!\" FROM account_holder_events e JOIN (SELECT UNNEST($2::text[]) AS event_type, UNNEST($3::text[]) AS field) f ON e.event_type = f.event_type WHERE e.id = $1 AND e.event -> f.field IS NOT NULL AND e.event -> f.field != 'null'::jsonb",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "event_type!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "field!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "719f5b334450737d6af80772876d0623bd7348aaf1a4af70fa5e73002413b6ba"
+}

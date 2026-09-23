@@ -159,6 +159,113 @@ impl GuardWithoutSnapshotClause for SnapshotRecord<NoSnapshot> {
 }
 
 /// Implemented by every entity whose repo enables `snapshot`.
+///
+/// The `#[derive(EsRepo)]` macro checks that the entity's own `Snapshot`
+/// associated type and the repo's `snapshot` flag agree, so widening the
+/// repo without also widening the entity's `EntityEvents<E, S>` (or the
+/// reverse) does not compile:
+///
+/// ```compile_fail
+/// use es_entity::*;
+/// use serde::{Serialize, Deserialize};
+/// # fn main() {}
+/// # es_entity::entity_id! { SnapGuardMeterId }
+/// # #[derive(EsEvent, Debug, Clone, Serialize, Deserialize)]
+/// # #[serde(tag = "type", rename_all = "snake_case")]
+/// # #[es_event(id = "SnapGuardMeterId")]
+/// # pub enum SnapGuardMeterEvent {
+/// #     Initialized { id: SnapGuardMeterId },
+/// # }
+/// # pub struct NewSnapGuardMeter { id: SnapGuardMeterId }
+/// # impl IntoEvents<SnapGuardMeterEvent> for NewSnapGuardMeter {
+/// #     fn into_events(self) -> EntityEvents<SnapGuardMeterEvent> {
+/// #         EntityEvents::init(self.id, [SnapGuardMeterEvent::Initialized { id: self.id }])
+/// #     }
+/// # }
+/// // Missing: a real `Snapshot` — `events` stays
+/// // `EntityEvents<SnapGuardMeterEvent>` (implicit `NoSnapshot`).
+/// #[derive(EsEntity)]
+/// pub struct SnapGuardMeter {
+///     pub id: SnapGuardMeterId,
+///     events: EntityEvents<SnapGuardMeterEvent>,
+/// }
+/// # impl TryFromEvents<SnapGuardMeterEvent> for SnapGuardMeter {
+/// #     fn try_from_events(events: EntityEvents<SnapGuardMeterEvent>) -> Result<Self, EntityHydrationError> {
+/// #         Ok(SnapGuardMeter { id: *events.id(), events })
+/// #     }
+/// # }
+/// # impl Snapshotting for SnapGuardMeter {
+/// #     fn snapshot(&self) -> Option<NoSnapshot> { None }
+/// # }
+/// // error: entity snapshot type and `#[es_repo(snapshot)]` disagree.
+/// #[derive(EsRepo, Debug)]
+/// #[es_repo(
+///     entity = "SnapGuardMeter",
+///     tbl = "meters",
+///     events_tbl = "meter_events",
+///     snapshot,
+///     snapshot_tbl = "meter_snapshots"
+/// )]
+/// pub struct SnapGuardMeters {
+///     pool: es_entity::db::Pool,
+/// }
+/// ```
+///
+/// A snapshot type with a `Forgettable<T>` field also requires the repo to
+/// enable `forgettable` — otherwise the payload would never be scrubbed:
+///
+/// ```compile_fail
+/// use es_entity::*;
+/// use serde::{Serialize, Deserialize};
+/// # fn main() {}
+/// # es_entity::entity_id! { SnapGuardClientId }
+/// # #[derive(EsEvent, Debug, Clone, Serialize, Deserialize)]
+/// # #[serde(tag = "type", rename_all = "snake_case")]
+/// # #[es_event(id = "SnapGuardClientId")]
+/// # pub enum SnapGuardClientEvent {
+/// #     Initialized { id: SnapGuardClientId, email: Forgettable<String> },
+/// # }
+/// #[derive(EsSnapshot, Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// pub struct SnapGuardClientSnapshot {
+///     pub id: SnapGuardClientId,
+///     pub email: Forgettable<String>,
+/// }
+/// # pub struct NewSnapGuardClient { id: SnapGuardClientId, email: String }
+/// # impl IntoEvents<SnapGuardClientEvent> for NewSnapGuardClient {
+/// #     fn into_events(self) -> EntityEvents<SnapGuardClientEvent> {
+/// #         EntityEvents::init(
+/// #             self.id,
+/// #             [SnapGuardClientEvent::Initialized { id: self.id, email: Forgettable::new(self.email) }],
+/// #         )
+/// #     }
+/// # }
+/// # #[derive(EsEntity)]
+/// # pub struct SnapGuardClient {
+/// #     pub id: SnapGuardClientId,
+/// #     events: EntityEvents<SnapGuardClientEvent, SnapGuardClientSnapshot>,
+/// # }
+/// # impl Snapshotting for SnapGuardClient {
+/// #     fn snapshot(&self) -> Option<SnapGuardClientSnapshot> { None }
+/// # }
+/// # impl TryFromEvents<SnapGuardClientEvent, SnapGuardClientSnapshot> for SnapGuardClient {
+/// #     fn try_from_events(events: EntityEvents<SnapGuardClientEvent, SnapGuardClientSnapshot>) -> Result<Self, EntityHydrationError> {
+/// #         Ok(SnapGuardClient { id: *events.id(), events })
+/// #     }
+/// # }
+/// // error: snapshot type has Forgettable fields but this repo does not
+/// // enable `forgettable`.
+/// #[derive(EsRepo, Debug)]
+/// #[es_repo(
+///     entity = "SnapGuardClient",
+///     tbl = "clients",
+///     events_tbl = "client_events",
+///     snapshot,
+///     snapshot_tbl = "client_snapshots"
+/// )]
+/// pub struct SnapGuardClients {
+///     pool: es_entity::db::Pool,
+/// }
+/// ```
 pub trait Snapshotting: crate::EsEntity {
     /// Called by the repo on every write, after commands have staged their
     /// events. `Some` = persist this as the fold of everything up to the new

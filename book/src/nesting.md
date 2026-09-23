@@ -955,3 +955,11 @@ Avoid nesting when:
 - Performance requirements dictate more granular loading/updating
 
 Remember, as discussed in the aggregates chapter, there are often alternative designs that can avoid the need for nesting while still maintaining consistency.
+
+## Nesting and Snapshots
+
+A parent and its nested children can each independently enable
+[`snapshot`](./snapshots.md) — any combination (both, parent only, child
+only, or neither) is supported, and the tree query stays a single statement
+regardless: every node's snapshot join folds into the same `UNION ALL`, and
+the whole tree still loads in one round trip.

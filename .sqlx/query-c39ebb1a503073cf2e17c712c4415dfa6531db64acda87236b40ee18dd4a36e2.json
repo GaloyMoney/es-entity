@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE account_holders SET deleted = TRUE, email = NULL WHERE account_id = $1 AND deleted = FALSE",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c39ebb1a503073cf2e17c712c4415dfa6531db64acda87236b40ee18dd4a36e2"
+}

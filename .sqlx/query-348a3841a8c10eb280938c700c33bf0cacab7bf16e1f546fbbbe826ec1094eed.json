@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n             event->>'name' IS NULL AS \"name_is_null!\",\n             event ? 'name' AS \"name_key_present!\",\n             event->>'email' AS email\n           FROM customer_events\n           WHERE id = $1 AND sequence = 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name_is_null!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "name_key_present!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "348a3841a8c10eb280938c700c33bf0cacab7bf16e1f546fbbbe826ec1094eed"
+}

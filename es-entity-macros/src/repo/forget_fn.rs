@@ -15,6 +15,7 @@ pub struct ForgetFn<'a> {
     event: &'a syn::Ident,
     error: syn::Ident,
     find_error: syn::Ident,
+    modify_error: syn::Ident,
     table_name: &'a str,
     events_table_name: &'a str,
     event_ctx: bool,
@@ -33,6 +34,7 @@ impl<'a> ForgetFn<'a> {
             event: opts.event(),
             error: opts.forget_error(),
             find_error: opts.find_error(),
+            modify_error: opts.modify_error(),
             table_name: opts.table_name(),
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
@@ -78,13 +80,18 @@ impl ToTokens for ForgetFn<'_> {
         // On the `persist_events` path that call reports it; on the combined
         // path it comes from marking the events, after the payload delete.
         let wants_hook = self.post_persist_error.is_some();
+        // `forget` never snapshots the events it stages (decision 6/9): the
+        // snapshot forced to `None` disables the CTE's `WHERE … IS NOT NULL`
+        // guard, so nothing gets written here — the rebuild-and-re-snapshot
+        // steps below produce the real, forgotten snapshot afterward.
+        let persist_events_snapshot_arg = self.snapshot_table_name.map(|_| quote! { , None });
 
         let (persist_staged, count_persisted) = if self.forgettable_columns.is_empty() {
             let persist = if wants_hook {
                 quote! {
                     let n_events = if entity.events().any_new() {
                         Self::extract_concurrent_modification(
-                            self.persist_events(op, entity.events_mut()).await,
+                            self.persist_events(op, entity.events_mut() #persist_events_snapshot_arg).await,
                             #error::ConcurrentModification,
                         )?
                     } else {
@@ -95,7 +102,7 @@ impl ToTokens for ForgetFn<'_> {
                 quote! {
                     if entity.events().any_new() {
                         Self::extract_concurrent_modification(
-                            self.persist_events(op, entity.events_mut()).await,
+                            self.persist_events(op, entity.events_mut() #persist_events_snapshot_arg).await,
                             #error::ConcurrentModification,
                         )?;
                     }
@@ -211,8 +218,17 @@ impl ToTokens for ForgetFn<'_> {
                                 ),
                             })?;
                     },
-                    quote! {
-                        self.persist_snapshot_in_op(op, &mut entity).await?;
+                    {
+                        let modify_error = &self.modify_error;
+                        quote! {
+                            self.persist_snapshot_in_op(op, &mut entity).await.map_err(|e| match e {
+                                #modify_error::ConcurrentModification => #error::ConcurrentModification,
+                                #modify_error::Sqlx(e) => #error::Sqlx(e),
+                                _ => unreachable!(
+                                    "persist_snapshot_in_op cannot produce this error"
+                                ),
+                            })?;
+                        }
                     },
                 )
             }
@@ -480,6 +496,7 @@ mod tests {
             event: &event,
             error,
             find_error: Ident::new("EntityFindError", Span::call_site()),
+            modify_error: Ident::new("EntityModifyError", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -533,6 +550,7 @@ mod tests {
             event: &event,
             error,
             find_error: Ident::new("EntityFindError", Span::call_site()),
+            modify_error: Ident::new("EntityModifyError", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -581,6 +599,7 @@ mod tests {
             event: &event,
             error,
             find_error: Ident::new("EntityFindError", Span::call_site()),
+            modify_error: Ident::new("EntityModifyError", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -631,6 +650,7 @@ mod tests {
             event: &event,
             error,
             find_error: Ident::new("EntityFindError", Span::call_site()),
+            modify_error: Ident::new("EntityModifyError", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,

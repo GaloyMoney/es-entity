@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT payload->>'name' AS \"name!\" FROM customers_forgettable_payloads\n               WHERE entity_id = $1 AND sequence = 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "e91155ee1d59b5cd3c68f9a1c445339bc0cd291330be37fead4ce283db7e8e09"
+}

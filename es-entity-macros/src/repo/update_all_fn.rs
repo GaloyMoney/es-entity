@@ -3,7 +3,7 @@ use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
 use super::{
-    events_write::{EventSource, EventsInsert, ForgettablePayloads},
+    events_write::{EventSource, EventsInsert, ForgettablePayloads, SnapshotUpsert},
     options::*,
 };
 
@@ -16,6 +16,7 @@ pub struct UpdateAllFn<'a> {
     events_table_name: &'a str,
     event_ctx: bool,
     forgettable_table_name: Option<&'a str>,
+    snapshot_table_name: Option<&'a str>,
     columns: &'a Columns,
     modify_error: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
@@ -37,6 +38,7 @@ impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
             forgettable_table_name: opts.forgettable_table_name(),
+            snapshot_table_name: opts.snapshot_table_name(),
             nested_fn_names: opts
                 .all_nested()
                 .map(|f| f.update_nested_fn_name())
@@ -161,11 +163,17 @@ impl UpdateAllFn<'_> {
             .map(|p| p.insert_batch(modify_error))
             .unwrap_or_default();
 
+        let snapshot_upsert = self
+            .snapshot_table_name
+            .map(|table| SnapshotUpsert { table });
+
         // Every entity in the batch is only borrowed here, so the index columns
         // and the event arrays can be gathered in the same pass and written by
         // a single statement; the events insert joins the `updated` CTE, which
         // orders the index write first and detects rows that vanished.
-        let (vec_declarations, per_entity_pushes, persist_tokens) = if self.columns.updates_needed()
+        let (vec_declarations, per_entity_pushes, persist_tokens, compact_tokens) = if self
+            .columns
+            .updates_needed()
         {
             let (vecs, pushes, bind_tokens) = self
                 .columns
@@ -182,11 +190,38 @@ impl UpdateAllFn<'_> {
 
             let now_p = n_columns + 1;
             let source = EventSource::BatchCte { cte: "updated" };
+            let n_event_args = events_insert.arg_exprs(&source).len();
+
+            let (snap_cte, snap_binds, compact_tokens) = match &snapshot_upsert {
+                Some(su) => {
+                    let ids_p = now_p + n_event_args;
+                    let seqs_p = ids_p + 1;
+                    let snaps_p = seqs_p + 1;
+                    let firsts_p = snaps_p + 1;
+                    let fp_p = firsts_p + 1;
+                    let cte = format!(
+                        ", {}",
+                        su.cte_batch(ids_p, seqs_p, snaps_p, firsts_p, fp_p, now_p)
+                    );
+                    let binds = quote! {
+                        .bind(&__snap_ids)
+                        .bind(&__snap_seqs)
+                        .bind(&__snap_jsons)
+                        .bind(&__snap_firsts)
+                        .bind(<<#entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::FINGERPRINT)
+                    };
+                    let compact =
+                        su.compact_batch(quote! { #iter_mut_ref }, quote! { recorded_at });
+                    (cte, binds, compact)
+                }
+                None => (String::new(), quote! {}, quote! {}),
+            };
+
             let query = format!(
                 "WITH updated AS (UPDATE {table_name} SET {set_clause} \
                      FROM UNNEST({placeholders}) \
                      AS unnested({column_list}) \
-                     WHERE {table_name}.id = unnested.id RETURNING {table_name}.id) {}",
+                     WHERE {table_name}.id = unnested.id RETURNING {table_name}.id){snap_cte} {}",
                 events_insert.sql(&source, now_p, now_p + 1),
             );
 
@@ -203,6 +238,7 @@ impl UpdateAllFn<'_> {
                     let rows = sqlx::query(#query)
                         #(#bind_tokens)*
                         #(#event_binds)*
+                        #snap_binds
                         .fetch_all(op.as_executor())
                         .await
                         .map_err(Self::classify_write_error)?;
@@ -226,6 +262,7 @@ impl UpdateAllFn<'_> {
                         }
                     }
                 },
+                compact_tokens,
             )
         } else {
             (
@@ -244,6 +281,7 @@ impl UpdateAllFn<'_> {
                     )?;
                     drop(all_event_refs);
                 },
+                quote! {},
             )
         };
 
@@ -253,16 +291,38 @@ impl UpdateAllFn<'_> {
             let batch_declarations = events_insert.batch_declarations(id_type);
             let gather =
                 events_insert.gather_batch(quote! { entity.events() }, quote! { &entity.id });
+
+            let (snap_declarations, snap_gather) = match &snapshot_upsert {
+                Some(su) => {
+                    let declarations = su.batch_declarations(id_type);
+                    let gather = su.gather_batch(
+                        quote! { <#entity as es_entity::Snapshotting>::snapshot(entity) },
+                        quote! { entity.events() },
+                        quote! { &entity.id },
+                    );
+                    (
+                        quote! {
+                            #declarations
+                            let mut __snapshots_to_compact: std::collections::HashMap<#id_type, (<#entity as es_entity::EsEntity>::Snapshot, Option<es_entity::prelude::chrono::DateTime<es_entity::prelude::chrono::Utc>>)> = std::collections::HashMap::new();
+                        },
+                        gather,
+                    )
+                }
+                None => (quote! {}, quote! {}),
+            };
+
             (
                 quote! {
                     #batch_declarations
                     let mut n_persisted: std::collections::HashMap<#id_type, usize> = std::collections::HashMap::new();
                     #forgettable_vars
+                    #snap_declarations
                 },
                 quote! {
                     #gather
                     #forgettable_extract
                     n_persisted.insert(entity.id.clone(), n_new);
+                    #snap_gather
                 },
             )
         } else {
@@ -382,6 +442,8 @@ impl UpdateAllFn<'_> {
                         }
                     }
 
+                    #compact_tokens
+
                     Ok(total_events)
                 }.await;
 
@@ -421,6 +483,7 @@ mod tests {
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
@@ -655,6 +718,7 @@ mod tests {
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),

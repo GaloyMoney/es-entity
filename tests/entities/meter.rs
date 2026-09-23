@@ -92,7 +92,7 @@ impl Meter {
         idempotency_guard!(
             self.events.replay().rev(),
             already_applied: MeterEvent::ReadingRecorded { value: v } if *v == value,
-            resets_on: MeterEvent::Reset,
+            resets_on: MeterEvent::ReadingRecorded { .. },
             snapshot: s if s.last_value == Some(value),
         );
         self.events.push(MeterEvent::ReadingRecorded { value });
@@ -213,7 +213,7 @@ impl PlainMeter {
         idempotency_guard!(
             self.events.iter_all().rev(),
             already_applied: MeterEvent::ReadingRecorded { value: v } if *v == value,
-            resets_on: MeterEvent::Reset,
+            resets_on: MeterEvent::ReadingRecorded { .. },
         );
         self.events.push(MeterEvent::ReadingRecorded { value });
         Idempotent::Executed(())
@@ -248,6 +248,10 @@ pub struct BrokenMeter {
 }
 
 impl BrokenMeter {
+    pub fn has_snapshot(&self) -> bool {
+        self.events.snapshot().is_some()
+    }
+
     /// BUG: only counts the tail, never the snapshot's own `count`.
     pub fn count(&self) -> u32 {
         self.events
@@ -285,7 +289,7 @@ impl BrokenMeter {
         idempotency_guard!(
             self.events.replay().rev(),
             already_applied: MeterEvent::ReadingRecorded { value: v } if *v == value,
-            resets_on: MeterEvent::Reset,
+            resets_on: MeterEvent::ReadingRecorded { .. },
             snapshot: s if s.last_value == Some(value),
         );
         self.events.push(MeterEvent::ReadingRecorded { value });

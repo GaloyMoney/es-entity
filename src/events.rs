@@ -255,9 +255,13 @@ where
         self.base_sequence + self.persisted_events.len()
     }
 
-    /// Returns the count of persisted events after the snapshot (the tail).
+    /// Returns the count of events after the snapshot: the persisted tail
+    /// plus any events commands have staged for the write in flight. This is
+    /// what `Snapshotting::snapshot()` is expected to threshold on — it is
+    /// called after commands have staged their events, so the fold (and the
+    /// tail length) must already include them.
     pub fn tail_len(&self) -> usize {
-        self.persisted_events.len()
+        self.persisted_events.len() + self.new_events.len()
     }
 
     #[doc(hidden)]
@@ -568,7 +572,38 @@ impl<T: EsEvent> EntityEvents<T, NoSnapshot> {
         self.persisted_events.iter()
     }
 
-    /// Returns an iterator over all events (both persisted and new) in chronological order
+    /// Returns an iterator over all events (both persisted and new) in
+    /// chronological order.
+    ///
+    /// Only exists for `EntityEvents<T, NoSnapshot>` — a switch to a real
+    /// snapshot type is a compile error at every such scan, rather than a
+    /// silently-wrong fold that skips whatever the snapshot summarised:
+    ///
+    /// ```compile_fail,E0599
+    /// use es_entity::*;
+    /// use serde::{Serialize, Deserialize};
+    ///
+    /// es_entity::entity_id! { IterAllMeterId }
+    ///
+    /// #[derive(EsEvent, Debug, Serialize, Deserialize)]
+    /// #[serde(tag = "type", rename_all = "snake_case")]
+    /// #[es_event(id = "IterAllMeterId")]
+    /// pub enum IterAllMeterEvent {
+    ///     Initialized { id: IterAllMeterId },
+    /// }
+    ///
+    /// #[derive(EsSnapshot, Debug, Clone, PartialEq, Serialize, Deserialize)]
+    /// pub struct IterAllMeterSnapshot {
+    ///     pub id: IterAllMeterId,
+    /// }
+    ///
+    /// fn count_all(events: &EntityEvents<IterAllMeterEvent, IterAllMeterSnapshot>) -> usize {
+    ///     // error[E0599]: no method named `iter_all` on this type — it is
+    ///     // only defined for `EntityEvents<T, NoSnapshot>`. Use `replay()`,
+    ///     // which forces every match to account for `Replay::Snapshot`.
+    ///     events.iter_all().count()
+    /// }
+    /// ```
     pub fn iter_all(&self) -> impl DoubleEndedIterator<Item = &T> + Clone {
         self.persisted_events
             .iter()

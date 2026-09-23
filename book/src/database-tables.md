@@ -136,3 +136,9 @@ ORDER BY e.sequence;
 
 As a result the query is much simpler and we are no longer leaking any domain information.
 We just have to ensure the index table gets updated atomically as we append the events to the events table.
+
+## Snapshots Table
+
+A repo with `#[es_repo(snapshot)]` also needs a `<tbl>_snapshots` table —
+see [Snapshots](./snapshots.md) for its shape and how loaders read it in the
+same statement as the events table.

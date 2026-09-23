@@ -351,3 +351,12 @@ the `name` column in the lookup table is `NULL`, so the value is retained
 nowhere the framework materialises it.
 
 **Important:** The payloads are *hard-deleted* even when the entity is only soft-deleted. If the entity is later restored, the forgettable fields will remain permanently forgotten.
+
+## Forgettable Fields on a Snapshot
+
+A [snapshot](./snapshots.md) type's own `Forgettable<T>` fields work the same
+way, sharing the *same* `_forgettable_payloads` table as the entity's events —
+at the reserved `sequence = 0` row, since real event sequences start at `1`.
+`forget()` on a snapshot repo deletes that row too, then re-snapshots
+immediately from the rebuilt (forgotten) state, so the snapshot can never
+retain a value that should have been forgotten.

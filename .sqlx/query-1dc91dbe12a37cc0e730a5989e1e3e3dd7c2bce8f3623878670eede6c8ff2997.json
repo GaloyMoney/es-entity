@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE order_items SET deleted = TRUE WHERE order_id = $1 AND deleted = FALSE",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1dc91dbe12a37cc0e730a5989e1e3e3dd7c2bce8f3623878670eede6c8ff2997"
+}

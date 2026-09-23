@@ -1,0 +1,113 @@
+#![cfg(feature = "instrument")]
+
+mod entities;
+mod helpers;
+
+use std::sync::{Arc, Mutex};
+
+use entities::{meter::*, site::*};
+use es_entity::*;
+use helpers::init_pool;
+use sqlx::PgPool;
+use tracing_subscriber::layer::SubscriberExt;
+
+/// Both parent (`Site`) and child (`Meter`) snapshot.
+#[derive(EsRepo, Debug)]
+#[es_repo(entity = "Site", snapshot, snapshot_tbl = "site_snapshots")]
+pub struct BothSites {
+    pool: PgPool,
+
+    #[es_repo(nested)]
+    meters: BothMeters,
+}
+
+impl BothSites {
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            pool: pool.clone(),
+            meters: BothMeters::new(pool),
+        }
+    }
+}
+
+#[derive(EsRepo, Debug)]
+#[es_repo(
+    entity = "Meter",
+    snapshot,
+    snapshot_tbl = "meter_snapshots",
+    columns(
+        site_id(ty = "SiteId", update(persist = false), parent),
+        label(ty = "String")
+    )
+)]
+pub struct BothMeters {
+    pool: PgPool,
+}
+
+impl BothMeters {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[derive(Clone, Default)]
+struct QueryEventCount(Arc<Mutex<usize>>);
+
+impl QueryEventCount {
+    fn get(&self) -> usize {
+        *self.0.lock().unwrap()
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for QueryEventCount {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        if event.metadata().target() == "sqlx::query" {
+            *self.0.lock().unwrap() += 1;
+        }
+    }
+}
+
+/// Test 10 — nested "just works" when both parent and child snapshot: a
+/// nested `find_by_id` still issues exactly one SQL statement for the whole
+/// tree.
+#[tokio::test]
+async fn nested_both_snapshot_one_statement() -> anyhow::Result<()> {
+    let pool = init_pool().await?;
+    let repo = BothSites::new(pool);
+
+    let site_id = SiteId::new();
+    let meter_id = MeterId::new();
+    let mut site = repo
+        .create(NewSite::builder().id(site_id).build().unwrap())
+        .await?;
+    site.add_meter(new_meter(meter_id, site_id, "m"));
+    repo.update(&mut site).await?;
+
+    // Cross the child's own snapshot threshold (tail_len() >= 4) the same
+    // way a flat repo would.
+    for v in 1..=5i64 {
+        let _ = site.meters.get_persisted_mut(&meter_id).unwrap().record(v);
+        repo.update(&mut site).await?;
+    }
+
+    let counter = QueryEventCount::default();
+    let subscriber = tracing_subscriber::registry().with(counter.clone());
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let loaded = repo.find_by_id(site_id).await?;
+
+    assert_eq!(
+        counter.get(),
+        1,
+        "a nested load with both parent and child snapshotting must be one statement"
+    );
+    let meter = loaded.meters.get_persisted(&meter_id).unwrap();
+    assert!(meter.has_snapshot());
+    assert_eq!(meter.count(), 5);
+
+    Ok(())
+}

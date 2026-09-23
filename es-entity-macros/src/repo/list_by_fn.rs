@@ -358,6 +358,7 @@ pub struct ListByFn<'a> {
     cursor_mod: syn::Ident,
     post_hydrate_error: Option<&'a syn::Type>,
     forgettable_table_name: Option<&'a str>,
+    snapshot_table_name: Option<&'a str>,
     scope: Option<ScopeInfo<'a>>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
@@ -377,6 +378,7 @@ impl<'a> ListByFn<'a> {
             cursor_mod: opts.cursor_mod(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             forgettable_table_name: opts.forgettable_table_name(),
+            snapshot_table_name: opts.snapshot_table_name(),
             scope: ScopeInfo::from_opts(opts),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
@@ -502,6 +504,11 @@ impl ToTokens for ListByFn<'_> {
             } else {
                 quote! {}
             };
+            let snapshot_tbl_arg = if let Some(tbl) = self.snapshot_table_name {
+                quote! { snapshot_tbl = #tbl, }
+            } else {
+                quote! {}
+            };
 
             let make_es_query = |query: &str, args: &TokenStream| -> TokenStream {
                 if let Some(prefix) = self.ignore_prefix {
@@ -509,6 +516,7 @@ impl ToTokens for ListByFn<'_> {
                         es_entity::es_query!(
                             tbl_prefix = #prefix,
                             #forgettable_tbl_arg
+                            #snapshot_tbl_arg
                             #query,
                             #args
                         )
@@ -518,6 +526,7 @@ impl ToTokens for ListByFn<'_> {
                         es_entity::es_query!(
                             entity = #entity,
                             #forgettable_tbl_arg
+                            #snapshot_tbl_arg
                             #query,
                             #args
                         )
@@ -812,6 +821,7 @@ mod tests {
             cursor_mod,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -900,6 +910,7 @@ mod tests {
             cursor_mod,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -935,6 +946,7 @@ mod tests {
             cursor_mod,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -1028,6 +1040,7 @@ mod tests {
             cursor_mod,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -1140,6 +1153,7 @@ mod tests {
             cursor_mod,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             scope: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),

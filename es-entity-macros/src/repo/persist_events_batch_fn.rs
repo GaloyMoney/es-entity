@@ -8,21 +8,25 @@ use super::{
 };
 
 pub struct PersistEventsBatchFn<'a> {
+    entity: &'a syn::Ident,
     id: &'a syn::Ident,
     event: &'a syn::Ident,
     events_table_name: &'a str,
     event_ctx: bool,
     forgettable_table_name: Option<&'a str>,
+    snapshot_enabled: bool,
 }
 
 impl<'a> From<&'a RepositoryOptions> for PersistEventsBatchFn<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
+            entity: opts.entity(),
             id: opts.id(),
             event: opts.event(),
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
             forgettable_table_name: opts.forgettable_table_name(),
+            snapshot_enabled: opts.snapshot_enabled(),
         }
     }
 }
@@ -31,6 +35,12 @@ impl ToTokens for PersistEventsBatchFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let id_type = &self.id;
         let event_type = &self.event;
+        let entity = &self.entity;
+        let events_ty = if self.snapshot_enabled {
+            quote! { es_entity::EntityEvents<#event_type, <#entity as es_entity::EsEntity>::Snapshot> }
+        } else {
+            quote! { es_entity::EntityEvents<#event_type> }
+        };
 
         // Same events-table tail as the combined bulk write statements, just
         // without a CTE to join back to.
@@ -114,7 +124,7 @@ impl ToTokens for PersistEventsBatchFn<'_> {
             ) -> Result<std::collections::HashMap<#id_type, usize>, sqlx::Error>
             where
                 OP: es_entity::AtomicOperation + ?Sized,
-                B: std::borrow::BorrowMut<es_entity::EntityEvents<#event_type>>,
+                B: std::borrow::BorrowMut<#events_ty>,
             {
                 use es_entity::prelude::sqlx::Row;
 
@@ -128,7 +138,7 @@ impl ToTokens for PersistEventsBatchFn<'_> {
 
                 let mut n_events_map = std::collections::HashMap::new();
                 for item in all_events.iter() {
-                    let events: &es_entity::EntityEvents<#event_type> = item.borrow();
+                    let events: &#events_ty = item.borrow();
                     let id = events.id();
                     let offset = events.len_persisted() + 1;
                     let types = events.new_event_types();
@@ -166,7 +176,7 @@ impl ToTokens for PersistEventsBatchFn<'_> {
                     .try_get("recorded_at")?;
 
                 for item in all_events.iter_mut() {
-                    let events: &mut es_entity::EntityEvents<#event_type> = item.borrow_mut();
+                    let events: &mut #events_ty = item.borrow_mut();
                     events.mark_new_events_persisted_at(recorded_at);
                 }
 
@@ -184,12 +194,15 @@ mod tests {
     fn persist_events_fn() {
         let id = syn::parse_str("EntityId").unwrap();
         let event = syn::Ident::new("EntityEvent", proc_macro2::Span::call_site());
+        let entity = syn::Ident::new("Entity", proc_macro2::Span::call_site());
         let persist_fn = PersistEventsBatchFn {
+            entity: &entity,
             id: &id,
             event: &event,
             events_table_name: "entity_events",
             event_ctx: true,
             forgettable_table_name: None,
+            snapshot_enabled: false,
         };
 
         let mut tokens = TokenStream::new();
@@ -203,7 +216,7 @@ mod tests {
             ) -> Result<std::collections::HashMap<EntityId, usize>, sqlx::Error>
             where
                 OP: es_entity::AtomicOperation + ?Sized,
-                B: std::borrow::BorrowMut<es_entity::EntityEvents<EntityEvent>>,
+                B: std::borrow::BorrowMut<es_entity::EntityEvents<EntityEvent> >,
             {
                 use es_entity::prelude::sqlx::Row;
 
@@ -273,12 +286,15 @@ mod tests {
     fn persist_events_fn_without_event_context() {
         let id = syn::parse_str("EntityId").unwrap();
         let event = syn::Ident::new("EntityEvent", proc_macro2::Span::call_site());
+        let entity = syn::Ident::new("Entity", proc_macro2::Span::call_site());
         let persist_fn = PersistEventsBatchFn {
+            entity: &entity,
             id: &id,
             event: &event,
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: None,
+            snapshot_enabled: false,
         };
 
         let mut tokens = TokenStream::new();
@@ -292,7 +308,7 @@ mod tests {
             ) -> Result<std::collections::HashMap<EntityId, usize>, sqlx::Error>
             where
                 OP: es_entity::AtomicOperation + ?Sized,
-                B: std::borrow::BorrowMut<es_entity::EntityEvents<EntityEvent>>,
+                B: std::borrow::BorrowMut<es_entity::EntityEvents<EntityEvent> >,
             {
                 use es_entity::prelude::sqlx::Row;
 

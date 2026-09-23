@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE customer_events\n           SET event = jsonb_set(event, '{name}', '\"leaked\"')\n           WHERE id = $1 AND event_type = 'initialized'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7383e676e63a5a15634943c1e8589562a747122214906f9d12a07272a195b98d"
+}

@@ -128,16 +128,32 @@ impl ToTokens for UpdateFn<'_> {
 
             let gather = events_insert.gather_per_entity(quote! { entity.events() });
 
+            // A leading comma only when there is a snapshot to bind — kept
+            // as its own token group so a non-snapshot repo's query args are
+            // byte-identical to before (no trailing/joining comma added).
+            let snap_args_prefixed = if snap_args.is_empty() {
+                quote! {}
+            } else {
+                quote! { , #(#snap_args),* }
+            };
+
             // Forgettable payloads are written to their own table, so they
             // stay a follow-up statement (still one fewer round trip than
             // before, where the index update was separate too).
+            let snapshot_expr = snapshot_upsert
+                .is_some()
+                .then(|| quote! { __snapshot.as_ref() });
             let forgettable_code = match self.forgettable_table_name {
                 Some(table) => ForgettablePayloads {
                     table,
                     id_type: self.id,
                     event_type: self.event,
                 }
-                .insert_per_entity(quote! { entity.events() }, modify_error),
+                .insert_per_entity(
+                    quote! { entity.events() },
+                    modify_error,
+                    snapshot_expr,
+                ),
                 None => quote! {},
             };
 
@@ -150,7 +166,7 @@ impl ToTokens for UpdateFn<'_> {
                     #query,
                     #(#args,)*
                     #(#event_args),*
-                    #(#snap_args),*
+                    #snap_args_prefixed
                 )
                     .fetch_all(op.as_executor())
                     .await
@@ -169,6 +185,32 @@ impl ToTokens for UpdateFn<'_> {
                     .ok_or(#modify_error::ConcurrentModification)?;
                 let n_events = Self::extract_events(entity).mark_new_events_persisted_at(recorded_at);
             }
+        } else if snapshot_upsert.is_some() {
+            quote! {
+                let __snapshot = <#entity as es_entity::Snapshotting>::snapshot(&*entity);
+                // `persist_events` is a separate call, so unlike the combined
+                // (with-columns) path there is no shared `__snapshot_first`
+                // local already in scope for `compact_to_snapshot` below —
+                // recompute it the same way, before the write moves new
+                // events into the persisted tail (recomputing after would
+                // still be correct — marking only appends — but there is no
+                // reason to rely on that).
+                let __snapshot_first = Self::extract_events(entity).entity_first_persisted_at();
+                let n_events = {
+                    let events = Self::extract_events(entity);
+                    Self::extract_concurrent_modification(
+                        self.persist_events(op, events, __snapshot.as_ref()).await,
+                        #modify_error::ConcurrentModification,
+                    )?
+                };
+                // `persist_events` reports only the count, not the
+                // `recorded_at` it stamped new events with — recover it from
+                // the entity itself (the just-marked events are now its most
+                // recent persisted ones) for `compact_to_snapshot` below.
+                let recorded_at = Self::extract_events(entity)
+                    .entity_last_modified_at()
+                    .ok_or(#modify_error::ConcurrentModification)?;
+            }
         } else {
             quote! {
                 let n_events = {
@@ -182,11 +224,11 @@ impl ToTokens for UpdateFn<'_> {
         };
 
         let compact_code = match &snapshot_upsert {
-            Some(su) if self.columns.updates_needed() => su.compact_per_entity(
+            Some(su) => su.compact_per_entity(
                 quote! { Self::extract_events(entity) },
                 quote! { recorded_at },
             ),
-            _ => quote! {},
+            None => quote! {},
         };
 
         #[cfg(feature = "instrument")]
@@ -476,5 +518,68 @@ mod tests {
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    /// Step 15 (test 15): a snapshot repo's `update_in_op` combines the
+    /// index update, the snapshot upsert, and the events insert into one
+    /// statement — the `snap AS (INSERT INTO ...)` CTE must be present —
+    /// and compacts the entity in memory after persisting, via
+    /// `compact_to_snapshot`.
+    #[test]
+    fn update_fn_with_snapshot_contains_the_snap_cte_and_compacts() {
+        let id = syn::parse_str("EntityId").unwrap();
+        let entity = Ident::new("Entity", Span::call_site());
+
+        let columns = Columns::new(
+            &id,
+            [Column::new(
+                Ident::new("name", Span::call_site()),
+                syn::parse_str("String").unwrap(),
+            )],
+        );
+
+        let event = Ident::new("EntityEvent", Span::call_site());
+        let update_fn = UpdateFn {
+            in_op_only: false,
+            entity: &entity,
+            id: &id,
+            event: &event,
+            table_name: "entities",
+            events_table_name: "entity_events",
+            event_ctx: false,
+            forgettable_table_name: None,
+            snapshot_table_name: Some("entity_snapshots"),
+            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            columns: &columns,
+            nested_fn_names: Vec::new(),
+            post_persist_error: None,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        update_fn.to_tokens(&mut tokens);
+        let out = tokens.to_string();
+
+        assert!(
+            out.contains("snap AS (INSERT INTO entity_snapshots"),
+            "missing the snap CTE: {out}"
+        );
+        assert!(
+            out.contains("compact_to_snapshot"),
+            "missing the post-write compaction: {out}"
+        );
+        assert!(
+            out.contains("es_entity :: Snapshotting > :: snapshot"),
+            "missing the pre-statement snapshot() call: {out}"
+        );
+        // The snap CTE runs in the same statement as the events insert (no
+        // follow-up round trip for it) — the whole query is one
+        // `sqlx :: query !` call.
+        assert_eq!(
+            out.matches("sqlx :: query !").count(),
+            1,
+            "the snapshot write must not be a separate statement: {out}"
+        );
     }
 }

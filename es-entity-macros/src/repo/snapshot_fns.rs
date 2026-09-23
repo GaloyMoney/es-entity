@@ -73,14 +73,18 @@ impl<'a> SnapshotFns<'a> {
             None => quote! {},
         };
         let find_by_id_sql = format!("SELECT id FROM {table_name} WHERE id = $1");
+        // Bypasses the public `es_query!` wrapper (whose arms don't carry a
+        // `snapshot_fingerprint` override) and calls the underlying proc
+        // macro directly — this is the one place that needs the fingerprint
+        // forced to `NO_SNAPSHOT_FINGERPRINT` rather than the type's own.
         let query_call = quote! {
-            es_entity::es_query!(
+            es_entity::expand_es_query!(
                 entity = #entity,
                 #forgettable_tbl_arg
                 snapshot_tbl = #snapshot_tbl,
                 snapshot_fingerprint = es_entity::NO_SNAPSHOT_FINGERPRINT,
-                #find_by_id_sql,
-                id as &#id_type,
+                sql = #find_by_id_sql,
+                args = [id as &#id_type,]
             )
         };
 
@@ -216,10 +220,23 @@ impl<'a> SnapshotFns<'a> {
             }
 
             /// Loads `id` both via its snapshot and via `full_history()`, and
-            /// compares the two folds. `Ok(())` means the snapshot is a
-            /// faithful summary; `Err(SnapshotMismatch)` means some scan or
-            /// `idempotency_guard!` clause is not accounting for the
-            /// snapshot correctly.
+            /// checks that the stored snapshot is exactly what `snapshot()`
+            /// would compute from the raw events up to that same sequence.
+            /// `Ok(())` means the snapshot is a faithful summary;
+            /// `Err(SnapshotMismatch)` means some scan or `idempotency_guard!`
+            /// clause is not accounting for the snapshot correctly.
+            ///
+            /// `Snapshotting::snapshot()` is threshold-gated (it decides
+            /// *whether* to write, not just what the fold is), so it cannot
+            /// be called directly on both loads: a freshly loaded snapshotted
+            /// entity has a short tail and would almost always answer `None`,
+            /// while `full_history()`'s entity has the entire history as its
+            /// tail and would almost always answer `Some`. Instead, the
+            /// events `full_history()` returned are truncated to the stored
+            /// snapshot's own sequence and re-hydrated with no snapshot at
+            /// all, so `snapshot()` sees the same tail length the original
+            /// write did and recomputes the same fold — this is what is
+            /// compared against the stored value.
             pub async fn verify_snapshot_in_op<OP>(
                 &self,
                 op: &mut OP,
@@ -231,14 +248,31 @@ impl<'a> SnapshotFns<'a> {
                 let id = id.borrow();
                 let full = self.__full_history_find_by_id_in_op(&mut *op, id).await?;
                 let snapshotted = self.find_by_id_in_op(&mut *op, id).await?;
-                let full_snapshot = <#entity as es_entity::Snapshotting>::snapshot(&full);
-                let snapshotted_snapshot = <#entity as es_entity::Snapshotting>::snapshot(&snapshotted);
-                if full_snapshot == snapshotted_snapshot {
+                let stored = snapshotted.events().snapshot();
+                let recomputed = match stored {
+                    Some(record) => {
+                        let events: Vec<<#entity as es_entity::EsEntity>::Event> = full
+                            .events()
+                            .replay_persisted()
+                            .filter_map(|r| match r {
+                                es_entity::Replay::Event(e) if e.sequence <= record.sequence => {
+                                    Some(e.event.clone())
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        let tmp_events = es_entity::EntityEvents::init(*id, events);
+                        let tmp_entity: #entity = Self::hydrate_entity(tmp_events)?;
+                        <#entity as es_entity::Snapshotting>::snapshot(&tmp_entity)
+                    }
+                    None => None,
+                };
+                if recomputed.as_ref() == stored.map(|r| &r.state) {
                     Ok(())
                 } else {
                     Err(#find_error::SnapshotMismatch(es_entity::SnapshotMismatch {
-                        full_history: format!("{full_snapshot:?}"),
-                        snapshotted: format!("{snapshotted_snapshot:?}"),
+                        full_history: format!("{recomputed:?}"),
+                        snapshotted: format!("{:?}", stored.map(|r| &r.state)),
                     }))
                 }
             }

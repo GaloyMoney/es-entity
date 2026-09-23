@@ -148,7 +148,7 @@ impl ToTokens for CreateFn<'_> {
                     id_type: self.id,
                     event_type: self.event,
                 }
-                .insert_per_entity(quote! { events }, create_error);
+                .insert_per_entity(quote! { events }, create_error, None);
                 quote! {
                     let offset = events.len_persisted();
                     let id = events.id();
@@ -168,6 +168,7 @@ impl ToTokens for CreateFn<'_> {
                     quote! { entity.events() },
                     quote! { n_events },
                     create_error,
+                    Some(quote! { __snapshot.as_ref() }),
                 );
                 quote! {
                     let id = &entity.events().entity_id;

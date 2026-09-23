@@ -326,6 +326,7 @@ pub struct ListForFiltersFn<'a> {
     id: &'a syn::Ident,
     post_hydrate_error: Option<&'a syn::Type>,
     forgettable_table_name: Option<&'a str>,
+    snapshot_table_name: Option<&'a str>,
     scope: Option<ScopeInfo<'a>>,
     index_catalog: crate::index_catalog::IndexCatalog,
     #[cfg(feature = "instrument")]
@@ -356,6 +357,7 @@ impl<'a> ListForFiltersFn<'a> {
             id: opts.id(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
             forgettable_table_name: opts.forgettable_table_name(),
+            snapshot_table_name: opts.snapshot_table_name(),
             scope: ScopeInfo::from_opts(opts),
             index_catalog: opts.index_catalog(),
             #[cfg(feature = "instrument")]
@@ -890,6 +892,11 @@ impl<'a> ListForFiltersFn<'a> {
         } else {
             quote! {}
         };
+        let snapshot_tbl_arg = if let Some(tbl) = self.snapshot_table_name {
+            quote! { snapshot_tbl = #tbl, }
+        } else {
+            quote! {}
+        };
 
         let make_es_query = |query: &str, args: &TokenStream| -> TokenStream {
             if let Some(prefix) = self.ignore_prefix {
@@ -897,6 +904,7 @@ impl<'a> ListForFiltersFn<'a> {
                     es_entity::es_query!(
                         tbl_prefix = #prefix,
                         #forgettable_tbl_arg
+                        #snapshot_tbl_arg
                         #query,
                         #args
                     )
@@ -906,6 +914,7 @@ impl<'a> ListForFiltersFn<'a> {
                     es_entity::es_query!(
                         entity = #entity,
                         #forgettable_tbl_arg
+                        #snapshot_tbl_arg
                         #query,
                         #args
                     )
@@ -1532,6 +1541,7 @@ mod tests {
             id: &id,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             scope: None,
             index_catalog: catalog(
                 "CREATE INDEX ON orders (id); \
@@ -1781,6 +1791,7 @@ mod tests {
             id: &id,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             scope: None,
             index_catalog: Default::default(),
             #[cfg(feature = "instrument")]
@@ -1852,6 +1863,7 @@ mod tests {
             id: &id,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             scope: None,
             index_catalog: Default::default(),
             #[cfg(feature = "instrument")]
@@ -1939,6 +1951,7 @@ mod tests {
             id: &id,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             scope: None,
             index_catalog: Default::default(),
             #[cfg(feature = "instrument")]
@@ -2025,6 +2038,7 @@ mod tests {
             id: &id,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             scope: None,
             index_catalog: catalog(
                 "CREATE INDEX ON tasks (id); \
@@ -2126,6 +2140,7 @@ mod tests {
             id: &id,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             scope: None,
             // A single composite; specialization keys on the equality columns
             // being a *leading prefix* of it — the sort column need not follow.
@@ -2217,6 +2232,7 @@ mod tests {
                 id: &id,
                 post_hydrate_error: None,
                 forgettable_table_name: None,
+                snapshot_table_name: None,
                 scope: None,
                 index_catalog,
                 #[cfg(feature = "instrument")]
@@ -2313,6 +2329,7 @@ mod tests {
             id: &id,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             scope: None,
             index_catalog: Default::default(),
             #[cfg(feature = "instrument")]
@@ -2425,6 +2442,7 @@ mod tests {
             id: &id,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             scope: None,
             index_catalog: Default::default(),
             #[cfg(feature = "instrument")]
@@ -2507,6 +2525,7 @@ mod tests {
             id: &id,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             scope: None,
             index_catalog: Default::default(),
             #[cfg(feature = "instrument")]
@@ -2606,6 +2625,7 @@ mod tests {
             id: &id,
             post_hydrate_error: None,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             scope: None,
             index_catalog: Default::default(),
             #[cfg(feature = "instrument")]

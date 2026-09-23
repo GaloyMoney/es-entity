@@ -276,20 +276,34 @@ pub struct ForgettablePayloads<'a> {
 }
 
 impl ForgettablePayloads<'_> {
-    /// Collects and inserts the payloads of one entity's new events.
-    /// Requires `offset` (the pre-persist `len_persisted`) and `id` in scope.
-    pub fn insert_per_entity(&self, events: TokenStream, error: &syn::Ident) -> TokenStream {
+    /// Collects and inserts the payloads of one entity's new events, plus —
+    /// when `snapshot` is given — the snapshot's own payload at the reserved
+    /// `sequence = 0` (J1), and a follow-up `DELETE` of that row when a
+    /// snapshot was written but its payload is `None` (every forgettable
+    /// field already forgotten — decision 5/10c). `snapshot` is an
+    /// expression evaluating to `Option<&Snapshot>` (cheap to re-evaluate —
+    /// it is read, never consumed); passing `None` here keeps the query and
+    /// generated code byte-identical to a repo with no snapshot at all (no
+    /// `ON CONFLICT` clause is needed there — event sequences never repeat).
+    /// Requires `offset` (the pre-persist `len_persisted`) and `id` in
+    /// scope.
+    pub fn insert_per_entity(
+        &self,
+        events: TokenStream,
+        error: &syn::Ident,
+        snapshot: Option<TokenStream>,
+    ) -> TokenStream {
         let Self {
             table,
             id_type,
             event_type,
         } = self;
-        let query = format!(
-            "INSERT INTO {table} (entity_id, sequence, payload) SELECT $1, unnested.sequence, unnested.payload FROM UNNEST($2::INT[], $3::JSONB[]) AS unnested(sequence, payload)"
-        );
+        let query = Self::insert_query(table, snapshot.is_some());
+        let (snap_push, snap_delete) = Self::snapshot_payload_tokens(table, id_type, &snapshot);
         quote! {
             let mut payload_sequences: Vec<i32> = Vec::new();
             let mut payload_values: Vec<es_entity::prelude::serde_json::Value> = Vec::new();
+            #snap_push
             for (idx, event_with_ctx) in #events.iter_new_events().enumerate() {
                 if let Some(payload) = #event_type::extract_forgettable_payloads(&event_with_ctx.event) {
                     payload_sequences.push((offset + 1 + idx) as i32);
@@ -309,6 +323,7 @@ impl ForgettablePayloads<'_> {
                     #error::ConcurrentModification,
                 )?;
             }
+            #snap_delete
         }
     }
 
@@ -322,18 +337,19 @@ impl ForgettablePayloads<'_> {
         events: TokenStream,
         n: TokenStream,
         error: &syn::Ident,
+        snapshot: Option<TokenStream>,
     ) -> TokenStream {
         let Self {
             table,
             id_type,
             event_type,
         } = self;
-        let query = format!(
-            "INSERT INTO {table} (entity_id, sequence, payload) SELECT $1, unnested.sequence, unnested.payload FROM UNNEST($2::INT[], $3::JSONB[]) AS unnested(sequence, payload)"
-        );
+        let query = Self::insert_query(table, snapshot.is_some());
+        let (snap_push, snap_delete) = Self::snapshot_payload_tokens(table, id_type, &snapshot);
         quote! {
             let mut payload_sequences: Vec<i32> = Vec::new();
             let mut payload_values: Vec<es_entity::prelude::serde_json::Value> = Vec::new();
+            #snap_push
             for persisted in #events.last_persisted(#n) {
                 if let Some(payload) = #event_type::extract_forgettable_payloads(&persisted.event) {
                     payload_sequences.push(persisted.sequence as i32);
@@ -353,7 +369,57 @@ impl ForgettablePayloads<'_> {
                     #error::ConcurrentModification,
                 )?;
             }
+            #snap_delete
         }
+    }
+
+    /// Builds the two snapshot-related token groups shared by
+    /// `insert_per_entity`/`insert_per_entity_from_persisted`: pushing the
+    /// snapshot's own payload at `sequence = 0` when there is one, and
+    /// deleting that row when a snapshot was written but its payload is
+    /// `None`. `snapshot` is `None` for a non-snapshot repo (both groups
+    /// empty, byte for byte).
+    fn snapshot_payload_tokens(
+        table: &str,
+        id_type: &syn::Ident,
+        snapshot: &Option<TokenStream>,
+    ) -> (TokenStream, TokenStream) {
+        let Some(expr) = snapshot else {
+            return (quote! {}, quote! {});
+        };
+        let delete_query = format!("DELETE FROM {table} WHERE entity_id = $1 AND sequence = 0");
+        let push = quote! {
+            if let Some(payload) = (#expr).and_then(es_entity::EsSnapshot::extract_forgettable_payloads) {
+                payload_sequences.push(0);
+                payload_values.push(payload);
+            }
+        };
+        let delete = quote! {
+            if (#expr).is_some()
+                && (#expr).and_then(es_entity::EsSnapshot::extract_forgettable_payloads).is_none()
+            {
+                sqlx::query!(#delete_query, id as &#id_type)
+                    .execute(op.as_executor())
+                    .await?;
+            }
+        };
+        (push, delete)
+    }
+
+    /// The payload insert query. `on_conflict` (true only for a snapshot
+    /// repo) adds `ON CONFLICT (entity_id, sequence) DO UPDATE SET payload =
+    /// EXCLUDED.payload` — needed because a re-snapshot writes over the same
+    /// `sequence = 0` row; event-only rows never conflict, so this is a
+    /// no-op for them, and non-snapshot repos never emit it at all.
+    fn insert_query(table: &str, on_conflict: bool) -> String {
+        let conflict_clause = if on_conflict {
+            " ON CONFLICT (entity_id, sequence) DO UPDATE SET payload = EXCLUDED.payload"
+        } else {
+            ""
+        };
+        format!(
+            "INSERT INTO {table} (entity_id, sequence, payload) SELECT $1, unnested.sequence, unnested.payload FROM UNNEST($2::INT[], $3::JSONB[]) AS unnested(sequence, payload){conflict_clause}"
+        )
     }
 
     /// Declarations for the batch payload accumulators.
@@ -469,6 +535,106 @@ impl SnapshotUpsert<'_> {
         quote! {
             if let Some(s) = __snapshot {
                 #events.compact_to_snapshot(s, #recorded_at, __snapshot_first.unwrap_or(#recorded_at));
+            }
+        }
+    }
+
+    /// The `snap AS (...)` CTE for a batch write: every entity whose
+    /// `snapshot()` was `Some` in one `INSERT ... SELECT ... FROM UNNEST`,
+    /// sourced from the parallel arrays `gather_batch` fills. No `WHERE` on
+    /// the `SELECT` — only entities with a snapshot to write are ever pushed
+    /// into the arrays in the first place.
+    pub fn cte_batch(
+        &self,
+        ids_p: usize,
+        seqs_p: usize,
+        snaps_p: usize,
+        firsts_p: usize,
+        fp_p: usize,
+        now_p: usize,
+    ) -> String {
+        let table = self.table;
+        format!(
+            "snap AS (INSERT INTO {table} (id, sequence, fingerprint, snapshot, first_recorded_at, recorded_at) \
+             SELECT u.id, u.sequence, ${fp_p}::BIGINT, u.snapshot, \
+             COALESCE(u.first_recorded_at, COALESCE(${now_p}, NOW())), COALESCE(${now_p}, NOW()) \
+             FROM UNNEST(${ids_p}, ${seqs_p}::INT[], ${snaps_p}::JSONB[], ${firsts_p}::TIMESTAMPTZ[]) \
+             AS u(id, sequence, snapshot, first_recorded_at) \
+             ON CONFLICT (id) DO UPDATE SET sequence = EXCLUDED.sequence, fingerprint = EXCLUDED.fingerprint, \
+             snapshot = EXCLUDED.snapshot, first_recorded_at = EXCLUDED.first_recorded_at, recorded_at = EXCLUDED.recorded_at \
+             WHERE EXCLUDED.sequence > {table}.sequence)"
+        )
+    }
+
+    /// Declarations for the batch snapshot gather accumulators, plus the
+    /// `HashMap` that remembers which entities got a `Some` from
+    /// `snapshot()` (and its value) for the compaction pass after the write.
+    pub fn batch_declarations(&self, id_type: &syn::Ident) -> TokenStream {
+        quote! {
+            let mut __snap_ids: Vec<&#id_type> = Vec::new();
+            let mut __snap_seqs: Vec<i32> = Vec::new();
+            let mut __snap_jsons: Vec<es_entity::prelude::serde_json::Value> = Vec::new();
+            let mut __snap_firsts: Vec<Option<es_entity::prelude::chrono::DateTime<es_entity::prelude::chrono::Utc>>> = Vec::new();
+        }
+    }
+
+    /// Per-entity body of the batch snapshot gather: `snapshot` evaluates to
+    /// the already-computed `Option<S>` for this entity (its own
+    /// `Snapshotting::snapshot()` result — the caller computes this
+    /// differently for `create_all`, where entities must be hydrated from
+    /// their staged events first, versus `update_all`, where they already
+    /// are); `events`/`id` mirror `EventsInsert::gather_batch`.
+    pub fn gather_batch(
+        &self,
+        snapshot: TokenStream,
+        events: TokenStream,
+        id: TokenStream,
+    ) -> TokenStream {
+        quote! {
+            if let Some(s) = #snapshot {
+                let __first = #events.entity_first_persisted_at();
+                let __json = es_entity::prelude::serde_json::to_value(&s).expect("Failed to serialize snapshot");
+                __snap_ids.push(#id);
+                __snap_seqs.push((#events.len_persisted() + #events.len_new()) as i32);
+                __snap_firsts.push(__first);
+                __snap_jsons.push(__json);
+                __snapshots_to_compact.insert((#id).clone(), (s, __first));
+            }
+        }
+    }
+
+    /// Compacts every entity in the batch that got a snapshot, after the
+    /// write succeeded and events were marked persisted. `entities` iterates
+    /// `&mut Entity`. Uses the SAME `first_recorded_at` gathered (and bound
+    /// into the write) before the statement ran, not one recomputed
+    /// afterward — `mark_new_events_persisted_at` has already run by here,
+    /// so `entity_first_persisted_at()` would still answer correctly, but
+    /// there is no reason for the in-memory value to be derived differently
+    /// from the row that was actually written.
+    pub fn compact_batch(&self, entities: TokenStream, recorded_at: TokenStream) -> TokenStream {
+        quote! {
+            for entity in #entities {
+                if let Some((s, first)) = __snapshots_to_compact.remove(&entity.id) {
+                    entity.events_mut().compact_to_snapshot(s, #recorded_at, first.unwrap_or(#recorded_at));
+                }
+            }
+        }
+    }
+
+    /// Like [`compact_batch`][Self::compact_batch], but for `create_all`,
+    /// where there is no hydrated `Entity` yet at the point the write
+    /// succeeds — only the raw `EntityEvents` batch that is about to be
+    /// hydrated. `events` iterates `&mut EntityEvents<_, _>`.
+    pub fn compact_events_batch(
+        &self,
+        events: TokenStream,
+        recorded_at: TokenStream,
+    ) -> TokenStream {
+        quote! {
+            for events in #events {
+                if let Some((s, first)) = __snapshots_to_compact.remove(&events.entity_id) {
+                    events.compact_to_snapshot(s, #recorded_at, first.unwrap_or(#recorded_at));
+                }
             }
         }
     }

@@ -58,6 +58,10 @@ impl Client {
         self.events.tail_len()
     }
 
+    pub fn has_snapshot(&self) -> bool {
+        self.events.snapshot().is_some()
+    }
+
     pub fn change_email(&mut self, email: impl Into<String>) -> Idempotent<()> {
         let email = email.into();
         idempotency_guard!(

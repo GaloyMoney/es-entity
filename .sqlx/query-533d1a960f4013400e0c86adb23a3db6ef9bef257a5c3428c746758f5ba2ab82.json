@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT label FROM savepoint_items WHERE label LIKE $1 ORDER BY label",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "label",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "533d1a960f4013400e0c86adb23a3db6ef9bef257a5c3428c746758f5ba2ab82"
+}

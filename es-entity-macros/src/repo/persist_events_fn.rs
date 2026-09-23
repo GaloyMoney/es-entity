@@ -3,7 +3,7 @@ use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
 use super::{
-    events_write::{EventSource, EventsInsert},
+    events_write::{EventSource, EventsInsert, SnapshotUpsert},
     options::*,
 };
 
@@ -14,7 +14,7 @@ pub struct PersistEventsFn<'a> {
     events_table_name: &'a str,
     event_ctx: bool,
     forgettable_table_name: Option<&'a str>,
-    snapshot_enabled: bool,
+    snapshot_table_name: Option<&'a str>,
 }
 
 impl<'a> From<&'a RepositoryOptions> for PersistEventsFn<'a> {
@@ -26,7 +26,7 @@ impl<'a> From<&'a RepositoryOptions> for PersistEventsFn<'a> {
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
             forgettable_table_name: opts.forgettable_table_name(),
-            snapshot_enabled: opts.snapshot_enabled(),
+            snapshot_table_name: opts.snapshot_table_name(),
         }
     }
 }
@@ -40,7 +40,10 @@ impl ToTokens for PersistEventsFn<'_> {
             id_param: 1,
             offset_param: 3,
         };
-        let query = events_insert.sql(&source, 2, 4);
+        // `id` is bound at $1 outside `arg_exprs` (which starts from
+        // `op.maybe_now()` at $2); together they cover every placeholder the
+        // existing query already uses.
+        let n_base_params = 1 + events_insert.arg_exprs(&source).len();
 
         let (ctx_var, ctx_arg) = if self.event_ctx {
             (
@@ -59,27 +62,99 @@ impl ToTokens for PersistEventsFn<'_> {
             id as &#id_type
         };
 
-        // A snapshot repo with no persisted index columns never takes a
-        // snapshot through this path (there is no entity reference here to
-        // call `Snapshotting::snapshot()` on) — known limitation, and
-        // exactly the behavior `forget_in_op` wants (persist staged events
-        // without snapshotting them). The events parameter still needs the
-        // entity's real `Snapshot` type to typecheck; non-snapshot repos
-        // keep the bare (implicit `NoSnapshot`) form, byte for byte.
-        let events_ty = if self.snapshot_enabled {
-            quote! { es_entity::EntityEvents<#event_type, <#entity as es_entity::EsEntity>::Snapshot> }
-        } else {
-            quote! { es_entity::EntityEvents<#event_type> }
+        let snapshot_upsert = self
+            .snapshot_table_name
+            .map(|table| SnapshotUpsert { table });
+
+        // A snapshot repo with no persisted index columns takes its snapshot
+        // through this shared path: the caller (an `update` with no index
+        // columns, or `forget_in_op` binding `None` to disable it — decision
+        // 2/6) computes `Snapshotting::snapshot()` itself, since it is the
+        // one holding the full hydrated entity, and passes the result in.
+        // Non-snapshot repos keep the bare (implicit `NoSnapshot`) form and
+        // the original query, byte for byte.
+        // `persist_events` never compacts (it only ever sees `&mut
+        // EntityEvents`, not the entity) — the caller does that with the
+        // `snapshot` value it passed in, after its own post-persist hook.
+        let (events_ty, snapshot_param, query, snap_gather, snap_arg_adds) = match &snapshot_upsert
+        {
+            Some(su) => {
+                let head_p = n_base_params + 1;
+                let fp_p = head_p + 1;
+                let snap_p = fp_p + 1;
+                let first_p = snap_p + 1;
+                let cte = su.cte_per_entity("$1", "", head_p, fp_p, snap_p, first_p, 2);
+                let query = format!("WITH {cte} {}", events_insert.sql(&source, 2, 4));
+                let gather = quote! {
+                    let __snapshot_json = snapshot.map(|s| {
+                        es_entity::prelude::serde_json::to_value(s).expect("Failed to serialize snapshot")
+                    });
+                    let __snapshot_head = (events.len_persisted() + events.len_new()) as i32;
+                    let __snapshot_first = events.entity_first_persisted_at();
+                };
+                let arg_adds = quote! {
+                    __snapshot_head,
+                    <<#entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::FINGERPRINT,
+                    __snapshot_json as Option<es_entity::prelude::serde_json::Value>,
+                    __snapshot_first,
+                };
+                (
+                    quote! { es_entity::EntityEvents<#event_type, <#entity as es_entity::EsEntity>::Snapshot> },
+                    quote! { , snapshot: Option<&<#entity as es_entity::EsEntity>::Snapshot> },
+                    query,
+                    gather,
+                    arg_adds,
+                )
+            }
+            None => (
+                quote! { es_entity::EntityEvents<#event_type> },
+                quote! {},
+                events_insert.sql(&source, 2, 4),
+                quote! {},
+                quote! {},
+            ),
         };
 
         let forgettable_code = if let Some(forgettable_tbl) = self.forgettable_table_name {
+            // `ON CONFLICT` only when a snapshot is possible through this
+            // path: a re-snapshot writes over the same `sequence = 0` row,
+            // while event-only rows never conflict. Non-snapshot repos keep
+            // the plain INSERT, byte for byte.
+            let conflict_clause = if snapshot_upsert.is_some() {
+                " ON CONFLICT (entity_id, sequence) DO UPDATE SET payload = EXCLUDED.payload"
+            } else {
+                ""
+            };
             let payload_insert_query = format!(
-                "INSERT INTO {} (entity_id, sequence, payload) SELECT $1, unnested.sequence, unnested.payload FROM UNNEST($2::INT[], $3::JSONB[]) AS unnested(sequence, payload)",
-                forgettable_tbl
+                "INSERT INTO {forgettable_tbl} (entity_id, sequence, payload) SELECT $1, unnested.sequence, unnested.payload FROM UNNEST($2::INT[], $3::JSONB[]) AS unnested(sequence, payload){conflict_clause}"
             );
+            let (snap_push, snap_delete) = if snapshot_upsert.is_some() {
+                let delete_query =
+                    format!("DELETE FROM {forgettable_tbl} WHERE entity_id = $1 AND sequence = 0");
+                (
+                    quote! {
+                        if let Some(payload) = snapshot.and_then(es_entity::EsSnapshot::extract_forgettable_payloads) {
+                            payload_sequences.push(0);
+                            payload_values.push(payload);
+                        }
+                    },
+                    quote! {
+                        if snapshot.is_some()
+                            && snapshot.and_then(es_entity::EsSnapshot::extract_forgettable_payloads).is_none()
+                        {
+                            sqlx::query!(#delete_query, id as &#id_type)
+                                .execute(op.as_executor())
+                                .await?;
+                        }
+                    },
+                )
+            } else {
+                (quote! {}, quote! {})
+            };
             quote! {
                 let mut payload_sequences: Vec<i32> = Vec::new();
                 let mut payload_values: Vec<es_entity::prelude::serde_json::Value> = Vec::new();
+                #snap_push
                 for (idx, event_with_ctx) in events.iter_new_events().enumerate() {
                     if let Some(payload) = #event_type::extract_forgettable_payloads(&event_with_ctx.event) {
                         payload_sequences.push((offset + 1 + idx) as i32);
@@ -96,6 +171,7 @@ impl ToTokens for PersistEventsFn<'_> {
                     .execute(op.as_executor())
                     .await?;
                 }
+                #snap_delete
             }
         } else {
             quote! {}
@@ -106,6 +182,7 @@ impl ToTokens for PersistEventsFn<'_> {
                 &self,
                 op: &mut OP,
                 events: &mut #events_ty
+                #snapshot_param
             ) -> Result<usize, sqlx::Error>
             where
                 OP: es_entity::AtomicOperation + ?Sized,
@@ -118,6 +195,7 @@ impl ToTokens for PersistEventsFn<'_> {
                 let events_types = events.new_event_types();
                 let serialized_events = events.serialize_new_events();
                 #ctx_var
+                #snap_gather
                 #forgettable_code
                 let now = op.maybe_now();
 
@@ -129,6 +207,7 @@ impl ToTokens for PersistEventsFn<'_> {
                         &events_types,
                         &serialized_events,
                         #ctx_arg
+                        #snap_arg_adds
                     ).fetch_all(op.as_executor()).await?;
 
                 let recorded_at = rows
@@ -159,7 +238,7 @@ mod tests {
             events_table_name: "entity_events",
             event_ctx: true,
             forgettable_table_name: None,
-            snapshot_enabled: false,
+            snapshot_table_name: None,
         };
 
         let mut tokens = TokenStream::new();
@@ -219,7 +298,7 @@ mod tests {
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: None,
-            snapshot_enabled: false,
+            snapshot_table_name: None,
         };
 
         let mut tokens = TokenStream::new();

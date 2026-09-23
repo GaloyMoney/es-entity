@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT event->>'email' IS NULL AS \"email_is_null!\" FROM subscriber_events\n           WHERE id = $1 AND event_type = 'email_updated'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "email_is_null!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "1bc67d1c588158d5a6385dcd039ece8d909b9fa18976c4b2e27af2841aabd024"
+}

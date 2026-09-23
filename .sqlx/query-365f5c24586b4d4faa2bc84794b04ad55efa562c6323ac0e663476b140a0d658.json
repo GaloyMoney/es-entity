@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO clients_forgettable_payloads (entity_id, sequence, payload) VALUES ($1, 0, $2) ON CONFLICT (entity_id, sequence) DO UPDATE SET payload = EXCLUDED.payload",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "365f5c24586b4d4faa2bc84794b04ad55efa562c6323ac0e663476b140a0d658"
+}

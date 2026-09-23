@@ -1,0 +1,85 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH entities AS ((SELECT id FROM clients WHERE (id < $2) AND ($2 IS NOT NULL) ORDER BY id DESC LIMIT $1) UNION ALL (SELECT id FROM clients WHERE ($2 IS NULL) ORDER BY id DESC LIMIT $1) ORDER BY id DESC LIMIT $1) SELECT i.id AS \"entity_id!: Repo__Id\", COALESCE(e.sequence, s.sequence) AS \"sequence!\", e.event AS \"event?\", CASE WHEN $3 THEN e.context ELSE NULL::jsonb END AS \"context?: es_entity::ContextData\", e.recorded_at AS \"recorded_at?\", p.payload as \"forgettable_payload?\", CASE WHEN e.sequence IS NULL OR e.sequence = s.sequence + 1 THEN s.snapshot END AS \"snapshot?\", s.sequence AS \"snapshot_sequence?\", s.recorded_at AS \"snapshot_recorded_at?\", s.first_recorded_at AS \"snapshot_first_recorded_at?\", sp.payload as \"snapshot_forgettable_payload?\" FROM entities i LEFT JOIN client_snapshots s ON s.id = i.id AND s.fingerprint = $4 LEFT JOIN client_events e ON e.id = i.id AND e.sequence > COALESCE(s.sequence, 0) LEFT JOIN clients_forgettable_payloads p ON e.id = p.entity_id AND e.sequence = p.sequence LEFT JOIN clients_forgettable_payloads sp ON sp.entity_id = i.id AND sp.sequence = 0 ORDER BY i.id desc, i.id, COALESCE(e.sequence, s.sequence)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "entity_id!: Repo__Id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "sequence!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "event?",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "context?: es_entity::ContextData",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "recorded_at?",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "forgettable_payload?",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "snapshot?",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "snapshot_sequence?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "snapshot_recorded_at?",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "snapshot_first_recorded_at?",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "snapshot_forgettable_payload?",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Uuid",
+        "Bool",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      false,
+      null,
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9486854ec221abb9f2c7088533771456c9622e3fcdeb44c9993b002b3ad30965"
+}
