@@ -312,6 +312,50 @@ impl ForgettablePayloads<'_> {
         }
     }
 
+    /// Like [`insert_per_entity`][Self::insert_per_entity], but for a caller
+    /// that already marked its events persisted (a snapshot create, which
+    /// must hydrate before the write) — the `n` most-recently-persisted
+    /// events supply their own sequence directly instead of `offset + idx`.
+    /// Requires `id` in scope.
+    pub fn insert_per_entity_from_persisted(
+        &self,
+        events: TokenStream,
+        n: TokenStream,
+        error: &syn::Ident,
+    ) -> TokenStream {
+        let Self {
+            table,
+            id_type,
+            event_type,
+        } = self;
+        let query = format!(
+            "INSERT INTO {table} (entity_id, sequence, payload) SELECT $1, unnested.sequence, unnested.payload FROM UNNEST($2::INT[], $3::JSONB[]) AS unnested(sequence, payload)"
+        );
+        quote! {
+            let mut payload_sequences: Vec<i32> = Vec::new();
+            let mut payload_values: Vec<es_entity::prelude::serde_json::Value> = Vec::new();
+            for persisted in #events.last_persisted(#n) {
+                if let Some(payload) = #event_type::extract_forgettable_payloads(&persisted.event) {
+                    payload_sequences.push(persisted.sequence as i32);
+                    payload_values.push(payload);
+                }
+            }
+            if !payload_sequences.is_empty() {
+                Self::extract_concurrent_modification(
+                    sqlx::query!(
+                        #query,
+                        id as &#id_type,
+                        &payload_sequences,
+                        &payload_values,
+                    )
+                    .execute(op.as_executor())
+                    .await,
+                    #error::ConcurrentModification,
+                )?;
+            }
+        }
+    }
+
     /// Declarations for the batch payload accumulators.
     pub fn batch_declarations(&self) -> TokenStream {
         let id_type = self.id_type;
@@ -354,6 +398,138 @@ impl ForgettablePayloads<'_> {
                         .await,
                     #error::ConcurrentModification,
                 )?;
+            }
+        }
+    }
+}
+
+/// Emitter for the snapshot upsert CTE that rides in the same statement as
+/// the events insert, and the Rust-side gather/compaction glue around it.
+///
+/// `snapshot()` must be called (and its result bound) before the statement
+/// executes — the fold must include the events this write is about to stage
+/// — and `compact_to_snapshot` must run after the post-persist hook (which
+/// reads `last_persisted`), never before.
+pub struct SnapshotUpsert<'a> {
+    pub table: &'a str,
+}
+
+impl SnapshotUpsert<'_> {
+    /// The `snap AS (...)` CTE for a single-entity write. `id_expr` is the
+    /// entity id expression (`"$1"`, `"updated.id"`, `"new_row.id"`);
+    /// `from_clause` is `""` when `id_expr` is a bare placeholder, or
+    /// `"FROM {cte}"` when it comes from another CTE in the same statement.
+    #[allow(clippy::too_many_arguments)]
+    pub fn cte_per_entity(
+        &self,
+        id_expr: &str,
+        from_clause: &str,
+        head_p: usize,
+        fp_p: usize,
+        snap_p: usize,
+        first_p: usize,
+        now_p: usize,
+    ) -> String {
+        let table = self.table;
+        format!(
+            "snap AS (INSERT INTO {table} (id, sequence, fingerprint, snapshot, first_recorded_at, recorded_at) \
+             SELECT {id_expr}, ${head_p}::INT, ${fp_p}::BIGINT, ${snap_p}::JSONB, \
+             COALESCE(${first_p}::TIMESTAMPTZ, COALESCE(${now_p}, NOW())), COALESCE(${now_p}, NOW()) \
+             {from_clause} WHERE ${snap_p}::JSONB IS NOT NULL \
+             ON CONFLICT (id) DO UPDATE SET sequence = EXCLUDED.sequence, fingerprint = EXCLUDED.fingerprint, \
+             snapshot = EXCLUDED.snapshot, first_recorded_at = EXCLUDED.first_recorded_at, recorded_at = EXCLUDED.recorded_at \
+             WHERE EXCLUDED.sequence > {table}.sequence)"
+        )
+    }
+
+    /// The batch form: one row per entity whose `snapshot()` returned
+    /// `Some` (Rust filters `None`s out before building the arrays, so no
+    /// `WHERE ... IS NOT NULL` guard is needed here).
+    #[allow(clippy::too_many_arguments)]
+    pub fn cte_batch(
+        &self,
+        ids_p: usize,
+        seqs_p: usize,
+        snaps_p: usize,
+        firsts_p: usize,
+        fp_p: usize,
+        now_p: usize,
+    ) -> String {
+        let table = self.table;
+        format!(
+            "snap AS (INSERT INTO {table} (id, sequence, fingerprint, snapshot, first_recorded_at, recorded_at) \
+             SELECT u.id, u.sequence, ${fp_p}::BIGINT, u.snapshot, \
+             COALESCE(u.first, COALESCE(${now_p}, NOW())), COALESCE(${now_p}, NOW()) \
+             FROM UNNEST(${ids_p}, ${seqs_p}::INT[], ${snaps_p}::JSONB[], ${firsts_p}::TIMESTAMPTZ[]) AS u(id, sequence, snapshot, first) \
+             ON CONFLICT (id) DO UPDATE SET sequence = EXCLUDED.sequence, fingerprint = EXCLUDED.fingerprint, \
+             snapshot = EXCLUDED.snapshot, first_recorded_at = EXCLUDED.first_recorded_at, recorded_at = EXCLUDED.recorded_at \
+             WHERE EXCLUDED.sequence > {table}.sequence)"
+        )
+    }
+
+    /// Calls `snapshot()` on the (already-staged) entity and gathers the
+    /// bind values. Must run before the write statement. `entity` evaluates
+    /// to `&Entity` (or `&mut Entity` via auto-deref); `events` to
+    /// `&EntityEvents<_, _>` of that same entity.
+    pub fn gather_per_entity(
+        &self,
+        entity: TokenStream,
+        events: TokenStream,
+        entity_ty: &syn::Ident,
+    ) -> TokenStream {
+        quote! {
+            let __snapshot = <#entity_ty as es_entity::Snapshotting>::snapshot(&*#entity);
+            let __snapshot_json = __snapshot.as_ref().map(|s| {
+                es_entity::prelude::serde_json::to_value(s).expect("Failed to serialize snapshot")
+            });
+            let __snapshot_head = (#events.len_persisted() + #events.len_new()) as i32;
+            let __snapshot_first = #events.entity_first_persisted_at();
+        }
+    }
+
+    /// Declarations for the batch snapshot accumulators.
+    pub fn batch_declarations(&self) -> TokenStream {
+        quote! {
+            let mut snap_ids = Vec::new();
+            let mut snap_seqs: Vec<i32> = Vec::new();
+            let mut snap_jsons: Vec<es_entity::prelude::serde_json::Value> = Vec::new();
+            let mut snap_firsts: Vec<Option<chrono::DateTime<chrono::Utc>>> = Vec::new();
+            let mut snap_states = Vec::new();
+        }
+    }
+
+    /// Per-entity body of the batch gather loop: pushes into the
+    /// accumulators only when `snapshot()` returned `Some`, and remembers
+    /// the state (keyed by position, matching iteration order) for
+    /// compaction after the write. `id` evaluates to `&IdType`.
+    pub fn gather_batch(
+        &self,
+        entity: TokenStream,
+        events: TokenStream,
+        id: TokenStream,
+        entity_ty: &syn::Ident,
+    ) -> TokenStream {
+        quote! {
+            let __snapshot = <#entity_ty as es_entity::Snapshotting>::snapshot(&*#entity);
+            if let Some(ref s) = __snapshot {
+                snap_ids.push(#id);
+                snap_seqs.push((#events.len_persisted() + #events.len_new()) as i32);
+                snap_jsons.push(
+                    es_entity::prelude::serde_json::to_value(s).expect("Failed to serialize snapshot"),
+                );
+                snap_firsts.push(#events.entity_first_persisted_at());
+            }
+            snap_states.push(__snapshot);
+        }
+    }
+
+    /// Compacts one entity's tail into the snapshot it just wrote (a no-op
+    /// when `snapshot()` returned `None`). Must run after the post-persist
+    /// hook.
+    pub fn compact_per_entity(&self, events: TokenStream, recorded_at: TokenStream) -> TokenStream {
+        quote! {
+            if let Some(s) = __snapshot {
+                #events.compact_to_snapshot(s, #recorded_at, __snapshot_first.unwrap_or(#recorded_at));
             }
         }
     }

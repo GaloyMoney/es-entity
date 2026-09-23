@@ -3,7 +3,7 @@ use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
 use super::{
-    events_write::{EventSource, EventsInsert, ForgettablePayloads},
+    events_write::{EventSource, EventsInsert, ForgettablePayloads, SnapshotUpsert},
     options::*,
 };
 
@@ -16,6 +16,7 @@ pub struct UpdateFn<'a> {
     events_table_name: &'a str,
     event_ctx: bool,
     forgettable_table_name: Option<&'a str>,
+    snapshot_table_name: Option<&'a str>,
     columns: &'a Columns,
     modify_error: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
@@ -37,6 +38,7 @@ impl<'a> From<&'a RepositoryOptions> for UpdateFn<'a> {
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
             forgettable_table_name: opts.forgettable_table_name(),
+            snapshot_table_name: opts.snapshot_table_name(),
             nested_fn_names: opts
                 .all_nested()
                 .map(|f| f.update_nested_fn_name())
@@ -65,6 +67,10 @@ impl ToTokens for UpdateFn<'_> {
         // index-error-wins precedence of the previous two-statement form) and
         // supplies the id without re-binding it. Without index columns there
         // is nothing to combine, so the shared `persist_events` is used.
+        let snapshot_upsert = self
+            .snapshot_table_name
+            .map(|table| SnapshotUpsert { table });
+
         let persist_tokens = if self.columns.updates_needed() {
             let assignments = self
                 .columns
@@ -78,15 +84,49 @@ impl ToTokens for UpdateFn<'_> {
                 cte: "updated",
                 offset_param: Some(now_p + 1),
             };
+            let event_args = events_insert.arg_exprs(&source);
+            let n_event_params = event_args.len();
+
+            let (snap_gather, snap_cte, snap_args) = match &snapshot_upsert {
+                Some(su) => {
+                    let head_p = now_p + n_event_params;
+                    let fp_p = head_p + 1;
+                    let snap_p = fp_p + 1;
+                    let first_p = snap_p + 1;
+                    let cte = su.cte_per_entity(
+                        "updated.id",
+                        "FROM updated",
+                        head_p,
+                        fp_p,
+                        snap_p,
+                        first_p,
+                        now_p,
+                    );
+                    let gather = su.gather_per_entity(
+                        quote! { entity },
+                        quote! { entity.events() },
+                        self.entity,
+                    );
+                    let args = vec![
+                        quote! { __snapshot_head },
+                        quote! { <<#entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::FINGERPRINT },
+                        quote! { __snapshot_json },
+                        quote! { __snapshot_first },
+                    ];
+                    (gather, format!(", {cte}"), args)
+                }
+                None => (quote! {}, String::new(), Vec::new()),
+            };
+
             let query = format!(
-                "WITH updated AS (UPDATE {} SET {} WHERE id = $1 RETURNING id) {}",
+                "WITH updated AS (UPDATE {} SET {} WHERE id = $1 RETURNING id){} {}",
                 self.table_name,
                 column_updates,
+                snap_cte,
                 events_insert.sql(&source, now_p, now_p + 2),
             );
 
             let gather = events_insert.gather_per_entity(quote! { entity.events() });
-            let event_args = events_insert.arg_exprs(&source);
 
             // Forgettable payloads are written to their own table, so they
             // stay a follow-up statement (still one fewer round trip than
@@ -104,11 +144,13 @@ impl ToTokens for UpdateFn<'_> {
             quote! {
                 #assignments
                 #gather
+                #snap_gather
 
                 let rows = sqlx::query!(
                     #query,
                     #(#args,)*
                     #(#event_args),*
+                    #(#snap_args),*
                 )
                     .fetch_all(op.as_executor())
                     .await
@@ -137,6 +179,14 @@ impl ToTokens for UpdateFn<'_> {
                     )?
                 };
             }
+        };
+
+        let compact_code = match &snapshot_upsert {
+            Some(su) if self.columns.updates_needed() => su.compact_per_entity(
+                quote! { Self::extract_events(entity) },
+                quote! { recorded_at },
+            ),
+            _ => quote! {},
         };
 
         #[cfg(feature = "instrument")]
@@ -224,6 +274,8 @@ impl ToTokens for UpdateFn<'_> {
 
                     #post_persist_check
 
+                    #compact_code
+
                     Ok(n_events)
                 }.await;
 
@@ -263,6 +315,7 @@ mod tests {
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
@@ -361,6 +414,7 @@ mod tests {
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: None,
+            snapshot_table_name: None,
             modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
