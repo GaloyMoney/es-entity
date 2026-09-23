@@ -62,6 +62,7 @@ pub use error::*;
 pub use es_entity_macros::EsEntity;
 pub use es_entity_macros::EsEvent;
 pub use es_entity_macros::EsRepo;
+pub use es_entity_macros::EsSnapshot;
 pub use es_entity_macros::es_event_context;
 pub use es_entity_macros::expand_es_query;
 pub use es_entity_macros::retry_on_concurrent_modification;

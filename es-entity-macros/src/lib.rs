@@ -9,6 +9,8 @@ mod index_catalog;
 mod query;
 mod repo;
 mod retry_on_concurrent_modification;
+mod snapshot;
+mod type_utils;
 
 use proc_macro::TokenStream;
 use syn::parse_macro_input;
@@ -135,6 +137,15 @@ pub fn es_event_context(args: TokenStream, input: TokenStream) -> TokenStream {
 pub fn es_entity_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as syn::DeriveInput);
     match entity::derive(ast) {
+        Ok(tokens) => tokens.into(),
+        Err(e) => e.write_errors().into(),
+    }
+}
+
+#[proc_macro_derive(EsSnapshot, attributes(es_snapshot))]
+pub fn es_snapshot_derive(input: TokenStream) -> TokenStream {
+    let ast = parse_macro_input!(input as syn::DeriveInput);
+    match snapshot::derive(ast) {
         Ok(tokens) => tokens.into(),
         Err(e) => e.write_errors().into(),
     }

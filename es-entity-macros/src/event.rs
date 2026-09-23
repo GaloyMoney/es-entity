@@ -160,7 +160,7 @@ fn extract_forgettable_info(ast: &syn::DeriveInput) -> ForgettableInfo {
                     .fields
                     .iter()
                     .filter_map(|field| {
-                        if is_forgettable_type(&field.ty) {
+                        if crate::type_utils::is_forgettable_type(&field.ty) {
                             field.ident.clone()
                         } else {
                             None
@@ -179,16 +179,6 @@ fn extract_forgettable_info(ast: &syn::DeriveInput) -> ForgettableInfo {
         has_forgettable,
         variants,
     }
-}
-
-/// Check if a type's last path segment is "Forgettable".
-fn is_forgettable_type(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last()
-    {
-        return segment.ident == "Forgettable";
-    }
-    false
 }
 
 impl ToTokens for EsEvent {
