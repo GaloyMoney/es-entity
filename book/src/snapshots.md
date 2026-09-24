@@ -81,7 +81,7 @@ use es_entity::*;
 
 es_entity::entity_id! { MeterId }
 
-#[derive(EsSnapshot, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(EsSnapshot, Debug, Clone, Serialize, Deserialize)]
 #[es_snapshot(version = 1)]
 pub struct MeterSnapshot {
     pub id: MeterId,
@@ -92,15 +92,18 @@ pub struct MeterSnapshot {
 # fn main() {}
 ```
 
-`#[es_snapshot(version = N)]` (default `0`) salts a **fingerprint**: an FNV-1a
-hash over the struct's field names, types, and version, computed once at
-macro-expansion time and embedded as a literal `i64`. Every loader binds this
-value; a stored snapshot only joins when its own fingerprint matches. Change
-the shape of `MeterSnapshot` (add/remove/rename/retype a field) and the
-fingerprint changes with it — old rows simply stop matching and every loader
-falls back to a full replay for that entity, self-healing the next time it
-writes a fresh snapshot. Bump `version` by hand for a change the derive can't
-see (e.g. a change in how a field is *interpreted*, not its Rust type).
+`#[es_snapshot(version = N)]` is mandatory — omitting it is a compile error —
+and salts a **fingerprint**: an FNV-1a hash over the struct's field names,
+types, and version, computed once at macro-expansion time and embedded as a
+literal `i64`. Every loader binds this value; a stored snapshot only joins
+when its own fingerprint matches. Change the shape of `MeterSnapshot`
+(add/remove/rename/retype a field) and the fingerprint changes with it — old
+rows simply stop matching and every loader falls back to a full replay for
+that entity, self-healing the next time it writes a fresh snapshot. Bump
+`version` by hand for a change the derive can't see (e.g. a change in how a
+field is *interpreted*, not its Rust type) — that's the whole reason the
+attribute is required rather than defaulted: it forces the question to be
+asked instead of silently assuming "no semantic change."
 
 A fingerprint mismatch is never an error — it's the mechanism that makes
 schema evolution safe without a migration step. During a rolling deploy, old
@@ -131,7 +134,8 @@ tail:
 #     Initialized { id: MeterId, label: String },
 #     ReadingRecorded { value: i64 },
 # }
-# #[derive(EsSnapshot, Debug, Clone, PartialEq, Serialize, Deserialize)]
+# #[derive(EsSnapshot, Debug, Clone, Serialize, Deserialize)]
+# #[es_snapshot(version = 1)]
 # pub struct MeterSnapshot { pub id: MeterId, pub label: String, pub count: u32, pub total: i64 }
 #[derive(EsEntity, Builder)]
 #[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]

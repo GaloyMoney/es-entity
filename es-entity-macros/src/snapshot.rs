@@ -5,8 +5,11 @@ use quote::{ToTokens, quote};
 #[darling(attributes(es_snapshot))]
 struct EsSnapshotInput {
     ident: syn::Ident,
-    #[darling(default)]
-    version: i64,
+    // No `#[darling(default)]`: `Option<T>` already parses as `None` when the
+    // attribute or field is absent, which lets `derive()` below reject a
+    // missing version with a message explaining *why*, instead of silently
+    // falling back to a fingerprint input of `0`.
+    version: Option<i64>,
 }
 
 /// FNV-1a 64, computed at macro-expansion time over the fingerprint input
@@ -42,6 +45,17 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
     let input = EsSnapshotInput::from_derive_input(&ast)?;
     let ident = &input.ident;
 
+    let version = input.version.ok_or_else(|| {
+        darling::Error::custom(
+            "`#[derive(EsSnapshot)]` requires `#[es_snapshot(version = N)]`. The \
+             fingerprint already hashes every field's name and type, so this only \
+             matters when you change what a field *means* — e.g. fixing `capture()`'s \
+             fold — without changing the struct's shape. Bump N in that case; \
+             otherwise start at `version = 1`.",
+        )
+        .with_span(&ast.ident)
+    })?;
+
     let fields: Vec<(&syn::Ident, &syn::Type)> = match &ast.data {
         syn::Data::Struct(data) => data
             .fields
@@ -56,7 +70,7 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
         }
     };
 
-    let fingerprint = compute_fingerprint(input.version, &fields);
+    let fingerprint = compute_fingerprint(version, &fields);
 
     let forgettable_fields: Vec<&syn::Ident> = fields
         .iter()
@@ -124,9 +138,11 @@ mod tests {
     #[test]
     fn same_struct_same_fingerprint() {
         let a: syn::DeriveInput = syn::parse_quote! {
+            #[es_snapshot(version = 1)]
             struct MeterSnapshot { id: MeterId, count: u32 }
         };
         let b: syn::DeriveInput = syn::parse_quote! {
+            #[es_snapshot(version = 1)]
             struct MeterSnapshot { id: MeterId, count: u32 }
         };
         assert_eq!(fingerprint_of(a), fingerprint_of(b));
@@ -135,9 +151,11 @@ mod tests {
     #[test]
     fn renamed_field_changes_fingerprint() {
         let a: syn::DeriveInput = syn::parse_quote! {
+            #[es_snapshot(version = 1)]
             struct MeterSnapshot { id: MeterId, count: u32 }
         };
         let b: syn::DeriveInput = syn::parse_quote! {
+            #[es_snapshot(version = 1)]
             struct MeterSnapshot { id: MeterId, total: u32 }
         };
         assert_ne!(fingerprint_of(a), fingerprint_of(b));
@@ -146,12 +164,26 @@ mod tests {
     #[test]
     fn changed_type_changes_fingerprint() {
         let a: syn::DeriveInput = syn::parse_quote! {
+            #[es_snapshot(version = 1)]
             struct MeterSnapshot { id: MeterId, count: u32 }
         };
         let b: syn::DeriveInput = syn::parse_quote! {
+            #[es_snapshot(version = 1)]
             struct MeterSnapshot { id: MeterId, count: u64 }
         };
         assert_ne!(fingerprint_of(a), fingerprint_of(b));
+    }
+
+    #[test]
+    fn missing_version_is_a_helpful_error() {
+        let input: syn::DeriveInput = syn::parse_quote! {
+            struct MeterSnapshot { id: MeterId, count: u32 }
+        };
+        let err = derive(input).unwrap_err().to_string();
+        assert!(
+            err.contains("es_snapshot(version = N)"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -188,6 +220,7 @@ mod tests {
     #[test]
     fn detects_forgettable_fields() {
         let input: syn::DeriveInput = syn::parse_quote! {
+            #[es_snapshot(version = 1)]
             struct ContactSnapshot { id: ContactId, email: Forgettable<String>, changes: u32 }
         };
         let out = derive(input).unwrap().to_string();
@@ -199,6 +232,7 @@ mod tests {
     #[test]
     fn no_forgettable_fields() {
         let input: syn::DeriveInput = syn::parse_quote! {
+            #[es_snapshot(version = 1)]
             struct MeterSnapshot { id: MeterId, count: u32 }
         };
         let out = derive(input).unwrap().to_string();

@@ -127,7 +127,8 @@
 ///
 /// entity_id! { MeterId }
 ///
-/// #[derive(EsSnapshot, Serialize, Deserialize, Debug, PartialEq)]
+/// #[derive(EsSnapshot, Serialize, Deserialize, Debug)]
+/// #[es_snapshot(version = 1)]
 /// pub struct MeterSnapshot { id: MeterId, last_value: Option<i64> }
 ///
 /// #[derive(EsEvent, Serialize, Deserialize)]
@@ -192,7 +193,8 @@
 /// # use es_entity::*;
 /// # use serde::{Serialize, Deserialize};
 /// # entity_id! { MeterId }
-/// # #[derive(EsSnapshot, Serialize, Deserialize, Debug, PartialEq)]
+/// # #[derive(EsSnapshot, Serialize, Deserialize, Debug)]
+/// # #[es_snapshot(version = 1)]
 /// # pub struct MeterSnapshot { id: MeterId }
 /// # #[derive(EsEvent, Serialize, Deserialize)]
 /// # #[serde(tag = "type", rename_all = "snake_case")]

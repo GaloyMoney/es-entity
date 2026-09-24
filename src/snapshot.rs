@@ -14,7 +14,7 @@ pub const NO_SNAPSHOT_FINGERPRINT: i64 = i64::MIN;
 /// Implemented by `#[derive(EsSnapshot)]` for user state types and by hand for
 /// [`NoSnapshot`].
 pub trait EsSnapshot:
-    serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debug + PartialEq + Send + Sync + 'static
+    serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debug + Send + Sync + 'static
 {
     /// `false` only for [`NoSnapshot`].
     const IS_SNAPSHOT: bool;
@@ -233,7 +233,8 @@ impl GuardWithoutSnapshotClause for SnapshotRecord<NoSnapshot> {
 /// # pub enum SnapGuardClientEvent {
 /// #     Initialized { id: SnapGuardClientId, email: Forgettable<String> },
 /// # }
-/// #[derive(EsSnapshot, Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// #[derive(EsSnapshot, Debug, Clone, Serialize, Deserialize)]
+/// #[es_snapshot(version = 1)]
 /// pub struct SnapGuardClientSnapshot {
 ///     pub id: SnapGuardClientId,
 ///     pub email: Forgettable<String>,

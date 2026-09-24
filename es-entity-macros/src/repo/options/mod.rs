@@ -289,10 +289,12 @@ impl RepositoryOptions {
         }
 
         if self.snapshot && self.snapshot_table_name.is_none() {
-            self.snapshot_table_name = Some(format!(
-                "{}_snapshots",
-                self.table_name.as_ref().expect("Table name not set")
-            ));
+            // Mirrors `events_table_name`'s convention (singular entity name),
+            // not `forgettable_table_name`'s (pluralized `table_name`) —
+            // every hand-written override anyone has reached for lands on
+            // the singular form, matching the sibling `_events` table.
+            self.snapshot_table_name =
+                Some(format!("{prefix}{entity_name}Snapshots").to_case(Case::Snake));
         }
 
         self.columns
@@ -658,5 +660,57 @@ impl RepositoryOptions {
             return Err(darling::Error::custom("`snapshot_tbl` requires `snapshot`"));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use darling::FromDeriveInput;
+    use syn::parse_quote;
+
+    use super::*;
+
+    #[test]
+    fn snapshot_table_name_defaults_to_singular_entity_name_like_events() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Meter", snapshot)]
+            struct Meters {
+                pool: sqlx::PgPool,
+            }
+        };
+        let opts = RepositoryOptions::from_derive_input(&input).unwrap();
+        assert_eq!(opts.events_table_name(), "meter_events");
+        assert_eq!(opts.snapshot_table_name(), Some("meter_snapshots"));
+    }
+
+    #[test]
+    fn snapshot_table_name_default_respects_tbl_prefix() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "InterestAccrualCycle", snapshot, tbl_prefix = "core")]
+            struct InterestAccrualCycles {
+                pool: sqlx::PgPool,
+            }
+        };
+        let opts = RepositoryOptions::from_derive_input(&input).unwrap();
+        assert_eq!(
+            opts.events_table_name(),
+            "core_interest_accrual_cycle_events"
+        );
+        assert_eq!(
+            opts.snapshot_table_name(),
+            Some("core_interest_accrual_cycle_snapshots")
+        );
+    }
+
+    #[test]
+    fn explicit_snapshot_tbl_still_overrides_the_default() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Meter", snapshot, snapshot_tbl = "custom_meter_snaps")]
+            struct Meters {
+                pool: sqlx::PgPool,
+            }
+        };
+        let opts = RepositoryOptions::from_derive_input(&input).unwrap();
+        assert_eq!(opts.snapshot_table_name(), Some("custom_meter_snaps"));
     }
 }

@@ -21,7 +21,8 @@ pub enum MeterEvent {
     Reset,
 }
 
-#[derive(EsSnapshot, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(EsSnapshot, Debug, Clone, Serialize, Deserialize)]
+#[es_snapshot(version = 1)]
 pub struct MeterSnapshot {
     pub id: MeterId,
     pub site_id: SiteId,

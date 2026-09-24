@@ -40,7 +40,6 @@ impl ChildOnlySites {
 #[es_repo(
     entity = "Meter",
     snapshot,
-    snapshot_tbl = "meter_snapshots",
     columns(
         site_id(ty = "SiteId", update(persist = false), parent),
         label(ty = "String")
