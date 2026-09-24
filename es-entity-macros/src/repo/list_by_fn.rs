@@ -703,9 +703,12 @@ impl ToTokens for ListByFn<'_> {
                         #post_hydrate_check
                         #record_results
 
-                        let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
-
-                        Ok(es_entity::PaginatedQueryRet::new(entities, has_next_page, end_cursor, first))
+                        let next_page = if has_next_page {
+                            entities.last().map(#cursor_mod::#cursor_ident::from)
+                        } else {
+                            None
+                        };
+                        Ok(es_entity::PaginatedQueryRet::new(entities, next_page, first))
                     }.await;
 
                     #error_recording
@@ -879,8 +882,12 @@ mod tests {
                         },
                     };
 
-                    let end_cursor = entities.last().map(cursor_mod::EntityByIdCursor::from);
-                    Ok(es_entity::PaginatedQueryRet::new(entities, has_next_page, end_cursor, first))
+                    let next_page = if has_next_page {
+                        entities.last().map(cursor_mod::EntityByIdCursor::from)
+                    } else {
+                        None
+                    };
+                    Ok(es_entity::PaginatedQueryRet::new(entities, next_page, first))
                 }.await;
 
                 __result
@@ -1006,8 +1013,12 @@ mod tests {
                         },
                     };
 
-                    let end_cursor = entities.last().map(cursor_mod::EntityByNameCursor::from);
-                    Ok(es_entity::PaginatedQueryRet::new(entities, has_next_page, end_cursor, first))
+                    let next_page = if has_next_page {
+                        entities.last().map(cursor_mod::EntityByNameCursor::from)
+                    } else {
+                        None
+                    };
+                    Ok(es_entity::PaginatedQueryRet::new(entities, next_page, first))
                 }.await;
 
                 __result
@@ -1100,8 +1111,12 @@ mod tests {
                         },
                     };
 
-                    let end_cursor = entities.last().map(cursor_mod::EntityByValueCursor::from);
-                    Ok(es_entity::PaginatedQueryRet::new(entities, has_next_page, end_cursor, first))
+                    let next_page = if has_next_page {
+                        entities.last().map(cursor_mod::EntityByValueCursor::from)
+                    } else {
+                        None
+                    };
+                    Ok(es_entity::PaginatedQueryRet::new(entities, next_page, first))
                 }.await;
 
                 __result
@@ -1213,8 +1228,12 @@ mod tests {
                         },
                     };
 
-                    let end_cursor = entities.last().map(cursor_mod::EntityByValueCursor::from);
-                    Ok(es_entity::PaginatedQueryRet::new(entities, has_next_page, end_cursor, first))
+                    let next_page = if has_next_page {
+                        entities.last().map(cursor_mod::EntityByValueCursor::from)
+                    } else {
+                        None
+                    };
+                    Ok(es_entity::PaginatedQueryRet::new(entities, next_page, first))
                 }.await;
 
                 __result
