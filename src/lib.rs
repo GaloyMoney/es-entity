@@ -36,6 +36,7 @@ pub mod one_time_executor;
 pub mod operation;
 pub mod pagination;
 pub mod query;
+pub mod snapshot;
 pub mod sql_commenter;
 pub mod traits;
 pub mod tree_query;
@@ -61,6 +62,7 @@ pub use error::*;
 pub use es_entity_macros::EsEntity;
 pub use es_entity_macros::EsEvent;
 pub use es_entity_macros::EsRepo;
+pub use es_entity_macros::EsSnapshot;
 pub use es_entity_macros::es_event_context;
 pub use es_entity_macros::expand_es_query;
 pub use es_entity_macros::retry_on_concurrent_modification;
@@ -80,6 +82,8 @@ pub use operation::*;
 pub use pagination::*;
 #[doc(inline)]
 pub use query::*;
+#[doc(inline)]
+pub use snapshot::*;
 #[doc(inline)]
 pub use traits::*;
 #[doc(inline)]

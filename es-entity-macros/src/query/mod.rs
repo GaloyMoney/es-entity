@@ -77,15 +77,70 @@ impl ToTokens for EsQuery {
                 )
             };
 
+        let default_fingerprint: syn::Expr = syn::parse_quote! {
+            <<<Self as es_entity::EsRepo>::Entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::FINGERPRINT
+        };
+        let fingerprint_expr = self
+            .input
+            .snapshot_fingerprint
+            .clone()
+            .unwrap_or(default_fingerprint);
+
         // `entity_id!` forces the non-null assertion: `i.id` is a primary-key
         // join key so it is always non-null, but sqlx cannot infer that through
         // a `UNION ALL` CTE (the unified cursor queries) and would otherwise
         // decode it as `Option<Repo__Id>`, breaking `Repo__DbEvent`. The
         // override is a safe no-op for the non-union queries.
-        let query = format!(
-            "WITH entities AS ({}) SELECT i.id AS \"entity_id!: Repo__Id\", e.sequence, e.event, CASE WHEN {} THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, {} FROM entities i JOIN {} e ON i.id = e.id{} ORDER BY {} e.sequence",
-            self.input.sql, context_arg, payload_column, events_table, forgettable_join, order_by
-        );
+        let (query, decode_fn) = if let Some(ref snapshot_tbl) = self.input.snapshot_tbl {
+            let fingerprint_arg = format!("${}", n_args + 2);
+            let (snapshot_payload_column, snapshot_payload_join) = match self.input.forgettable_tbl
+            {
+                Some(ref forgettable_tbl) => (
+                    "sp.payload as \"snapshot_forgettable_payload?\"".to_string(),
+                    format!(
+                        " LEFT JOIN {forgettable_tbl} sp ON sp.entity_id = i.id AND sp.sequence = 0"
+                    ),
+                ),
+                None => (
+                    "NULL::jsonb as \"snapshot_forgettable_payload?\"".to_string(),
+                    String::new(),
+                ),
+            };
+            let query = format!(
+                "WITH entities AS ({}) SELECT i.id AS \"entity_id!: Repo__Id\", COALESCE(e.sequence, s.sequence) AS \"sequence!\", e.event AS \"event?\", CASE WHEN {} THEN e.context ELSE NULL::jsonb END AS \"context?: es_entity::ContextData\", e.recorded_at AS \"recorded_at?\", {}, CASE WHEN e.sequence IS NULL OR e.sequence = s.sequence + 1 THEN s.snapshot END AS \"snapshot?\", s.sequence AS \"snapshot_sequence?\", s.recorded_at AS \"snapshot_recorded_at?\", s.first_recorded_at AS \"snapshot_first_recorded_at?\", {} FROM entities i LEFT JOIN {} s ON s.id = i.id AND s.fingerprint = {} LEFT JOIN {} e ON e.id = i.id AND e.sequence > COALESCE(s.sequence, 0){}{} ORDER BY {} COALESCE(e.sequence, s.sequence)",
+                self.input.sql,
+                context_arg,
+                payload_column,
+                snapshot_payload_column,
+                snapshot_tbl,
+                fingerprint_arg,
+                events_table,
+                forgettable_join,
+                snapshot_payload_join,
+                order_by,
+            );
+            (
+                query,
+                quote! { es_entity::decode_tagged_snapshot_row::<Repo__Id> },
+            )
+        } else {
+            let query = format!(
+                "WITH entities AS ({}) SELECT i.id AS \"entity_id!: Repo__Id\", e.sequence, e.event, CASE WHEN {} THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, {} FROM entities i JOIN {} e ON i.id = e.id{} ORDER BY {} e.sequence",
+                self.input.sql,
+                context_arg,
+                payload_column,
+                events_table,
+                forgettable_join,
+                order_by
+            );
+            (query, quote! { es_entity::decode_tagged_row::<Repo__Id> })
+        };
+
+        let fingerprint_bind = if self.input.snapshot_tbl.is_some() {
+            quote! { #fingerprint_expr, }
+        } else {
+            quote! {}
+        };
 
         let forgettable_check = if self.input.forgettable_tbl.is_none() {
             quote! {
@@ -109,25 +164,44 @@ impl ToTokens for EsQuery {
             quote! {}
         };
 
+        let snapshot_tbl_check = if self.input.snapshot_tbl.is_none() {
+            quote! {
+                const _: () = assert!(
+                    !REPO__HAS_SNAPSHOT,
+                    "es_query! on a `snapshot` repo requires the `snapshot_tbl` parameter"
+                );
+            }
+        } else {
+            quote! {
+                const _: () = assert!(
+                    REPO__HAS_SNAPSHOT,
+                    "es_query! `snapshot_tbl` parameter given but this repo does not enable `snapshot`"
+                );
+            }
+        };
+
         tokens.append_all(quote! {
             {
                 use #repo_types_mod::*;
 
                 #forgettable_check
                 #tbl_prefix_check
+                #snapshot_tbl_check
 
-                es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
+                es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _, Repo__DbEvent>::new(
                     sqlx::query_as!(
                         Repo__DbEvent,
                         #query,
                         #(#args,)*
                         <<<Self as es_entity::EsRepo>::Entity as EsEntity>::Event>::event_context(),
+                        #fingerprint_bind
                     ),
                     es_entity::TreeQuerySource {
                         user_sql: #user_sql,
                         order_by_cols: &[#(#raw_order_cols),*],
                         n_user_args: #n_args,
-                        decode: es_entity::decode_tagged_row::<Repo__Id>,
+                        decode: #decode_fn,
+                        snapshot_fingerprint: #fingerprint_expr,
                     },
                 )
             }
@@ -164,8 +238,12 @@ mod tests {
                     !REPO__HAS_TBL_PREFIX,
                     "es_query! requires `tbl_prefix` parameter when the repo uses tbl_prefix"
                 );
+                const _: () = assert!(
+                    !REPO__HAS_SNAPSHOT,
+                    "es_query! on a `snapshot` repo requires the `snapshot_tbl` parameter"
+                );
 
-                es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
+                es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _, Repo__DbEvent>::new(
                     sqlx::query_as!(
                         Repo__DbEvent,
                         "WITH entities AS (SELECT * FROM users WHERE id = $1) SELECT i.id AS \"entity_id!: Repo__Id\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, NULL::jsonb as \"forgettable_payload?\" FROM entities i JOIN user_events e ON i.id = e.id ORDER BY i.id, e.sequence",
@@ -177,6 +255,7 @@ mod tests {
                         order_by_cols: &[],
                         n_user_args: 1usize,
                         decode: es_entity::decode_tagged_row::<Repo__Id>,
+                        snapshot_fingerprint: < < <Self as es_entity::EsRepo>::Entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::FINGERPRINT,
                     },
                 )
             }
@@ -205,8 +284,12 @@ mod tests {
                     !Repo__Event::HAS_FORGETTABLE_FIELDS,
                     "es_query! requires `forgettable_tbl` parameter when the event type has Forgettable<T> fields"
                 );
+                const _: () = assert!(
+                    !REPO__HAS_SNAPSHOT,
+                    "es_query! on a `snapshot` repo requires the `snapshot_tbl` parameter"
+                );
 
-                es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
+                es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _, Repo__DbEvent>::new(
                     sqlx::query_as!(
                         Repo__DbEvent,
                         "WITH entities AS (SELECT * FROM my_custom_table WHERE id = $1) SELECT i.id AS \"entity_id!: Repo__Id\", e.sequence, e.event, CASE WHEN $2 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, NULL::jsonb as \"forgettable_payload?\" FROM entities i JOIN my_custom_table_events e ON i.id = e.id ORDER BY i.id, e.sequence",
@@ -218,6 +301,7 @@ mod tests {
                         order_by_cols: &[],
                         n_user_args: 1usize,
                         decode: es_entity::decode_tagged_row::<Repo__Id>,
+                        snapshot_fingerprint: < < <Self as es_entity::EsRepo>::Entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::FINGERPRINT,
                     },
                 )
             }
@@ -253,8 +337,12 @@ mod tests {
                     !REPO__HAS_TBL_PREFIX,
                     "es_query! requires `tbl_prefix` parameter when the repo uses tbl_prefix"
                 );
+                const _: () = assert!(
+                    !REPO__HAS_SNAPSHOT,
+                    "es_query! on a `snapshot` repo requires the `snapshot_tbl` parameter"
+                );
 
-                es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _>::new(
+                es_entity::EsQuery::<Self, <Self as es_entity::EsRepo>::EsQueryFlavor, _, _, Repo__DbEvent>::new(
                     sqlx::query_as!(
                         Repo__DbEvent,
                         "WITH entities AS (SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) OR $2 IS NULL ORDER BY name, id LIMIT $1) SELECT i.id AS \"entity_id!: Repo__Id\", e.sequence, e.event, CASE WHEN $4 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, NULL::jsonb as \"forgettable_payload?\" FROM entities i JOIN entity_events e ON i.id = e.id ORDER BY i.name, i.id, i.id, e.sequence",
@@ -268,6 +356,7 @@ mod tests {
                         order_by_cols: &["name", "id"],
                         n_user_args: 3usize,
                         decode: es_entity::decode_tagged_row::<Repo__Id>,
+                        snapshot_fingerprint: < < <Self as es_entity::EsRepo>::Entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::FINGERPRINT,
                     },
                 )
             }

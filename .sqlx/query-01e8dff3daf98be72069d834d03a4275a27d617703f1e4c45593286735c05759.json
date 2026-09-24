@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH updated AS (UPDATE meters SET label = $2 WHERE id = $1 RETURNING id), snap AS (INSERT INTO meter_snapshots (id, sequence, fingerprint, snapshot, first_recorded_at, recorded_at) SELECT updated.id, $7::INT, $8::BIGINT, $9::JSONB, COALESCE($10::TIMESTAMPTZ, COALESCE($3, NOW())), COALESCE($3, NOW()) FROM updated WHERE $9::JSONB IS NOT NULL ON CONFLICT (id) DO UPDATE SET sequence = EXCLUDED.sequence, fingerprint = EXCLUDED.fingerprint, snapshot = EXCLUDED.snapshot, first_recorded_at = EXCLUDED.first_recorded_at, recorded_at = EXCLUDED.recorded_at WHERE EXCLUDED.sequence > meter_snapshots.sequence) INSERT INTO meter_events (id, recorded_at, sequence, event_type, event) SELECT updated.id, COALESCE($3, NOW()), ROW_NUMBER() OVER () + $4, unnested.event_type, unnested.event FROM updated CROSS JOIN UNNEST($5::TEXT[], $6::JSONB[]) AS unnested(event_type, event) RETURNING recorded_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "recorded_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Timestamptz",
+        "Int8",
+        "TextArray",
+        "JsonbArray",
+        "Int4",
+        "Int8",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "01e8dff3daf98be72069d834d03a4275a27d617703f1e4c45593286735c05759"
+}

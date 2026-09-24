@@ -39,6 +39,8 @@
 - [Aggregates](./aggregates.md)
   - [Nesting](./nesting.md)
 
+- [Snapshots](./snapshots.md)
+
 - [Forgettable Data](./forgettable.md)
 
 - [Clock](./clock.md)

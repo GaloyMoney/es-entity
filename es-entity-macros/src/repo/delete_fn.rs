@@ -151,7 +151,7 @@ impl ToTokens for DeleteFn<'_> {
                 id_type,
                 event_type,
             }
-            .insert_per_entity(quote! { entity.events() }, modify_error),
+            .insert_per_entity(quote! { entity.events() }, modify_error, None),
             None => quote! {},
         };
 

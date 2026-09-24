@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH entities AS ((SELECT email, id FROM subscribers WHERE ((email IS NULL OR (email, id) < ($3, $2))) AND ($2 IS NOT NULL AND $3 IS NOT NULL) ORDER BY email DESC NULLS LAST, id DESC LIMIT $1) UNION ALL (SELECT email, id FROM subscribers WHERE ((email IS NULL AND id < $2)) AND ($2 IS NOT NULL AND $3 IS NULL) ORDER BY email DESC NULLS LAST, id DESC LIMIT $1) UNION ALL (SELECT email, id FROM subscribers WHERE ($2 IS NULL) ORDER BY email DESC NULLS LAST, id DESC LIMIT $1) ORDER BY email DESC NULLS LAST, id DESC LIMIT $1) SELECT i.id AS \"entity_id!: Repo__Id\", e.sequence, e.event, CASE WHEN $4 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, p.payload as \"forgettable_payload?\" FROM entities i JOIN subscriber_events e ON i.id = e.id LEFT JOIN subscribers_forgettable_payloads p ON e.id = p.entity_id AND e.sequence = p.sequence ORDER BY i.email desc nulls last, i.id desc, i.id, e.sequence",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "entity_id!: Repo__Id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "sequence",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "event",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "context: es_entity::ContextData",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "recorded_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "forgettable_payload?",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Uuid",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null,
+      false,
+      false,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "e6a845ac04657f297acc5e82c991df1bdac6bca96d7cea3caa332a07a4c4c1a6"
+}

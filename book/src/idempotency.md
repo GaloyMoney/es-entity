@@ -206,3 +206,13 @@ fn main() {
 ```
 
 Without the `resets_on` argument the second call of `assert!(user.update_name("Harrison").did_execute());` would fail.
+
+## Guards on a Snapshotted Stream
+
+Once an entity's repo enables [snapshots](./snapshots.md), the tail an
+`idempotency_guard!` scans can be arbitrarily short — most of the history
+lives in the snapshot instead. `idempotency_guard!` requires a `snapshot:`
+clause for any stream that can yield `Replay::Snapshot`, so a guard written
+before snapshotting was enabled fails to compile until it says what the
+snapshot means for that guard, rather than silently under-guarding once the
+tail is compacted away.

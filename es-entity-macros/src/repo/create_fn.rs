@@ -83,13 +83,16 @@ impl ToTokens for CreateFn<'_> {
         // `ConstraintViolation`.
         //
         // A brand-new entity has no persisted events, so sequences start at 1
-        // and no offset parameter is needed.
+        // and no offset parameter is needed. A new entity is never
+        // snapshotted here, even when its repo enables `snapshot` — it gets
+        // its first snapshot on its first `update`.
         let events_insert = EventsInsert::new(self.events_table_name, self.event_ctx);
         let now_p = column_names.len() + 1;
         let source = EventSource::PerEntityCte {
             cte: "new_row",
             offset_param: None,
         };
+
         let query = format!(
             "WITH new_row AS (INSERT INTO {} ({}, created_at) VALUES ({}, COALESCE(${}, NOW())) RETURNING id) {}",
             table_name,
@@ -119,7 +122,7 @@ impl ToTokens for CreateFn<'_> {
                     id_type: self.id,
                     event_type: self.event,
                 }
-                .insert_per_entity(quote! { events }, create_error);
+                .insert_per_entity(quote! { events }, create_error, None);
                 quote! {
                     let offset = events.len_persisted();
                     let id = events.id();
@@ -185,19 +188,21 @@ impl ToTokens for CreateFn<'_> {
 
         tokens.append_all(quote! {
             #[inline(always)]
-            fn convert_new<Entity, Event>(item: Entity) -> es_entity::EntityEvents<Event>
+            fn convert_new<Entity, Event, Snapshot>(item: Entity) -> es_entity::EntityEvents<Event, Snapshot>
             where
                 Entity: es_entity::IntoEvents<Event>,
                 Event: es_entity::EsEvent,
+                Snapshot: es_entity::EsSnapshot,
             {
-                item.into_events()
+                item.into_events().widen_snapshot()
             }
 
             #[inline(always)]
-            fn hydrate_entity<Entity, Event>(events: es_entity::EntityEvents<Event>) -> Result<Entity, es_entity::EntityHydrationError>
+            fn hydrate_entity<Entity, Event, Snapshot>(events: es_entity::EntityEvents<Event, Snapshot>) -> Result<Entity, es_entity::EntityHydrationError>
             where
-                Entity: es_entity::TryFromEvents<Event>,
+                Entity: es_entity::TryFromEvents<Event, Snapshot>,
                 Event: es_entity::EsEvent,
+                Snapshot: es_entity::EsSnapshot,
             {
                 Entity::try_from_events(events)
             }
@@ -295,19 +300,21 @@ mod tests {
 
         let expected = quote! {
             #[inline(always)]
-            fn convert_new<Entity, Event>(item: Entity) -> es_entity::EntityEvents<Event>
+            fn convert_new<Entity, Event, Snapshot>(item: Entity) -> es_entity::EntityEvents<Event, Snapshot>
             where
                 Entity: es_entity::IntoEvents<Event>,
                 Event: es_entity::EsEvent,
+                Snapshot: es_entity::EsSnapshot,
             {
-                item.into_events()
+                item.into_events().widen_snapshot()
             }
 
             #[inline(always)]
-            fn hydrate_entity<Entity, Event>(events: es_entity::EntityEvents<Event>) -> Result<Entity, es_entity::EntityHydrationError>
+            fn hydrate_entity<Entity, Event, Snapshot>(events: es_entity::EntityEvents<Event, Snapshot>) -> Result<Entity, es_entity::EntityHydrationError>
             where
-                Entity: es_entity::TryFromEvents<Event>,
+                Entity: es_entity::TryFromEvents<Event, Snapshot>,
                 Event: es_entity::EsEvent,
+                Snapshot: es_entity::EsSnapshot,
             {
                 Entity::try_from_events(events)
             }
@@ -406,19 +413,21 @@ mod tests {
 
         let expected = quote! {
             #[inline(always)]
-            fn convert_new<Entity, Event>(item: Entity) -> es_entity::EntityEvents<Event>
+            fn convert_new<Entity, Event, Snapshot>(item: Entity) -> es_entity::EntityEvents<Event, Snapshot>
             where
                 Entity: es_entity::IntoEvents<Event>,
                 Event: es_entity::EsEvent,
+                Snapshot: es_entity::EsSnapshot,
             {
-                item.into_events()
+                item.into_events().widen_snapshot()
             }
 
             #[inline(always)]
-            fn hydrate_entity<Entity, Event>(events: es_entity::EntityEvents<Event>) -> Result<Entity, es_entity::EntityHydrationError>
+            fn hydrate_entity<Entity, Event, Snapshot>(events: es_entity::EntityEvents<Event, Snapshot>) -> Result<Entity, es_entity::EntityHydrationError>
             where
-                Entity: es_entity::TryFromEvents<Event>,
+                Entity: es_entity::TryFromEvents<Event, Snapshot>,
                 Event: es_entity::EsEvent,
+                Snapshot: es_entity::EsSnapshot,
             {
                 Entity::try_from_events(events)
             }

@@ -98,30 +98,189 @@
 /// assert!(config.apply_change("k".into(), "v".into()).did_execute());
 /// assert!(config.apply_change("k".into(), "v".into()).was_already_applied());
 /// ```
+///
+/// ## Snapshotted streams: the `snapshot:` clause
+///
+/// Iterating `.replay()` (or `.replay_persisted()`) on an `EntityEvents<E, S>`
+/// with a real snapshot type yields [`Replay`][crate::Replay] items instead
+/// of plain events. `already_applied:` and `resets_on:` patterns still match
+/// `&E` values (wrapped in `Replay::Event` under the hood via
+/// [`IntoReplay`][crate::IntoReplay]), so existing call sites over
+/// `iter_all().rev()` compile unchanged. A stream that can yield
+/// `Replay::Snapshot` additionally needs a `snapshot:` clause — placed last,
+/// after `resets_on:` if present — saying what the snapshot implies about
+/// this operation. Omitting it on such a stream is a compile error: the
+/// macro expands to a call the snapshot's type does not implement, with a
+/// diagnostic pointing at the missing clause. Use `snapshot: _ if false` to
+/// say explicitly "the snapshot can never imply this was already applied".
+///
+/// `resets_on` semantics fold into the guard the same way: if the reset
+/// condition is itself something the snapshot could already reflect, encode
+/// the resolved state in the `snapshot:` guard (e.g.
+/// `snapshot: s if s.last_threshold_update == Some((lower, upper))`) rather
+/// than in a separate clause — the snapshot has no "reset" of its own, it is
+/// always the fold as of its sequence.
+///
+/// ```rust
+/// use es_entity::*;
+/// use serde::{Serialize, Deserialize};
+///
+/// entity_id! { MeterId }
+///
+/// #[derive(EsSnapshot, Serialize, Deserialize, Debug)]
+/// #[es_snapshot(version = 1)]
+/// pub struct MeterSnapshot { id: MeterId, last_value: Option<i64> }
+///
+/// #[derive(EsEvent, Serialize, Deserialize)]
+/// #[serde(tag = "type", rename_all = "snake_case")]
+/// #[es_event(id = "MeterId")]
+/// pub enum MeterEvent {
+///     Initialized { id: MeterId },
+///     ReadingRecorded { value: i64 },
+/// }
+///
+/// pub struct NewMeter { id: MeterId }
+/// impl IntoEvents<MeterEvent> for NewMeter {
+///     fn into_events(self) -> EntityEvents<MeterEvent> {
+///         EntityEvents::init(self.id, [MeterEvent::Initialized { id: self.id }])
+///     }
+/// }
+///
+/// #[derive(EsEntity)]
+/// pub struct Meter {
+///     pub id: MeterId,
+///     events: EntityEvents<MeterEvent, MeterSnapshot>,
+/// }
+///
+/// impl TryFromEvents<MeterEvent, MeterSnapshot> for Meter {
+///     fn try_from_events(
+///         events: EntityEvents<MeterEvent, MeterSnapshot>,
+///     ) -> Result<Self, EntityHydrationError> {
+///         let mut id = None;
+///         for r in events.replay() {
+///             match r {
+///                 Replay::Snapshot(s) => id = Some(s.id),
+///                 Replay::Event(MeterEvent::Initialized { id: i }) => id = Some(*i),
+///                 Replay::Event(_) => {}
+///             }
+///         }
+///         Ok(Meter { id: id.expect("Initialized"), events })
+///     }
+/// }
+///
+/// impl Meter {
+///     pub fn record(&mut self, value: i64) -> Idempotent<()> {
+///         idempotency_guard!(
+///             self.events.replay().rev(),
+///             already_applied: MeterEvent::ReadingRecorded { value: v } if *v == value,
+///             snapshot: s if s.last_value == Some(value),
+///         );
+///         self.events.push(MeterEvent::ReadingRecorded { value });
+///         Idempotent::Executed(())
+///     }
+/// }
+///
+/// let id = MeterId::new();
+/// let events = EntityEvents::init(id, [MeterEvent::Initialized { id }]).widen_snapshot();
+/// let mut meter = <Meter as TryFromEvents<_, _>>::try_from_events(events).unwrap();
+/// assert!(meter.record(10).did_execute());
+/// assert!(meter.record(10).was_already_applied());
+/// ```
+///
+/// Omitting the `snapshot:` clause on the same stream does not compile:
+///
+/// ```compile_fail
+/// # use es_entity::*;
+/// # use serde::{Serialize, Deserialize};
+/// # entity_id! { MeterId }
+/// # #[derive(EsSnapshot, Serialize, Deserialize, Debug)]
+/// # #[es_snapshot(version = 1)]
+/// # pub struct MeterSnapshot { id: MeterId }
+/// # #[derive(EsEvent, Serialize, Deserialize)]
+/// # #[serde(tag = "type", rename_all = "snake_case")]
+/// # #[es_event(id = "MeterId")]
+/// # pub enum MeterEvent { Initialized { id: MeterId }, ReadingRecorded { value: i64 } }
+/// # pub struct NewMeter { id: MeterId }
+/// # impl IntoEvents<MeterEvent> for NewMeter {
+/// #     fn into_events(self) -> EntityEvents<MeterEvent> {
+/// #         EntityEvents::init(self.id, [MeterEvent::Initialized { id: self.id }])
+/// #     }
+/// # }
+/// # #[derive(EsEntity)]
+/// # pub struct Meter { pub id: MeterId, events: EntityEvents<MeterEvent, MeterSnapshot> }
+/// # impl TryFromEvents<MeterEvent, MeterSnapshot> for Meter {
+/// #     fn try_from_events(events: EntityEvents<MeterEvent, MeterSnapshot>) -> Result<Self, EntityHydrationError> {
+/// #         unimplemented!()
+/// #     }
+/// # }
+/// impl Meter {
+///     pub fn record(&mut self, value: i64) -> Idempotent<()> {
+///         // error: missing the required `snapshot:` clause.
+///         idempotency_guard!(
+///             self.events.replay().rev(),
+///             already_applied: MeterEvent::ReadingRecorded { value: v } if *v == value,
+///         );
+///         self.events.push(MeterEvent::ReadingRecorded { value });
+///         Idempotent::Executed(())
+///     }
+/// }
+/// ```
 #[macro_export]
 macro_rules! idempotency_guard {
-    // already_applied + resets_on (must come before already_applied-only to avoid ambiguity)
+    // already_applied+ , resets_on , snapshot
     ($events:expr,
      $(already_applied: $pattern:pat $(if $guard:expr)? ,)+
-     resets_on: $break_pattern:pat $(if $break_guard:expr)? $(,)?) => {
-        for event in $events {
-            match event {
+     resets_on: $break_pattern:pat $(if $break_guard:expr)? ,
+     snapshot: $snap_pattern:pat $(if $snap_guard:expr)? $(,)?) => {
+        for __item in $events {
+            match $crate::IntoReplay::into_replay(__item) {
                 $(
-                    $pattern $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
+                    $crate::Replay::Event($pattern) $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
                 )+
-                $break_pattern $(if $break_guard)? => break,
+                $crate::Replay::Snapshot($snap_pattern) $(if $snap_guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
+                $crate::Replay::Event($break_pattern) $(if $break_guard)? => break,
                 _ => {}
             }
         }
     };
-    // already_applied only
+    // already_applied+ , resets_on (no snapshot clause -> compile error on a snapshotted stream)
+    ($events:expr,
+     $(already_applied: $pattern:pat $(if $guard:expr)? ,)+
+     resets_on: $break_pattern:pat $(if $break_guard:expr)? $(,)?) => {
+        for __item in $events {
+            match $crate::IntoReplay::into_replay(__item) {
+                $(
+                    $crate::Replay::Event($pattern) $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
+                )+
+                $crate::Replay::Snapshot(__s) => return $crate::GuardWithoutSnapshotClause::reached(__s),
+                $crate::Replay::Event($break_pattern) $(if $break_guard)? => break,
+                _ => {}
+            }
+        }
+    };
+    // already_applied+ , snapshot
+    ($events:expr,
+     $(already_applied: $pattern:pat $(if $guard:expr)? ,)+
+     snapshot: $snap_pattern:pat $(if $snap_guard:expr)? $(,)?) => {
+        for __item in $events {
+            match $crate::IntoReplay::into_replay(__item) {
+                $(
+                    $crate::Replay::Event($pattern) $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
+                )+
+                $crate::Replay::Snapshot($snap_pattern) $(if $snap_guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
+                _ => {}
+            }
+        }
+    };
+    // already_applied+ only (no snapshot clause -> compile error on a snapshotted stream)
     ($events:expr,
      $(already_applied: $pattern:pat $(if $guard:expr)?),+ $(,)?) => {
-        for event in $events {
-            match event {
+        for __item in $events {
+            match $crate::IntoReplay::into_replay(__item) {
                 $(
-                    $pattern $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
+                    $crate::Replay::Event($pattern) $(if $guard)? => return $crate::FromAlreadyApplied::from_already_applied(),
                 )+
+                $crate::Replay::Snapshot(__s) => return $crate::GuardWithoutSnapshotClause::reached(__s),
                 _ => {}
             }
         }
@@ -172,6 +331,63 @@ macro_rules! idempotency_guard {
 /// ```
 #[macro_export]
 macro_rules! es_query {
+    // With entity override + forgettable + snapshot
+    (
+        entity = $entity:ident,
+        forgettable_tbl = $forgettable_tbl:literal,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            entity = $entity,
+            forgettable_tbl = $forgettable_tbl,
+            snapshot_tbl = $snapshot_tbl,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // With entity override + forgettable + snapshot - no args
+    (
+        entity = $entity:ident,
+        forgettable_tbl = $forgettable_tbl:literal,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            entity = $entity,
+            forgettable_tbl = $forgettable_tbl,
+            snapshot_tbl = $snapshot_tbl,
+            sql = $query
+        )
+    });
+    // With entity override + snapshot (no forgettable)
+    (
+        entity = $entity:ident,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            entity = $entity,
+            snapshot_tbl = $snapshot_tbl,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // With entity override + snapshot (no forgettable) - no args
+    (
+        entity = $entity:ident,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            entity = $entity,
+            snapshot_tbl = $snapshot_tbl,
+            sql = $query
+        )
+    });
+
     // With entity override + forgettable
     (
         entity = $entity:ident,
@@ -218,6 +434,63 @@ macro_rules! es_query {
     ) => ({
         $crate::expand_es_query!(
             entity = $entity,
+            sql = $query
+        )
+    });
+
+    // With tbl_prefix + forgettable + snapshot
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        forgettable_tbl = $forgettable_tbl:literal,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            forgettable_tbl = $forgettable_tbl,
+            snapshot_tbl = $snapshot_tbl,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // With tbl_prefix + forgettable + snapshot - no args
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        forgettable_tbl = $forgettable_tbl:literal,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            forgettable_tbl = $forgettable_tbl,
+            snapshot_tbl = $snapshot_tbl,
+            sql = $query
+        )
+    });
+    // With tbl_prefix + snapshot (no forgettable)
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr,
+        $($args:tt)*
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            snapshot_tbl = $snapshot_tbl,
+            sql = $query,
+            args = [$($args)*]
+        )
+    });
+    // With tbl_prefix + snapshot (no forgettable) - no args
+    (
+        tbl_prefix = $tbl_prefix:literal,
+        snapshot_tbl = $snapshot_tbl:literal,
+        $query:expr
+    ) => ({
+        $crate::expand_es_query!(
+            tbl_prefix = $tbl_prefix,
+            snapshot_tbl = $snapshot_tbl,
             sql = $query
         )
     });

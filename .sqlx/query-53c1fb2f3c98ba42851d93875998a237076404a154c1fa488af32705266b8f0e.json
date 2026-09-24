@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH entities AS ((SELECT id FROM transfers WHERE COALESCE(account_id = $1, $1 IS NULL) AND COALESCE(status = $2, $2 IS NULL) AND (NOT $3 OR reference IS NOT DISTINCT FROM $4) AND (id > $6) AND ($6 IS NOT NULL) ORDER BY id ASC LIMIT $5) UNION ALL (SELECT id FROM transfers WHERE COALESCE(account_id = $1, $1 IS NULL) AND COALESCE(status = $2, $2 IS NULL) AND (NOT $3 OR reference IS NOT DISTINCT FROM $4) AND ($6 IS NULL) ORDER BY id ASC LIMIT $5) ORDER BY id ASC LIMIT $5) SELECT i.id AS \"entity_id!: Repo__Id\", e.sequence, e.event, CASE WHEN $7 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, NULL::jsonb as \"forgettable_payload?\" FROM entities i JOIN transfer_events e ON i.id = e.id ORDER BY i.id asc, i.id, e.sequence",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "entity_id!: Repo__Id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "sequence",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "event",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "context: es_entity::ContextData",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "recorded_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "forgettable_payload?",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bool",
+        "Text",
+        "Int8",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null,
+      false,
+      false,
+      null,
+      false,
+      null
+    ]
+  },
+  "hash": "53c1fb2f3c98ba42851d93875998a237076404a154c1fa488af32705266b8f0e"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO clients_forgettable_payloads (entity_id, sequence, payload) SELECT $1, unnested.sequence, unnested.payload FROM UNNEST($2::INT[], $3::JSONB[]) AS unnested(sequence, payload)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4Array",
+        "JsonbArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bfe295b91a93473d839bd1ba3dbea2f9d7621810d4385661053afe38f734bcd2"
+}

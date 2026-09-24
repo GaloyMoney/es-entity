@@ -87,9 +87,12 @@ impl ToTokens for CreateAllFn<'_> {
         // count). Postgres interleaves the CTE and main inserts with no
         // guaranteed ordering, so a duplicate id (including an intra-batch
         // one) may surface as either table's constraint — the classifier maps
-        // both to the same `ConstraintViolation`.
+        // both to the same `ConstraintViolation`. New entities are never
+        // snapshotted here, even when the repo enables `snapshot` — each one
+        // gets its first snapshot on its first `update`.
         let events_insert = EventsInsert::new(self.events_table_name, self.event_ctx);
         let source = EventSource::BatchCte { cte: "new_rows" };
+
         let query = format!(
             "WITH new_rows AS (INSERT INTO {} (created_at, {}) \
             SELECT COALESCE($1, NOW()), unnested.{} \
@@ -250,7 +253,7 @@ impl ToTokens for CreateAllFn<'_> {
                     #arg_collection
                     #(#arg_adds)*
 
-                    let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event>> = new_entities.into_iter().map(Self::convert_new).collect();
+                    let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event, <#entity as es_entity::EsEntity>::Snapshot>> = new_entities.into_iter().map(Self::convert_new).collect();
 
                     #batch_declarations
                     let mut n_persisted: Vec<usize> = Vec::new();
@@ -384,7 +387,7 @@ mod tests {
                     __query_args.add(id_collection).map_err(sqlx::Error::Encode)?;
                     __query_args.add(name_collection).map_err(sqlx::Error::Encode)?;
 
-                    let mut all_events: Vec<es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event>> = new_entities.into_iter().map(Self::convert_new).collect();
+                    let mut all_events: Vec<es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event, <Entity as es_entity::EsEntity>::Snapshot>> = new_entities.into_iter().map(Self::convert_new).collect();
 
                     let mut all_ids: Vec<&EntityId> = Vec::new();
                     let mut all_sequences: Vec<i32> = Vec::new();

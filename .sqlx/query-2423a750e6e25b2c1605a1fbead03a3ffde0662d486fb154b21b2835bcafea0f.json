@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH entities AS ((SELECT score, id FROM transfers WHERE account_id = $1 AND ((score IS NULL OR (score, id) < ($4, $3))) AND ($3 IS NOT NULL AND $4 IS NOT NULL) ORDER BY score DESC NULLS LAST, id DESC LIMIT $2) UNION ALL (SELECT score, id FROM transfers WHERE account_id = $1 AND ((score IS NULL AND id < $3)) AND ($3 IS NOT NULL AND $4 IS NULL) ORDER BY score DESC NULLS LAST, id DESC LIMIT $2) UNION ALL (SELECT score, id FROM transfers WHERE account_id = $1 AND ($3 IS NULL) ORDER BY score DESC NULLS LAST, id DESC LIMIT $2) ORDER BY score DESC NULLS LAST, id DESC LIMIT $2) SELECT i.id AS \"entity_id!: Repo__Id\", e.sequence, e.event, CASE WHEN $5 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, NULL::jsonb as \"forgettable_payload?\" FROM entities i JOIN transfer_events e ON i.id = e.id ORDER BY i.score desc nulls last, i.id desc, i.id, e.sequence",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "entity_id!: Repo__Id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "sequence",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "event",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "context: es_entity::ContextData",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "recorded_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "forgettable_payload?",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8",
+        "Uuid",
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null,
+      false,
+      false,
+      null,
+      false,
+      null
+    ]
+  },
+  "hash": "2423a750e6e25b2c1605a1fbead03a3ffde0662d486fb154b21b2835bcafea0f"
+}

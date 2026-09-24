@@ -1,10 +1,13 @@
+pub mod client;
 pub mod contact;
 pub mod customer;
 pub mod facility;
+pub mod meter;
 pub mod order;
 pub mod partner;
 pub mod party;
 pub mod profile;
+pub mod site;
 pub mod task;
 pub mod transfer;
 pub mod user;

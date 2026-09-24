@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE client_snapshots SET fingerprint = fingerprint + 1 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2c2e832ae6813d2fd5ca202425494de7cae9333c7aae413ea64b9c4454b09b55"
+}

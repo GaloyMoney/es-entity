@@ -1,0 +1,57 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH entities AS ((SELECT created_at, id FROM vf_accounts WHERE status = $1 AND ((created_at, id) < ($5, $4)) AND ($4 IS NOT NULL) AND (EXISTS (SELECT 1 FROM vf_account_flags f WHERE f.account_id = vf_accounts.id)) AND ((SELECT COUNT(*) FROM vf_account_flags f WHERE f.account_id = vf_accounts.id) >= $2) ORDER BY created_at DESC, id DESC LIMIT $3) UNION ALL (SELECT created_at, id FROM vf_accounts WHERE status = $1 AND ($4 IS NULL) AND (EXISTS (SELECT 1 FROM vf_account_flags f WHERE f.account_id = vf_accounts.id)) AND ((SELECT COUNT(*) FROM vf_account_flags f WHERE f.account_id = vf_accounts.id) >= $2) ORDER BY created_at DESC, id DESC LIMIT $3) ORDER BY created_at DESC, id DESC LIMIT $3) SELECT i.id AS \"entity_id!: Repo__Id\", e.sequence, e.event, CASE WHEN $6 THEN e.context ELSE NULL::jsonb END as \"context: es_entity::ContextData\", e.recorded_at, NULL::jsonb as \"forgettable_payload?\" FROM entities i JOIN vf_account_events e ON i.id = e.id ORDER BY i.created_at desc, i.id desc, i.id, e.sequence",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "entity_id!: Repo__Id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "sequence",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "event",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "context: es_entity::ContextData",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "recorded_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "forgettable_payload?",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Int8",
+        "Uuid",
+        "Timestamptz",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null,
+      false,
+      false,
+      null,
+      false,
+      null
+    ]
+  },
+  "hash": "c233a26311a6a60d323b6257b7614aad51d18fac2c003fd403ed57e018aa4119"
+}

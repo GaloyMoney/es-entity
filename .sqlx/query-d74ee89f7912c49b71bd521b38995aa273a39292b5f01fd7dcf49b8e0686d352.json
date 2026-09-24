@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE meter_snapshots SET fingerprint = fingerprint + 1 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d74ee89f7912c49b71bd521b38995aa273a39292b5f01fd7dcf49b8e0686d352"
+}

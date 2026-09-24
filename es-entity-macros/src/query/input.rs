@@ -11,6 +11,8 @@ pub struct QueryInput {
     pub(super) arg_exprs: Vec<syn::Expr>,
     pub(super) entity: Option<syn::Ident>,
     pub(super) forgettable_tbl: Option<String>,
+    pub(super) snapshot_tbl: Option<String>,
+    pub(super) snapshot_fingerprint: Option<syn::Expr>,
 }
 
 impl QueryInput {
@@ -89,6 +91,8 @@ impl Parse for QueryInput {
         let mut tbl_prefix = None;
         let mut entity = None;
         let mut forgettable_tbl = None;
+        let mut snapshot_tbl = None;
+        let mut snapshot_fingerprint = None;
 
         while !input.is_empty() {
             if expect_comma {
@@ -115,6 +119,10 @@ impl Parse for QueryInput {
                 entity = Some(input.parse::<syn::Ident>()?);
             } else if key == "forgettable_tbl" {
                 forgettable_tbl = Some(input.parse::<syn::LitStr>()?.value());
+            } else if key == "snapshot_tbl" {
+                snapshot_tbl = Some(input.parse::<syn::LitStr>()?.value());
+            } else if key == "snapshot_fingerprint" {
+                snapshot_fingerprint = Some(input.parse::<syn::Expr>()?);
             } else {
                 let message = format!("unexpected input key: {key}");
                 return Err(syn::Error::new_spanned(key, message));
@@ -132,6 +140,8 @@ impl Parse for QueryInput {
             arg_exprs: args.unwrap_or_default(),
             entity,
             forgettable_tbl,
+            snapshot_tbl,
+            snapshot_fingerprint,
         })
     }
 }
@@ -199,6 +209,8 @@ mod tests {
                 arg_exprs: vec![],
                 entity: None,
                 forgettable_tbl: None,
+                snapshot_tbl: None,
+                snapshot_fingerprint: None,
             };
             assert_eq!(input.order_by_columns(), expected, "Failed for SQL: {sql}",);
         }

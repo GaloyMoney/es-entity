@@ -20,6 +20,7 @@ mod persist_events_fn;
 mod post_hydrate_hook;
 mod post_persist_hook;
 mod scope;
+mod snapshot_fns;
 mod update_all_fn;
 mod update_fn;
 
@@ -35,6 +36,7 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
     opts.columns.validate_scope()?;
     opts.columns.validate_virtual()?;
     opts.validate_forgettable()?;
+    opts.validate_snapshot()?;
     opts.validate_in_op_only()?;
     // `include_bytes!` the resolved migrations so Cargo re-runs this derive when
     // they change (keeps the migration-derived index catalog and error mapping
@@ -67,6 +69,7 @@ pub struct EsRepo<'a> {
     nested: Vec<nested::Nested<'a>>,
     hydrate_nested: Option<hydrate_nested::HydrateNested<'a>>,
     error_types: error_types::ErrorTypes<'a>,
+    snapshot_fns: Option<snapshot_fns::SnapshotFns<'a>>,
     opts: &'a RepositoryOptions,
 }
 
@@ -157,6 +160,7 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             nested,
             hydrate_nested,
             error_types: error_types::ErrorTypes::new(opts),
+            snapshot_fns: snapshot_fns::SnapshotFns::from(opts),
             opts,
         }
     }
@@ -219,6 +223,7 @@ impl ToTokens for EsRepo<'_> {
         let hydrate_nested_fns = &self.hydrate_nested_fns;
         let nested = &self.nested;
         let hydrate_nested = &self.hydrate_nested;
+        let snapshot_fns_in_impl = self.snapshot_fns.as_ref().map(|s| s.in_impl_tokens());
 
         let pool_fn = self.opts.pool_field().map(|pool_field| {
             quote! {
@@ -248,6 +253,10 @@ impl ToTokens for EsRepo<'_> {
         };
         let tree_soft_delete = self.opts.delete.is_soft();
         let tree_forgettable_table_name = match self.opts.forgettable_table_name() {
+            Some(tbl) => quote! { Some(#tbl) },
+            None => quote! { None },
+        };
+        let tree_snapshot_table_name = match self.opts.snapshot_table_name() {
             Some(tbl) => quote! { Some(#tbl) },
             None => quote! { None },
         };
@@ -350,6 +359,25 @@ impl ToTokens for EsRepo<'_> {
             }
         };
 
+        let repo_has_snapshot = self.opts.snapshot_enabled();
+        let has_forgettable_flag = self.opts.forgettable_enabled();
+        let repo_db_event = if repo_has_snapshot {
+            quote! { es_entity::SnapshotGenericEvent<#id> }
+        } else {
+            quote! { es_entity::GenericEvent<#id> }
+        };
+        let snapshot_guards = quote! {
+            const _: () = assert!(
+                <<#entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::IS_SNAPSHOT == #repo_has_snapshot,
+                "entity snapshot type and `#[es_repo(snapshot)]` disagree: a snapshotted entity needs `snapshot` on its repo and vice versa"
+            );
+            const _: () = assert!(
+                !<<#entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::HAS_FORGETTABLE_FIELDS
+                    || #has_forgettable_flag,
+                "snapshot type has Forgettable fields but this repo does not enable `forgettable`"
+            );
+        };
+
         tokens.append_all(quote! {
             pub mod #cursor_mod {
                 use super::*;
@@ -372,11 +400,14 @@ impl ToTokens for EsRepo<'_> {
                 #[allow(non_camel_case_types)]
                 pub(super) type Repo__Entity = #entity;
                 #[allow(non_camel_case_types)]
-                pub(super) type Repo__DbEvent = es_entity::GenericEvent<#id>;
+                pub(super) type Repo__DbEvent = #repo_db_event;
                 #[allow(dead_code)]
                 pub(super) const REPO__HAS_TBL_PREFIX: bool = #has_tbl_prefix;
+                #[allow(dead_code)]
+                pub(super) const REPO__HAS_SNAPSHOT: bool = #repo_has_snapshot;
 
                 #forgettable_event_guard
+                #snapshot_guards
             }
 
             #error_types
@@ -413,6 +444,7 @@ impl ToTokens for EsRepo<'_> {
                 #(#list_by_fns)*
                 #(#list_for_fns)*
                 #(#nested)*
+                #snapshot_fns_in_impl
             }
 
             #hydrate_nested
@@ -434,6 +466,8 @@ impl ToTokens for EsRepo<'_> {
                        soft_delete: #tree_soft_delete,
                        forgettable_table_name: #tree_forgettable_table_name,
                        event_context: <#types_mod::Repo__Event as EsEvent>::event_context(),
+                       snapshot_table_name: #tree_snapshot_table_name,
+                       snapshot_fingerprint: <<#entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::FINGERPRINT,
                        children: vec![ #( <#tree_child_tys as es_entity::EsRepo>::nested_tree_spec(), )* ],
                    }
                }

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE meter_snapshots SET snapshot = '{}'::jsonb WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b53db233b4c7552568914d78f260e4686c9bcc5f07c9fcd60dceabc9dabcd233"
+}

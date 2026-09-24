@@ -13,6 +13,7 @@ pub struct HydrateNested<'a> {
     delete_option: &'a DeleteOption,
     forgettable_table_name: Option<&'a str>,
     forgettable_columns: Vec<&'a syn::Ident>,
+    snapshot_enabled: bool,
 }
 
 impl<'a> HydrateNested<'a> {
@@ -26,6 +27,7 @@ impl<'a> HydrateNested<'a> {
             delete_option: &opts.delete,
             forgettable_table_name: opts.forgettable_table_name(),
             forgettable_columns: opts.columns.forgettable_column_names(),
+            snapshot_enabled: opts.snapshot_table_name().is_some(),
         }
     }
 }
@@ -38,6 +40,17 @@ impl ToTokens for HydrateNested<'_> {
         let accessor = self.column.parent_accessor();
 
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
+
+        // A snapshot-enabled child's own branch of the tree query carries the
+        // wider (`snapshot*`-column) row shape — the same distinction
+        // `es_query!` makes for a flat repo's own loaders (`decode_fn` in
+        // `query/mod.rs`). Non-snapshot repos keep the original decoder byte
+        // for byte.
+        let decode_fn = if self.snapshot_enabled {
+            quote! { es_entity::decode_tagged_snapshot_row::<#id> }
+        } else {
+            quote! { es_entity::decode_tagged_row::<#id> }
+        };
 
         tokens.append_all(quote! {
             impl #impl_generics es_entity::HydrateNested<#ty> for #ident #ty_generics #where_clause {
@@ -56,7 +69,7 @@ impl ToTokens for HydrateNested<'_> {
                     let n = rows.len();
                     let generic = rows
                         .iter()
-                        .map(es_entity::decode_tagged_row::<#id>)
+                        .map(#decode_fn)
                         .collect::<Result<Vec<_>, _>>()?;
                     let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(generic.into_iter(), n)?;
                     <Self as es_entity::EsRepo>::hydrate_nested_from_rows::<__EsErr>(rows_by_tag, tag_cursor, &mut res)?;

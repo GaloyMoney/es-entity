@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT event->>'name' IS NULL AS \"name_is_null!\" FROM customer_events\n           WHERE id = $1 AND event_type = 'name_updated'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name_is_null!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4ae055f3d8dce26f3594dc386dcc137bf00351137bfdcdc3e8c9319cbee0ff2e"
+}

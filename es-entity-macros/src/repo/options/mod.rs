@@ -236,6 +236,10 @@ pub struct RepositoryOptions {
     forgettable: bool,
     #[darling(default, rename = "forgettable_tbl")]
     forgettable_table_name: Option<String>,
+    #[darling(default)]
+    snapshot: bool,
+    #[darling(default, rename = "snapshot_tbl")]
+    snapshot_table_name: Option<String>,
 
     /// Override the migrations directory the index catalog is derived from.
     /// Resolved relative to `$CARGO_MANIFEST_DIR`. Takes effect only when the
@@ -282,6 +286,15 @@ impl RepositoryOptions {
                 "{}_forgettable_payloads",
                 self.table_name.as_ref().expect("Table name not set")
             ));
+        }
+
+        if self.snapshot && self.snapshot_table_name.is_none() {
+            // Mirrors `events_table_name`'s convention (singular entity name),
+            // not `forgettable_table_name`'s (pluralized `table_name`) —
+            // every hand-written override anyone has reached for lands on
+            // the singular form, matching the sibling `_events` table.
+            self.snapshot_table_name =
+                Some(format!("{prefix}{entity_name}Snapshots").to_case(Case::Snake));
         }
 
         self.columns
@@ -624,5 +637,80 @@ impl RepositoryOptions {
         } else {
             None
         }
+    }
+
+    pub fn snapshot_enabled(&self) -> bool {
+        self.snapshot
+    }
+
+    pub fn snapshot_table_name(&self) -> Option<&str> {
+        if self.snapshot {
+            Some(self.snapshot_table_name.as_deref().unwrap_or_else(|| {
+                panic!("snapshot_table_name should have been set in update_defaults")
+            }))
+        } else {
+            None
+        }
+    }
+
+    /// `snapshot_tbl` without `snapshot` makes no sense — the table name has
+    /// nothing to attach to.
+    pub fn validate_snapshot(&self) -> darling::Result<()> {
+        if !self.snapshot && self.snapshot_table_name.is_some() {
+            return Err(darling::Error::custom("`snapshot_tbl` requires `snapshot`"));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use darling::FromDeriveInput;
+    use syn::parse_quote;
+
+    use super::*;
+
+    #[test]
+    fn snapshot_table_name_defaults_to_singular_entity_name_like_events() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Meter", snapshot)]
+            struct Meters {
+                pool: sqlx::PgPool,
+            }
+        };
+        let opts = RepositoryOptions::from_derive_input(&input).unwrap();
+        assert_eq!(opts.events_table_name(), "meter_events");
+        assert_eq!(opts.snapshot_table_name(), Some("meter_snapshots"));
+    }
+
+    #[test]
+    fn snapshot_table_name_default_respects_tbl_prefix() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "InterestAccrualCycle", snapshot, tbl_prefix = "core")]
+            struct InterestAccrualCycles {
+                pool: sqlx::PgPool,
+            }
+        };
+        let opts = RepositoryOptions::from_derive_input(&input).unwrap();
+        assert_eq!(
+            opts.events_table_name(),
+            "core_interest_accrual_cycle_events"
+        );
+        assert_eq!(
+            opts.snapshot_table_name(),
+            Some("core_interest_accrual_cycle_snapshots")
+        );
+    }
+
+    #[test]
+    fn explicit_snapshot_tbl_still_overrides_the_default() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Meter", snapshot, snapshot_tbl = "custom_meter_snaps")]
+            struct Meters {
+                pool: sqlx::PgPool,
+            }
+        };
+        let opts = RepositoryOptions::from_derive_input(&input).unwrap();
+        assert_eq!(opts.snapshot_table_name(), Some("custom_meter_snaps"));
     }
 }

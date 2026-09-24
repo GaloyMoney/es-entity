@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM clients_forgettable_payloads WHERE entity_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fcfb442132b51fb9100b0cc768f3c1ac07f50a500cc2aca8ff13c823226d8ce8"
+}
