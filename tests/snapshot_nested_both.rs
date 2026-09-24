@@ -110,3 +110,86 @@ async fn nested_both_snapshot_one_statement() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Refresh-on-write over a nested batch: three children snapshot, all three
+/// fingerprints go stale, only one child is mutated — the parent `update`
+/// still refreshes every stale child in the same call, not just the mutated
+/// one, because `update_all` (which the nested phase routes through) checks
+/// every child it is handed, not only the dirty ones.
+#[tokio::test]
+async fn nested_update_refreshes_every_stale_child_not_just_the_mutated_one() -> anyhow::Result<()>
+{
+    let pool = init_pool().await?;
+    let repo = BothSites::new(pool.clone());
+
+    let site_id = SiteId::new();
+    let mut site = repo
+        .create(NewSite::builder().id(site_id).build().unwrap())
+        .await?;
+
+    let meter_ids: Vec<MeterId> = (0..3).map(|_| MeterId::new()).collect();
+    for &id in &meter_ids {
+        site.add_meter(new_meter(id, site_id, "m"));
+    }
+    repo.update(&mut site).await?;
+
+    // Cross every child's own snapshot threshold.
+    for &id in &meter_ids {
+        for v in 1..=5i64 {
+            let _ = site.meters.get_persisted_mut(&id).unwrap().record(v);
+        }
+    }
+    repo.update(&mut site).await?;
+    for &id in &meter_ids {
+        assert!(site.meters.get_persisted(&id).unwrap().has_snapshot());
+    }
+
+    // Every child's snapshot goes stale.
+    for &id in &meter_ids {
+        sqlx::query!(
+            "UPDATE meter_snapshots SET fingerprint = fingerprint + 1 WHERE id = $1",
+            id as MeterId
+        )
+        .execute(&pool)
+        .await?;
+    }
+
+    let mut reloaded = repo.find_by_id(site_id).await?;
+    for &id in &meter_ids {
+        assert!(!reloaded.meters.get_persisted(&id).unwrap().has_snapshot());
+    }
+
+    // Mutate only the first child, then update the parent.
+    let _ = reloaded
+        .meters
+        .get_persisted_mut(&meter_ids[0])
+        .unwrap()
+        .record(6);
+    repo.update(&mut reloaded).await?;
+
+    // All three children — not just the mutated one — are fresh again.
+    for &id in &meter_ids {
+        assert!(
+            reloaded.meters.get_persisted(&id).unwrap().has_snapshot(),
+            "child {id} should have been refreshed even though it staged no events"
+        );
+    }
+
+    let final_load = repo.find_by_id(site_id).await?;
+    for &id in &meter_ids {
+        assert!(final_load.meters.get_persisted(&id).unwrap().has_snapshot());
+    }
+    assert_eq!(
+        final_load
+            .meters
+            .get_persisted(&meter_ids[0])
+            .unwrap()
+            .count(),
+        6
+    );
+    for &id in &meter_ids[1..] {
+        assert_eq!(final_load.meters.get_persisted(&id).unwrap().count(), 5);
+    }
+
+    Ok(())
+}
