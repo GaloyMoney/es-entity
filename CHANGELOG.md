@@ -1,3 +1,11 @@
+# [cala release v0.14.2](https://github.com/GaloyMoney/cala/releases/tag/0.14.2)
+
+
+
+### Features
+
+- Entity snapshots (EntityEvents<E, S>, #[es_repo(snapshot)]) (#240)
+
 # [cala release v0.14.1](https://github.com/GaloyMoney/cala/releases/tag/0.14.1)
 
 
