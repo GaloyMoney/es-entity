@@ -296,7 +296,7 @@ impl UpdateAllFn<'_> {
                 Some(su) => {
                     let declarations = su.batch_declarations(id_type);
                     let gather = su.gather_batch(
-                        quote! { <#entity as es_entity::Snapshotting>::snapshot(entity) },
+                        quote! { <#entity as es_entity::HeadSnapshot>::capture(entity) },
                         quote! { entity.events() },
                         quote! { &entity.id },
                     );
@@ -373,6 +373,21 @@ impl UpdateAllFn<'_> {
             quote! {}
         };
 
+        // A clean entity whose loaded state had no matching snapshot (a
+        // fingerprint change, or one that predates `snapshot` altogether)
+        // gets one chance per call to refresh here — dirty entities either
+        // already snapshotted inline above, or their `capture()` still says
+        // `None`, in which case this is a cheap no-op.
+        let stale_refresh_loop = self.snapshot_table_name.map(|_| {
+            quote! {
+                for entity in #iter_mut_ref {
+                    if !entity.events().any_new() && entity.events().snapshot().is_none() {
+                        self.__persist_snapshot_in_op(op, entity).await?;
+                    }
+                }
+            }
+        });
+
         let standalone_wrapper =
             (matches!(mode, BatchMode::OwnedSlice) && !self.in_op_only).then(|| {
                 quote! {
@@ -427,6 +442,7 @@ impl UpdateAllFn<'_> {
                     }
 
                     if !has_new_events {
+                        #stale_refresh_loop
                         return Ok(0);
                     }
 
@@ -443,6 +459,8 @@ impl UpdateAllFn<'_> {
                     }
 
                     #compact_tokens
+
+                    #stale_refresh_loop
 
                     Ok(total_events)
                 }.await;
@@ -853,5 +871,53 @@ mod tests {
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    /// A snapshot repo's `update_all_in_op` refreshes clean-but-stale
+    /// entities (no matching snapshot loaded) both when the whole batch has
+    /// no staged events, and after persisting whichever entities did.
+    #[test]
+    fn update_all_fn_with_snapshot_refreshes_stale_clean_entities() {
+        let id = syn::parse_str("EntityId").unwrap();
+        let entity = Ident::new("Entity", Span::call_site());
+        let mut columns = Columns::default();
+        columns.set_id_column(&id);
+
+        let event = Ident::new("EntityEvent", Span::call_site());
+        let update_all_fn = UpdateAllFn {
+            in_op_only: false,
+            entity: &entity,
+            id: &id,
+            event: &event,
+            table_name: "entities",
+            events_table_name: "entity_events",
+            event_ctx: false,
+            forgettable_table_name: None,
+            snapshot_table_name: Some("entity_snapshots"),
+            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            columns: &columns,
+            nested_fn_names: Vec::new(),
+            post_persist_error: None,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        update_all_fn.to_tokens(&mut tokens);
+        let out = tokens.to_string();
+
+        // Emitted twice per generated fn (early-return path, persisted
+        // path) and once each for `update_all_in_op` / `update_all_mut_in_op`.
+        assert_eq!(
+            out.matches("self . __persist_snapshot_in_op (op , entity)")
+                .count(),
+            4,
+            "expected the refresh call on both paths, in both generated fns: {out}"
+        );
+        assert_eq!(
+            out.matches(". snapshot () . is_none ()").count(),
+            4,
+            "expected the staleness check on both paths, in both generated fns: {out}"
+        );
     }
 }

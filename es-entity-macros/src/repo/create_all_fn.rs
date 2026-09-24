@@ -3,7 +3,7 @@ use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
 use super::{
-    events_write::{EventSource, EventsInsert, ForgettablePayloads, SnapshotUpsert},
+    events_write::{EventSource, EventsInsert, ForgettablePayloads},
     options::*,
 };
 
@@ -16,7 +16,6 @@ pub struct CreateAllFn<'a> {
     events_table_name: &'a str,
     event_ctx: bool,
     forgettable_table_name: Option<&'a str>,
-    snapshot_table_name: Option<&'a str>,
     columns: &'a Columns,
     create_error: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
@@ -37,7 +36,6 @@ impl<'a> From<&'a RepositoryOptions> for CreateAllFn<'a> {
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
             forgettable_table_name: opts.forgettable_table_name(),
-            snapshot_table_name: opts.snapshot_table_name(),
             create_error: opts.create_error(),
             nested_fn_names: opts
                 .all_nested()
@@ -84,75 +82,22 @@ impl ToTokens for CreateAllFn<'_> {
             .columns
             .create_all_arg_collection(syn::parse_quote! { new_entity });
 
-        let snapshot_upsert = self
-            .snapshot_table_name
-            .map(|table| SnapshotUpsert { table });
-
         // Both inserts in one statement. The events insert joins the `new_rows`
         // CTE, which reveals index rows that vanished (a short RETURNING
         // count). Postgres interleaves the CTE and main inserts with no
         // guaranteed ordering, so a duplicate id (including an intra-batch
         // one) may surface as either table's constraint — the classifier maps
-        // both to the same `ConstraintViolation`.
+        // both to the same `ConstraintViolation`. New entities are never
+        // snapshotted here, even when the repo enables `snapshot` — each one
+        // gets its first snapshot on its first `update`.
         let events_insert = EventsInsert::new(self.events_table_name, self.event_ctx);
         let source = EventSource::BatchCte { cte: "new_rows" };
-        let n_event_args = events_insert.arg_exprs(&source).len();
-
-        let (snap_cte, snap_gather, snap_arg_adds, snap_declarations, compact_events) =
-            match &snapshot_upsert {
-                Some(su) => {
-                    let ids_p = column_names.len() + 2 + (n_event_args - 1);
-                    let seqs_p = ids_p + 1;
-                    let snaps_p = seqs_p + 1;
-                    let firsts_p = snaps_p + 1;
-                    let fp_p = firsts_p + 1;
-                    let cte = format!(
-                        ", {}",
-                        su.cte_batch(ids_p, seqs_p, snaps_p, firsts_p, fp_p, 1)
-                    );
-                    let declarations = su.batch_declarations(self.id);
-                    let entity = self.entity;
-                    let id_ty = self.id;
-                    let gather = {
-                        let g = su.gather_batch(
-                            quote! { <#entity as es_entity::Snapshotting>::snapshot(&__tmp_entity) },
-                            quote! { events },
-                            quote! { id },
-                        );
-                        quote! {
-                            let __tmp_events = es_entity::EntityEvents::init(
-                                events.id().clone(),
-                                events.iter_new_events().map(|e| e.event.clone()).collect::<Vec<_>>(),
-                            );
-                            let __tmp_entity: #entity = Self::hydrate_entity(__tmp_events)?;
-                            #g
-                        }
-                    };
-                    let arg_adds = quote! {
-                        __query_args.add(&__snap_ids).map_err(sqlx::Error::Encode)?;
-                        __query_args.add(&__snap_seqs).map_err(sqlx::Error::Encode)?;
-                        __query_args.add(&__snap_jsons).map_err(sqlx::Error::Encode)?;
-                        __query_args.add(&__snap_firsts).map_err(sqlx::Error::Encode)?;
-                        __query_args.add(<<#entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::FINGERPRINT).map_err(sqlx::Error::Encode)?;
-                    };
-                    let declarations = quote! {
-                        #declarations
-                        let mut __snapshots_to_compact: std::collections::HashMap<#id_ty, (<#entity as es_entity::EsEntity>::Snapshot, Option<es_entity::prelude::chrono::DateTime<es_entity::prelude::chrono::Utc>>)> = std::collections::HashMap::new();
-                    };
-                    let compact = su.compact_events_batch(
-                        quote! { all_events.iter_mut() },
-                        quote! { recorded_at },
-                    );
-                    (cte, gather, arg_adds, declarations, compact)
-                }
-                None => (String::new(), quote! {}, quote! {}, quote! {}, quote! {}),
-            };
 
         let query = format!(
             "WITH new_rows AS (INSERT INTO {} (created_at, {}) \
             SELECT COALESCE($1, NOW()), unnested.{} \
             FROM UNNEST({}) \
-            AS unnested({}) RETURNING id){snap_cte} {}",
+            AS unnested({}) RETURNING id) {}",
             table_name,
             column_names.join(", "),
             column_names.join(", unnested."),
@@ -313,18 +258,15 @@ impl ToTokens for CreateAllFn<'_> {
                     #batch_declarations
                     let mut n_persisted: Vec<usize> = Vec::new();
                     #forgettable_vars
-                    #snap_declarations
 
                     for events in all_events.iter() {
                         let id = events.id();
                         #gather
                         #forgettable_extract
                         n_persisted.push(n_new);
-                        #snap_gather
                     }
 
                     #(#event_arg_adds)*
-                    #snap_arg_adds
 
                     let expected_events = all_ids.len();
                     let rows = sqlx::query_with(#query, __query_args)
@@ -348,8 +290,6 @@ impl ToTokens for CreateAllFn<'_> {
                         for events in all_events.iter_mut() {
                             events.mark_new_events_persisted_at(recorded_at);
                         }
-
-                        #compact_events
                     }
 
                     #post_checks_phase
@@ -391,7 +331,6 @@ mod tests {
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: None,
-            snapshot_table_name: None,
             create_error,
             columns: &columns,
             nested_fn_names: Vec::new(),

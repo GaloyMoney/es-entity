@@ -128,9 +128,8 @@ impl ToTokens for UpdateFn<'_> {
 
             let gather = events_insert.gather_per_entity(quote! { entity.events() });
 
-            // A leading comma only when there is a snapshot to bind — kept
-            // as its own token group so a non-snapshot repo's query args are
-            // byte-identical to before (no trailing/joining comma added).
+            // A leading comma only when there is a snapshot to bind — a
+            // non-snapshot repo's query args are unaffected.
             let snap_args_prefixed = if snap_args.is_empty() {
                 quote! {}
             } else {
@@ -187,14 +186,10 @@ impl ToTokens for UpdateFn<'_> {
             }
         } else if snapshot_upsert.is_some() {
             quote! {
-                let __snapshot = <#entity as es_entity::Snapshotting>::snapshot(&*entity);
-                // `persist_events` is a separate call, so unlike the combined
-                // (with-columns) path there is no shared `__snapshot_first`
-                // local already in scope for `compact_to_snapshot` below —
-                // recompute it the same way, before the write moves new
-                // events into the persisted tail (recomputing after would
-                // still be correct — marking only appends — but there is no
-                // reason to rely on that).
+                let __snapshot = <#entity as es_entity::HeadSnapshot>::capture(&*entity);
+                // `persist_events` is a separate call, so there is no shared
+                // `__snapshot_first` local in scope yet — recompute it before
+                // the write moves new events into the persisted tail.
                 let __snapshot_first = Self::extract_events(entity).entity_first_persisted_at();
                 let n_events = {
                     let events = Self::extract_events(entity);
@@ -205,8 +200,7 @@ impl ToTokens for UpdateFn<'_> {
                 };
                 // `persist_events` reports only the count, not the
                 // `recorded_at` it stamped new events with — recover it from
-                // the entity itself (the just-marked events are now its most
-                // recent persisted ones) for `compact_to_snapshot` below.
+                // the entity itself for `compact_to_snapshot` below.
                 let recorded_at = Self::extract_events(entity)
                     .entity_last_modified_at()
                     .ok_or(#modify_error::ConcurrentModification)?;
@@ -230,6 +224,17 @@ impl ToTokens for UpdateFn<'_> {
             ),
             None => quote! {},
         };
+
+        // A clean entity whose loaded state had no matching snapshot (a
+        // fingerprint change, or one that predates `snapshot` altogether)
+        // gets one chance to refresh here before the no-op early return.
+        let stale_refresh = self.snapshot_table_name.map(|_| {
+            quote! {
+                if Self::extract_events(entity).snapshot().is_none() {
+                    self.__persist_snapshot_in_op(op, entity).await?;
+                }
+            }
+        });
 
         #[cfg(feature = "instrument")]
         let (instrument_attr, record_id, error_recording) = {
@@ -309,6 +314,7 @@ impl ToTokens for UpdateFn<'_> {
                     #(#nested)*
 
                     if !Self::extract_events(entity).any_new() {
+                        #stale_refresh
                         return Ok(0);
                     }
 
@@ -520,11 +526,10 @@ mod tests {
         assert_eq!(tokens.to_string(), expected.to_string());
     }
 
-    /// Step 15 (test 15): a snapshot repo's `update_in_op` combines the
-    /// index update, the snapshot upsert, and the events insert into one
-    /// statement — the `snap AS (INSERT INTO ...)` CTE must be present —
-    /// and compacts the entity in memory after persisting, via
-    /// `compact_to_snapshot`.
+    /// A snapshot repo's `update_in_op` combines the index update, the
+    /// snapshot upsert, and the events insert into one statement — the
+    /// `snap AS (INSERT INTO ...)` CTE must be present — and compacts the
+    /// entity in memory after persisting, via `compact_to_snapshot`.
     #[test]
     fn update_fn_with_snapshot_contains_the_snap_cte_and_compacts() {
         let id = syn::parse_str("EntityId").unwrap();
@@ -570,16 +575,60 @@ mod tests {
             "missing the post-write compaction: {out}"
         );
         assert!(
-            out.contains("es_entity :: Snapshotting > :: snapshot"),
-            "missing the pre-statement snapshot() call: {out}"
+            out.contains("es_entity :: HeadSnapshot > :: capture"),
+            "missing the pre-statement capture() call: {out}"
         );
-        // The snap CTE runs in the same statement as the events insert (no
-        // follow-up round trip for it) — the whole query is one
-        // `sqlx :: query !` call.
         assert_eq!(
             out.matches("sqlx :: query !").count(),
             1,
             "the snapshot write must not be a separate statement: {out}"
+        );
+    }
+
+    /// A snapshot repo's `update_in_op`, called on a clean entity whose
+    /// loaded state had no matching snapshot, refreshes it via the private
+    /// re-snapshot helper instead of silently returning early forever.
+    #[test]
+    fn update_fn_with_snapshot_refreshes_a_stale_clean_entity() {
+        let id = syn::parse_str("EntityId").unwrap();
+        let entity = Ident::new("Entity", Span::call_site());
+        let mut columns = Columns::default();
+        columns.set_id_column(&id);
+
+        let event = Ident::new("EntityEvent", Span::call_site());
+        let update_fn = UpdateFn {
+            in_op_only: false,
+            entity: &entity,
+            id: &id,
+            event: &event,
+            table_name: "entities",
+            events_table_name: "entity_events",
+            event_ctx: false,
+            forgettable_table_name: None,
+            snapshot_table_name: Some("entity_snapshots"),
+            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            columns: &columns,
+            nested_fn_names: Vec::new(),
+            post_persist_error: None,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        update_fn.to_tokens(&mut tokens);
+        let out = tokens.to_string();
+
+        assert!(
+            out.contains("if ! Self :: extract_events (entity) . any_new ()"),
+            "missing the early-return guard: {out}"
+        );
+        assert!(
+            out.contains(". snapshot () . is_none ()"),
+            "missing the staleness check: {out}"
+        );
+        assert!(
+            out.contains("self . __persist_snapshot_in_op (op , entity)"),
+            "missing the refresh call: {out}"
         );
     }
 }

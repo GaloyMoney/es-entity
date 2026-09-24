@@ -67,15 +67,12 @@ impl ToTokens for PersistEventsFn<'_> {
             .map(|table| SnapshotUpsert { table });
 
         // A snapshot repo with no persisted index columns takes its snapshot
-        // through this shared path: the caller (an `update` with no index
-        // columns, or `forget_in_op` binding `None` to disable it — decision
-        // 2/6) computes `Snapshotting::snapshot()` itself, since it is the
-        // one holding the full hydrated entity, and passes the result in.
-        // Non-snapshot repos keep the bare (implicit `NoSnapshot`) form and
-        // the original query, byte for byte.
-        // `persist_events` never compacts (it only ever sees `&mut
-        // EntityEvents`, not the entity) — the caller does that with the
-        // `snapshot` value it passed in, after its own post-persist hook.
+        // through this shared path: the caller computes `HeadSnapshot::capture()`
+        // itself (it holds the full entity; this function only ever sees
+        // `&mut EntityEvents`) and passes the result in. `forget_in_op`
+        // passes `None` to disable it entirely. `persist_events` never
+        // compacts — the caller does that with the value it passed in,
+        // after its own post-persist hook.
         let (events_ty, snapshot_param, query, snap_gather, snap_arg_adds) = match &snapshot_upsert
         {
             Some(su) => {
@@ -118,8 +115,7 @@ impl ToTokens for PersistEventsFn<'_> {
         let forgettable_code = if let Some(forgettable_tbl) = self.forgettable_table_name {
             // `ON CONFLICT` only when a snapshot is possible through this
             // path: a re-snapshot writes over the same `sequence = 0` row,
-            // while event-only rows never conflict. Non-snapshot repos keep
-            // the plain INSERT, byte for byte.
+            // while event-only rows never conflict.
             let conflict_clause = if snapshot_upsert.is_some() {
                 " ON CONFLICT (entity_id, sequence) DO UPDATE SET payload = EXCLUDED.payload"
             } else {

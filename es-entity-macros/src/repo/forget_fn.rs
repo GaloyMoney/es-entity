@@ -80,10 +80,10 @@ impl ToTokens for ForgetFn<'_> {
         // On the `persist_events` path that call reports it; on the combined
         // path it comes from marking the events, after the payload delete.
         let wants_hook = self.post_persist_error.is_some();
-        // `forget` never snapshots the events it stages (decision 6/9): the
-        // snapshot forced to `None` disables the CTE's `WHERE … IS NOT NULL`
-        // guard, so nothing gets written here — the rebuild-and-re-snapshot
-        // steps below produce the real, forgotten snapshot afterward.
+        // `forget` never snapshots the events it stages: the snapshot forced
+        // to `None` disables the CTE's `WHERE … IS NOT NULL` guard, so
+        // nothing gets written here — the rebuild-and-re-snapshot steps
+        // below produce the real, forgotten snapshot afterward.
         let persist_events_snapshot_arg = self.snapshot_table_name.map(|_| quote! { , None });
 
         let (persist_staged, count_persisted) = if self.forgettable_columns.is_empty() {
@@ -206,26 +206,25 @@ impl ToTokens for ForgetFn<'_> {
                     },
                     quote! {
                         let mut entity: #entity_type = self
-                            .full_history()
-                            .find_by_id_in_op(&mut *op, entity.id)
+                            .__full_history_find_by_id_in_op(&mut *op, &entity.id)
                             .await
                             .map_err(|e| match e {
                                 #find_error::NotFound { .. } => #error::ConcurrentModification,
                                 #find_error::Sqlx(e) => #error::Sqlx(e),
                                 #find_error::HydrationError(e) => #error::HydrationError(e),
                                 _ => unreachable!(
-                                    "full_history().find_by_id_in_op cannot produce this error"
+                                    "__full_history_find_by_id_in_op cannot produce this error"
                                 ),
                             })?;
                     },
                     {
                         let modify_error = &self.modify_error;
                         quote! {
-                            self.persist_snapshot_in_op(op, &mut entity).await.map_err(|e| match e {
+                            self.__persist_snapshot_in_op(op, &mut entity).await.map_err(|e| match e {
                                 #modify_error::ConcurrentModification => #error::ConcurrentModification,
                                 #modify_error::Sqlx(e) => #error::Sqlx(e),
                                 _ => unreachable!(
-                                    "persist_snapshot_in_op cannot produce this error"
+                                    "__persist_snapshot_in_op cannot produce this error"
                                 ),
                             })?;
                         }

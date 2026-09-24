@@ -32,7 +32,7 @@ pub struct MeterSnapshot {
     pub resets: u32,
 }
 
-/// The snapshotted entity: `snapshot()` fires once the tail reaches 4 events.
+/// The snapshotted entity: `capture()` fires once the tail reaches 4 events.
 #[derive(EsEntity, Builder)]
 #[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
 pub struct Meter {
@@ -99,9 +99,9 @@ impl Meter {
         Idempotent::Executed(())
     }
 
-    /// Deliberately simple forward guard (see the design doc): once ever
-    /// reset, additional `reset()` calls are no-ops. Exercises a forward
-    /// scan where the snapshot is the *first* replay item.
+    /// Deliberately simple forward guard: once ever reset, additional
+    /// `reset()` calls are no-ops. Exercises a forward scan where the
+    /// snapshot is the *first* replay item.
     pub fn reset(&mut self) -> Idempotent<()> {
         idempotency_guard!(
             self.events.replay(),
@@ -113,8 +113,8 @@ impl Meter {
     }
 }
 
-impl Snapshotting for Meter {
-    fn snapshot(&self) -> Option<MeterSnapshot> {
+impl HeadSnapshot for Meter {
+    fn capture(&self) -> Option<MeterSnapshot> {
         (self.events.tail_len() >= 4).then(|| MeterSnapshot {
             id: self.id,
             site_id: self.site_id,
@@ -226,105 +226,6 @@ impl TryFromEvents<MeterEvent> for PlainMeter {
         for e in events.iter_all() {
             if let MeterEvent::Initialized { id, site_id, label } = e {
                 builder = builder.id(*id).site_id(*site_id).label(label.clone());
-            }
-        }
-        builder.events(events).build()
-    }
-}
-
-/// `verify_snapshot`'s negative case: `count()` forgets to seed from the
-/// snapshot's own count, so it silently under-counts once a snapshot exists
-/// — the exact "wildcard swallows `Replay::Snapshot`" bug the design
-/// defends against. Shares `meters`/`meter_events`/`meter_snapshots` with
-/// [`Meter`] (same `MeterSnapshot` state, so the same fingerprint).
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
-#[es_entity(event = "MeterEvent", new = "NewMeter")]
-pub struct BrokenMeter {
-    pub id: MeterId,
-    pub site_id: SiteId,
-    pub label: String,
-    events: EntityEvents<MeterEvent, MeterSnapshot>,
-}
-
-impl BrokenMeter {
-    pub fn has_snapshot(&self) -> bool {
-        self.events.snapshot().is_some()
-    }
-
-    /// BUG: only counts the tail, never the snapshot's own `count`.
-    pub fn count(&self) -> u32 {
-        self.events
-            .replay()
-            .filter(|r| matches!(r, Replay::Event(MeterEvent::ReadingRecorded { .. })))
-            .count() as u32
-    }
-
-    pub fn total(&self) -> i64 {
-        self.events.replay().fold(0, |acc, r| match r {
-            Replay::Snapshot(s) => s.total,
-            Replay::Event(MeterEvent::ReadingRecorded { value }) => acc + value,
-            Replay::Event(_) => acc,
-        })
-    }
-
-    pub fn last_value(&self) -> Option<i64> {
-        self.events.replay().rev().find_map(|r| match r {
-            Replay::Event(MeterEvent::ReadingRecorded { value }) => Some(*value),
-            Replay::Event(MeterEvent::Reset) => None,
-            Replay::Snapshot(s) => s.last_value,
-            Replay::Event(_) => None,
-        })
-    }
-
-    pub fn resets(&self) -> u32 {
-        self.events.replay().fold(0, |acc, r| match r {
-            Replay::Snapshot(s) => s.resets,
-            Replay::Event(MeterEvent::Reset) => acc + 1,
-            Replay::Event(_) => acc,
-        })
-    }
-
-    pub fn record(&mut self, value: i64) -> Idempotent<()> {
-        idempotency_guard!(
-            self.events.replay().rev(),
-            already_applied: MeterEvent::ReadingRecorded { value: v } if *v == value,
-            resets_on: MeterEvent::ReadingRecorded { .. },
-            snapshot: s if s.last_value == Some(value),
-        );
-        self.events.push(MeterEvent::ReadingRecorded { value });
-        Idempotent::Executed(())
-    }
-}
-
-impl Snapshotting for BrokenMeter {
-    fn snapshot(&self) -> Option<MeterSnapshot> {
-        (self.events.tail_len() >= 4).then(|| MeterSnapshot {
-            id: self.id,
-            site_id: self.site_id,
-            label: self.label.clone(),
-            count: self.count(),
-            total: self.total(),
-            last_value: self.last_value(),
-            resets: self.resets(),
-        })
-    }
-}
-
-impl TryFromEvents<MeterEvent, MeterSnapshot> for BrokenMeter {
-    fn try_from_events(
-        events: EntityEvents<MeterEvent, MeterSnapshot>,
-    ) -> Result<Self, EntityHydrationError> {
-        let mut builder = BrokenMeterBuilder::default();
-        for r in events.replay() {
-            match r {
-                Replay::Snapshot(s) => {
-                    builder = builder.id(s.id).site_id(s.site_id).label(s.label.clone());
-                }
-                Replay::Event(MeterEvent::Initialized { id, site_id, label }) => {
-                    builder = builder.id(*id).site_id(*site_id).label(label.clone());
-                }
-                Replay::Event(_) => {}
             }
         }
         builder.events(events).build()

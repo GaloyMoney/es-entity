@@ -71,7 +71,7 @@ impl ToTokens for HydrateNested<'_> {
                         .iter()
                         .map(#decode_fn)
                         .collect::<Result<Vec<_>, _>>()?;
-                    let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity, _>(generic.into_iter(), n)?;
+                    let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(generic.into_iter(), n)?;
                     <Self as es_entity::EsRepo>::hydrate_nested_from_rows::<__EsErr>(rows_by_tag, tag_cursor, &mut res)?;
                     for entity in res.into_iter() {
                         if let Some(parent) = lookup.get_mut(&entity.#accessor) {

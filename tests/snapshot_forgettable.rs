@@ -5,9 +5,9 @@ use entities::client::*;
 use es_entity::*;
 use sqlx::PgPool;
 
-/// Snapshot + forgettable together (J1): the snapshot's own `Forgettable`
-/// fields live in the same `<tbl>_forgettable_payloads` table, at the
-/// reserved `sequence = 0` row.
+/// Snapshot + forgettable together: the snapshot's own `Forgettable` fields
+/// live in the same `<tbl>_forgettable_payloads` table, at the reserved
+/// `sequence = 0` row.
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "Client",
@@ -64,7 +64,7 @@ async fn snapshot_email(pool: &PgPool, id: ClientId) -> anyhow::Result<Option<Op
     Ok(row.map(|r| r.email))
 }
 
-/// Test 13a — a snapshot write stores the forgettable field at the reserved
+/// A snapshot write stores the forgettable field at the reserved
 /// `sequence = 0` row, and a reload folds it back in.
 #[tokio::test]
 async fn snapshot_writes_forgettable_payload_at_sequence_zero() -> anyhow::Result<()> {
@@ -72,17 +72,10 @@ async fn snapshot_writes_forgettable_payload_at_sequence_zero() -> anyhow::Resul
     let repo = ClientRepo::new(pool.clone());
 
     let mut client = repo.create(new_client("alice@example.com")).await?;
-    // `Client::snapshot()` fires once `tail_len() >= 2` — Initialized plus
+    // `Client::capture()` fires once `tail_len() >= 2` — Initialized plus
     // one change is already there.
     let _ = client.change_email("bob@example.com");
-    let n = repo.update(&mut client).await?;
-    eprintln!(
-        "DEBUG n={} tail_len={} has_snapshot={} email={:?}",
-        n,
-        client.tail_len(),
-        client.has_snapshot(),
-        client.email()
-    );
+    repo.update(&mut client).await?;
     assert!(client.has_snapshot());
 
     assert_eq!(
@@ -97,10 +90,10 @@ async fn snapshot_writes_forgettable_payload_at_sequence_zero() -> anyhow::Resul
     Ok(())
 }
 
-/// Test 13b — `forget` on a snapshotted, forgettable entity: the payload row
-/// (including the reserved sequence-0 one) and the old snapshot row are both
-/// gone; the repo immediately re-snapshots via `persist_snapshot_in_op` with
-/// a forgotten email baked in, and `verify_forgotten` passes.
+/// `forget` on a snapshotted, forgettable entity: the payload row (including
+/// the reserved sequence-0 one) and the old snapshot row are both gone; the
+/// repo immediately re-snapshots with a forgotten email baked in, and
+/// `verify_forgotten` passes.
 #[tokio::test]
 async fn forget_forgets_the_snapshot_and_resnapshots() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -117,7 +110,7 @@ async fn forget_forgets_the_snapshot_and_resnapshots() -> anyhow::Result<()> {
     assert_eq!(forgotten.email(), None);
     assert!(
         forgotten.has_snapshot(),
-        "forget_in_op re-snapshots immediately, per decision 6"
+        "forget_in_op re-snapshots immediately"
     );
 
     repo.verify_forgotten(client.id).await?;
@@ -135,9 +128,9 @@ async fn forget_forgets_the_snapshot_and_resnapshots() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test 13c — same as above, but the snapshot row present before `forget`
-/// has a stale (mismatched) fingerprint. `forget_in_op` rebuilds from full
-/// history regardless, so the outcome is identical.
+/// Same as above, but the snapshot row present before `forget` has a stale
+/// (mismatched) fingerprint. `forget_in_op` rebuilds from full history
+/// regardless, so the outcome is identical.
 #[tokio::test]
 async fn forget_with_a_stale_fingerprint_snapshot_still_resnapshots_cleanly() -> anyhow::Result<()>
 {
@@ -175,9 +168,9 @@ async fn forget_with_a_stale_fingerprint_snapshot_still_resnapshots_cleanly() ->
     Ok(())
 }
 
-/// Test 13d — an ordinary write (not `forget`) whose staged event sets the
-/// forgettable field to an already-forgotten value: once that crosses the
-/// snapshot threshold, `snapshot()` is `Some` but its own
+/// An ordinary write (not `forget`) whose staged event sets the forgettable
+/// field to an already-forgotten value: once that crosses the snapshot
+/// threshold, `capture()` is `Some` but its own
 /// `extract_forgettable_payloads()` is `None` (nothing left to store), which
 /// must delete the stale `sequence = 0` row from the *previous* snapshot
 /// rather than leaving it behind.

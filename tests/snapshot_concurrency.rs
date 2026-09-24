@@ -31,7 +31,7 @@ fn new_meter(label: &str) -> NewMeter {
         .unwrap()
 }
 
-/// Test 6 — concurrency: two independently loaded copies of the same meter,
+/// Concurrency: two independently loaded copies of the same meter,
 /// each staging one more reading, `update()` at the same time on separate
 /// connections (a real multi-threaded tokio runtime, two `spawn`ed tasks —
 /// no `sleep`, no artificial sequencing). Exactly one wins; the loser gets

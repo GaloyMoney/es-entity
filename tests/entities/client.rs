@@ -38,11 +38,12 @@ impl Client {
         self.events
             .replay()
             .rev()
-            .find_map(|r| match r {
-                Replay::Event(ClientEvent::EmailChanged { email }) => Some(email.clone()),
-                Replay::Event(ClientEvent::Initialized { email, .. }) => Some(email.clone()),
-                Replay::Snapshot(s) => Some(s.email.clone()),
+            .map(|r| match r {
+                Replay::Event(ClientEvent::EmailChanged { email }) => email.clone(),
+                Replay::Event(ClientEvent::Initialized { email, .. }) => email.clone(),
+                Replay::Snapshot(s) => s.email.clone(),
             })
+            .next()
             .and_then(|f| f.value().map(|r| (*r).clone()))
     }
 
@@ -66,8 +67,8 @@ impl Client {
         let email = email.into();
         idempotency_guard!(
             self.events.replay().rev(),
-            already_applied: ClientEvent::EmailChanged { email: e } if e.value().map(|r| &*r == &email).unwrap_or(false),
-            snapshot: s if s.email.value().map(|r| &*r == &email).unwrap_or(false),
+            already_applied: ClientEvent::EmailChanged { email: e } if e.value().map(|r| *r == email).unwrap_or(false),
+            snapshot: s if s.email.value().map(|r| *r == email).unwrap_or(false),
         );
         self.events.push(ClientEvent::EmailChanged {
             email: Forgettable::new(email),
@@ -76,8 +77,8 @@ impl Client {
     }
 }
 
-impl Snapshotting for Client {
-    fn snapshot(&self) -> Option<ClientSnapshot> {
+impl HeadSnapshot for Client {
+    fn capture(&self) -> Option<ClientSnapshot> {
         (self.events.tail_len() >= 2).then(|| ClientSnapshot {
             id: self.id,
             email: self

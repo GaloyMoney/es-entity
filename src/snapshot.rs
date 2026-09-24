@@ -165,6 +165,14 @@ impl GuardWithoutSnapshotClause for SnapshotRecord<NoSnapshot> {
 /// repo without also widening the entity's `EntityEvents<E, S>` (or the
 /// reverse) does not compile:
 ///
+/// ```ignore
+/// impl HeadSnapshot for Meter {
+///     fn capture(&self) -> Option<MeterSnapshot> {
+///         (self.events.tail_len() >= 4).then(|| MeterSnapshot { .. })
+///     }
+/// }
+/// ```
+///
 /// ```compile_fail
 /// use es_entity::*;
 /// use serde::{Serialize, Deserialize};
@@ -194,8 +202,8 @@ impl GuardWithoutSnapshotClause for SnapshotRecord<NoSnapshot> {
 /// #         Ok(SnapGuardMeter { id: *events.id(), events })
 /// #     }
 /// # }
-/// # impl Snapshotting for SnapGuardMeter {
-/// #     fn snapshot(&self) -> Option<NoSnapshot> { None }
+/// # impl HeadSnapshot for SnapGuardMeter {
+/// #     fn capture(&self) -> Option<NoSnapshot> { None }
 /// # }
 /// // error: entity snapshot type and `#[es_repo(snapshot)]` disagree.
 /// #[derive(EsRepo, Debug)]
@@ -244,8 +252,8 @@ impl GuardWithoutSnapshotClause for SnapshotRecord<NoSnapshot> {
 /// #     pub id: SnapGuardClientId,
 /// #     events: EntityEvents<SnapGuardClientEvent, SnapGuardClientSnapshot>,
 /// # }
-/// # impl Snapshotting for SnapGuardClient {
-/// #     fn snapshot(&self) -> Option<SnapGuardClientSnapshot> { None }
+/// # impl HeadSnapshot for SnapGuardClient {
+/// #     fn capture(&self) -> Option<SnapGuardClientSnapshot> { None }
 /// # }
 /// # impl TryFromEvents<SnapGuardClientEvent, SnapGuardClientSnapshot> for SnapGuardClient {
 /// #     fn try_from_events(events: EntityEvents<SnapGuardClientEvent, SnapGuardClientSnapshot>) -> Result<Self, EntityHydrationError> {
@@ -266,29 +274,10 @@ impl GuardWithoutSnapshotClause for SnapshotRecord<NoSnapshot> {
 ///     pool: es_entity::db::Pool,
 /// }
 /// ```
-pub trait Snapshotting: crate::EsEntity {
-    /// Called by the repo on every write, after commands have staged their
-    /// events. `Some` = persist this as the fold of everything up to the new
-    /// head; `None` = keep the existing one.
-    fn snapshot(&self) -> Option<Self::Snapshot>;
+pub trait HeadSnapshot: crate::EsEntity {
+    /// Called on every write the entity passes through — with staged events,
+    /// or with none when the loaded state had no matching snapshot. `Some(s)`
+    /// = persist `s` as the snapshot at the current head; `None` = keep
+    /// whatever snapshot exists and let the tail grow.
+    fn capture(&self) -> Option<Self::Snapshot>;
 }
-
-/// `verify_snapshot` found the snapshotted fold differs from the
-/// full-history fold.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SnapshotMismatch {
-    pub full_history: String,
-    pub snapshotted: String,
-}
-
-impl std::fmt::Display for SnapshotMismatch {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "snapshot mismatch: full-history fold = {}, snapshotted fold = {}",
-            self.full_history, self.snapshotted
-        )
-    }
-}
-
-impl std::error::Error for SnapshotMismatch {}

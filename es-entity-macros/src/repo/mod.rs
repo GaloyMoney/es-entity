@@ -224,7 +224,6 @@ impl ToTokens for EsRepo<'_> {
         let nested = &self.nested;
         let hydrate_nested = &self.hydrate_nested;
         let snapshot_fns_in_impl = self.snapshot_fns.as_ref().map(|s| s.in_impl_tokens());
-        let snapshot_fns_outer = self.snapshot_fns.as_ref().map(|s| s.outer_tokens());
 
         let pool_fn = self.opts.pool_field().map(|pool_field| {
             quote! {
@@ -449,7 +448,6 @@ impl ToTokens for EsRepo<'_> {
             }
 
             #hydrate_nested
-            #snapshot_fns_outer
 
             impl #impl_generics es_entity::EsRepo for #repo #ty_generics #where_clause {
                 type Entity = #entity;

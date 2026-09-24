@@ -3,7 +3,7 @@ use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
 use super::{
-    events_write::{EventSource, EventsInsert, ForgettablePayloads, SnapshotUpsert},
+    events_write::{EventSource, EventsInsert, ForgettablePayloads},
     options::*,
 };
 
@@ -16,7 +16,6 @@ pub struct CreateFn<'a> {
     events_table_name: &'a str,
     event_ctx: bool,
     forgettable_table_name: Option<&'a str>,
-    snapshot_table_name: Option<&'a str>,
     columns: &'a Columns,
     create_error: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
@@ -37,7 +36,6 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
             forgettable_table_name: opts.forgettable_table_name(),
-            snapshot_table_name: opts.snapshot_table_name(),
             create_error: opts.create_error(),
             nested_fn_names: opts
                 .all_nested()
@@ -85,7 +83,9 @@ impl ToTokens for CreateFn<'_> {
         // `ConstraintViolation`.
         //
         // A brand-new entity has no persisted events, so sequences start at 1
-        // and no offset parameter is needed.
+        // and no offset parameter is needed. A new entity is never
+        // snapshotted here, even when its repo enables `snapshot` — it gets
+        // its first snapshot on its first `update`.
         let events_insert = EventsInsert::new(self.events_table_name, self.event_ctx);
         let now_p = column_names.len() + 1;
         let source = EventSource::PerEntityCte {
@@ -93,38 +93,12 @@ impl ToTokens for CreateFn<'_> {
             offset_param: None,
         };
 
-        let snapshot_upsert = self
-            .snapshot_table_name
-            .map(|table| SnapshotUpsert { table });
-        let n_event_params = if self.event_ctx { 3 } else { 2 };
-        let snap_params = snapshot_upsert.as_ref().map(|_| {
-            let next_p = now_p + 1 + n_event_params;
-            (next_p, next_p + 1, next_p + 2, next_p + 3)
-        });
-
-        let snap_cte = match (&snapshot_upsert, snap_params) {
-            (Some(su), Some((head_p, fp_p, snap_p, first_p))) => format!(
-                ", {}",
-                su.cte_per_entity(
-                    "new_row.id",
-                    "FROM new_row",
-                    head_p,
-                    fp_p,
-                    snap_p,
-                    first_p,
-                    now_p
-                )
-            ),
-            _ => String::new(),
-        };
-
         let query = format!(
-            "WITH new_row AS (INSERT INTO {} ({}, created_at) VALUES ({}, COALESCE(${}, NOW())) RETURNING id){} {}",
+            "WITH new_row AS (INSERT INTO {} ({}, created_at) VALUES ({}, COALESCE(${}, NOW())) RETURNING id) {}",
             table_name,
             column_names.join(", "),
             placeholders,
             now_p,
-            snap_cte,
             events_insert.sql(&source, now_p, now_p + 1),
         );
 
@@ -152,26 +126,6 @@ impl ToTokens for CreateFn<'_> {
                 quote! {
                     let offset = events.len_persisted();
                     let id = events.id();
-                    #payloads
-                }
-            }
-            None => quote! {},
-        };
-        let forgettable_code_post_hydrate = match self.forgettable_table_name {
-            Some(table) => {
-                let payloads = ForgettablePayloads {
-                    table,
-                    id_type: self.id,
-                    event_type: self.event,
-                }
-                .insert_per_entity_from_persisted(
-                    quote! { entity.events() },
-                    quote! { n_events },
-                    create_error,
-                    Some(quote! { __snapshot.as_ref() }),
-                );
-                quote! {
-                    let id = &entity.events().entity_id;
                     #payloads
                 }
             }
@@ -216,124 +170,6 @@ impl ToTokens for CreateFn<'_> {
             }
         } else {
             quote! {}
-        };
-
-        let compact_code = snapshot_upsert.as_ref().map(|su| {
-            su.compact_per_entity(quote! { entity.events_mut() }, quote! { recorded_at })
-        });
-
-        // Non-snapshot repos: byte-identical to before. The entity is
-        // hydrated only after the write, using the DB's own `recorded_at`.
-        //
-        // Snapshot repos: `snapshot()` needs a real, hydrated entity, so the
-        // entity is hydrated *before* the write (using a Rust-side
-        // `recorded_at` — `op.maybe_now()`, or the real clock — bound
-        // directly instead of left to the DB's `NOW()`, so the pre-write
-        // hydration and the row actually written agree). Compaction runs
-        // after the post-persist hook, per the container's invariant.
-        //
-        // One `if` decides both bodies together: `event_arg_adds`/`nested`
-        // are each consumed by exactly one arm, and the borrow checker can
-        // only see that if it is a single branch, not two separate ones.
-        let (plain_body, snapshot_body) = if snapshot_upsert.is_none() {
-            let plain_body = quote! {
-                let __result: Result<#entity, #create_error> = async {
-                    use es_entity::prelude::sqlx::{Arguments, Row};
-
-                    #assignments
-                    #record_id
-
-                    let mut __query_args = sqlx::postgres::PgArguments::default();
-                    #(#arg_adds)*
-                    __query_args.add(op.maybe_now()).map_err(sqlx::Error::Encode)?;
-
-                    let mut events = Self::convert_new(new_entity);
-                    let events_types = events.new_event_types();
-                    let serialized_events = events.serialize_new_events();
-                    #ctx_var
-                    #(#event_arg_adds)*
-
-                    let rows = sqlx::query_with(#query, __query_args)
-                        .fetch_all(op.as_executor())
-                        .await
-                        .map_err(Self::classify_create_error)?;
-
-                    #forgettable_code
-
-                    let recorded_at = rows
-                        .first()
-                        .ok_or(sqlx::Error::RowNotFound)
-                        .and_then(|row| row.try_get("recorded_at"))?;
-                    let n_events = events.mark_new_events_persisted_at(recorded_at);
-                    let #maybe_mut_entity = Self::hydrate_entity(events)?;
-
-                    #(#nested)*
-
-                    #post_hydrate_check
-                    #post_persist_check
-                    Ok(entity)
-                }.await;
-
-                #error_recording
-                __result
-            };
-            (plain_body, quote! {})
-        } else {
-            let snapshot_body = quote! {
-                let __result: Result<#entity, #create_error> = async {
-                    use es_entity::prelude::sqlx::{Arguments, Row};
-
-                    #assignments
-                    #record_id
-
-                    let recorded_at = op.maybe_now().unwrap_or_else(es_entity::prelude::chrono::Utc::now);
-
-                    let mut __query_args = sqlx::postgres::PgArguments::default();
-                    #(#arg_adds)*
-                    __query_args.add(Some(recorded_at)).map_err(sqlx::Error::Encode)?;
-
-                    let mut events = Self::convert_new(new_entity);
-                    let events_types = events.new_event_types();
-                    let serialized_events = events.serialize_new_events();
-                    #ctx_var
-                    #(#event_arg_adds)*
-
-                    let n_events = events.mark_new_events_persisted_at(recorded_at);
-                    let mut entity = Self::hydrate_entity(events)?;
-
-                    let __snapshot = <#entity as es_entity::Snapshotting>::snapshot(&entity);
-                    let __snapshot_json = __snapshot.as_ref().map(|s| {
-                        es_entity::prelude::serde_json::to_value(s).expect("Failed to serialize snapshot")
-                    });
-                    let __snapshot_head = entity.events().len_persisted() as i32;
-                    let __snapshot_first = entity.events().entity_first_persisted_at();
-                    __query_args.add(__snapshot_head).map_err(sqlx::Error::Encode)?;
-                    __query_args.add(<<#entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::FINGERPRINT).map_err(sqlx::Error::Encode)?;
-                    __query_args.add(&__snapshot_json).map_err(sqlx::Error::Encode)?;
-                    __query_args.add(__snapshot_first).map_err(sqlx::Error::Encode)?;
-
-                    let rows = sqlx::query_with(#query, __query_args)
-                        .fetch_all(op.as_executor())
-                        .await
-                        .map_err(Self::classify_create_error)?;
-                    if rows.is_empty() {
-                        return Err(sqlx::Error::RowNotFound.into());
-                    }
-
-                    #forgettable_code_post_hydrate
-
-                    #(#nested)*
-
-                    #post_hydrate_check
-                    #post_persist_check
-                    #compact_code
-                    Ok(entity)
-                }.await;
-
-                #error_recording
-                __result
-            };
-            (quote! {}, snapshot_body)
         };
 
         let standalone = (!self.in_op_only).then(|| {
@@ -382,8 +218,45 @@ impl ToTokens for CreateFn<'_> {
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                #snapshot_body
-                #plain_body
+                let __result: Result<#entity, #create_error> = async {
+                    use es_entity::prelude::sqlx::{Arguments, Row};
+
+                    #assignments
+                    #record_id
+
+                    let mut __query_args = sqlx::postgres::PgArguments::default();
+                    #(#arg_adds)*
+                    __query_args.add(op.maybe_now()).map_err(sqlx::Error::Encode)?;
+
+                    let mut events = Self::convert_new(new_entity);
+                    let events_types = events.new_event_types();
+                    let serialized_events = events.serialize_new_events();
+                    #ctx_var
+                    #(#event_arg_adds)*
+
+                    let rows = sqlx::query_with(#query, __query_args)
+                        .fetch_all(op.as_executor())
+                        .await
+                        .map_err(Self::classify_create_error)?;
+
+                    #forgettable_code
+
+                    let recorded_at = rows
+                        .first()
+                        .ok_or(sqlx::Error::RowNotFound)
+                        .and_then(|row| row.try_get("recorded_at"))?;
+                    let n_events = events.mark_new_events_persisted_at(recorded_at);
+                    let #maybe_mut_entity = Self::hydrate_entity(events)?;
+
+                    #(#nested)*
+
+                    #post_hydrate_check
+                    #post_persist_check
+                    Ok(entity)
+                }.await;
+
+                #error_recording
+                __result
             }
         });
     }
@@ -413,7 +286,6 @@ mod tests {
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: None,
-            snapshot_table_name: None,
             create_error,
             columns: &columns,
             nested_fn_names: Vec::new(),
@@ -527,7 +399,6 @@ mod tests {
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: None,
-            snapshot_table_name: None,
             create_error,
             columns: &columns,
             nested_fn_names: Vec::new(),

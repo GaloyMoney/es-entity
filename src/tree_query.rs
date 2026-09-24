@@ -88,8 +88,8 @@ where
 
 /// `true` if this node or any descendant enables `snapshot`. Determines
 /// whether every branch in the tree's `UNION ALL` needs the same (wider)
-/// column list — a tree with no snapshot node anywhere emits exactly
-/// today's SQL, byte for byte.
+/// column list — a tree with no snapshot node anywhere emits the same SQL
+/// as before this feature existed.
 pub fn tree_has_snapshot(spec: &TreeSpec) -> bool {
     spec.snapshot_table_name.is_some() || spec.children.iter().any(tree_has_snapshot)
 }
@@ -504,8 +504,8 @@ mod tests {
 
     #[test]
     fn plain_tree_has_no_snapshot_columns_at_all() {
-        // A tree with no snapshot node anywhere emits exactly today's SQL —
-        // no `snapshot` columns, no fingerprint bind, byte for byte.
+        // A tree with no snapshot node anywhere emits no `snapshot` columns
+        // and no fingerprint bind, matching the pre-snapshot query exactly.
         let child = leaf("meters", "meter_events", "site_id");
         let spec = root("sites", "site_events", vec![child]);
         assert!(!tree_has_snapshot(&spec));

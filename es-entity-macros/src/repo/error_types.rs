@@ -17,7 +17,6 @@ pub struct ErrorTypes<'a> {
     query_error: syn::Ident,
     forget_error: syn::Ident,
     forgettable: bool,
-    snapshot_enabled: bool,
     column_variants: Vec<ColumnVariant>,
     constraint_variants: Vec<ConstraintVariant>,
     nested: Vec<NestedErrorInfo>,
@@ -207,7 +206,6 @@ impl<'a> ErrorTypes<'a> {
             query_error: opts.query_error(),
             forget_error: opts.forget_error(),
             forgettable: opts.forgettable_enabled(),
-            snapshot_enabled: opts.snapshot_enabled(),
             column_variants,
             constraint_variants,
             nested,
@@ -1077,17 +1075,6 @@ impl<'a> ErrorTypes<'a> {
             quote! {}
         };
 
-        let (snapshot_variant, snapshot_display_arm, snapshot_source_arm) = if self.snapshot_enabled
-        {
-            (
-                quote! { SnapshotMismatch(es_entity::SnapshotMismatch), },
-                quote! { Self::SnapshotMismatch(e) => write!(f, "{}FindError - SnapshotMismatch: {}", #entity_name, e), },
-                quote! { Self::SnapshotMismatch(e) => Some(e), },
-            )
-        } else {
-            (quote! {}, quote! {}, quote! {})
-        };
-
         quote! {
             #[derive(Debug)]
             pub enum #find_error {
@@ -1095,7 +1082,6 @@ impl<'a> ErrorTypes<'a> {
                 NotFound { entity: &'static str, column: Option<#column_enum>, value: String },
                 HydrationError(es_entity::EntityHydrationError),
                 #ph_variant
-                #snapshot_variant
             }
 
             impl std::fmt::Display for #find_error {
@@ -1106,7 +1092,6 @@ impl<'a> ErrorTypes<'a> {
                         Self::NotFound { entity, column: None, value } => write!(f, "{}FindError - NotFound({})", entity, value),
                         Self::HydrationError(e) => write!(f, "{}FindError - HydrationError: {}", #entity_name, e),
                         #ph_display_arm
-                        #snapshot_display_arm
                     }
                 }
             }
@@ -1118,7 +1103,6 @@ impl<'a> ErrorTypes<'a> {
                         Self::NotFound { .. } => None,
                         Self::HydrationError(e) => Some(e),
                         #ph_source_arm
-                        #snapshot_source_arm
                     }
                 }
             }
@@ -1330,7 +1314,6 @@ mod tests {
             query_error: Ident::new("OrderQueryError", Span::call_site()),
             forget_error: Ident::new("OrderForgetError", Span::call_site()),
             forgettable: false,
-            snapshot_enabled: false,
             column_variants: vec![],
             constraint_variants: vec![],
             nested,
@@ -1570,7 +1553,6 @@ mod tests {
             query_error: Ident::new("OrderQueryError", Span::call_site()),
             forget_error: Ident::new("OrderForgetError", Span::call_site()),
             forgettable: false,
-            snapshot_enabled: false,
             column_variants: vec![],
             constraint_variants: vec![],
             nested,

@@ -256,10 +256,8 @@ where
     }
 
     /// Returns the count of events after the snapshot: the persisted tail
-    /// plus any events commands have staged for the write in flight. This is
-    /// what `Snapshotting::snapshot()` is expected to threshold on — it is
-    /// called after commands have staged their events, so the fold (and the
-    /// tail length) must already include them.
+    /// plus any events staged for the write in flight. This is what
+    /// `HeadSnapshot::capture()` thresholds on.
     pub fn tail_len(&self) -> usize {
         self.persisted_events.len() + self.new_events.len()
     }
@@ -393,12 +391,11 @@ where
     /// rows, marking events as `persisted`.
     ///
     /// Returns `Ok(None)` if no events are present, `Ok(Some(entity))` on success.
-    pub fn load_first<E, R>(
-        events: impl IntoIterator<Item = R>,
+    pub fn load_first<E>(
+        events: impl IntoIterator<Item = impl Into<HydrationRow<<T as EsEvent>::EntityId>>>,
     ) -> Result<Option<E>, EntityHydrationError>
     where
         E: EsEntity<Event = T, Snapshot = S>,
-        R: Into<HydrationRow<<T as EsEvent>::EntityId>>,
     {
         let mut current_id = None;
         let mut current: Option<Self> = None;
@@ -432,13 +429,12 @@ where
     /// per `id`.
     ///
     /// Returns both the entities and a flag indicating whether more entities were available in the stream.
-    pub fn load_n<E, R>(
-        events: impl IntoIterator<Item = R>,
+    pub fn load_n<E>(
+        events: impl IntoIterator<Item = impl Into<HydrationRow<<T as EsEvent>::EntityId>>>,
         n: usize,
     ) -> Result<(Vec<E>, bool), EntityHydrationError>
     where
         E: EsEntity<Event = T, Snapshot = S>,
-        R: Into<HydrationRow<<T as EsEvent>::EntityId>>,
     {
         if n == 0 {
             // Asking for zero entities yields zero entities. `has_more` reports
@@ -611,12 +607,9 @@ impl<T: EsEvent> EntityEvents<T, NoSnapshot> {
             .chain(self.new_events.iter().map(|e| &e.event))
     }
 
-    /// Widens a freshly-initialized container (as produced by
-    /// `IntoEvents::into_events`) into one carrying a real snapshot type. A
-    /// brand-new entity has no persisted snapshot regardless of whether its
-    /// repo enables `snapshot`, so this conversion is always exact — used by
-    /// generated `create`/`create_all` code between `IntoEvents::into_events`
-    /// (fixed at `NoSnapshot`) and the entity's real `Snapshot` type.
+    /// Widens a freshly-initialized container into one carrying a real
+    /// snapshot type. A brand-new entity always has no snapshot, so this
+    /// conversion is exact regardless of `S`.
     #[doc(hidden)]
     pub fn widen_snapshot<S: EsSnapshot>(self) -> EntityEvents<T, S> {
         EntityEvents {
@@ -738,7 +731,7 @@ mod tests {
     #[test]
     fn load_zero_events() {
         let generic_events: Vec<GenericEvent<Uuid>> = vec![];
-        let res = EntityEvents::load_first::<DummyEntity, _>(generic_events);
+        let res = EntityEvents::load_first::<DummyEntity>(generic_events);
         assert!(matches!(res, Ok(None)));
     }
 
@@ -814,8 +807,8 @@ mod tests {
     proptest! {
         #[test]
         fn load_first_empty_input_returns_none(_ in Just(())) {
-            let res = EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity, GenericEvent<Uuid>>(
-                vec![],
+            let res = EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity>(
+                Vec::<GenericEvent<Uuid>>::new(),
             );
             prop_assert!(matches!(res, Ok(None)));
         }
@@ -830,7 +823,7 @@ mod tests {
                 .zip(names.iter())
                 .map(|(s, n)| valid_event(id, s, n))
                 .collect();
-            let res = EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity, _>(events);
+            let res = EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity>(events);
             prop_assert!(matches!(res, Ok(Some(_))));
         }
 
@@ -853,7 +846,7 @@ mod tests {
                 })
                 .collect();
             let is_empty = events.is_empty();
-            let res = EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity, _>(events);
+            let res = EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity>(events);
             if let Ok(None) = res {
                 prop_assert!(is_empty);
             }
@@ -876,7 +869,7 @@ mod tests {
                 }
             }
             let (entities, has_more) =
-                EntityEvents::<DummyEntityEvent>::load_n::<DummyEntity, _>(events, n as usize)
+                EntityEvents::<DummyEntityEvent>::load_n::<DummyEntity>(events, n as usize)
                     .expect("valid events hydrate");
             prop_assert_eq!(entities.len(), (n as usize).min(k as usize));
             prop_assert_eq!(has_more, n < k);
@@ -895,7 +888,7 @@ mod tests {
                 }
             }
             let (entities, has_more) =
-                EntityEvents::<DummyEntityEvent>::load_n::<DummyEntity, _>(events, 0)
+                EntityEvents::<DummyEntityEvent>::load_n::<DummyEntity>(events, 0)
                     .expect("valid events hydrate");
             prop_assert!(entities.is_empty());
             prop_assert_eq!(has_more, k > 0);
@@ -918,7 +911,7 @@ mod tests {
                     forgettable_payload: None,
                 })
                 .collect();
-            let _ = EntityEvents::<DummyEntityEvent>::load_n::<DummyEntity, _>(events, n as usize);
+            let _ = EntityEvents::<DummyEntityEvent>::load_n::<DummyEntity>(events, n as usize);
         }
 
         /// `last_persisted(n)` must clamp to the available events for any `n`,
@@ -933,7 +926,7 @@ mod tests {
                 .map(|s| valid_event(id, s, &format!("n{s}")))
                 .collect();
             let entity: DummyEntity =
-                EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity, _>(events)
+                EntityEvents::<DummyEntityEvent>::load_first::<DummyEntity>(events)
                     .expect("load")
                     .expect("some");
             let count = entity.events().last_persisted(n as usize).count();

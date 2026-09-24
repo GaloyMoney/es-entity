@@ -11,13 +11,14 @@ only the events *after* it, in **one round trip**.
 1. Your entity's `events` field widens from `EntityEvents<E>` to
    `EntityEvents<E, S>`, where `S` is your own state type — the fold of events
    `1..=k` as of some sequence `k`.
-2. You implement `Snapshotting::snapshot(&self) -> Option<S>`, business logic
+2. You implement `HeadSnapshot::capture(&self) -> Option<S>`, business logic
    that decides, on every write, whether the current state is worth persisting
    as the new snapshot head.
-3. The repo's `create`/`update`/`create_all`/`update_all` functions call
-   `snapshot()` before their write statement and, if it returns `Some`, upsert
-   the state into a `<tbl>_snapshots` table in the *same* statement as the
-   event insert — no extra round trip.
+3. The repo's `update`/`update_all` functions call `capture()` before their
+   write statement and, if it returns `Some`, upsert the state into a
+   `<tbl>_snapshots` table in the *same* statement as the event insert — no
+   extra round trip. A brand-new entity is never snapshotted on `create`; it
+   gets its first snapshot on its first `update`.
 4. Every loader reads `<tbl>_snapshots` (matched by a **fingerprint** — see
    below) left-joined to only the events after it, and hands your entity a
    `Replay` stream: the snapshot first (if any), then the tail of events after
@@ -25,9 +26,13 @@ only the events *after* it, in **one round trip**.
 5. In memory, `EntityEvents<E, S>` compacts itself right after a write that
    took a snapshot: the tail is dropped and replaced by the just-written
    state. A freshly-loaded entity and a freshly-updated one look identical.
+6. A clean entity whose loaded state had no matching snapshot — a fingerprint
+   change, or one that predates `snapshot` altogether — refreshes on its next
+   `update`, even one that stages no events. Untouched siblings are never
+   written to.
 
-A repo *without* `snapshot` is completely unaffected: its generated SQL and
-`.sqlx` cache are byte-for-byte the same as before this feature existed.
+A repo *without* `snapshot` is unaffected: its generated SQL and `.sqlx` cache
+are the same as before this feature existed.
 
 ## Database Setup
 
@@ -98,11 +103,14 @@ writes a fresh snapshot. Bump `version` by hand for a change the derive can't
 see (e.g. a change in how a field is *interpreted*, not its Rust type).
 
 A fingerprint mismatch is never an error — it's the mechanism that makes
-schema evolution safe without a migration step.
+schema evolution safe without a migration step. During a rolling deploy, old
+and new pods can briefly disagree on the fingerprint and flip a row back and
+forth on writes; every version written is a correct fold for its own reader,
+so the only cost is a few extra writes until the rollout finishes.
 
-## The `Snapshotting` Trait and `Replay`
+## The `HeadSnapshot` Trait and `Replay`
 
-Your entity implements `Snapshotting::snapshot()`, and every place that used to
+Your entity implements `HeadSnapshot::capture()`, and every place that used to
 fold over `events.iter_all()` switches to `events.replay()`, which yields
 `Replay::Snapshot(&S)` (at most once, first) then `Replay::Event(&E)` for the
 tail:
@@ -145,8 +153,8 @@ impl Meter {
     }
 }
 
-impl Snapshotting for Meter {
-    fn snapshot(&self) -> Option<MeterSnapshot> {
+impl HeadSnapshot for Meter {
+    fn capture(&self) -> Option<MeterSnapshot> {
         // Business logic decides when a snapshot is worth taking — here,
         // once four events have accumulated since the last one.
         (self.events.tail_len() >= 4).then(|| MeterSnapshot {
@@ -215,36 +223,14 @@ pub struct MeterRepo {
 
 `repo.find_by_id`, `find_all`, `list_by_*`, `create`, `update`, and their
 `_all`/`_in_op` twins all keep their existing signatures — the snapshot is
-entirely a storage-layer concern.
-
-## `full_history()`, `persist_snapshot_in_op`, and `verify_snapshot`
-
-A snapshot repo gains three extra tools:
-
-- **`repo.full_history()`** returns a view whose `find_by_id`/`maybe_find_by_id`
-  bypass snapshots entirely (by binding a fingerprint that matches nothing),
-  always replaying the complete event stream. Useful for audits, debugging,
-  and as the backfill source below.
-- **`repo.persist_snapshot_in_op(op, &mut entity)`** writes `snapshot()`'s
-  result for an entity with no staged events (erroring if there are any),
-  guarded so a concurrent writer that already moved the head wins — `Ok(true)`
-  on success, `Ok(false)` if the entity was stale. This is how you backfill
-  snapshots for data that predates enabling `snapshot`: load it once via
-  `full_history()`, then call this to write the first snapshot.
-- **`repo.verify_snapshot(id)`** is an equivalence check: it recomputes what
-  the stored snapshot's fold *should* be from the full history truncated to
-  the same sequence, and compares it against the stored value — `Ok(())` when
-  they agree, `Err(SnapshotMismatch)` when your fold logic disagrees with
-  itself depending on whether a snapshot happens to be involved (exactly the
-  "forgot to seed from `Replay::Snapshot`" bug `Replay` not being
-  `#[non_exhaustive]` mostly prevents, but a wildcard arm can still swallow).
+entirely a storage-layer concern. There is no separate backfill step: an
+entity that predates `snapshot` being enabled gets its first snapshot the
+same way a fingerprint change heals — on its next `update`.
 
 ## Nesting
 
 Nested parents and children snapshot independently — any combination (both,
-parent only, child only, neither) "just works": each `#[es_repo(nested)]`
-child carries its own snapshot table and fingerprint, and the tree query
-folds every node's snapshot join into the same single statement. See
+parent only, child only, neither) just works, in one statement per load. See
 [Nesting](./nesting.md).
 
 ## Forgettable Fields on a Snapshot

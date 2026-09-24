@@ -51,8 +51,8 @@ impl Site {
     }
 }
 
-impl Snapshotting for Site {
-    fn snapshot(&self) -> Option<SiteSnapshot> {
+impl HeadSnapshot for Site {
+    fn capture(&self) -> Option<SiteSnapshot> {
         Some(SiteSnapshot { id: self.id })
     }
 }
@@ -91,8 +91,8 @@ impl SiteOverPlainMeters {
     }
 }
 
-impl Snapshotting for SiteOverPlainMeters {
-    fn snapshot(&self) -> Option<SiteSnapshot> {
+impl HeadSnapshot for SiteOverPlainMeters {
+    fn capture(&self) -> Option<SiteSnapshot> {
         Some(SiteSnapshot { id: self.id })
     }
 }

@@ -136,26 +136,16 @@ where
             .map_err(sqlx::Error::Encode)?
             .unwrap_or_default();
 
-        // A `full_history()` load signals itself by binding
-        // `NO_SNAPSHOT_FINGERPRINT` as the root's own fingerprint; when it
-        // does, every node in the tree binds the sentinel too, so every
-        // snapshot join in the tree matches nothing. Meaningless — and must
-        // not trigger — when the root has no snapshot table of its own: a
-        // `NoSnapshot` entity's *own* `FINGERPRINT` constant already equals
-        // the sentinel (nothing else would ever match it), so this
-        // comparison would otherwise be true on every load of a
-        // non-snapshot root, forcing every descendant's real snapshot to be
-        // ignored too even on an ordinary (non-`full_history`) call.
+        // A full-history load binds `NO_SNAPSHOT_FINGERPRINT` as the root's
+        // own fingerprint, forcing every node in the tree to bind the
+        // sentinel too. The `snapshot_table_name` check guards against a
+        // false positive: `NoSnapshot::FINGERPRINT` *equals* that sentinel,
+        // so an ordinary non-snapshot root would otherwise always match.
         let full_history = spec.snapshot_table_name.is_some()
             && self.source.snapshot_fingerprint == NO_SNAPSHOT_FINGERPRINT;
-        // When the root itself has a snapshot table, its own `es_query!`
-        // call site already bound its fingerprint (right after the context
-        // bool) — that is also what makes `Repo__DbEvent`/`self.source.decode`
-        // the snapshot-aware shape for the root's own rows. `fingerprints`
-        // walks root-then-descendants in the same DFS order
-        // `build_tree_query` assigned bind positions in, so only the
-        // descendants (everything after the first entry, when the root has
-        // one) still need binding here.
+        // The root's own `es_query!` call site already bound its
+        // fingerprint, so only descendants need binding here — walked in
+        // the same DFS order `build_tree_query` assigned positions in.
         let mut fingerprints = snapshot_fingerprints(&spec).into_iter();
         if spec.snapshot_table_name.is_some() {
             fingerprints.next();
@@ -275,7 +265,7 @@ where
         let (root, mut by_tag) = self
             .fetch_tree_rows::<<Repo as EsRepo>::QueryError>(op, include_deleted)
             .await?;
-        let Some(entity) = EntityEvents::load_first::<<Repo as EsRepo>::Entity, _>(root)? else {
+        let Some(entity) = EntityEvents::load_first::<<Repo as EsRepo>::Entity>(root)? else {
             return Ok(None);
         };
         let mut entities = [entity];
@@ -298,8 +288,7 @@ where
         let (root, mut by_tag) = self
             .fetch_tree_rows::<<Repo as EsRepo>::QueryError>(op, include_deleted)
             .await?;
-        let (mut entities, more) =
-            EntityEvents::load_n::<<Repo as EsRepo>::Entity, _>(root, first)?;
+        let (mut entities, more) = EntityEvents::load_n::<<Repo as EsRepo>::Entity>(root, first)?;
         let mut cursor = 1i32;
         <Repo as EsRepo>::hydrate_nested_from_rows::<<Repo as EsRepo>::QueryError>(
             &mut by_tag,

@@ -41,27 +41,6 @@ impl PlainMeterRepo {
     }
 }
 
-#[derive(EsRepo, Debug)]
-#[es_repo(
-    entity = "BrokenMeter",
-    id = "MeterId",
-    event = "MeterEvent",
-    snapshot,
-    tbl = "meters",
-    events_tbl = "meter_events",
-    snapshot_tbl = "meter_snapshots",
-    columns(label(ty = "String"))
-)]
-pub struct BrokenMeterRepo {
-    pool: PgPool,
-}
-
-impl BrokenMeterRepo {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-}
-
 fn new_meter(label: &str) -> NewMeter {
     NewMeter::builder()
         .id(MeterId::new())
@@ -71,14 +50,15 @@ fn new_meter(label: &str) -> NewMeter {
         .unwrap()
 }
 
-/// Test 1 — round trip: create, 10 `record`s via `update` → reload:
-/// `snapshot().is_some()`, `tail_len() < 4`, `total()`/`count()`/
-/// `last_value()` equal the `full_history()` load's; `len_persisted()`
-/// equals the events row count.
+/// Round trip: create, 10 `record`s via `update` → reload: has a snapshot,
+/// a short tail, and folds to the same state as a full replay of the same
+/// rows via the non-snapshot twin; `len_persisted()` equals the events row
+/// count.
 #[tokio::test]
 async fn round_trip() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let repo = MeterRepo::new(pool.clone());
+    let plain = PlainMeterRepo::new(pool.clone());
 
     let mut meter = repo.create(new_meter("m1")).await?;
     for v in 1..=10i64 {
@@ -93,7 +73,7 @@ async fn round_trip() -> anyhow::Result<()> {
         "tail should be short after a snapshot"
     );
 
-    let full = repo.full_history().find_by_id(meter.id).await?;
+    let full = plain.find_by_id(meter.id).await?;
     assert_eq!(reloaded.total(), full.total());
     assert_eq!(reloaded.count(), full.count());
     assert_eq!(reloaded.last_value(), full.last_value());
@@ -113,9 +93,9 @@ async fn round_trip() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test 2 — snapshot + tail + guard across the boundary: `record(v)`
-/// already applied when `v` is only in the snapshot, when only in the tail,
-/// and re-applied after a different reading (`resets_on`).
+/// Snapshot + tail + guard across the boundary: `record(v)` already applied
+/// when `v` is only in the snapshot, when only in the tail, and re-applied
+/// after a different reading (`resets_on`).
 #[tokio::test]
 async fn guard_across_snapshot_boundary() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -147,8 +127,8 @@ async fn guard_across_snapshot_boundary() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test 3 — forward guard: `reset()` idempotency reads the snapshot first,
-/// then the tail.
+/// Forward guard: `reset()` idempotency reads the snapshot first, then the
+/// tail.
 #[tokio::test]
 async fn forward_guard_reads_snapshot_first() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -171,10 +151,10 @@ async fn forward_guard_reads_snapshot_first() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test 4 — fingerprint mismatch ⇒ full replay, self-heals: after flipping
-/// the stored fingerprint, a reload ignores the snapshot (falls back to a
-/// full replay with correct state); the next update rewrites the row with
-/// the right fingerprint.
+/// Fingerprint mismatch ⇒ full replay, self-heals: after flipping the
+/// stored fingerprint, a reload ignores the snapshot (falls back to a full
+/// replay with correct state); the next update rewrites the row with the
+/// right fingerprint.
 #[tokio::test]
 async fn fingerprint_mismatch_self_heals() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -223,7 +203,7 @@ async fn fingerprint_mismatch_self_heals() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test 5 — corrupt blob with matching fingerprint ⇒ `SnapshotDecode`.
+/// Corrupt blob with matching fingerprint ⇒ `SnapshotDecode`.
 #[tokio::test]
 async fn corrupt_snapshot_blob_is_a_hard_error() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -269,10 +249,9 @@ async fn corrupt_snapshot_blob_is_a_hard_error() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test 7 — compaction: after an update that snapshotted, `tail_len() ==
-/// 0`, `len_persisted()` unchanged; a further update on the same in-memory
-/// entity persists with correct sequences (no `UNIQUE` violation);
-/// `entity_first_persisted_at()`-driven timestamps stay stable.
+/// Compaction: after an update that snapshotted, the tail is empty and
+/// `len_persisted()` unchanged; a further update on the same in-memory
+/// entity persists with correct sequences (no `UNIQUE` violation).
 #[tokio::test]
 async fn compaction_after_snapshot_write() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -307,8 +286,8 @@ async fn compaction_after_snapshot_write() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test 8 — `snapshot()` returning `None` keeps the old row and grows the
-/// tail (row `sequence` unchanged).
+/// `capture()` returning `None` keeps the old row and grows the tail (row
+/// `sequence` unchanged).
 #[tokio::test]
 async fn snapshot_returning_none_keeps_old_row() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -328,7 +307,7 @@ async fn snapshot_returning_none_keeps_old_row() -> anyhow::Result<()> {
     .await?
     .sequence;
 
-    // One more reading: tail_len() goes from 0 to 1, snapshot() returns None.
+    // One more reading: tail_len() goes from 0 to 1, capture() returns None.
     let _ = meter.record(4);
     repo.update(&mut meter).await?;
     assert_eq!(meter.tail_len(), 1);
@@ -348,9 +327,8 @@ async fn snapshot_returning_none_keeps_old_row() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test 9 — batch: `find_all` and `list_by_id` over a page mixing
-/// snapshotted, never-snapshotted, and stale-fingerprint meters — every
-/// entity correct.
+/// Batch: `find_all` and `list_by_id` over a page mixing snapshotted,
+/// never-snapshotted, and stale-fingerprint meters — every entity correct.
 #[tokio::test]
 async fn batch_load_mixes_snapshot_states() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -422,117 +400,52 @@ async fn batch_load_mixes_snapshot_states() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test 11 — `persist_snapshot_in_op`: `Ok(true)` writes and compacts; on a
-/// stale copy (another writer appended) `Ok(false)` and the row is
-/// untouched; `any_new()` ⇒ error.
+/// A clean entity whose loaded state has no matching snapshot — because a
+/// fingerprint change made a fresh row stop matching — gets refreshed on
+/// its next `update`, even though that call stages no new events.
 #[tokio::test]
-async fn persist_snapshot_in_op_behaviour() -> anyhow::Result<()> {
+async fn stale_clean_entity_refreshes_on_next_update() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let repo = MeterRepo::new(pool.clone());
-    let plain = PlainMeterRepo::new(pool.clone());
 
-    // Simulate data that predates snapshotting: created and recorded
-    // entirely through the non-snapshot twin (same `meters` / `meter_events`
-    // tables), so no row ever lands in `meter_snapshots` — a normal write
-    // through `MeterRepo` would auto-snapshot as soon as the tail crosses
-    // the threshold, leaving nothing for a backfill to catch up on.
-    let mut plain_meter = plain.create(new_meter("m11")).await?;
+    let mut meter = repo.create(new_meter("m11")).await?;
     for v in 1..=4i64 {
-        let _ = plain_meter.record(v);
-        plain.update(&mut plain_meter).await?;
+        let _ = meter.record(v);
+        repo.update(&mut meter).await?;
     }
+    assert!(meter.has_snapshot());
 
-    let mut backfill_target = repo.full_history().find_by_id(plain_meter.id).await?;
-    assert_eq!(backfill_target.tail_len(), 5, "Initialized + 4 readings");
+    sqlx::query!(
+        "UPDATE meter_snapshots SET fingerprint = fingerprint + 1 WHERE id = $1",
+        meter.id as MeterId
+    )
+    .execute(&pool)
+    .await?;
 
-    // any_new() must error.
-    let _ = backfill_target.record(5);
-    let mut op = repo.begin_op().await?;
-    let err = repo
-        .persist_snapshot_in_op(&mut op, &mut backfill_target)
-        .await;
-    assert!(
-        err.is_err(),
-        "persist_snapshot_in_op must reject an entity with staged events"
-    );
-    drop(op);
+    let mut reloaded = repo.find_by_id(meter.id).await?;
+    assert!(!reloaded.has_snapshot(), "the stale row must be ignored");
 
-    // A stale copy loaded now, before the real head moves further, must not
-    // be able to overwrite a newer snapshot once one exists.
-    let mut stale_copy = repo.full_history().find_by_id(plain_meter.id).await?;
+    // No events staged — `update` is a pure refresh.
+    assert!(!reloaded.events().any_new());
+    let n = repo.update(&mut reloaded).await?;
+    assert_eq!(n, 0, "a pure refresh persists no events");
 
-    // One more reading, still via the non-snapshot twin, moves the real
-    // head past what `stale_copy` saw.
-    let _ = plain_meter.record(5);
-    plain.update(&mut plain_meter).await?;
-
-    let mut backfill_target = repo.full_history().find_by_id(plain_meter.id).await?;
-    assert_eq!(backfill_target.tail_len(), 6);
-
-    let mut op = repo.begin_op().await?;
-    let wrote = repo
-        .persist_snapshot_in_op(&mut op, &mut backfill_target)
-        .await?;
-    op.commit().await?;
-    assert!(wrote, "a backfill target with a real fold must write");
+    let row = sqlx::query!(
+        "SELECT fingerprint FROM meter_snapshots WHERE id = $1",
+        meter.id as MeterId
+    )
+    .fetch_one(&pool)
+    .await?;
     assert_eq!(
-        backfill_target.tail_len(),
-        0,
-        "persist_snapshot_in_op must compact the entity it wrote for"
+        row.fingerprint,
+        <MeterSnapshot as EsSnapshot>::FINGERPRINT,
+        "the refresh must rewrite the row with the current fingerprint"
     );
 
-    let mut op = repo.begin_op().await?;
-    let wrote_stale = repo
-        .persist_snapshot_in_op(&mut op, &mut stale_copy)
-        .await?;
-    op.commit().await?;
+    let reloaded_again = repo.find_by_id(meter.id).await?;
     assert!(
-        !wrote_stale,
-        "a stale copy must not overwrite a newer snapshot"
-    );
-
-    Ok(())
-}
-
-/// Test 12 — `verify_snapshot`: `Ok(())` for `Meter`; `SnapshotMismatch`
-/// for `BrokenMeter`.
-#[tokio::test]
-async fn verify_snapshot_detects_a_broken_fold() -> anyhow::Result<()> {
-    let pool = helpers::init_pool().await?;
-    let meters = MeterRepo::new(pool.clone());
-    let broken = BrokenMeterRepo::new(pool.clone());
-
-    // Seven readings force a *second* compaction (the first snapshot has
-    // nothing to forget yet — the bug only shows up once a fold has to
-    // combine a prior snapshot's own count with a new tail).
-    let mut good = meters.create(new_meter("good")).await?;
-    for v in 1..=7i64 {
-        let _ = good.record(v);
-        meters.update(&mut good).await?;
-    }
-    assert!(good.has_snapshot());
-    meters.verify_snapshot(good.id).await?;
-
-    let mut bad = broken
-        .create(
-            NewMeter::builder()
-                .id(MeterId::new())
-                .site_id(SiteId::new())
-                .label("bad")
-                .build()
-                .unwrap(),
-        )
-        .await?;
-    for v in 1..=7i64 {
-        let _ = bad.record(v);
-        broken.update(&mut bad).await?;
-    }
-    assert!(bad.has_snapshot());
-
-    let err = broken.verify_snapshot(bad.id).await.unwrap_err();
-    assert!(
-        matches!(err, BrokenMeterFindError::SnapshotMismatch(_)),
-        "BrokenMeter's under-counting bug must surface as a mismatch: {err}"
+        reloaded_again.has_snapshot(),
+        "the refreshed row must now match"
     );
 
     Ok(())

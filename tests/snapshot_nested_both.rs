@@ -71,9 +71,8 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for QueryEventCount {
     }
 }
 
-/// Test 10 — nested "just works" when both parent and child snapshot: a
-/// nested `find_by_id` still issues exactly one SQL statement for the whole
-/// tree.
+/// Nested "just works" when both parent and child snapshot: a nested
+/// `find_by_id` still issues exactly one SQL statement for the whole tree.
 #[tokio::test]
 async fn nested_both_snapshot_one_statement() -> anyhow::Result<()> {
     let pool = init_pool().await?;
