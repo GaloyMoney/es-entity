@@ -164,9 +164,9 @@ checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 
 [[package]]
 name = "convert_case"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "affbf0190ed2caf063e3def54ff444b449371d55c58e513a95ab98eca50adb49"
+checksum = "1af709f1f33454bf52eadfc8c78b3b9ef9cb26fb54d16dc9cd9a7299f899fd1b"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -383,7 +383,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "es-entity"
-version = "0.12.4-dev"
+version = "0.14.3-dev"
 dependencies = [
  "async-stream",
  "chrono",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "es-entity-fuzz"
-version = "0.0.0"
+version = "0.14.3-dev"
 dependencies = [
  "chrono",
  "es-entity",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "es-entity-macros"
-version = "0.12.4-dev"
+version = "0.14.3-dev"
 dependencies = [
  "convert_case",
  "darling 0.24.0",
@@ -1468,9 +1468,9 @@ dependencies = [
 
 [[package]]
 name = "sqlparser"
-version = "0.62.0"
+version = "0.63.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13c6d1b651dc4edf07eead2a0c6c78016ce971bc2c10da5266861b13f25e7cec"
+checksum = "3679862809bd1f92e563cf6fd820e28f39135303668001c10331d5027183e8b4"
 dependencies = [
  "log",
 ]
