@@ -211,6 +211,11 @@ async fn corrupt_snapshot_blob_is_a_hard_error() -> anyhow::Result<()> {
     }
     assert!(meter.has_snapshot());
 
+    // Hold the corruption guard for exactly as long as the row is
+    // undecodable: a concurrent unscoped walk in
+    // `batch_load_mixes_snapshot_states` must not observe the `'{}'` blob.
+    let guard = helpers::SnapshotCorruptionGuard::acquire(&pool).await?;
+
     sqlx::query!(
         "UPDATE meter_snapshots SET snapshot = '{}'::jsonb WHERE id = $1",
         meter.id as MeterId
@@ -240,6 +245,8 @@ async fn corrupt_snapshot_blob_is_a_hard_error() -> anyhow::Result<()> {
     )
     .execute(&pool)
     .await?;
+
+    guard.release().await?;
 
     Ok(())
 }
@@ -371,7 +378,11 @@ async fn batch_load_mixes_snapshot_states() -> anyhow::Result<()> {
     // Page through `list_by_id` (unscoped — it walks every meter this
     // database has ever seen, across every test in this suite) until all
     // three planted ids have turned up, rather than assuming they land on
-    // the first page.
+    // the first page. The walk must not observe the transient `'{}'`
+    // snapshot blob planted by `corrupt_snapshot_blob_is_a_hard_error`,
+    // so it holds the same advisory guard that test holds while the row
+    // is undecodable.
+    let guard = helpers::SnapshotCorruptionGuard::acquire(&pool).await?;
     let mut found: std::collections::HashSet<MeterId> = std::collections::HashSet::new();
     let mut after = None;
     loop {
@@ -391,6 +402,7 @@ async fn batch_load_mixes_snapshot_states() -> anyhow::Result<()> {
     for id in ids {
         assert!(found.contains(&id));
     }
+    guard.release().await?;
 
     Ok(())
 }
