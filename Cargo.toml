@@ -93,9 +93,9 @@ im = { version = "15.1", features = ["serde"] }
 pin-project = "1.1"
 tracing = { version = "0.1.41", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing-opentelemetry = { version = "0.33.0", default-features = false }
-opentelemetry = { version = "0.32.0", default-features = false }
-opentelemetry_sdk = { version = "0.32.0", features = ["rt-tokio"] }
+tracing-opentelemetry = { version = "0.34.0", default-features = false }
+opentelemetry = { version = "0.33.0", default-features = false }
+opentelemetry_sdk = { version = "0.33.0", features = ["rt-tokio"] }
 futures = "0.3"
 futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
