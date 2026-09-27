@@ -1,3 +1,16 @@
+# [cala release v0.14.3](https://github.com/GaloyMoney/cala/releases/tag/0.14.3)
+
+
+
+### Bug Fixes
+
+- Serialize snapshot corruption window against unscoped walk (#243)
+- Repair API drift, add GHA smoke test (#242)
+
+### Miscellaneous Tasks
+
+- Bump opentelemetry stack to 0.33 / tracing-opentelemetry 0.34 (#244)
+
 # [cala release v0.14.2](https://github.com/GaloyMoney/cala/releases/tag/0.14.2)
 
 
