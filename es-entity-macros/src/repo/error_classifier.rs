@@ -193,6 +193,12 @@ fn update_write_classifier_fn(
 /// any other table (e.g. the forgettable payloads table, keyed
 /// `(entity_id, sequence)`) is a bug: that table's rows are only ever
 /// written once, by the same statement that advanced the sequence.
+///
+/// Every call site passes its repo's `events_table_name()` unchanged, which
+/// may be schema-qualified (`events_tbl = "schema.table"`); Postgres reports
+/// only the bare table name in `DatabaseError::table()`, so the comparison
+/// strips a schema prefix here — once, centrally — rather than requiring
+/// every call site to remember to.
 pub fn classify_conflict_fn() -> TokenStream {
     quote! {
         #[inline(always)]
@@ -201,6 +207,7 @@ pub fn classify_conflict_fn() -> TokenStream {
             events_table: &'static str,
             context: impl FnOnce() -> String,
         ) -> Result<T, errlanes::Fail<D>> {
+            let events_table = events_table.rsplit('.').next().unwrap_or(events_table);
             match res {
                 Ok(v) => Ok(v),
                 Err(sqlx::Error::Database(ref db_err))
@@ -217,5 +224,30 @@ pub fn classify_conflict_fn() -> TokenStream {
                 Err(e) => Err(errlanes::Fail::from(e)),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use quote::ToTokens;
+
+    use super::*;
+
+    /// Regression for a misclassified events-table conflict on a
+    /// schema-qualified `events_tbl`: `classify_conflict`'s generated body
+    /// must strip a schema prefix off its runtime `events_table` argument
+    /// before comparing it against `DatabaseError::table()`, which Postgres
+    /// only ever reports bare. Without the strip, a unique violation on
+    /// e.g. `schema.entity_events` never matches and is misclassified
+    /// `Fatal` instead of `Transient` — so update/forget/persist_events
+    /// conflicts on such a repo would never be retried.
+    #[test]
+    fn classify_conflict_strips_schema_prefix_before_comparing() {
+        let output = classify_conflict_fn().into_token_stream().to_string();
+        assert!(
+            output.contains("events_table . rsplit ('.') . next ()"),
+            "classify_conflict must strip a schema prefix off `events_table` \
+             before comparing it to `db_err.table()`: {output}"
+        );
     }
 }
