@@ -57,6 +57,8 @@ pub mod prelude {
 
 #[doc(inline)]
 pub use context::*;
+pub use errlanes;
+pub use errlanes::{Denied, Fail, Failure, Fatal, Lane, Rejection, Settled, Transient};
 #[doc(inline)]
 pub use error::*;
 pub use es_entity_macros::EsEntity;

@@ -1,0 +1,5 @@
+error: #[rejection(constraint = ...)] requires enum-level #[rejection(repo = ...)]
+ --> tests/trybuild/rejection_constraint_without_repo.rs:5:5
+  |
+5 |     EmailTaken,
+  |     ^^^^^^^^^^

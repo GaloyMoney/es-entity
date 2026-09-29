@@ -20,10 +20,11 @@ event-context = ["es-entity-macros/event-context", "event-context-enabled"]
 event-context-enabled = ["es-entity-macros/event-context-enabled"]
 json-schema = ["dep:schemars"]
 mdbook-test = ["dep:anyhow"]
-instrument = ["es-entity-macros/instrument", "dep:tracing"]
+instrument = ["es-entity-macros/instrument", "dep:tracing", "errlanes/tracing"]
 
 [dependencies]
 es-entity-macros = { workspace = true }
+errlanes = { workspace = true, features = ["sqlx"] }
 
 async-stream = { workspace = true }
 futures-core = { workspace = true }
@@ -67,11 +68,15 @@ harness = false
 [workspace]
 resolver = "2"
 members = [
+  "errlanes",
+  "errlanes-derive",
   "es-entity-macros",
 ]
 
 [workspace.dependencies]
 
+errlanes = { path = "errlanes", version = "0.14.4-dev", default-features = false }
+errlanes-derive = { path = "errlanes-derive", version = "0.14.4-dev" }
 es-entity-macros = { path = "es-entity-macros", version = "0.14.4-dev" }
 
 anyhow = "1.0"

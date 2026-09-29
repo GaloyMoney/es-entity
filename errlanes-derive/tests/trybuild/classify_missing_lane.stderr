@@ -1,0 +1,5 @@
+error: every variant needs exactly one #[lane(rejected|denied|transient|fatal|delegate|external|sqlx)]
+ --> tests/trybuild/classify_missing_lane.rs:4:5
+  |
+4 |     Unclassified,
+  |     ^^^^^^^^^^^^
