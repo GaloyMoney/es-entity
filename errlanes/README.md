@@ -91,6 +91,32 @@ An unlisted key demotes to `Fatal(Invariant)` with the key in `context` — a
 constraint (or discriminator) the domain did not anticipate is a bug, not a
 rejection to show a client.
 
+For multiple foreign targets, put every type in one `lift(...)` list and
+select the target for each `key` variant with `via`:
+
+```rust,ignore
+#[derive(Debug, Clone, thiserror::Error, errlanes::Rejection)]
+#[rejection(lift(UserConstraintViolation, TeamConstraintViolation))]
+enum MembershipRejection {
+    #[error("email already in use")]
+    #[rejection(key = UserConstraint::EmailKey, via = UserConstraintViolation)]
+    EmailTaken,
+    #[error("team name already in use")]
+    #[rejection(key = TeamConstraint::NameKey, via = TeamConstraintViolation)]
+    TeamNameTaken,
+}
+
+#[derive(Debug, Clone, errlanes::Failure)]
+#[failure(lift(UserConstraintViolation, TeamConstraintViolation))]
+struct MembershipError(errlanes::Fail<MembershipRejection>);
+```
+
+`#[rejection(lift(A), lift(B))]` fails with ``Duplicate field `lift` ``;
+use `#[rejection(lift(A, B))]`. The same single-list rule applies to
+`#[failure(lift(A, B))]`. `via` names the foreign `Liftable` type, which
+cannot be inferred from its separate key type; it is optional when there
+is only one target.
+
 ## Why not a generic `Fail<Local>` carrier everywhere
 
 A downstream crate cannot `impl From<Fail<Upstream>> for Fail<Local>` —

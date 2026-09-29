@@ -30,7 +30,7 @@ struct RejectionVariant {
     /// into it: `OrderConstraint::OrderItems(OrderItemConstraint::SkuKey)`.
     #[darling(default)]
     key: Option<syn::Expr>,
-    /// Which `lift = X` target this `key` belongs to. A `key`'s own path
+    /// Which target in `lift(X, ...)` this `key` belongs to. A `key`'s own path
     /// (e.g. `UserConstraint::EmailKey`) names the *key* type, not the
     /// *lift* (`Liftable`) type — the two are unrelated types the macro has
     /// no way to connect syntactically — so with more than one `lift`

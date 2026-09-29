@@ -1,7 +1,7 @@
-// `lift = X` is repeatable: a domain rejection can lift keys from more than
-// one foreign `Liftable`. A `key = X::Variant` path is routed to the `impl
-// Lift<X>` whose target its owner segments match — this fixture pins that
-// routing across two distinct targets sharing no key names.
+// One `lift(A, B)` list declares multiple foreign `Liftable` targets.
+// Each `key` variant's `via` selects its target; the key's path names a
+// separate type and cannot identify that target. This fixture pins routing
+// across two distinct targets.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, std::hash::Hash)]
 enum AKey {

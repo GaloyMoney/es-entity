@@ -65,9 +65,12 @@ pub trait Liftable: Rejection {
     fn key(&self) -> Option<Self::Key>;
 }
 
-/// Emitted by `#[derive(errlanes::Rejection)]` when `#[rejection(lift = X)]`
+/// Emitted by `#[derive(errlanes::Rejection)]` when `#[rejection(lift(X))]`
 /// is given: lifts a foreign rejection into a domain rejection, demoting
-/// anything the domain did not name to [`Fatal`].
+/// anything the domain did not name to [`Fatal`]. Multiple targets belong
+/// in one list, `#[rejection(lift(X, Y))]`; each `key` variant then uses
+/// `via = X` or `via = Y` to select its target. Repeating `lift(...)` is
+/// a duplicate-field error.
 pub trait Lift<X: Liftable>: Sized {
     fn lift(x: X) -> Result<Self, Fatal>;
 }
