@@ -593,6 +593,80 @@ mod tests {
         assert!(out.contains("Own {"));
     }
 
+    /// Regression (Cursor Bugbot on commit 8092f0e): a nested field whose
+    /// name camel-cases to `Unknown` must not collide with
+    /// `{Parent}Constraint`'s own `Unknown` fallback variant — previously the
+    /// nested arm was appended straight into the enum with no dedup at all,
+    /// so this pair would emit two `Unknown` variants and fail to compile
+    /// (E0428) for the generated repo.
+    #[test]
+    fn nested_variant_colliding_with_unknown_is_disambiguated() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Order", columns(name(ty = "String")))]
+            struct Orders {
+                pool: sqlx::PgPool,
+                #[es_repo(nested)]
+                unknown: UnknownItems,
+            }
+        };
+        let out = derive(input).unwrap().to_string();
+        // Isolate just the `OrderConstraint` enum body (not e.g. `kind()`'s
+        // `ConstraintKind::Unknown` fallback, which also contains the word
+        // "Unknown" but is a different type entirely) and count its bare
+        // `Unknown ,` variant declarations directly.
+        let decl_start = out
+            .find("pub enum OrderConstraint")
+            .expect("OrderConstraint enum must be emitted");
+        let body_end = decl_start
+            + out[decl_start..]
+                .find('}')
+                .expect("enum body must be closed");
+        let body = &out[decl_start..body_end];
+        assert!(
+            body.contains("Unknown2 ("),
+            "expected the nested field to be disambiguated to `Unknown2`: {body}"
+        );
+        assert_eq!(
+            body.matches("Unknown ,").count(),
+            1,
+            "the real `Unknown` fallback arm must appear exactly once: {body}"
+        );
+    }
+
+    /// Same regression, the other collision Bugbot named: a nested field
+    /// whose name camel-cases onto an already-assigned *catalog* variant
+    /// (here `name` collides with the `name` column's own `NameKey`
+    /// constraint variant), not just the `Unknown` fallback.
+    #[test]
+    fn nested_variant_colliding_with_catalog_variant_is_disambiguated() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Order", columns(name(ty = "String")))]
+            struct Orders {
+                pool: sqlx::PgPool,
+                #[es_repo(nested)]
+                name_key: NameKeyItems,
+            }
+        };
+        let out = derive(input).unwrap().to_string();
+        let decl_start = out
+            .find("pub enum OrderConstraint")
+            .expect("OrderConstraint enum must be emitted");
+        let body_end = decl_start
+            + out[decl_start..]
+                .find('}')
+                .expect("enum body must be closed");
+        let body = &out[decl_start..body_end];
+        assert!(
+            body.contains("NameKey2 ("),
+            "expected the nested field to be disambiguated to `NameKey2`: {body}"
+        );
+        assert_eq!(
+            body.matches("NameKey ,").count(),
+            1,
+            "the real catalog `NameKey` variant must appear exactly once: {body}"
+        );
+    }
+
     // Guard 1 (event has Forgettable fields but the repo omits `forgettable`)
     // fires only once the event type resolves, so it is a const assert on the
     // event's inherent `HAS_FORGETTABLE_FIELDS`; its end-to-end behavior is

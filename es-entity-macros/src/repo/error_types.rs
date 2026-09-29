@@ -30,6 +30,26 @@ struct ConstraintVariant {
     kind: ConstraintKind,
 }
 
+/// Disambiguates a candidate variant name against every name already
+/// assigned in `taken` with a deterministic numeric suffix, reserves the
+/// result, and returns it as an `Ident`. Shared by every source of
+/// `{Entity}Constraint` variants — catalog-derived and nested-child alike —
+/// so none of them can silently collide with each other or with `Unknown`
+/// (reserved by the caller before the first call).
+fn dedupe_variant_ident(candidate: String, taken: &mut HashSet<String>) -> syn::Ident {
+    let mut candidate = candidate;
+    if taken.contains(&candidate) {
+        let base = candidate.clone();
+        let mut n = 2;
+        while taken.contains(&candidate) {
+            candidate = format!("{base}{n}");
+            n += 1;
+        }
+    }
+    taken.insert(candidate.clone());
+    syn::Ident::new(&candidate, Span::call_site())
+}
+
 /// A readable variant ident for a constraint name: the `{table}_` prefix is
 /// stripped when present (`profiles_email_not_blank` → `EmailNotBlank`),
 /// falling back to the full name when stripping yields an invalid or already
@@ -61,21 +81,18 @@ fn constraint_variant_ident(
         // Degenerate quoted identifiers (e.g. a constraint named "2fa_check").
         candidate = format!("Constraint{candidate}");
     }
-    if taken.contains(&candidate) {
-        let base = candidate.clone();
-        let mut n = 2;
-        while taken.contains(&candidate) {
-            candidate = format!("{base}{n}");
-            n += 1;
-        }
-    }
-    taken.insert(candidate.clone());
-    syn::Ident::new(&candidate, Span::call_site())
+    dedupe_variant_ident(candidate, taken)
 }
 
 struct NestedErrorInfo {
     child_repo_ty: syn::Type,
     variant_name: syn::Ident,
+    /// The nested variant's name on `{Parent}Constraint` specifically —
+    /// deduplicated against catalog-derived variants and `Unknown`, so it
+    /// may differ from `variant_name` (the `{Parent}ConstraintViolation`
+    /// variant, which only ever shares its enum with `Own` and other
+    /// nested fields, so needs no such dedup).
+    constraint_variant_name: syn::Ident,
     /// When set, the child's `ConstraintViolation` is referenced by
     /// convention-based concrete name (e.g. `FooConstraintViolation`)
     /// instead of an associated type projection
@@ -146,6 +163,9 @@ impl<'a> ErrorTypes<'a> {
         // discoverable migrations) plus every classified constraint (unique /
         // foreign key / check) the catalog found on this table.
         let mut taken = HashSet::new();
+        // Reserved up front so no catalog-derived or nested-child variant can
+        // ever silently collide with the enum's own `Unknown` fallback arm.
+        taken.insert("Unknown".to_string());
         let mut seen_names = HashSet::new();
         let mut constraint_variants: Vec<ConstraintVariant> = Vec::new();
         let unique_seed = column_variants
@@ -184,9 +204,18 @@ impl<'a> ErrorTypes<'a> {
                         None
                     }
                 });
+                let variant_name = f.nested_variant_name();
+                // Deduplicated separately from `variant_name`: this is what
+                // goes on `{Parent}Constraint`, which also carries every
+                // catalog-derived variant and `Unknown` — none of which
+                // `variant_name` (scoped to the CV enum, which has no such
+                // neighbors) was ever checked against.
+                let constraint_variant_name =
+                    dedupe_variant_ident(variant_name.to_string(), &mut taken);
                 NestedErrorInfo {
                     child_repo_ty: f.ty.clone(),
-                    variant_name: f.nested_variant_name(),
+                    variant_name,
+                    constraint_variant_name,
                     nested_entity,
                 }
             })
@@ -237,7 +266,7 @@ impl<'a> ErrorTypes<'a> {
             .nested
             .iter()
             .map(|n| {
-                let variant = &n.variant_name;
+                let variant = &n.constraint_variant_name;
                 let ty = n.constraint_ty();
                 quote! { #variant(#ty), }
             })
@@ -264,7 +293,7 @@ impl<'a> ErrorTypes<'a> {
             .nested
             .iter()
             .map(|n| {
-                let variant = &n.variant_name;
+                let variant = &n.constraint_variant_name;
                 quote! { Self::#variant(c) => c.name(), }
             })
             .collect();
@@ -285,7 +314,7 @@ impl<'a> ErrorTypes<'a> {
             .nested
             .iter()
             .map(|n| {
-                let variant = &n.variant_name;
+                let variant = &n.constraint_variant_name;
                 quote! { Self::#variant(c) => c.kind(), }
             })
             .collect();
@@ -565,7 +594,8 @@ impl<'a> ErrorTypes<'a> {
                 .iter()
                 .map(|n| {
                     let variant = &n.variant_name;
-                    quote! { Self::#variant(c) => c.constraint().map(#constraint_enum::#variant), }
+                    let constraint_variant = &n.constraint_variant_name;
+                    quote! { Self::#variant(c) => c.constraint().map(#constraint_enum::#constraint_variant), }
                 })
                 .collect();
 
@@ -753,4 +783,49 @@ fn derive_entity_from_repo_type(ty: &syn::Type) -> Option<syn::Ident> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: nested-child variants on `{Parent}Constraint` are built
+    /// from the same `taken` set as catalog-derived variants (and reserve
+    /// `Unknown` up front) precisely so that a nested field whose name
+    /// happens to camel-case identically to a catalog variant — or to
+    /// `Unknown` itself — is disambiguated instead of emitting a duplicate
+    /// enum variant (which would fail to compile for the generated repo).
+    #[test]
+    fn dedupe_variant_ident_disambiguates_repeats() {
+        let mut taken = HashSet::new();
+        let first = dedupe_variant_ident("Items".to_string(), &mut taken);
+        let second = dedupe_variant_ident("Items".to_string(), &mut taken);
+        assert_eq!(first.to_string(), "Items");
+        assert_eq!(second.to_string(), "Items2");
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn dedupe_variant_ident_never_collides_with_reserved_unknown() {
+        let mut taken = HashSet::new();
+        taken.insert("Unknown".to_string());
+        let variant = dedupe_variant_ident("Unknown".to_string(), &mut taken);
+        assert_eq!(variant.to_string(), "Unknown2");
+    }
+
+    /// The same guarantee as it actually plays out for catalog-derived
+    /// names: a real constraint name that happens to camel-case to
+    /// `Unknown` must not collide with the enum's own `Unknown` fallback
+    /// arm. The table-prefix-stripped candidate ("Unknown") is already
+    /// reserved, so this exercises the existing full-name fallback
+    /// ("WidgetsUnknown"); reserving that too forces the final numeric-
+    /// suffix dedup layer to engage.
+    #[test]
+    fn constraint_variant_ident_never_collides_with_reserved_unknown() {
+        let mut taken = HashSet::new();
+        taken.insert("Unknown".to_string());
+        taken.insert("WidgetsUnknown".to_string());
+        let variant = constraint_variant_ident("widgets", "widgets_unknown", &mut taken);
+        assert_eq!(variant.to_string(), "WidgetsUnknown2");
+    }
 }
