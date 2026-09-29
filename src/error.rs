@@ -138,32 +138,30 @@ impl std::fmt::Display for NotFound {
 impl std::error::Error for NotFound {}
 
 #[doc(hidden)]
-pub fn hydration_fatal<D>(e: EntityHydrationError) -> errlanes::Fail<D> {
-    errlanes::Fail::Fatal(errlanes::Fatal::from_error(
-        errlanes::FatalKind::CorruptState,
-        e,
-    ))
+pub fn hydration_fatal(e: EntityHydrationError) -> errlanes::Fault {
+    errlanes::Fatal::from_error(errlanes::FatalKind::CorruptState, e).into()
 }
 
 #[doc(hidden)]
-pub fn cursor_decode_fatal<D>(e: CursorDestructureError) -> errlanes::Fail<D> {
-    errlanes::Fail::Fatal(errlanes::Fatal::from_error(errlanes::FatalKind::Config, e))
+pub fn cursor_decode_fatal(e: CursorDestructureError) -> errlanes::Fault {
+    errlanes::Fatal::from_error(errlanes::FatalKind::Config, e).into()
 }
 
 #[doc(hidden)]
-pub fn not_found_fatal<D>(
+pub fn not_found_fatal(
     entity: &'static str,
     column: Option<&'static str>,
     value: String,
-) -> errlanes::Fail<D> {
-    errlanes::Fail::Fatal(errlanes::Fatal::from_error(
+) -> errlanes::Fault {
+    errlanes::Fatal::from_error(
         errlanes::FatalKind::Invariant,
         NotFound {
             entity,
             column,
             value,
         },
-    ))
+    )
+    .into()
 }
 
 #[doc(hidden)]

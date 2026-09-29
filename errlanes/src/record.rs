@@ -1,4 +1,4 @@
-use crate::fail::{Fail, Level, Rejection, Settled};
+use crate::fail::{Fail, Fault, Level, Rejection, Settled, SettledFault};
 
 /// Span fields a boundary span must declare as `tracing::field::Empty` for
 /// [`record`] / [`record_fail`] to fill.
@@ -36,6 +36,12 @@ fn level_str(level: Level) -> &'static str {
     }
 }
 
+/// **Display discipline**: `error.code` for a `Rejected` outcome comes from
+/// `Rejection::code`, never from `Fail`'s `Display`/`to_string()` — a
+/// rejection's message may embed caller-supplied input, so the *code* is the
+/// only thing safe to key metrics, alerts, or a GraphQL error extension on.
+/// `exception.message` is written only for `Fatal`/`Exhausted`, where the
+/// message is operator-facing by construction.
 pub fn record_fail<D: Rejection>(span: &tracing::Span, f: &Fail<D>) {
     span.record("error", true);
     span.record("error.lane", f.lane().as_str());
@@ -53,6 +59,52 @@ pub fn record_fail<D: Rejection>(span: &tracing::Span, f: &Fail<D>) {
             span.record("error.level", "INFO");
         }
         Fail::Fatal(x) => {
+            span.record("error.code", x.kind.as_str());
+            span.record("error.level", "ERROR");
+            span.record("exception.message", f.to_string());
+            span.record("exception.type", x.kind.as_str());
+        }
+    }
+}
+
+/// [`record_fail`] for a [`Fault`] — no `Rejected` arm to key a code from.
+pub fn record_fault(span: &tracing::Span, f: &Fault) {
+    span.record("error", true);
+    span.record("error.lane", f.lane().as_str());
+    match f {
+        Fault::Denied(_) => {
+            span.record("error.code", "FORBIDDEN");
+            span.record("error.level", "WARN");
+        }
+        Fault::Transient(t) => {
+            span.record("error.code", t.kind.as_str());
+            span.record("error.level", "INFO");
+        }
+        Fault::Fatal(x) => {
+            span.record("error.code", x.kind.as_str());
+            span.record("error.level", "ERROR");
+            span.record("exception.message", f.to_string());
+            span.record("exception.type", x.kind.as_str());
+        }
+    }
+}
+
+/// [`record`] for a [`SettledFault`].
+pub fn record_settled_fault(span: &tracing::Span, f: &SettledFault) {
+    span.record("error", true);
+    span.record("error.lane", f.lane().as_str());
+    match f {
+        SettledFault::Denied(_) => {
+            span.record("error.code", "FORBIDDEN");
+            span.record("error.level", "WARN");
+        }
+        SettledFault::Exhausted(_) => {
+            span.record("error.code", "EXHAUSTED");
+            span.record("error.level", "ERROR");
+            span.record("exception.message", f.to_string());
+            span.record("exception.type", "EXHAUSTED");
+        }
+        SettledFault::Fatal(x) => {
             span.record("error.code", x.kind.as_str());
             span.record("error.level", "ERROR");
             span.record("exception.message", f.to_string());

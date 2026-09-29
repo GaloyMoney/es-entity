@@ -62,7 +62,7 @@ impl ToTokens for DeleteFn<'_> {
 
         let nested_deletes = self.nested_delete_fn_names.iter().map(|f| {
             quote! {
-                Self::#f(op, &entity).await.map_err(errlanes::Fail::never)?;
+                Self::#f(op, &entity).await?;
             }
         });
 

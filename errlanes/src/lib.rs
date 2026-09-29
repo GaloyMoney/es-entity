@@ -21,18 +21,18 @@ mod record;
 
 pub use dynamic::{Classify, lane_of, transient_of};
 pub use fail::{
-    Fail, Failure, HasConstraint, Level, LiftConstraint, NeverCode, Rejection, Settled,
+    Fail, Failure, Fault, Laned, Level, Lift, Liftable, Rejection, Settled, SettledFault,
 };
 pub use lane::{Denied, Exhausted, Fatal, FatalKind, Lane, Transient, TransientKind};
 
 #[cfg(feature = "sqlx")]
-pub use sqlx::{classify_sqlx, lane_of_sqlx, transient_sqlstate};
+pub use sqlx::{classify_sqlx, classify_sqlx_fault, lane_of_sqlx, transient_sqlstate};
 
 #[cfg(feature = "tokio")]
 pub use retry::{RetryPolicy, retry, retry_with};
 
 #[cfg(feature = "tracing")]
-pub use record::{FIELDS, record, record_fail};
+pub use record::{FIELDS, record, record_fail, record_fault, record_settled_fault};
 
 #[cfg(feature = "derive")]
 pub use errlanes_derive::{Classify, Failure, Rejection};

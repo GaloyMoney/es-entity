@@ -411,7 +411,7 @@ async fn find_by_id_not_found_is_fatal_invariant() -> anyhow::Result<()> {
     };
 
     let fatal = match err {
-        Fail::Fatal(fatal) => fatal,
+        Fault::Fatal(fatal) => fatal,
         other => panic!("expected Fatal, got {other:?}"),
     };
     assert_eq!(fatal.kind, FatalKind::Invariant);
@@ -441,7 +441,7 @@ async fn find_by_name_not_found_is_fatal_invariant() -> anyhow::Result<()> {
     };
 
     let fatal = match err {
-        Fail::Fatal(fatal) => fatal,
+        Fault::Fatal(fatal) => fatal,
         other => panic!("expected Fatal, got {other:?}"),
     };
     let not_found = std::error::Error::source(&fatal)

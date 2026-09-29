@@ -228,7 +228,7 @@ async fn corrupt_snapshot_blob_is_a_hard_error() -> anyhow::Result<()> {
         Err(e) => e,
     };
     let fatal = match &err {
-        Fail::Fatal(fatal) => fatal,
+        Fault::Fatal(fatal) => fatal,
         other => panic!("expected Fatal(CorruptState), got: {other:?}"),
     };
     assert_eq!(fatal.kind, FatalKind::CorruptState);

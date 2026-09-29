@@ -1,0 +1,5 @@
+error: #[rejection(via = ...)] does not name a declared #[rejection(lift = ...)] target
+ --> tests/trybuild/rejection_via_unknown_target.rs:8:5
+  |
+8 |     EmailTaken,
+  |     ^^^^^^^^^^

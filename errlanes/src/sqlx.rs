@@ -11,7 +11,7 @@
 //! silently instead of surfacing as the bug they are.
 
 use crate::{
-    fail::Fail,
+    fail::{Fail, Fault},
     lane::{Fatal, FatalKind, Lane, Transient, TransientKind},
 };
 
@@ -27,8 +27,16 @@ pub fn transient_sqlstate(code: &str) -> Option<TransientKind> {
 }
 
 /// Classifies a raw `sqlx::Error`, moving it. See the module docs for why
-/// `Protocol(_)` lands in `Fatal(Dependency)`.
+/// `Protocol(_)` lands in `Fatal(Dependency)`. A `sqlx::Error` never carries
+/// a domain rejection, so the real work happens in [`classify_sqlx_fault`];
+/// this widens that into whatever `D` the caller needs.
 pub fn classify_sqlx<D>(e: ::sqlx::Error) -> Fail<D> {
+    classify_sqlx_fault(e).into()
+}
+
+/// Same classification as [`classify_sqlx`], as a [`Fault`] rather than a
+/// `Fail<D>` — what `impl From<sqlx::Error> for Fault` delegates to.
+pub fn classify_sqlx_fault(e: ::sqlx::Error) -> Fault {
     match e {
         ::sqlx::Error::PoolTimedOut => Transient::new(TransientKind::PoolTimeout).into(),
         ::sqlx::Error::Io(err) => Transient::new(TransientKind::ConnectionLost)
@@ -100,25 +108,27 @@ impl<D> From<::sqlx::Error> for Fail<D> {
     }
 }
 
+impl From<::sqlx::Error> for Fault {
+    fn from(e: ::sqlx::Error) -> Self {
+        classify_sqlx_fault(e)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn lane<D>(f: Fail<D>) -> Lane {
-        f.lane()
-    }
-
     #[test]
     fn pool_timed_out_is_transient_pool_timeout() {
-        let f: Fail<core::convert::Infallible> = classify_sqlx(::sqlx::Error::PoolTimedOut);
-        assert_eq!(lane(f), Lane::Transient);
+        let f = classify_sqlx_fault(::sqlx::Error::PoolTimedOut);
+        assert_eq!(f.lane(), Lane::Transient);
     }
 
     #[test]
     fn row_not_found_is_fatal_corrupt_state() {
-        let f: Fail<core::convert::Infallible> = classify_sqlx(::sqlx::Error::RowNotFound);
+        let f = classify_sqlx_fault(::sqlx::Error::RowNotFound);
         match f {
-            Fail::Fatal(fatal) => assert_eq!(fatal.kind, FatalKind::CorruptState),
+            Fault::Fatal(fatal) => assert_eq!(fatal.kind, FatalKind::CorruptState),
             other => panic!("expected Fatal, got {other:?}"),
         }
     }
@@ -126,31 +136,41 @@ mod tests {
     #[test]
     fn io_error_is_transient_connection_lost() {
         let io = std::io::Error::other("boom");
-        let f: Fail<core::convert::Infallible> = classify_sqlx(::sqlx::Error::Io(io));
+        let f = classify_sqlx_fault(::sqlx::Error::Io(io));
         match f {
-            Fail::Transient(t) => assert_eq!(t.kind, TransientKind::ConnectionLost),
+            Fault::Transient(t) => assert_eq!(t.kind, TransientKind::ConnectionLost),
             other => panic!("expected Transient, got {other:?}"),
         }
     }
 
     #[test]
     fn protocol_error_is_fatal_dependency_not_transient() {
-        let f: Fail<core::convert::Infallible> =
-            classify_sqlx(::sqlx::Error::Protocol("synthesized".into()));
+        let f = classify_sqlx_fault(::sqlx::Error::Protocol("synthesized".into()));
         match f {
-            Fail::Fatal(fatal) => assert_eq!(fatal.kind, FatalKind::Dependency),
+            Fault::Fatal(fatal) => assert_eq!(fatal.kind, FatalKind::Dependency),
             other => panic!("expected Fatal(Dependency), got {other:?}"),
         }
     }
 
     #[test]
     fn configuration_error_is_fatal_config() {
-        let f: Fail<core::convert::Infallible> =
-            classify_sqlx(::sqlx::Error::Configuration("bad config".into()));
+        let f = classify_sqlx_fault(::sqlx::Error::Configuration("bad config".into()));
         match f {
-            Fail::Fatal(fatal) => assert_eq!(fatal.kind, FatalKind::Config),
+            Fault::Fatal(fatal) => assert_eq!(fatal.kind, FatalKind::Config),
             other => panic!("expected Fatal(Config), got {other:?}"),
         }
+    }
+
+    /// `classify_sqlx<D>` must still widen through to any `D` — pinned
+    /// separately from the `Fault` cases above so a regression in the
+    /// `Fail<D>` wrapper (not just the shared `Fault` classification) fails
+    /// its own test.
+    #[test]
+    fn classify_sqlx_widens_into_any_rejection_type() {
+        #[derive(Debug)]
+        struct NeverRejects;
+        let f: Fail<NeverRejects> = classify_sqlx(::sqlx::Error::PoolTimedOut);
+        assert_eq!(f.lane(), Lane::Transient);
     }
 
     #[test]

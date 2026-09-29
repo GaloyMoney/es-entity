@@ -108,7 +108,7 @@ async fn a_clean_bisect_probes_exactly_once() -> anyhow::Result<()> {
             for item in slice {
                 insert(sp, *item).await?;
             }
-            Ok::<_, errlanes::Fail<core::convert::Infallible>>(())
+            Ok::<_, errlanes::Fault>(())
         })
         .await?;
 
@@ -141,7 +141,7 @@ async fn a_bisect_isolates_its_culprit_and_salvages_the_siblings() -> anyhow::Re
             for item in slice {
                 insert(sp, *item).await?;
             }
-            Ok::<_, errlanes::Fail<core::convert::Infallible>>(())
+            Ok::<_, errlanes::Fault>(())
         })
         .await?;
 
@@ -186,7 +186,7 @@ async fn budget_exhaustion_leaves_unprobed_items_unresolved() -> anyhow::Result<
             for item in slice {
                 insert(sp, *item).await?;
             }
-            Ok::<_, errlanes::Fail<core::convert::Infallible>>(())
+            Ok::<_, errlanes::Fault>(())
         })
         .await?;
 
@@ -374,20 +374,12 @@ impl Runner {
 
 #[async_trait::async_trait]
 trait BatchRunner: Send + Sync {
-    async fn run(
-        &self,
-        op: &mut DbOp<'static>,
-        items: &[i32],
-    ) -> Result<usize, errlanes::Fail<core::convert::Infallible>>;
+    async fn run(&self, op: &mut DbOp<'static>, items: &[i32]) -> Result<usize, errlanes::Fault>;
 }
 
 #[async_trait::async_trait]
 impl BatchRunner for Runner {
-    async fn run(
-        &self,
-        op: &mut DbOp<'static>,
-        items: &[i32],
-    ) -> Result<usize, errlanes::Fail<core::convert::Infallible>> {
+    async fn run(&self, op: &mut DbOp<'static>, items: &[i32]) -> Result<usize, errlanes::Fault> {
         // Borrows `&self` directly, with no owned clone, and builds a wrapper
         // context per probe.
         let isolated = op
@@ -410,7 +402,7 @@ impl BatchRunner for Runner {
                     Ok::<_, sqlx::Error>(*item)
                 })
                 .await?;
-                Ok::<_, errlanes::Fail<core::convert::Infallible>>(())
+                Ok::<_, errlanes::Fault>(())
             })
             .await?;
 
@@ -432,7 +424,7 @@ async fn a_closure_borrowing_self_composes_inside_an_async_trait_runner() -> any
         let mut op = DbOp::init(&pool).await?;
         let n = runner.run(&mut op, &items).await?;
         op.commit().await?;
-        Ok::<_, errlanes::Fail<core::convert::Infallible>>((n, pool))
+        Ok::<_, errlanes::Fault>((n, pool))
     });
 
     let (n, pool) = handle.await??;

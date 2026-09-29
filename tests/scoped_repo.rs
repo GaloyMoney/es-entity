@@ -83,7 +83,7 @@ async fn scoped_point_reads() -> anyhow::Result<()> {
 
     // foreign scope: missing and not-yours look identical
     let err = contacts.find_by_id(partner_b, id_a).await;
-    assert!(matches!(err, Err(Fail::Fatal(_))));
+    assert!(matches!(err, Err(Fault::Fatal(_))));
     assert!(contacts.maybe_find_by_id(partner_b, id_a).await?.is_none());
 
     // All: reads across scopes (audited escape hatch)
@@ -408,7 +408,7 @@ async fn scoped_view_delegates() -> anyhow::Result<()> {
     assert!(view.maybe_find_by_id(ids_b[0]).await?.is_none());
     assert!(matches!(
         view.find_by_id(ids_b[0]).await,
-        Err(Fail::Fatal(_))
+        Err(Fault::Fatal(_))
     ));
 
     // batch + lists
@@ -503,7 +503,7 @@ async fn scope_column_find_by_composes() -> anyhow::Result<()> {
 
     // PartnerId(a) + b: mismatch — not-found, indistinguishable from missing
     let err = contacts.find_by_partner_id(partner_a, partner_b).await;
-    assert!(matches!(err, Err(Fail::Fatal(_))));
+    assert!(matches!(err, Err(Fault::Fatal(_))));
     assert!(
         contacts
             .maybe_find_by_partner_id(partner_a, partner_b)

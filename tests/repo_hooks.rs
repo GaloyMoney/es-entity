@@ -129,6 +129,17 @@ fn fatal_source_message<D: std::fmt::Debug>(err: &es_entity::Fail<D>) -> String 
     }
 }
 
+/// [`fatal_source_message`] for a read path's `Fault`. Panics if `err` isn't
+/// `Fault::Fatal` at all.
+fn fault_source_message(err: &es_entity::Fault) -> String {
+    match err {
+        es_entity::Fault::Fatal(fatal) => std::error::Error::source(fatal)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| fatal.to_string()),
+        other => panic!("expected Fatal, got: {other:?}"),
+    }
+}
+
 // ===========================================================================
 // post_hydrate_hook tests
 // ===========================================================================
@@ -203,7 +214,7 @@ async fn post_hydrate_hook_error_propagates_through_find_by_id() -> anyhow::Resu
     let result = users.find_by_id(id).await;
     match result {
         Err(ref e) => {
-            let msg = fatal_source_message(e);
+            let msg = fault_source_message(e);
             assert!(
                 msg.contains("banned name"),
                 "expected banned name message, got: {msg}"

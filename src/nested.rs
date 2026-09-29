@@ -111,7 +111,7 @@ pub trait HydrateNested<ID>: EsRepo {
         rows_by_tag: &mut HashMap<i32, Vec<db::Row>>,
         tag_cursor: &mut i32,
         lookup: HashMap<ID, &mut P>,
-    ) -> Result<(), crate::Fail<core::convert::Infallible>>
+    ) -> Result<(), crate::Fault>
     where
         P: Parent<<Self as EsRepo>::Entity>;
 }
@@ -124,7 +124,7 @@ pub trait CascadeDeleteNested<ID>: EsRepo {
     fn cascade_delete_in_op<OP>(
         op: &mut OP,
         parent_id: &ID,
-    ) -> impl Future<Output = Result<(), crate::Fail<core::convert::Infallible>>> + Send
+    ) -> impl Future<Output = Result<(), crate::Fault>> + Send
     where
         OP: AtomicOperation + ?Sized;
 }

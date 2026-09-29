@@ -214,13 +214,13 @@ impl ToTokens for ForgetFn<'_> {
                             .await
                         {
                             Ok(e) => e,
-                            Err(errlanes::Fail::Fatal(fatal)) if es_entity::fatal_is_not_found(&fatal) => {
+                            Err(errlanes::Fault::Fatal(fatal)) if es_entity::fatal_is_not_found(&fatal) => {
                                 return Err(errlanes::Fail::from(
                                     errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
                                         .with_context(format!("{} vanished during forget", #table_name))
                                 ));
                             }
-                            Err(other) => return Err(other.never()),
+                            Err(other) => return Err(other.into()),
                         };
                     },
                     quote! {

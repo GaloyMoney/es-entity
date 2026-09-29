@@ -111,7 +111,7 @@ impl<'a> SnapshotFns<'a> {
                 &self,
                 op: OP,
                 id: &#id_type,
-            ) -> Result<#entity, errlanes::Fail<core::convert::Infallible>>
+            ) -> Result<#entity, errlanes::Fault>
             where
                 OP: es_entity::IntoOneTimeExecutor<'a>,
             {

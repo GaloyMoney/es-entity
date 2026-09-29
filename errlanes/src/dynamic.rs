@@ -56,6 +56,18 @@ impl<D: crate::fail::Rejection> Classify for crate::fail::Settled<D> {
     }
 }
 
+impl Classify for crate::fail::Fault {
+    fn lane(&self) -> Lane {
+        crate::fail::Fault::lane(self)
+    }
+}
+
+impl Classify for crate::fail::SettledFault {
+    fn lane(&self) -> Lane {
+        crate::fail::SettledFault::lane(self)
+    }
+}
+
 impl Classify for Transient {
     fn lane(&self) -> Lane {
         Lane::Transient

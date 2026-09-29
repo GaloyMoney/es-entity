@@ -132,8 +132,8 @@ pub struct Users {
 //     async fn create_all(&self, new: Vec<NewUser>) -> Result<Vec<User>, errlanes::Fail<UserConstraintViolation>>;
 //
 //     // Query operations
-//     async fn find_by_id(&self, id: UserId) -> Result<User, errlanes::Fail<core::convert::Infallible>>;
-//     async fn find_by_name(&self, name: &str) -> Result<User, errlanes::Fail<core::convert::Infallible>>;
+//     async fn find_by_id(&self, id: UserId) -> Result<User, errlanes::Fault>;
+//     async fn find_by_name(&self, name: &str) -> Result<User, errlanes::Fault>;
 //
 //     // Update operations
 //     async fn update(&self, entity: &mut User) -> Result<(), errlanes::Fail<UserConstraintViolation>>;

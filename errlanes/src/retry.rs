@@ -1,6 +1,6 @@
 use std::{future::Future, time::Duration};
 
-use crate::fail::{Failure, Settled};
+use crate::{dynamic::transient_of, fail::Laned};
 
 #[derive(Debug, Clone, Copy)]
 pub struct RetryPolicy {
@@ -49,9 +49,9 @@ impl RetryPolicy {
     }
 }
 
-pub async fn retry<T, E, F, Fut>(policy: RetryPolicy, op: F) -> Result<T, Settled<E::Rejection>>
+pub async fn retry<T, E, F, Fut>(policy: &RetryPolicy, op: F) -> Result<T, E::Settled>
 where
-    E: Failure,
+    E: Laned,
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, E>>,
 {
@@ -59,12 +59,12 @@ where
 }
 
 pub async fn retry_with<T, E, F, Fut, S, SFut>(
-    policy: RetryPolicy,
+    policy: &RetryPolicy,
     mut op: F,
     sleep: S,
-) -> Result<T, Settled<E::Rejection>>
+) -> Result<T, E::Settled>
 where
-    E: Failure,
+    E: Laned,
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, E>>,
     S: Fn(Duration) -> SFut,
@@ -76,17 +76,19 @@ where
         match op().await {
             Ok(t) => return Ok(t),
             Err(e) => {
-                let fail = e.into_fail();
-                if let crate::fail::Fail::Transient(t) = &fail
-                    && attempt < policy.max_attempts
-                {
+                if e.is_transient() && attempt < policy.max_attempts {
+                    let transient = transient_of(&e);
                     #[cfg(feature = "tracing")]
-                    tracing::debug!(attempt, kind = %t.kind, "retrying transient failure");
-                    let delay = t.retry_after.unwrap_or_else(|| policy.backoff(attempt));
+                    if let Some(t) = transient {
+                        tracing::debug!(attempt, kind = %t.kind, "retrying transient failure");
+                    }
+                    let delay = transient
+                        .and_then(|t| t.retry_after)
+                        .unwrap_or_else(|| policy.backoff(attempt));
                     sleep(delay).await;
                     continue;
                 }
-                return Err(fail.settle(attempt));
+                return Err(e.settle(attempt));
             }
         }
     }

@@ -1,6 +1,19 @@
 # Error Types
 
-Every generated repo op returns `Result<T, errlanes::Fail<D>>` — the `errlanes` crate's four-lane model: `Rejected(D)` (a typed domain outcome, caller-correctable), `Denied` (authorization), `Transient` (retry the same call), or `Fatal` (a broken invariant or infrastructure failure — page an operator). `EsRepo` is "born-classified": it picks the lane for you, so a caller never has to sniff a `sqlx::Error` to know whether something is worth retrying.
+Every generated repo op returns `errlanes`' four-lane model: `Rejected(D)` (a typed domain outcome, caller-correctable), `Denied` (authorization), `Transient` (retry the same call), or `Fatal` (a broken invariant or infrastructure failure — page an operator). `EsRepo` is "born-classified": it picks the lane for you, so a caller never has to sniff a `sqlx::Error` to know whether something is worth retrying.
+
+### `Fail` vs `Fault`
+
+A write can reject: `create`/`create_all`/`update`/`update_all`/`forget`/`delete` return `Result<T, errlanes::Fail<{Entity}ConstraintViolation>>`, where `Fail<D>` is the full four-arm view (`Rejected(D)`/`Denied`/`Transient`/`Fatal`). A read cannot: `find_by_*`/`maybe_find_by_*`/`find_all`/`list_by_*`/`list_for_*` return `Result<T, errlanes::Fault>`, where `Fault` is `Fail` minus the `Rejected` arm — the type itself says a read never hands back a domain outcome. `?` widens a `Fault` into any `Fail<D>` for free, so calling a read from inside a write path needs no `map_err`:
+
+```rust,ignore
+async fn rename(&self, id: UserId, name: String) -> Result<(), errlanes::Fail<UserConstraintViolation>> {
+    let mut user = self.find_by_id(id).await?; // Fault widens into Fail<UserConstraintViolation>
+    user.rename(name);
+    self.update(&mut user).await?;
+    Ok(())
+}
+```
 
 For an entity called `User`, the macro produces one domain rejection type and two supporting enums:
 
@@ -9,8 +22,6 @@ For an entity called `User`, the macro produces one domain rejection type and tw
 | `UserColumn` | Enum of indexed columns (e.g. `Id`, `Name`, `Email`) |
 | `UserConstraint` | Enum of the table's known constraints (unique / foreign key / check), plus `Unknown` |
 | `UserConstraintViolation` | The repo's one `Rejection` — returned as `errlanes::Fail::Rejected` from `create`/`create_all`/`update`/`update_all`/`forget`/`delete` |
-
-Every write op's signature is `Result<T, errlanes::Fail<UserConstraintViolation>>`. Every find/list op's signature is `Result<T, errlanes::Fail<core::convert::Infallible>>` — `core::convert::Infallible` because reads never reject; a missing row is `Fatal`, not a domain rejection (see [Not found](#not-found), below).
 
 ## `UserConstraintViolation`
 
@@ -25,7 +36,7 @@ pub struct UserConstraintViolation {
 
 When a `create`, `create_all`, `update`, `update_all`, or `forget` operation violates a **unique**, **foreign key**, or **check** constraint, the error comes back as `errlanes::Fail::Rejected(UserConstraintViolation { .. })`. (`NOT NULL` and exclusion violations are not classified and surface as `Fatal` instead — they indicate a programming error, not a caller-correctable domain conflict.) For unique violations, `column()` identifies which column caused the violation and `value()` contains the conflicting value extracted from the PostgreSQL error detail. For foreign key and check violations — or unique constraints not recognized as belonging to one of the entity's columns — `column()` and `value()` are `None`; use `constraint()` (or the raw `constraint_name()`) to identify the constraint instead.
 
-`UserConstraintViolation` implements `errlanes::Rejection` (`Code = UserConstraint`) and `errlanes::HasConstraint`.
+`UserConstraintViolation` implements `errlanes::Rejection` (`Code = UserConstraint`) and `errlanes::Liftable` (`Key = UserConstraint`) — the trait a domain rejection's `#[rejection(lift = UserConstraintViolation)]` reads to lift a constraint into one of its own variants (see the `errlanes` crate docs).
 
 > **Security note:** `value()` contains attacker-influenced input that was rejected by a unique constraint and is frequently PII (e.g. an email address). Do not propagate it to untrusted API clients — a caller can probe which values already exist (user enumeration) — and be aware it may end up in logs via the error's `Display`/`Debug` output. `Display` never prints it; at trust boundaries, prefer matching on `constraint()` / `column()` and map the error to a neutral client-facing message.
 
@@ -100,7 +111,7 @@ match users.update(&mut user).await {
 
 ## Not found
 
-`find_by_*` returns `Result<Entity, errlanes::Fail<core::convert::Infallible>>`: a missing row is `Fatal(Invariant)`, not a rejection — by calling `find_by_*` instead of `maybe_find_by_*`, the caller has already asserted the row must exist, so its absence is a broken invariant, not something the caller is meant to branch on. Its source is a `NotFound` carrying the entity name, the column searched, and the value that was not found (see [es_query](./es-query.md)).
+`find_by_*` returns `Result<Entity, errlanes::Fault>`: a missing row is `Fatal(Invariant)`, not a rejection — by calling `find_by_*` instead of `maybe_find_by_*`, the caller has already asserted the row must exist, so its absence is a broken invariant, not something the caller is meant to branch on. Its source is a `NotFound` carrying the entity name, the column searched, and the value that was not found (see [es_query](./es-query.md)).
 
 Use `maybe_find_by_*` to get `Ok(None)` instead of an error when the entity legitimately may not exist:
 

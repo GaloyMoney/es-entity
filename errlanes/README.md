@@ -11,7 +11,9 @@ Four error lanes, carried in the type instead of re-derived at every layer.
 
 `Fail<D>` is the generic view before retries have run. `Settled<D>` is the
 view after: it has no `Transient` arm, so a `match` that forgets to handle
-exhaustion does not compile.
+exhaustion does not compile. `Fault` is `Fail` minus the `Rejected` arm —
+what an operation that cannot reject (a read) returns; `SettledFault` is its
+post-retry view. `?` widens a `Fault` into any `Fail<D>` for free.
 
 ## Classify at birth, carry forever, record once
 
@@ -63,27 +65,31 @@ enum MyError {
 
 **Tier 2 — derived carrier.** `#[derive(errlanes::Rejection)]` on the
 domain enum and `#[derive(errlanes::Failure)]` on a newtype wrapping
-`Fail<D>` generate every conversion above, plus constraint lifting:
+`Fail<D>` generate every conversion above, plus lifting a foreign rejection
+— a repo's `{Entity}ConstraintViolation` (`Liftable`, keyed by its typed
+constraint enum), or any other `Liftable` implementor (an HTTP client's
+`{status, code}`, a ledger's own rejection subset) — into one of the
+domain's own variants:
 
 ```rust,ignore
 #[derive(Debug, thiserror::Error, errlanes::Rejection)]
-#[rejection(repo = UserConstraintViolation)]
+#[rejection(lift(UserConstraintViolation))]
 enum UserRejection {
     #[error("email already in use")]
-    #[rejection(constraint = UserConstraint::EmailKey)]
+    #[rejection(key = UserConstraint::EmailKey)]
     EmailTaken,
     #[error(transparent)]
     Repo(#[from] UserConstraintViolation),
 }
 
 #[derive(Debug, Clone, errlanes::Failure)]
-#[failure(repo(UserConstraintViolation))]
+#[failure(lift(UserConstraintViolation))]
 struct UserError(errlanes::Fail<UserRejection>);
 ```
 
-An unlisted constraint violation demotes to `Fatal(Invariant)` with the
-constraint name in `context` — a constraint the domain did not anticipate
-is a bug, not a rejection to show a client.
+An unlisted key demotes to `Fatal(Invariant)` with the key in `context` — a
+constraint (or discriminator) the domain did not anticipate is a bug, not a
+rejection to show a client.
 
 ## Why not a generic `Fail<Local>` carrier everywhere
 

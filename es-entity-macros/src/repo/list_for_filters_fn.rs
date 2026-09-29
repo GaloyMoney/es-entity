@@ -430,7 +430,7 @@ impl<'a> ListForFiltersFn<'a> {
                             filters: #filters_ident,
                             cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                             direction: es_entity::ListDirection,
-                        ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fail<core::convert::Infallible>> {
+                        ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault> {
                             self.repo.#fn_name(self.scope, filters, cursor, direction).await
                         }
                     }
@@ -445,7 +445,7 @@ impl<'a> ListForFiltersFn<'a> {
                         filters: #filters_ident,
                         cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                         direction: es_entity::ListDirection,
-                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fail<core::convert::Infallible>>
+                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault>
                         where
                             OP: #query_fn_op_traits
                     {
@@ -469,7 +469,7 @@ impl<'a> ListForFiltersFn<'a> {
                         filters: #filters_ident,
                         sort: es_entity::Sort<#sort_by_name>,
                         cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#combo_cursor_ident>,
-                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#combo_cursor_ident>, errlanes::Fail<core::convert::Infallible>> {
+                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#combo_cursor_ident>, errlanes::Fault> {
                         self.repo.#dispatch_fn(self.scope, filters, sort, cursor).await
                     }
                 }
@@ -483,7 +483,7 @@ impl<'a> ListForFiltersFn<'a> {
                     filters: #filters_ident,
                     sort: es_entity::Sort<#sort_by_name>,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#combo_cursor_ident>,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#combo_cursor_ident>, errlanes::Fail<core::convert::Infallible>>
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#combo_cursor_ident>, errlanes::Fault>
                     where
                         OP: #query_fn_op_traits
                 {
@@ -1203,7 +1203,7 @@ impl<'a> ListForFiltersFn<'a> {
         let post_hydrate_check = if self.post_hydrate_error.is_some() {
             quote! {
                 for __entity in &entities {
-                    self.execute_post_hydrate_hook(__entity).map_err(|e| errlanes::Fail::<core::convert::Infallible>::from(e).never())?;
+                    self.execute_post_hydrate_hook(__entity).map_err(errlanes::Fault::from)?;
                 }
             }
         } else {
@@ -1218,7 +1218,7 @@ impl<'a> ListForFiltersFn<'a> {
                     filters: #filters_ident,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fail<core::convert::Infallible>> {
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault> {
                     self.#fn_in_op(#query_fn_get_op, #scope_fn_pass filters, cursor, direction).await
                 }
             }
@@ -1235,11 +1235,11 @@ impl<'a> ListForFiltersFn<'a> {
                 filters: #filters_ident,
                 cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fail<core::convert::Infallible>>
+            ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault>
                 where
                     OP: #query_fn_op_traits
             {
-                let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fail<core::convert::Infallible>> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault> = async {
                     #scope_convert
                     #extract_has_cursor
                     #destructure_filters
@@ -1394,7 +1394,7 @@ impl ToTokens for ListForFiltersFn<'_> {
                         filters: #filters_name,
                         sort: es_entity::Sort<#sort_by_name>,
                         cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
-                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fail<core::convert::Infallible>>
+                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault>
                     {
                         self.#fn_in_op(#query_fn_get_op, #scope_fn_pass filters, sort, cursor).await
                     }
@@ -1412,11 +1412,11 @@ impl ToTokens for ListForFiltersFn<'_> {
                     filters: #filters_name,
                     sort: es_entity::Sort<#sort_by_name>,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fail<core::convert::Infallible>>
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault>
                     where
                         OP: #query_fn_op_traits
                 {
-                    let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fail<core::convert::Infallible>> = async {
+                    let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault> = async {
                         #scope_convert
                         #extract_has_cursor
                         let es_entity::Sort { by, direction } = sort;
@@ -1555,7 +1555,7 @@ mod tests {
                 filters: OrderFilters,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrderByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderByIdCursor>, errlanes::Fail<core::convert::Infallible>> {
+            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderByIdCursor>, errlanes::Fault> {
                 self.list_for_filters_by_id_in_op(self.pool(), filters, cursor, direction).await
             }
 
@@ -1565,11 +1565,11 @@ mod tests {
                 filters: OrderFilters,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrderByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderByIdCursor>, errlanes::Fail<core::convert::Infallible>>
+            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderByIdCursor>, errlanes::Fault>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderByIdCursor>, errlanes::Fail<core::convert::Infallible>> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderByIdCursor>, errlanes::Fault> = async {
                     let filter_customer_id = filters.customer_id;
                     let filter_status = filters.status;
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
@@ -1687,7 +1687,7 @@ mod tests {
                 filters: OrderFilters,
                 sort: es_entity::Sort<OrderSortBy>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrderCursor>,
-            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderCursor>, errlanes::Fail<core::convert::Infallible>>
+            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderCursor>, errlanes::Fault>
             {
                 self.list_for_filters_in_op(self.pool(), filters, sort, cursor).await
             }
@@ -1698,11 +1698,11 @@ mod tests {
                 filters: OrderFilters,
                 sort: es_entity::Sort<OrderSortBy>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::OrderCursor>,
-            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderCursor>, errlanes::Fail<core::convert::Infallible>>
+            ) -> Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderCursor>, errlanes::Fault>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderCursor>, errlanes::Fail<core::convert::Infallible>> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<Order, cursor_mod::OrderCursor>, errlanes::Fault> = async {
                     let es_entity::Sort { by, direction } = sort;
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
 
@@ -2430,7 +2430,7 @@ mod tests {
         list_for_filters_fn.to_tokens(&mut tokens);
         let token_str = tokens.to_string();
 
-        let expected = r#"pub async fn list_for_filters_by_id (& self , filters : TaskFilters , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: TaskByIdCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Task , cursor_mod :: TaskByIdCursor > , errlanes :: Fail < core :: convert :: Infallible >> { self . list_for_filters_by_id_in_op (self . pool () , filters , cursor , direction) . await } pub async fn list_for_filters_by_id_in_op < 'a , OP > (& self , op : OP , filters : TaskFilters , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: TaskByIdCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Task , cursor_mod :: TaskByIdCursor > , errlanes :: Fail < core :: convert :: Infallible >> where OP : es_entity :: IntoOneTimeExecutor < 'a > { let __result : Result < es_entity :: PaginatedQueryRet < Task , cursor_mod :: TaskByIdCursor > , errlanes :: Fail < core :: convert :: Infallible >> = async { let filter_status = filters . status ; let virtual_flagged = filters . flagged ; let es_entity :: PaginatedQueryArgs { first , after } = cursor ; let id = if let Some (after) = after { Some (after . id) } else { None } ; let (entities , has_next_page) = match direction { es_entity :: ListDirection :: Ascending => match (filter_status . is_some () , virtual_flagged ,) { (.. , None ,) => es_entity :: es_query ! (entity = Task , "(SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND (id > $3) AND ($3 IS NOT NULL) ORDER BY id ASC LIMIT $2) UNION ALL (SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND ($3 IS NULL) ORDER BY id ASC LIMIT $2) ORDER BY id ASC LIMIT $2" , filter_status as Option < String > , (first + 1) as i64 , id as Option < TaskId > ,) . fetch_n (op , first) . await ? , (.. , Some (true) ,) => es_entity :: es_query ! (entity = Task , "(SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND (id > $3) AND ($3 IS NOT NULL) AND (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id ASC LIMIT $2) UNION ALL (SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND ($3 IS NULL) AND (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id ASC LIMIT $2) ORDER BY id ASC LIMIT $2" , filter_status as Option < String > , (first + 1) as i64 , id as Option < TaskId > ,) . fetch_n (op , first) . await ? , (.. , Some (false) ,) => es_entity :: es_query ! (entity = Task , "(SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND (id > $3) AND ($3 IS NOT NULL) AND NOT (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id ASC LIMIT $2) UNION ALL (SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND ($3 IS NULL) AND NOT (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id ASC LIMIT $2) ORDER BY id ASC LIMIT $2" , filter_status as Option < String > , (first + 1) as i64 , id as Option < TaskId > ,) . fetch_n (op , first) . await ? , } , es_entity :: ListDirection :: Descending => match (filter_status . is_some () , virtual_flagged ,) { (.. , None ,) => es_entity :: es_query ! (entity = Task , "(SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND (id < $3) AND ($3 IS NOT NULL) ORDER BY id DESC LIMIT $2) UNION ALL (SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND ($3 IS NULL) ORDER BY id DESC LIMIT $2) ORDER BY id DESC LIMIT $2" , filter_status as Option < String > , (first + 1) as i64 , id as Option < TaskId > ,) . fetch_n (op , first) . await ? , (.. , Some (true) ,) => es_entity :: es_query ! (entity = Task , "(SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND (id < $3) AND ($3 IS NOT NULL) AND (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id DESC LIMIT $2) UNION ALL (SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND ($3 IS NULL) AND (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id DESC LIMIT $2) ORDER BY id DESC LIMIT $2" , filter_status as Option < String > , (first + 1) as i64 , id as Option < TaskId > ,) . fetch_n (op , first) . await ? , (.. , Some (false) ,) => es_entity :: es_query ! (entity = Task , "(SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND (id < $3) AND ($3 IS NOT NULL) AND NOT (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id DESC LIMIT $2) UNION ALL (SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND ($3 IS NULL) AND NOT (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id DESC LIMIT $2) ORDER BY id DESC LIMIT $2" , filter_status as Option < String > , (first + 1) as i64 , id as Option < TaskId > ,) . fetch_n (op , first) . await ? , } } ; let end_cursor = entities . last () . map (cursor_mod :: TaskByIdCursor :: from) ; Ok (es_entity :: PaginatedQueryRet :: new (entities , has_next_page , end_cursor , first)) } . await ; __result } pub async fn list_for_filters (& self , filters : TaskFilters , sort : es_entity :: Sort < TaskSortBy > , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: TaskCursor > ,) -> Result < es_entity :: PaginatedQueryRet < Task , cursor_mod :: TaskCursor > , errlanes :: Fail < core :: convert :: Infallible >> { self . list_for_filters_in_op (self . pool () , filters , sort , cursor) . await } pub async fn list_for_filters_in_op < 'a , OP > (& self , op : OP , filters : TaskFilters , sort : es_entity :: Sort < TaskSortBy > , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: TaskCursor > ,) -> Result < es_entity :: PaginatedQueryRet < Task , cursor_mod :: TaskCursor > , errlanes :: Fail < core :: convert :: Infallible >> where OP : es_entity :: IntoOneTimeExecutor < 'a > { let __result : Result < es_entity :: PaginatedQueryRet < Task , cursor_mod :: TaskCursor > , errlanes :: Fail < core :: convert :: Infallible >> = async { let es_entity :: Sort { by , direction } = sort ; let es_entity :: PaginatedQueryArgs { first , after } = cursor ; use cursor_mod :: TaskCursor ; let res = match by { TaskSortBy :: Id => { let after = after . map (cursor_mod :: TaskByIdCursor :: try_from) . transpose () . map_err (es_entity :: cursor_decode_fatal) ? ; let query = es_entity :: PaginatedQueryArgs { first , after } ; if filters . status . is_none () && filters . flagged . is_none () { self . list_by_id_in_op (op , query , direction) . await ? } else if filters . flagged . is_none () { self . list_for_status_by_id_in_op (op , filters . status . unwrap () , query , direction) . await ? } else { self . list_for_filters_by_id_in_op (op , filters , query , direction) . await ? } . map_end_cursor (cursor_mod :: TaskCursor :: from) } } ; Ok (res) } . await ; __result }"#;
+        let expected = r#"pub async fn list_for_filters_by_id (& self , filters : TaskFilters , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: TaskByIdCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Task , cursor_mod :: TaskByIdCursor > , errlanes :: Fault > { self . list_for_filters_by_id_in_op (self . pool () , filters , cursor , direction) . await } pub async fn list_for_filters_by_id_in_op < 'a , OP > (& self , op : OP , filters : TaskFilters , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: TaskByIdCursor > , direction : es_entity :: ListDirection ,) -> Result < es_entity :: PaginatedQueryRet < Task , cursor_mod :: TaskByIdCursor > , errlanes :: Fault > where OP : es_entity :: IntoOneTimeExecutor < 'a > { let __result : Result < es_entity :: PaginatedQueryRet < Task , cursor_mod :: TaskByIdCursor > , errlanes :: Fault > = async { let filter_status = filters . status ; let virtual_flagged = filters . flagged ; let es_entity :: PaginatedQueryArgs { first , after } = cursor ; let id = if let Some (after) = after { Some (after . id) } else { None } ; let (entities , has_next_page) = match direction { es_entity :: ListDirection :: Ascending => match (filter_status . is_some () , virtual_flagged ,) { (.. , None ,) => es_entity :: es_query ! (entity = Task , "(SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND (id > $3) AND ($3 IS NOT NULL) ORDER BY id ASC LIMIT $2) UNION ALL (SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND ($3 IS NULL) ORDER BY id ASC LIMIT $2) ORDER BY id ASC LIMIT $2" , filter_status as Option < String > , (first + 1) as i64 , id as Option < TaskId > ,) . fetch_n (op , first) . await ? , (.. , Some (true) ,) => es_entity :: es_query ! (entity = Task , "(SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND (id > $3) AND ($3 IS NOT NULL) AND (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id ASC LIMIT $2) UNION ALL (SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND ($3 IS NULL) AND (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id ASC LIMIT $2) ORDER BY id ASC LIMIT $2" , filter_status as Option < String > , (first + 1) as i64 , id as Option < TaskId > ,) . fetch_n (op , first) . await ? , (.. , Some (false) ,) => es_entity :: es_query ! (entity = Task , "(SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND (id > $3) AND ($3 IS NOT NULL) AND NOT (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id ASC LIMIT $2) UNION ALL (SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND ($3 IS NULL) AND NOT (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id ASC LIMIT $2) ORDER BY id ASC LIMIT $2" , filter_status as Option < String > , (first + 1) as i64 , id as Option < TaskId > ,) . fetch_n (op , first) . await ? , } , es_entity :: ListDirection :: Descending => match (filter_status . is_some () , virtual_flagged ,) { (.. , None ,) => es_entity :: es_query ! (entity = Task , "(SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND (id < $3) AND ($3 IS NOT NULL) ORDER BY id DESC LIMIT $2) UNION ALL (SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND ($3 IS NULL) ORDER BY id DESC LIMIT $2) ORDER BY id DESC LIMIT $2" , filter_status as Option < String > , (first + 1) as i64 , id as Option < TaskId > ,) . fetch_n (op , first) . await ? , (.. , Some (true) ,) => es_entity :: es_query ! (entity = Task , "(SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND (id < $3) AND ($3 IS NOT NULL) AND (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id DESC LIMIT $2) UNION ALL (SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND ($3 IS NULL) AND (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id DESC LIMIT $2) ORDER BY id DESC LIMIT $2" , filter_status as Option < String > , (first + 1) as i64 , id as Option < TaskId > ,) . fetch_n (op , first) . await ? , (.. , Some (false) ,) => es_entity :: es_query ! (entity = Task , "(SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND (id < $3) AND ($3 IS NOT NULL) AND NOT (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id DESC LIMIT $2) UNION ALL (SELECT id FROM tasks WHERE COALESCE(status = $1, $1 IS NULL) AND ($3 IS NULL) AND NOT (EXISTS (SELECT 1 FROM task_flags f WHERE f.task_id = tasks.id)) ORDER BY id DESC LIMIT $2) ORDER BY id DESC LIMIT $2" , filter_status as Option < String > , (first + 1) as i64 , id as Option < TaskId > ,) . fetch_n (op , first) . await ? , } } ; let end_cursor = entities . last () . map (cursor_mod :: TaskByIdCursor :: from) ; Ok (es_entity :: PaginatedQueryRet :: new (entities , has_next_page , end_cursor , first)) } . await ; __result } pub async fn list_for_filters (& self , filters : TaskFilters , sort : es_entity :: Sort < TaskSortBy > , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: TaskCursor > ,) -> Result < es_entity :: PaginatedQueryRet < Task , cursor_mod :: TaskCursor > , errlanes :: Fault > { self . list_for_filters_in_op (self . pool () , filters , sort , cursor) . await } pub async fn list_for_filters_in_op < 'a , OP > (& self , op : OP , filters : TaskFilters , sort : es_entity :: Sort < TaskSortBy > , cursor : es_entity :: PaginatedQueryArgs < cursor_mod :: TaskCursor > ,) -> Result < es_entity :: PaginatedQueryRet < Task , cursor_mod :: TaskCursor > , errlanes :: Fault > where OP : es_entity :: IntoOneTimeExecutor < 'a > { let __result : Result < es_entity :: PaginatedQueryRet < Task , cursor_mod :: TaskCursor > , errlanes :: Fault > = async { let es_entity :: Sort { by , direction } = sort ; let es_entity :: PaginatedQueryArgs { first , after } = cursor ; use cursor_mod :: TaskCursor ; let res = match by { TaskSortBy :: Id => { let after = after . map (cursor_mod :: TaskByIdCursor :: try_from) . transpose () . map_err (es_entity :: cursor_decode_fatal) ? ; let query = es_entity :: PaginatedQueryArgs { first , after } ; if filters . status . is_none () && filters . flagged . is_none () { self . list_by_id_in_op (op , query , direction) . await ? } else if filters . flagged . is_none () { self . list_for_status_by_id_in_op (op , filters . status . unwrap () , query , direction) . await ? } else { self . list_for_filters_by_id_in_op (op , filters , query , direction) . await ? } . map_end_cursor (cursor_mod :: TaskCursor :: from) } } ; Ok (res) } . await ; __result }"#;
 
         assert_eq!(
             token_str, expected,

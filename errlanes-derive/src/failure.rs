@@ -11,7 +11,7 @@ struct FailureInput {
     #[darling(default)]
     from: PathList,
     #[darling(default)]
-    repo: PathList,
+    lift: PathList,
     #[darling(default)]
     sqlx: darling::util::Flag,
 }
@@ -111,6 +111,12 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                 Self(errlanes::Fail::from(e))
             }
         }
+
+        impl From<errlanes::Fault> for #ident {
+            fn from(f: errlanes::Fault) -> Self {
+                Self(f.into())
+            }
+        }
     };
 
     if input.sqlx.is_present() {
@@ -133,16 +139,16 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
         });
     }
 
-    for repo in input.repo.iter() {
+    for lift in input.lift.iter() {
         tokens.extend(quote! {
-            impl From<errlanes::Fail<#repo>> for #ident {
-                fn from(f: errlanes::Fail<#repo>) -> Self {
-                    Self(f.widen_with(<#d_ty as errlanes::LiftConstraint<#repo>>::lift))
+            impl From<errlanes::Fail<#lift>> for #ident {
+                fn from(f: errlanes::Fail<#lift>) -> Self {
+                    Self(f.widen_with(<#d_ty as errlanes::Lift<#lift>>::lift))
                 }
             }
 
-            impl From<#repo> for #ident {
-                fn from(x: #repo) -> Self {
+            impl From<#lift> for #ident {
+                fn from(x: #lift) -> Self {
                     errlanes::Fail::Rejected(x).into()
                 }
             }

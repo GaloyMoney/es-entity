@@ -7,7 +7,7 @@
 | `post_persist_hook` | After events are persisted (inside the transaction) | `async fn(&self, &mut OP, &Entity, LastPersisted<Event>) -> Result<(), E>` | Auditing, side-effect recording, cross-entity writes |
 | `post_hydrate_hook` | After an entity is reconstructed from events | `fn(&self, &Entity) -> Result<(), E>` | Validation against external config, policy enforcement |
 
-A hook cannot return a domain rejection — `E` must convert into `errlanes::Fail<core::convert::Infallible>`, so in practice `error` is `errlanes::Fatal` (or `errlanes::Denied` / `errlanes::Transient`, if the hook's failure is one of those lanes instead). A hook failure always widens into whatever `errlanes::Fail<D>` the calling op returns — see [Error Types](./repo-errors.md).
+A hook cannot return a domain rejection. `post_persist_hook` only ever runs from a write path, so its `E` must satisfy `errlanes::Fail<{Entity}ConstraintViolation>: From<E>` directly. `post_hydrate_hook` runs from both writes (`create`/`create_all`) and pure reads (`find_by_*`, `list_by_*`, ...), so its `E` must satisfy the narrower `errlanes::Fault: From<E>` instead — which then widens into whichever of `Fail<D>`/`Fault` the calling op returns. In practice `error` is `errlanes::Fatal` for both (or `errlanes::Denied` / `errlanes::Transient`, if the hook's failure is one of those lanes instead) — see [`Fail` vs `Fault`](./repo-errors.md#fail-vs-fault).
 
 ## post_persist_hook
 
@@ -22,7 +22,7 @@ Runs after events have been written to the database but before the entity is ret
 // Explicit syntax with default error:
 #[es_repo(entity = "User", post_persist_hook(method = "on_persist"))]
 
-// Explicit syntax with a custom error, which must convert into errlanes::Fail<core::convert::Infallible>:
+// Explicit syntax with a custom error, which must convert into errlanes::Fail<UserConstraintViolation>:
 #[es_repo(entity = "User", post_persist_hook(method = "on_persist", error = "errlanes::Fatal"))]
 ```
 
@@ -78,7 +78,7 @@ Runs synchronously every time an entity is reconstructed from its event stream �
 )]
 ```
 
-Both `method` and `error` are required; `error` must convert into `errlanes::Fail<core::convert::Infallible>` — see the note above.
+Both `method` and `error` are required; `error` must convert into `errlanes::Fault` — see the note above.
 
 ### Hook method
 
@@ -97,7 +97,7 @@ impl Users {
 
 ### Error propagation
 
-The error widens directly into the op's `errlanes::Fail<D>` — as `Fatal` (or whichever lane the hook error carries) — for `create`, `create_all`, `find_by_*`, `list_by_*`, `list_for_*`, and `find_all`:
+The error widens directly into whatever the calling op returns — `errlanes::Fail<D>` on `create`/`create_all`, `errlanes::Fault` on `find_by_*`/`list_by_*`/`list_for_*`/`find_all` — as `Fatal` (or whichever lane the hook error carries):
 
 ```rust,ignore
 match users.find_by_id(id).await {

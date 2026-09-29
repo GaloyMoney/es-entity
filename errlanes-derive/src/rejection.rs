@@ -1,5 +1,5 @@
 use convert_case::{Case, Casing};
-use darling::{FromDeriveInput, FromVariant, ast};
+use darling::{FromDeriveInput, FromVariant, ast, util::PathList};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Field, Ident, Path};
@@ -12,7 +12,7 @@ struct RejectionInput {
     #[darling(default)]
     code_prefix: Option<String>,
     #[darling(default)]
-    repo: Option<Path>,
+    lift: PathList,
 }
 
 #[derive(Debug, FromVariant)]
@@ -25,9 +25,26 @@ struct RejectionVariant {
     #[darling(default)]
     level: Option<String>,
     #[darling(default)]
-    constraint: Option<Path>,
+    key: Option<Path>,
+    /// Which `lift = X` target this `key` belongs to. A `key`'s own path
+    /// (e.g. `UserConstraint::EmailKey`) names the *key* type, not the
+    /// *lift* (`Liftable`) type — the two are unrelated types the macro has
+    /// no way to connect syntactically — so with more than one `lift`
+    /// target this is required to disambiguate. With exactly one target
+    /// it's implied and may be omitted.
+    #[darling(default)]
+    via: Option<Path>,
     #[darling(default)]
     with: Option<Path>,
+}
+
+/// Ident-by-ident path equality — syn::Path has no `PartialEq`.
+fn paths_equal(a: &Path, b: &Path) -> bool {
+    a.segments.len() == b.segments.len()
+        && a.segments
+            .iter()
+            .zip(b.segments.iter())
+            .all(|(x, y)| x.ident == y.ident)
 }
 
 impl RejectionVariant {
@@ -98,13 +115,36 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
         }
     };
 
-    if input.repo.is_none() {
+    if input.lift.is_empty() {
         for v in variants {
-            if v.constraint.is_some() {
+            if v.key.is_some() {
                 return Err(darling::Error::custom(
-                    "#[rejection(constraint = ...)] requires enum-level #[rejection(repo = ...)]",
+                    "#[rejection(key = ...)] requires enum-level #[rejection(lift = ...)]",
                 )
                 .with_span(&v.ident));
+            }
+        }
+    } else {
+        for v in variants {
+            if v.key.is_none() {
+                continue;
+            }
+            match (&v.via, input.lift.len()) {
+                (Some(via), _) => {
+                    if !input.lift.iter().any(|lift_ty| paths_equal(via, lift_ty)) {
+                        return Err(darling::Error::custom(
+                            "#[rejection(via = ...)] does not name a declared #[rejection(lift = ...)] target",
+                        )
+                        .with_span(&v.ident));
+                    }
+                }
+                (None, 1) => {}
+                (None, _) => {
+                    return Err(darling::Error::custom(
+                        "more than one #[rejection(lift = ...)] target: this `key = ...` variant needs `via = ...` to say which one it lifts from",
+                    )
+                    .with_span(&v.ident));
+                }
             }
         }
     }
@@ -190,31 +230,39 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
         }
     };
 
-    if let Some(repo) = &input.repo {
+    let single_target = input.lift.len() == 1;
+    for lift_ty in input.lift.iter() {
         let mut lift_arms = Vec::new();
         for v in variants {
-            let Some(constraint) = &v.constraint else {
+            let Some(key) = &v.key else {
                 continue;
             };
+            let belongs = match &v.via {
+                Some(via) => paths_equal(via, lift_ty),
+                None => single_target,
+            };
+            if !belongs {
+                continue;
+            }
             let variant_ident = &v.ident;
             match (&v.with, v.fields.style) {
                 (Some(with), _) => {
                     lift_arms.push(quote! {
-                        if constraint == Some(#constraint) {
-                            return Ok((#with)(cv));
+                        if key == Some(#key) {
+                            return Ok((#with)(x));
                         }
                     });
                 }
                 (None, ast::Style::Unit) => {
                     lift_arms.push(quote! {
-                        if constraint == Some(#constraint) {
+                        if key == Some(#key) {
                             return Ok(Self::#variant_ident);
                         }
                     });
                 }
                 (None, _) => {
                     return Err(darling::Error::custom(
-                        "a `constraint = ...` variant with fields needs `with = path::to::fn`",
+                        "a `key = ...` variant with fields needs `with = path::to::fn`",
                     )
                     .with_span(&v.ident));
                 }
@@ -222,14 +270,16 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
         }
 
         tokens.extend(quote! {
-            impl errlanes::LiftConstraint<#repo> for #ident {
-                fn lift(cv: #repo) -> Result<Self, errlanes::Fatal> {
-                    let constraint = errlanes::HasConstraint::constraint(&cv);
+            impl errlanes::Lift<#lift_ty> for #ident {
+                fn lift(x: #lift_ty) -> Result<Self, errlanes::Fatal> {
+                    let key = errlanes::Liftable::key(&x);
                     #(#lift_arms)*
-                    Err(errlanes::Fatal::invariant(format!(
-                        "unmapped constraint {}",
-                        errlanes::HasConstraint::constraint_name(&cv).unwrap_or("?")
-                    )))
+                    let unknown = match key {
+                        Some(k) => <<#lift_ty as errlanes::Liftable>::Key as Into<&'static str>>::into(k).to_string(),
+                        None => "unknown".to_string(),
+                    };
+                    Err(errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, x)
+                        .with_context(unknown))
                 }
             }
         });

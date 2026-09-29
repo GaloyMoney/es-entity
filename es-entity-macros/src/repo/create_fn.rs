@@ -163,7 +163,7 @@ impl ToTokens for CreateFn<'_> {
 
         let post_hydrate_check = if self.post_hydrate_error.is_some() {
             quote! {
-                self.execute_post_hydrate_hook(&entity).map_err(|e| errlanes::Fail::<core::convert::Infallible>::from(e).never())?;
+                self.execute_post_hydrate_hook(&entity).map_err(errlanes::Fault::from)?;
             }
         } else {
             quote! {}

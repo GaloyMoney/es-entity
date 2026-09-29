@@ -47,48 +47,180 @@ pub trait Rejection: Error + Send + Sync + 'static {
     }
 }
 
-/// The uninhabited code type for `Fail<core::convert::Infallible>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum NeverCode {}
+/// A foreign rejection carrying an opaque discriminator a domain can
+/// pattern-match — the general form of "a repo's `{Entity}ConstraintViolation`
+/// names a constraint": any Tier-1 boundary (a ledger's own rejection subset,
+/// an HTTP client's `{status, code}`, a payment processor's 409 body) can
+/// implement this the same way.
+pub trait Liftable: Rejection {
+    type Key: Copy + Eq + fmt::Debug + Into<&'static str>;
 
-impl fmt::Display for NeverCode {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {}
+    /// `None` means the discriminator is unknown to the caller — always
+    /// demoted to [`Fatal`] by [`Lift::lift`].
+    fn key(&self) -> Option<Self::Key>;
+}
+
+/// Emitted by `#[derive(errlanes::Rejection)]` when `#[rejection(lift = X)]`
+/// is given: lifts a foreign rejection into a domain rejection, demoting
+/// anything the domain did not name to [`Fatal`].
+pub trait Lift<X: Liftable>: Sized {
+    fn lift(x: X) -> Result<Self, Fatal>;
+}
+
+/// `Fail` minus the `Rejected` lane: what an operation that cannot reject
+/// (nothing about it is the caller's to correct) returns. Reads return
+/// `Fault`; writes return `Fail<{Entity}ConstraintViolation>` — the type
+/// itself says whether a call can ever hand back a domain outcome.
+#[derive(Debug, Clone)]
+pub enum Fault {
+    Denied(Denied),
+    Transient(Transient),
+    Fatal(Fatal),
+}
+
+impl Fault {
+    pub fn lane(&self) -> Lane {
+        match self {
+            Fault::Denied(_) => Lane::Denied,
+            Fault::Transient(_) => Lane::Transient,
+            Fault::Fatal(_) => Lane::Fatal,
+        }
+    }
+
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Fault::Transient(_))
+    }
+
+    /// Consumes the `Transient` lane. `attempts` is what the retry loop
+    /// counted.
+    pub fn settle(self, attempts: u32) -> SettledFault {
+        match self {
+            Fault::Denied(d) => SettledFault::Denied(d),
+            Fault::Transient(last) => SettledFault::Exhausted(Exhausted { attempts, last }),
+            Fault::Fatal(f) => SettledFault::Fatal(f),
+        }
     }
 }
 
-impl From<NeverCode> for &'static str {
-    fn from(code: NeverCode) -> Self {
-        match code {}
+impl fmt::Display for Fault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Fault::Denied(d) => write!(f, "{d}"),
+            Fault::Transient(t) => write!(f, "{t}"),
+            Fault::Fatal(x) => write!(f, "{x}"),
+        }
     }
 }
 
-impl Rejection for core::convert::Infallible {
-    type Code = NeverCode;
-
-    fn code(&self) -> NeverCode {
-        match *self {}
+impl Error for Fault {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        // Same contract as `Fail::source` (pitfall 2): the lane payload
+        // itself, so `lane_of` can downcast it.
+        match self {
+            Fault::Denied(d) => Some(d),
+            Fault::Transient(t) => Some(t),
+            Fault::Fatal(x) => Some(x),
+        }
     }
 }
 
-/// Implemented by a repo's generated `{Entity}ConstraintViolation`. Read by
-/// [`LiftConstraint`] to translate a constraint the domain names into one of
-/// its own rejection variants.
-pub trait HasConstraint: Rejection {
-    type Constraint: Copy + Eq + fmt::Debug + Into<&'static str>;
-
-    fn constraint(&self) -> Option<Self::Constraint>;
-    fn constraint_name(&self) -> Option<&str>;
+impl From<Transient> for Fault {
+    fn from(t: Transient) -> Self {
+        Fault::Transient(t)
+    }
 }
 
-/// Emitted by `#[derive(errlanes::Rejection)]` when `#[rejection(repo = X)]`
-/// is given: lifts a repo constraint violation into a domain rejection,
-/// demoting anything the domain did not name to [`Fatal`].
-pub trait LiftConstraint<X: HasConstraint>: Sized {
-    fn lift(cv: X) -> Result<Self, Fatal>;
+impl From<Fatal> for Fault {
+    fn from(f: Fatal) -> Self {
+        Fault::Fatal(f)
+    }
+}
+
+impl From<Denied> for Fault {
+    fn from(d: Denied) -> Self {
+        Fault::Denied(d)
+    }
+}
+
+impl From<Exhausted> for Fault {
+    fn from(e: Exhausted) -> Self {
+        Fault::Fatal(Fatal::from_error(crate::lane::FatalKind::Exhausted, e))
+    }
+}
+
+/// The uninhabited "this hook is not configured" default error type
+/// (`post_persist_hook`/`post_hydrate_hook`'s bound is `Fault: From<X>`, and
+/// the no-hook case sets `X = core::convert::Infallible`) converts trivially.
+impl From<core::convert::Infallible> for Fault {
+    fn from(e: core::convert::Infallible) -> Self {
+        match e {}
+    }
+}
+
+impl From<Box<dyn Error + Send + Sync>> for Fault {
+    fn from(e: Box<dyn Error + Send + Sync>) -> Self {
+        Fault::Fatal(Fatal::from_boxed(crate::lane::FatalKind::Dependency, e))
+    }
+}
+
+/// `Fault` after retries have run: no `Transient` arm.
+#[derive(Debug, Clone)]
+pub enum SettledFault {
+    Denied(Denied),
+    Exhausted(Exhausted),
+    Fatal(Fatal),
+}
+
+impl SettledFault {
+    /// `Exhausted` reports as `Lane::Fatal`, as `Settled::lane` does.
+    pub fn lane(&self) -> Lane {
+        match self {
+            SettledFault::Denied(_) => Lane::Denied,
+            SettledFault::Exhausted(_) => Lane::Fatal,
+            SettledFault::Fatal(_) => Lane::Fatal,
+        }
+    }
+}
+
+impl fmt::Display for SettledFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SettledFault::Denied(d) => write!(f, "{d}"),
+            SettledFault::Exhausted(e) => write!(f, "{e}"),
+            SettledFault::Fatal(x) => write!(f, "{x}"),
+        }
+    }
+}
+
+impl Error for SettledFault {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            SettledFault::Denied(d) => Some(d),
+            SettledFault::Exhausted(e) => Some(e),
+            SettledFault::Fatal(x) => Some(x),
+        }
+    }
+}
+
+impl<D> From<SettledFault> for Settled<D> {
+    fn from(f: SettledFault) -> Self {
+        match f {
+            SettledFault::Denied(d) => Settled::Denied(d),
+            SettledFault::Exhausted(e) => Settled::Exhausted(e),
+            SettledFault::Fatal(x) => Settled::Fatal(x),
+        }
+    }
 }
 
 /// The generic view over a domain rejection `D`, before retries have run.
+///
+/// **Display discipline**: [`Display`](fmt::Display)'s `Rejected` arm keeps
+/// its `rejected: {d}` prefix for logs, but no boundary may build a
+/// user-facing message from `to_string()` — a rejection's message may embed
+/// caller-supplied input. Use [`as_rejected`](Fail::as_rejected) and
+/// [`Rejection::code`] instead: `record`/`record_fail` key `error.code` off
+/// the code, never the message, and a GraphQL boundary should do the same
+/// for its error extension.
 #[derive(Debug, Clone)]
 pub enum Fail<D> {
     Rejected(D),
@@ -150,10 +282,15 @@ impl<D> Fail<D> {
         }
     }
 
-    pub fn rejected(self) -> Result<D, Fail<D>> {
+    /// Narrows to the domain outcome, or the non-domain fault. `let d =
+    /// e.rejected()?;` propagates the fault into any enclosing `Fail<_>` (or
+    /// a `Failure` carrier) via the blanket `From<Fault>`.
+    pub fn rejected(self) -> Result<D, Fault> {
         match self {
             Fail::Rejected(d) => Ok(d),
-            other => Err(other),
+            Fail::Denied(d) => Err(Fault::Denied(d)),
+            Fail::Transient(t) => Err(Fault::Transient(t)),
+            Fail::Fatal(f) => Err(Fault::Fatal(f)),
         }
     }
 
@@ -180,19 +317,6 @@ impl<D> Fail<D> {
     }
 }
 
-impl Fail<core::convert::Infallible> {
-    /// A `Fail` that provably carries no rejection converts into any
-    /// `Fail<D>`.
-    pub fn never<D>(self) -> Fail<D> {
-        match self {
-            Fail::Rejected(never) => match never {},
-            Fail::Denied(d) => Fail::Denied(d),
-            Fail::Transient(t) => Fail::Transient(t),
-            Fail::Fatal(f) => Fail::Fatal(f),
-        }
-    }
-}
-
 impl<D> Settled<D> {
     /// `Exhausted` reports as `Lane::Fatal` — by the time retries are done,
     /// it pages just like any other fatal outcome.
@@ -205,10 +329,12 @@ impl<D> Settled<D> {
         }
     }
 
-    pub fn rejected(self) -> Result<D, Settled<D>> {
+    pub fn rejected(self) -> Result<D, SettledFault> {
         match self {
             Settled::Rejected(d) => Ok(d),
-            other => Err(other),
+            Settled::Denied(d) => Err(SettledFault::Denied(d)),
+            Settled::Exhausted(e) => Err(SettledFault::Exhausted(e)),
+            Settled::Fatal(f) => Err(SettledFault::Fatal(f)),
         }
     }
 
@@ -220,6 +346,18 @@ impl<D> Settled<D> {
                 Fail::Fatal(Fatal::from_error(crate::lane::FatalKind::Exhausted, e))
             }
             Settled::Fatal(f) => Fail::Fatal(f),
+        }
+    }
+}
+
+/// The real blanket the `Infallible` encoding could not have: `Fault` is not
+/// `Fail`, so this does not overlap `From<T> for T`.
+impl<D> From<Fault> for Fail<D> {
+    fn from(f: Fault) -> Self {
+        match f {
+            Fault::Denied(d) => Fail::Denied(d),
+            Fault::Transient(t) => Fail::Transient(t),
+            Fault::Fatal(x) => Fail::Fatal(x),
         }
     }
 }
@@ -335,6 +473,52 @@ impl<D: Rejection> Failure for Fail<D> {
     }
 }
 
+mod sealed {
+    pub trait Sealed {}
+    impl<F: super::Failure> Sealed for F {}
+    impl Sealed for super::Fault {}
+}
+
+/// Sealed. The thing `retry`/`record` need from any error they are handed:
+/// its lane, and how to settle it. Implemented by every [`Failure`] (which
+/// covers `Fail<D>` itself and every carrier) and by [`Fault`] — the two
+/// shapes a generated repo op can return.
+pub trait Laned: sealed::Sealed + Error + Send + Sync + 'static + Sized {
+    type Settled: Error + Send + Sync + 'static;
+
+    fn lane(&self) -> Lane;
+
+    fn is_transient(&self) -> bool {
+        self.lane() == Lane::Transient
+    }
+
+    fn settle(self, attempts: u32) -> Self::Settled;
+}
+
+impl<F: Failure> Laned for F {
+    type Settled = Settled<F::Rejection>;
+
+    fn lane(&self) -> Lane {
+        Failure::lane(self)
+    }
+
+    fn settle(self, attempts: u32) -> Self::Settled {
+        self.into_fail().settle(attempts)
+    }
+}
+
+impl Laned for Fault {
+    type Settled = SettledFault;
+
+    fn lane(&self) -> Lane {
+        Fault::lane(self)
+    }
+
+    fn settle(self, attempts: u32) -> Self::Settled {
+        Fault::settle(self, attempts)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,14 +611,14 @@ mod tests {
     }
 
     #[test]
-    fn never_converts_into_any_rejection_type() {
-        let never: Fail<core::convert::Infallible> = Fatal::new(FatalKind::CorruptState).into();
-        let widened: Fail<Small> = never.never();
+    fn fault_converts_into_any_fail_via_the_real_blanket() {
+        let fault: Fault = Fatal::new(FatalKind::CorruptState).into();
+        let widened: Fail<Small> = fault.into();
         assert_eq!(widened.lane(), Lane::Fatal);
     }
 
     #[test]
-    fn rejected_narrows_or_returns_the_original() {
+    fn rejected_narrows_or_returns_the_fault() {
         let f: Fail<Small> = Fail::Rejected(Small);
         assert_eq!(f.rejected().unwrap(), Small);
 
@@ -447,5 +631,21 @@ mod tests {
         let t: Fail<Small> = Transient::new(TransientKind::Deadlock).into();
         let source = std::error::Error::source(&t).expect("source present");
         assert!(source.is::<Transient>());
+    }
+
+    #[test]
+    fn fault_source_is_the_lane_payload_itself_so_lane_of_can_downcast_it() {
+        let t: Fault = Transient::new(TransientKind::Deadlock).into();
+        let source = std::error::Error::source(&t).expect("source present");
+        assert!(source.is::<Transient>());
+    }
+
+    #[test]
+    fn laned_settle_agrees_between_fail_and_fault() {
+        let t: Fail<Small> = Transient::new(TransientKind::Deadlock).into();
+        assert!(matches!(Laned::settle(t, 2), Settled::Exhausted(e) if e.attempts == 2));
+
+        let t: Fault = Transient::new(TransientKind::Deadlock).into();
+        assert!(matches!(Laned::settle(t, 2), SettledFault::Exhausted(e) if e.attempts == 2));
     }
 }

@@ -89,8 +89,7 @@ where
     async fn fetch_optional_inner(
         self,
         op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::errlanes::Fail<core::convert::Infallible>>
-    {
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::errlanes::Fault> {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
         if rows.is_empty() {
@@ -104,10 +103,7 @@ where
         self,
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
-    ) -> Result<
-        (Vec<<Repo as EsRepo>::Entity>, bool),
-        crate::errlanes::Fail<core::convert::Infallible>,
-    > {
+    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), crate::errlanes::Fault> {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
         EntityEvents::load_n(rows.into_iter(), first).map_err(crate::error::hydration_fatal)
@@ -122,7 +118,7 @@ where
             Vec<HydrationRow<<<<Repo as EsRepo>::Entity as EsEntity>::Event as EsEvent>::EntityId>>,
             std::collections::HashMap<i32, Vec<db::Row>>,
         ),
-        crate::errlanes::Fail<core::convert::Infallible>,
+        crate::errlanes::Fault,
     > {
         let executor = op.into_executor();
         let spec = <Repo as EsRepo>::nested_tree_spec();
@@ -191,8 +187,7 @@ where
     pub async fn fetch_optional(
         self,
         op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::errlanes::Fail<core::convert::Infallible>>
-    {
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::errlanes::Fault> {
         self.fetch_optional_inner(op).await
     }
 
@@ -204,10 +199,7 @@ where
         self,
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
-    ) -> Result<
-        (Vec<<Repo as EsRepo>::Entity>, bool),
-        crate::errlanes::Fail<core::convert::Infallible>,
-    > {
+    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), crate::errlanes::Fault> {
         self.fetch_n_inner(op, first).await
     }
 }
@@ -229,8 +221,7 @@ where
     pub async fn fetch_optional(
         self,
         op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::errlanes::Fail<core::convert::Infallible>>
-    {
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::errlanes::Fault> {
         self.fetch_optional_tree(op, false).await
     }
 
@@ -242,10 +233,7 @@ where
         self,
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
-    ) -> Result<
-        (Vec<<Repo as EsRepo>::Entity>, bool),
-        crate::errlanes::Fail<core::convert::Infallible>,
-    > {
+    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), crate::errlanes::Fault> {
         self.fetch_n_tree(op, first, false).await
     }
 
@@ -254,8 +242,7 @@ where
     pub async fn fetch_optional_include_deleted(
         self,
         op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::errlanes::Fail<core::convert::Infallible>>
-    {
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::errlanes::Fault> {
         self.fetch_optional_tree(op, true).await
     }
 
@@ -265,10 +252,7 @@ where
         self,
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
-    ) -> Result<
-        (Vec<<Repo as EsRepo>::Entity>, bool),
-        crate::errlanes::Fail<core::convert::Infallible>,
-    > {
+    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), crate::errlanes::Fault> {
         self.fetch_n_tree(op, first, true).await
     }
 
@@ -276,8 +260,7 @@ where
         self,
         op: impl IntoOneTimeExecutor<'_>,
         include_deleted: bool,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::errlanes::Fail<core::convert::Infallible>>
-    {
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::errlanes::Fault> {
         let (root, mut by_tag) = self.fetch_tree_rows(op, include_deleted).await?;
         let Some(entity) = EntityEvents::load_first::<<Repo as EsRepo>::Entity>(root)
             .map_err(crate::error::hydration_fatal)?
@@ -296,10 +279,7 @@ where
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
         include_deleted: bool,
-    ) -> Result<
-        (Vec<<Repo as EsRepo>::Entity>, bool),
-        crate::errlanes::Fail<core::convert::Infallible>,
-    > {
+    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), crate::errlanes::Fault> {
         let (root, mut by_tag) = self.fetch_tree_rows(op, include_deleted).await?;
         let (mut entities, more) = EntityEvents::load_n::<<Repo as EsRepo>::Entity>(root, first)
             .map_err(crate::error::hydration_fatal)?;

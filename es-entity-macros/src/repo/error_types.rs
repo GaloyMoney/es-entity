@@ -443,15 +443,11 @@ impl<'a> ErrorTypes<'a> {
                     }
                 }
 
-                impl errlanes::HasConstraint for #cv {
-                    type Constraint = #constraint_enum;
+                impl errlanes::Liftable for #cv {
+                    type Key = #constraint_enum;
 
-                    fn constraint(&self) -> Option<Self::Constraint> {
+                    fn key(&self) -> Option<Self::Key> {
                         self.constraint
-                    }
-
-                    fn constraint_name(&self) -> Option<&str> {
-                        self.constraint_name.as_deref()
                     }
                 }
             }
@@ -583,15 +579,11 @@ impl<'a> ErrorTypes<'a> {
                     }
                 }
 
-                impl errlanes::HasConstraint for #cv {
-                    type Constraint = #constraint_enum;
+                impl errlanes::Liftable for #cv {
+                    type Key = #constraint_enum;
 
-                    fn constraint(&self) -> Option<Self::Constraint> {
+                    fn key(&self) -> Option<Self::Key> {
                         #cv::constraint(self)
-                    }
-
-                    fn constraint_name(&self) -> Option<&str> {
-                        #cv::constraint_name(self)
                     }
                 }
 
