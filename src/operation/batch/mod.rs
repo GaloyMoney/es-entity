@@ -109,10 +109,10 @@ pub trait BatchIsolation: SavepointOperation {
         items: &'a [T],
         budget: BisectBudget,
         f: F,
-    ) -> impl Future<Output = Result<BisectOutcomes<E>, sqlx::Error>> + 'a
+    ) -> impl Future<Output = Result<BisectOutcomes<E>, E>> + 'a
     where
         T: 'a,
-        E: std::error::Error + 'static,
+        E: std::error::Error + From<crate::errlanes::Fatal> + 'static,
         F: AsyncFnOnce(&mut SavepointOp<'_>, &[T]) -> Result<(), E> + Clone + Sync + 'a,
     {
         self.run_bisected_with(
@@ -126,18 +126,20 @@ pub trait BatchIsolation: SavepointOperation {
     /// [`run_bisected`](Self::run_bisected) with a caller-supplied notion of
     /// which failures are transient.
     ///
-    /// Classification being the caller's, the error bound here is just
-    /// [`Display`](std::fmt::Display).
+    /// The outer `Err` (the search itself gave up, or the savepoint
+    /// machinery failed) always arrives as `E::from(errlanes::Fatal)` — the
+    /// bisect never learned enough to attribute the failure to a range, so
+    /// there is nothing left to retry automatically.
     fn run_bisected_with<'a, T, E, F, P>(
         &'a mut self,
         items: &'a [T],
         budget: BisectBudget,
         policy: TransientPolicy<P>,
         f: F,
-    ) -> impl Future<Output = Result<BisectOutcomes<E>, sqlx::Error>> + 'a
+    ) -> impl Future<Output = Result<BisectOutcomes<E>, E>> + 'a
     where
         T: 'a,
-        E: std::fmt::Display + 'a,
+        E: std::fmt::Display + From<crate::errlanes::Fatal> + 'a,
         P: Fn(&E) -> bool + 'a,
         F: AsyncFnOnce(&mut SavepointOp<'_>, &[T]) -> Result<(), E> + Clone + Sync + 'a,
     {
@@ -149,7 +151,15 @@ pub trait BatchIsolation: SavepointOperation {
                 let f = f.clone();
                 let slice = &items[range.clone()];
 
-                let verdict = match self.with_savepoint(async |sp| f(sp, slice).await).await? {
+                let verdict = match self
+                    .with_savepoint(async |sp| f(sp, slice).await)
+                    .await
+                    .map_err(|e| {
+                        E::from(crate::errlanes::Fatal::from_error(
+                            crate::errlanes::FatalKind::Dependency,
+                            e,
+                        ))
+                    })? {
                     Ok(()) => ProbeVerdict::Clean,
                     Err(error) if (policy.is_transient)(&error) => ProbeVerdict::Transient(error),
                     Err(error) => ProbeVerdict::Failed(error),
@@ -159,10 +169,10 @@ pub trait BatchIsolation: SavepointOperation {
                     // The search learned nothing about the items, so there are
                     // no per-item verdicts to return — the caller re-runs the
                     // whole batch.
-                    return Err(sqlx::Error::Protocol(match search.last_error() {
-                        Some(error) => format!("{limit}; last error: {error}"),
-                        None => limit.to_string(),
-                    }));
+                    return Err(E::from(crate::errlanes::Fatal::from_error(
+                        crate::errlanes::FatalKind::Exhausted,
+                        limit,
+                    )));
                 }
             }
 

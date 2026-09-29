@@ -269,6 +269,8 @@ impl fmt::Display for ForgettableRemnants {
     }
 }
 
+impl std::error::Error for ForgettableRemnants {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

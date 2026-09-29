@@ -107,6 +107,68 @@ pub enum ConstraintKind {
     Unique,
     ForeignKey,
     Check,
+    /// The generated `{Entity}Constraint::Unknown` variant: a violation
+    /// whose name the migrations-derived catalog does not recognize.
+    Unknown,
+}
+
+/// A repo op that requires a row (`find_by_*`) found none. Always the
+/// `source()` of a `Fatal(Invariant)` — there is no `NotFound` rejection;
+/// callers that tolerate absence use `maybe_find_by_*`, which returns
+/// `Option` instead.
+///
+/// **Security note:** `value`'s `Debug` may contain PII (e.g. an email
+/// address looked up by a caller-supplied value). `Display` omits it.
+#[derive(Debug)]
+pub struct NotFound {
+    pub entity: &'static str,
+    pub column: Option<&'static str>,
+    pub value: String,
+}
+
+impl std::fmt::Display for NotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.column {
+            Some(column) => write!(f, "{} not found by {column}", self.entity),
+            None => write!(f, "{} not found", self.entity),
+        }
+    }
+}
+
+impl std::error::Error for NotFound {}
+
+#[doc(hidden)]
+pub fn hydration_fatal<D>(e: EntityHydrationError) -> errlanes::Fail<D> {
+    errlanes::Fail::Fatal(errlanes::Fatal::from_error(
+        errlanes::FatalKind::CorruptState,
+        e,
+    ))
+}
+
+#[doc(hidden)]
+pub fn cursor_decode_fatal<D>(e: CursorDestructureError) -> errlanes::Fail<D> {
+    errlanes::Fail::Fatal(errlanes::Fatal::from_error(errlanes::FatalKind::Config, e))
+}
+
+#[doc(hidden)]
+pub fn not_found_fatal<D>(
+    entity: &'static str,
+    column: Option<&'static str>,
+    value: String,
+) -> errlanes::Fail<D> {
+    errlanes::Fail::Fatal(errlanes::Fatal::from_error(
+        errlanes::FatalKind::Invariant,
+        NotFound {
+            entity,
+            column,
+            value,
+        },
+    ))
+}
+
+#[doc(hidden)]
+pub fn fatal_is_not_found(fatal: &errlanes::Fatal) -> bool {
+    std::error::Error::source(fatal).is_some_and(|s| s.is::<NotFound>())
 }
 
 #[doc(hidden)]

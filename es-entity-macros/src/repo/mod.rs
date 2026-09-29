@@ -49,7 +49,7 @@ pub struct EsRepo<'a> {
     repo: &'a syn::Ident,
     generics: &'a syn::Generics,
     error_classifier: error_classifier::ErrorClassifier<'a>,
-    extract_concurrent_modification_fn: Option<TokenStream>,
+    classify_conflict_fn: Option<TokenStream>,
     persist_events_fn: Option<persist_events_fn::PersistEventsFn<'a>>,
     persist_events_batch_fn: Option<persist_events_batch_fn::PersistEventsBatchFn<'a>>,
     update_fn: update_fn::UpdateFn<'a>,
@@ -127,15 +127,14 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
         let needs_persist_events = !opts.columns.updates_needed()
             || (opts.forgettable_enabled() && opts.columns.forgettable_column_names().is_empty());
         let needs_persist_events_batch = !opts.columns.updates_needed();
-        let extract_concurrent_modification_fn = (!opts.columns.updates_needed()
-            || opts.forgettable_enabled())
-        .then(error_classifier::extract_concurrent_modification_fn);
+        let classify_conflict_fn = (!opts.columns.updates_needed() || opts.forgettable_enabled())
+            .then(error_classifier::classify_conflict_fn);
 
         Self {
             repo: &opts.ident,
             generics: &opts.generics,
             error_classifier: error_classifier::ErrorClassifier::from(opts),
-            extract_concurrent_modification_fn,
+            classify_conflict_fn,
             persist_events_fn: needs_persist_events
                 .then(|| persist_events_fn::PersistEventsFn::from(opts)),
             persist_events_batch_fn: needs_persist_events_batch
@@ -170,7 +169,7 @@ impl ToTokens for EsRepo<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let repo = &self.repo;
         let error_classifier = &self.error_classifier;
-        let extract_concurrent_modification_fn = &self.extract_concurrent_modification_fn;
+        let classify_conflict_fn = &self.classify_conflict_fn;
         let persist_events_fn = &self.persist_events_fn;
         let persist_events_batch_fn = &self.persist_events_batch_fn;
         let update_fn = &self.update_fn;
@@ -262,10 +261,7 @@ impl ToTokens for EsRepo<'_> {
         };
         let tree_child_tys: Vec<_> = self.opts.all_nested().map(|f| &f.ty).collect();
 
-        let create_error = self.opts.create_error();
-        let modify_error = self.opts.modify_error();
-        let find_error = self.opts.find_error();
-        let query_error = self.opts.query_error();
+        let constraint_violation = self.opts.constraint_violation();
         let error_types = self.error_types.generate();
         let map_constraint_fn = self.error_types.generate_map_constraint_fn();
 
@@ -429,7 +425,7 @@ impl ToTokens for EsRepo<'_> {
                 #begin
                 #post_hydrate_hook
                 #post_persist_hook
-                #extract_concurrent_modification_fn
+                #classify_conflict_fn
                 #persist_events_fn
                 #persist_events_batch_fn
                 #create_fn
@@ -451,10 +447,7 @@ impl ToTokens for EsRepo<'_> {
 
             impl #impl_generics es_entity::EsRepo for #repo #ty_generics #where_clause {
                 type Entity = #entity;
-                type CreateError = #create_error;
-                type ModifyError = #modify_error;
-                type FindError = #find_error;
-                type QueryError = #query_error;
+                type ConstraintViolation = #constraint_violation;
                 type EsQueryFlavor = #es_query_flavor;
 
                #[inline(always)]
@@ -473,15 +466,13 @@ impl ToTokens for EsRepo<'_> {
                }
 
                #[inline(always)]
-               fn hydrate_nested_from_rows<__EsErr>(
+               fn hydrate_nested_from_rows(
                    rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
                    tag_cursor: &mut i32,
                    entities: &mut [#entity],
-               ) -> Result<(), __EsErr>
-                   where
-                       __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError>,
+               ) -> Result<(), errlanes::Fail<core::convert::Infallible>>
                {
-                   #(Self::#hydrate_nested_fns::<_, __EsErr>(rows_by_tag, tag_cursor, entities)?;)*
+                   #(Self::#hydrate_nested_fns(rows_by_tag, tag_cursor, entities)?;)*
                    Ok(())
                }
             }
@@ -528,7 +519,7 @@ mod tests {
     }
 
     /// The combined-write classifiers are emitted once per repo, not rendered
-    /// into every write path. `classify_write_error` is gated to repos that
+    /// into every write path. `classify_update_write` is gated to repos that
     /// actually have a caller — an uncalled private helper is dead code, and
     /// consumers build with `-D warnings`.
     #[test]
@@ -541,18 +532,18 @@ mod tests {
         };
         let out = derive(with_columns).unwrap().to_string();
         assert_eq!(
-            out.matches("fn classify_create_error").count(),
+            out.matches("fn classify_create_write").count(),
             1,
             "create classifier should be defined exactly once"
         );
         assert_eq!(
-            out.matches("fn classify_write_error").count(),
+            out.matches("fn classify_update_write").count(),
             1,
             "write classifier should be defined exactly once"
         );
         // Both create paths call the shared fn rather than inlining a match.
         assert_eq!(
-            out.matches("Self :: classify_create_error").count(),
+            out.matches("Self :: classify_create_write").count(),
             2,
             "create and create_all should both call the shared classifier"
         );
@@ -567,13 +558,39 @@ mod tests {
         };
         let out = derive(no_columns).unwrap().to_string();
         assert!(
-            !out.contains("fn classify_write_error"),
+            !out.contains("fn classify_update_write"),
             "write classifier must not be emitted without a caller"
         );
         assert!(
-            out.contains("fn classify_create_error"),
+            out.contains("fn classify_create_write"),
             "create classifier always has callers"
         );
+    }
+
+    /// A non-nested repo's `{Entity}ConstraintViolation` is a struct; a
+    /// nested repo's is an enum with an `Own` variant plus one per child.
+    #[test]
+    fn constraint_violation_is_struct_without_nesting_enum_with() {
+        let flat: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", columns(name(ty = "String")))]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = derive(flat).unwrap().to_string();
+        assert!(out.contains("pub struct UserConstraintViolation"));
+
+        let nested: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Order", columns(name(ty = "String")))]
+            struct Orders {
+                pool: sqlx::PgPool,
+                #[es_repo(nested)]
+                items: OrderItems,
+            }
+        };
+        let out = derive(nested).unwrap().to_string();
+        assert!(out.contains("pub enum OrderConstraintViolation"));
+        assert!(out.contains("Own {"));
     }
 
     // Guard 1 (event has Forgettable fields but the repo omits `forgettable`)

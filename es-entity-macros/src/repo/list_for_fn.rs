@@ -16,7 +16,6 @@ pub struct ListForFn<'a> {
     entity: &'a syn::Ident,
     id: &'a syn::Ident,
     table_name: &'a str,
-    query_error: syn::Ident,
     delete: DeleteOption,
     cursor_mod: syn::Ident,
     post_hydrate_error: Option<&'a syn::Type>,
@@ -37,7 +36,6 @@ impl<'a> ListForFn<'a> {
             id: opts.id(),
             entity: opts.entity(),
             table_name: opts.table_name(),
-            query_error: opts.query_error(),
             delete: opts.delete,
             cursor_mod: opts.cursor_mod(),
             post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
@@ -69,7 +67,6 @@ impl<'a> ListForFn<'a> {
         let cursor = self.cursor();
         let cursor_ident = cursor.ident();
         let cursor_mod = cursor.cursor_mod();
-        let error = &self.query_error;
         let query_fn_generics = RepositoryOptions::query_fn_generics();
         let query_fn_op_arg = RepositoryOptions::query_fn_op_arg();
         let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
@@ -109,7 +106,7 @@ impl<'a> ListForFn<'a> {
                         #filter_arg_name: #for_impl_expr,
                         cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                         direction: es_entity::ListDirection,
-                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
+                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fail<core::convert::Infallible>> {
                         self.repo.#fn_name(self.scope, #filter_arg_name, cursor, direction).await
                     }
                 }
@@ -124,7 +121,7 @@ impl<'a> ListForFn<'a> {
                     #filter_arg_name: #for_impl_expr,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fail<core::convert::Infallible>>
                     where
                         OP: #query_fn_op_traits
                 {
@@ -146,7 +143,6 @@ impl ToTokens for ListForFn<'_> {
         let cursor = self.cursor();
         let cursor_ident = cursor.ident();
         let cursor_mod = cursor.cursor_mod();
-        let error = &self.query_error;
         let query_fn_generics = RepositoryOptions::query_fn_generics();
         let query_fn_op_arg = RepositoryOptions::query_fn_op_arg();
         let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
@@ -358,7 +354,7 @@ impl ToTokens for ListForFn<'_> {
             let post_hydrate_check = if self.post_hydrate_error.is_some() {
                 quote! {
                     for __entity in &entities {
-                        self.execute_post_hydrate_hook(__entity).map_err(#error::PostHydrateError)?;
+                        self.execute_post_hydrate_hook(__entity).map_err(|e| errlanes::Fail::<core::convert::Infallible>::from(e).never())?;
                     }
                 }
             } else {
@@ -373,7 +369,7 @@ impl ToTokens for ListForFn<'_> {
                         #filter_arg_name: #for_impl_expr,
                         cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                         direction: es_entity::ListDirection,
-                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> {
+                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fail<core::convert::Infallible>> {
                         self.#fn_in_op(#query_fn_get_op, #scope_fn_pass #filter_arg_name, cursor, direction).await
                     }
                 }
@@ -390,11 +386,11 @@ impl ToTokens for ListForFn<'_> {
                     #filter_arg_name: #for_impl_expr,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error>
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fail<core::convert::Infallible>>
                     where
                         OP: #query_fn_op_traits
                 {
-                    let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, #error> = async {
+                    let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fail<core::convert::Infallible>> = async {
                         #scope_convert
                         #extract_has_cursor
                         let #filter_arg_name = #filter_arg_name.#for_access_expr;
@@ -432,7 +428,6 @@ mod tests {
     #[test]
     fn list_for_fn() {
         let entity = Ident::new("Entity", Span::call_site());
-        let query_error = syn::Ident::new("EntityQueryError", Span::call_site());
         let id = syn::Ident::new("EntityId", proc_macro2::Span::call_site());
         let by_column = Column::for_id(syn::parse_str("EntityId").unwrap());
         let for_column = Column::new(
@@ -449,7 +444,6 @@ mod tests {
             for_column: &for_column,
             by_column: &by_column,
             table_name: "entities",
-            query_error,
             delete: DeleteOption::No,
             cursor_mod,
             post_hydrate_error: None,
@@ -469,7 +463,7 @@ mod tests {
                 filter_customer_id: impl std::borrow::Borrow<Uuid>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, EntityQueryError> {
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, errlanes::Fail<core::convert::Infallible>> {
                 self.list_for_customer_id_by_id_in_op(self.pool(), filter_customer_id, cursor, direction).await
             }
 
@@ -479,11 +473,11 @@ mod tests {
                 filter_customer_id: impl std::borrow::Borrow<Uuid>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, EntityQueryError>
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, errlanes::Fail<core::convert::Infallible>>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, EntityQueryError> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, errlanes::Fail<core::convert::Infallible>> = async {
                     let filter_customer_id = filter_customer_id.borrow();
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
                     let id = if let Some(after) = after {
@@ -530,7 +524,6 @@ mod tests {
     #[test]
     fn list_same_column() {
         let entity = Ident::new("Entity", Span::call_site());
-        let query_error = syn::Ident::new("EntityQueryError", Span::call_site());
         let id = syn::Ident::new("EntityId", proc_macro2::Span::call_site());
         let column = Column::new(
             syn::Ident::new("email", proc_macro2::Span::call_site()),
@@ -546,7 +539,6 @@ mod tests {
             for_column: &column,
             by_column: &column,
             table_name: "entities",
-            query_error,
             delete: DeleteOption::No,
             cursor_mod,
             post_hydrate_error: None,
@@ -566,7 +558,7 @@ mod tests {
                 filter_email: impl std::convert::AsRef<str>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByEmailCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, EntityQueryError> {
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, errlanes::Fail<core::convert::Infallible>> {
                 self.list_for_email_by_email_in_op(self.pool(), filter_email, cursor, direction).await
             }
 
@@ -576,11 +568,11 @@ mod tests {
                 filter_email: impl std::convert::AsRef<str>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByEmailCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, EntityQueryError>
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, errlanes::Fail<core::convert::Infallible>>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, EntityQueryError> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, errlanes::Fail<core::convert::Infallible>> = async {
                     let filter_email = filter_email.as_ref();
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
                     let (id, email) = if let Some(after) = after {

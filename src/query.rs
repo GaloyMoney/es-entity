@@ -20,7 +20,6 @@
 
 use crate::{
     db,
-    error::EntityHydrationError,
     events::{EntityEvents, HydrationRow},
     one_time_executor::IntoOneTimeExecutor,
     snapshot::NO_SNAPSHOT_FINGERPRINT,
@@ -87,30 +86,34 @@ where
         }
     }
 
-    async fn fetch_optional_inner<E: From<sqlx::Error> + From<EntityHydrationError>>(
+    async fn fetch_optional_inner(
         self,
         op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, E> {
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::errlanes::Fail<core::convert::Infallible>>
+    {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
         if rows.is_empty() {
             return Ok(None);
         }
 
-        Ok(EntityEvents::load_first(rows.into_iter())?)
+        EntityEvents::load_first(rows.into_iter()).map_err(crate::error::hydration_fatal)
     }
 
-    async fn fetch_n_inner<E: From<sqlx::Error> + From<EntityHydrationError>>(
+    async fn fetch_n_inner(
         self,
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
-    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), E> {
+    ) -> Result<
+        (Vec<<Repo as EsRepo>::Entity>, bool),
+        crate::errlanes::Fail<core::convert::Infallible>,
+    > {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
-        Ok(EntityEvents::load_n(rows.into_iter(), first)?)
+        EntityEvents::load_n(rows.into_iter(), first).map_err(crate::error::hydration_fatal)
     }
 
-    async fn fetch_tree_rows<E: From<sqlx::Error>>(
+    async fn fetch_tree_rows(
         self,
         op: impl IntoOneTimeExecutor<'_>,
         include_deleted: bool,
@@ -119,7 +122,7 @@ where
             Vec<HydrationRow<<<<Repo as EsRepo>::Entity as EsEntity>::Event as EsEvent>::EntityId>>,
             std::collections::HashMap<i32, Vec<db::Row>>,
         ),
-        E,
+        crate::errlanes::Fail<core::convert::Infallible>,
     > {
         let executor = op.into_executor();
         let spec = <Repo as EsRepo>::nested_tree_spec();
@@ -188,7 +191,8 @@ where
     pub async fn fetch_optional(
         self,
         op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::QueryError> {
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::errlanes::Fail<core::convert::Infallible>>
+    {
         self.fetch_optional_inner(op).await
     }
 
@@ -200,7 +204,10 @@ where
         self,
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
-    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::QueryError> {
+    ) -> Result<
+        (Vec<<Repo as EsRepo>::Entity>, bool),
+        crate::errlanes::Fail<core::convert::Infallible>,
+    > {
         self.fetch_n_inner(op, first).await
     }
 }
@@ -222,7 +229,8 @@ where
     pub async fn fetch_optional(
         self,
         op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::QueryError> {
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::errlanes::Fail<core::convert::Infallible>>
+    {
         self.fetch_optional_tree(op, false).await
     }
 
@@ -234,7 +242,10 @@ where
         self,
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
-    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::QueryError> {
+    ) -> Result<
+        (Vec<<Repo as EsRepo>::Entity>, bool),
+        crate::errlanes::Fail<core::convert::Infallible>,
+    > {
         self.fetch_n_tree(op, first, false).await
     }
 
@@ -243,7 +254,8 @@ where
     pub async fn fetch_optional_include_deleted(
         self,
         op: impl IntoOneTimeExecutor<'_>,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::QueryError> {
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::errlanes::Fail<core::convert::Infallible>>
+    {
         self.fetch_optional_tree(op, true).await
     }
 
@@ -253,7 +265,10 @@ where
         self,
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
-    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::QueryError> {
+    ) -> Result<
+        (Vec<<Repo as EsRepo>::Entity>, bool),
+        crate::errlanes::Fail<core::convert::Infallible>,
+    > {
         self.fetch_n_tree(op, first, true).await
     }
 
@@ -261,20 +276,17 @@ where
         self,
         op: impl IntoOneTimeExecutor<'_>,
         include_deleted: bool,
-    ) -> Result<Option<<Repo as EsRepo>::Entity>, <Repo as EsRepo>::QueryError> {
-        let (root, mut by_tag) = self
-            .fetch_tree_rows::<<Repo as EsRepo>::QueryError>(op, include_deleted)
-            .await?;
-        let Some(entity) = EntityEvents::load_first::<<Repo as EsRepo>::Entity>(root)? else {
+    ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::errlanes::Fail<core::convert::Infallible>>
+    {
+        let (root, mut by_tag) = self.fetch_tree_rows(op, include_deleted).await?;
+        let Some(entity) = EntityEvents::load_first::<<Repo as EsRepo>::Entity>(root)
+            .map_err(crate::error::hydration_fatal)?
+        else {
             return Ok(None);
         };
         let mut entities = [entity];
         let mut cursor = 1i32;
-        <Repo as EsRepo>::hydrate_nested_from_rows::<<Repo as EsRepo>::QueryError>(
-            &mut by_tag,
-            &mut cursor,
-            &mut entities,
-        )?;
+        <Repo as EsRepo>::hydrate_nested_from_rows(&mut by_tag, &mut cursor, &mut entities)?;
         let [entity] = entities;
         Ok(Some(entity))
     }
@@ -284,17 +296,15 @@ where
         op: impl IntoOneTimeExecutor<'_>,
         first: usize,
         include_deleted: bool,
-    ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), <Repo as EsRepo>::QueryError> {
-        let (root, mut by_tag) = self
-            .fetch_tree_rows::<<Repo as EsRepo>::QueryError>(op, include_deleted)
-            .await?;
-        let (mut entities, more) = EntityEvents::load_n::<<Repo as EsRepo>::Entity>(root, first)?;
+    ) -> Result<
+        (Vec<<Repo as EsRepo>::Entity>, bool),
+        crate::errlanes::Fail<core::convert::Infallible>,
+    > {
+        let (root, mut by_tag) = self.fetch_tree_rows(op, include_deleted).await?;
+        let (mut entities, more) = EntityEvents::load_n::<<Repo as EsRepo>::Entity>(root, first)
+            .map_err(crate::error::hydration_fatal)?;
         let mut cursor = 1i32;
-        <Repo as EsRepo>::hydrate_nested_from_rows::<<Repo as EsRepo>::QueryError>(
-            &mut by_tag,
-            &mut cursor,
-            &mut entities,
-        )?;
+        <Repo as EsRepo>::hydrate_nested_from_rows(&mut by_tag, &mut cursor, &mut entities)?;
         Ok((entities, more))
     }
 }

@@ -99,7 +99,7 @@ async fn null_scoped_row_invisible_to_customer_scope_visible_to_all() -> anyhow:
     // the row's customer_id is NULL and `customer_id = $1` never matches
     // NULL, for any bound value.
     let err = parties.find_by_id(customer_id, unowned_id).await;
-    assert!(matches!(err, Err(PartyFindError::NotFound { .. })));
+    assert!(matches!(err, Err(Fail::Fatal(_))));
     assert!(
         parties
             .maybe_find_by_id(customer_id, unowned_id)

@@ -17,7 +17,7 @@ pub struct CreateFn<'a> {
     event_ctx: bool,
     forgettable_table_name: Option<&'a str>,
     columns: &'a Columns,
-    create_error: syn::Ident,
+    constraint_violation: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
     post_hydrate_error: Option<&'a syn::Type>,
     post_persist_error: Option<&'a syn::Type>,
@@ -36,7 +36,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
             forgettable_table_name: opts.forgettable_table_name(),
-            create_error: opts.create_error(),
+            constraint_violation: opts.constraint_violation(),
             nested_fn_names: opts
                 .all_nested()
                 .map(|f| f.create_nested_fn_name())
@@ -53,11 +53,11 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
 impl ToTokens for CreateFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let entity = self.entity;
-        let create_error = &self.create_error;
+        let constraint_violation = &self.constraint_violation;
 
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
-                self.#f(op, &mut [&mut entity]).await?;
+                self.#f(op, &mut [&mut entity]).await.map_err(errlanes::Fail::widen)?;
             }
         });
         let maybe_mut_entity = if self.nested_fn_names.is_empty() {
@@ -122,7 +122,12 @@ impl ToTokens for CreateFn<'_> {
                     id_type: self.id,
                     event_type: self.event,
                 }
-                .insert_per_entity(quote! { events }, create_error, None);
+                .insert_per_entity(
+                    quote! { events },
+                    constraint_violation,
+                    self.events_table_name,
+                    None,
+                );
                 quote! {
                     let offset = events.len_persisted();
                     let id = events.id();
@@ -158,7 +163,7 @@ impl ToTokens for CreateFn<'_> {
 
         let post_hydrate_check = if self.post_hydrate_error.is_some() {
             quote! {
-                self.execute_post_hydrate_hook(&entity).map_err(#create_error::PostHydrateError)?;
+                self.execute_post_hydrate_hook(&entity).map_err(|e| errlanes::Fail::<core::convert::Infallible>::from(e).never())?;
             }
         } else {
             quote! {}
@@ -166,7 +171,7 @@ impl ToTokens for CreateFn<'_> {
 
         let post_persist_check = if self.post_persist_error.is_some() {
             quote! {
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(#create_error::PostPersistHookError)?;
+                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(errlanes::Fail::from)?;
             }
         } else {
             quote! {}
@@ -177,7 +182,7 @@ impl ToTokens for CreateFn<'_> {
                 pub async fn create(
                     &self,
                     new_entity: <#entity as es_entity::EsEntity>::New
-                ) -> Result<#entity, #create_error> {
+                ) -> Result<#entity, errlanes::Fail<#constraint_violation>> {
                     let mut op = self.begin_op().await?;
                     let res = self.create_in_op(&mut op, new_entity).await?;
                     op.commit().await?;
@@ -214,11 +219,11 @@ impl ToTokens for CreateFn<'_> {
                 &self,
                 op: &mut OP,
                 new_entity: <#entity as es_entity::EsEntity>::New
-            ) -> Result<#entity, #create_error>
+            ) -> Result<#entity, errlanes::Fail<#constraint_violation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<#entity, #create_error> = async {
+                let __result: Result<#entity, errlanes::Fail<#constraint_violation>> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     #assignments
@@ -237,7 +242,7 @@ impl ToTokens for CreateFn<'_> {
                     let rows = sqlx::query_with(#query, __query_args)
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_create_error)?;
+                        .map_err(Self::classify_create_write)?;
 
                     #forgettable_code
 
@@ -246,7 +251,7 @@ impl ToTokens for CreateFn<'_> {
                         .ok_or(sqlx::Error::RowNotFound)
                         .and_then(|row| row.try_get("recorded_at"))?;
                     let n_events = events.mark_new_events_persisted_at(recorded_at);
-                    let #maybe_mut_entity = Self::hydrate_entity(events)?;
+                    let #maybe_mut_entity = Self::hydrate_entity(events).map_err(es_entity::hydration_fatal)?;
 
                     #(#nested)*
 
@@ -271,7 +276,7 @@ mod tests {
     #[test]
     fn create_fn() {
         let entity = Ident::new("Entity", Span::call_site());
-        let create_error = syn::Ident::new("EntityCreateError", Span::call_site());
+        let constraint_violation = syn::Ident::new("EntityConstraintViolation", Span::call_site());
         let id = Ident::new("EntityId", Span::call_site());
         let event = Ident::new("EntityEvent", Span::call_site());
         let mut columns = Columns::default();
@@ -286,7 +291,7 @@ mod tests {
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: None,
-            create_error,
+            constraint_violation,
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_hydrate_error: None,
@@ -322,7 +327,7 @@ mod tests {
             pub async fn create(
                 &self,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, EntityCreateError> {
+            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.create_in_op(&mut op, new_entity).await?;
                 op.commit().await?;
@@ -333,11 +338,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, EntityCreateError>
+            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<Entity, EntityCreateError> = async {
+                let __result: Result<Entity, errlanes::Fail<EntityConstraintViolation>> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     let id = &new_entity.id;
@@ -358,14 +363,14 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_create_error)?;
+                        .map_err(Self::classify_create_write)?;
 
                     let recorded_at = rows
                         .first()
                         .ok_or(sqlx::Error::RowNotFound)
                         .and_then(|row| row.try_get("recorded_at"))?;
                     let n_events = events.mark_new_events_persisted_at(recorded_at);
-                    let entity = Self::hydrate_entity(events)?;
+                    let entity = Self::hydrate_entity(events).map_err(es_entity::hydration_fatal)?;
 
                     Ok(entity)
                 }.await;
@@ -380,7 +385,7 @@ mod tests {
     #[test]
     fn create_fn_with_columns() {
         let entity = Ident::new("Entity", Span::call_site());
-        let create_error = syn::Ident::new("EntityCreateError", Span::call_site());
+        let constraint_violation = syn::Ident::new("EntityConstraintViolation", Span::call_site());
         let id = Ident::new("EntityId", Span::call_site());
         let event = Ident::new("EntityEvent", Span::call_site());
 
@@ -399,7 +404,7 @@ mod tests {
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: None,
-            create_error,
+            constraint_violation,
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_hydrate_error: None,
@@ -435,7 +440,7 @@ mod tests {
             pub async fn create(
                 &self,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, EntityCreateError> {
+            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.create_in_op(&mut op, new_entity).await?;
                 op.commit().await?;
@@ -446,11 +451,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, EntityCreateError>
+            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<Entity, EntityCreateError> = async {
+                let __result: Result<Entity, errlanes::Fail<EntityConstraintViolation>> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     let id = &new_entity.id;
@@ -473,14 +478,14 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_create_error)?;
+                        .map_err(Self::classify_create_write)?;
 
                     let recorded_at = rows
                         .first()
                         .ok_or(sqlx::Error::RowNotFound)
                         .and_then(|row| row.try_get("recorded_at"))?;
                     let n_events = events.mark_new_events_persisted_at(recorded_at);
-                    let entity = Self::hydrate_entity(events)?;
+                    let entity = Self::hydrate_entity(events).map_err(es_entity::hydration_fatal)?;
 
                     Ok(entity)
                 }.await;

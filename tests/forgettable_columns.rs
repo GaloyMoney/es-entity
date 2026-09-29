@@ -139,6 +139,17 @@ impl Subscribers {
     }
 }
 
+/// `verify_forgotten` reports remnants as a `Fatal(Invariant)` whose source
+/// is the `ForgettableRemnants` itself.
+fn not_forgotten_remnants<D>(err: &Fail<D>) -> Option<&ForgettableRemnants> {
+    match err {
+        Fail::Fatal(fatal) => {
+            std::error::Error::source(fatal).and_then(|s| s.downcast_ref::<ForgettableRemnants>())
+        }
+        _ => None,
+    }
+}
+
 /// Creates a subscriber with an email unique to this run (the table is shared
 /// across tests and runs, so a fixed value would collide). Returns the entity
 /// and its email.
@@ -276,10 +287,7 @@ async fn staged_erasure_event_fences_stale_writers_on_delete() -> anyhow::Result
         .update(&mut stale)
         .await
         .expect_err("stale update after fenced delete must fail");
-    assert!(
-        err.was_concurrent_modification(),
-        "expected ConcurrentModification, got: {err}"
-    );
+    assert!(err.is_transient(), "expected Transient, got: {err}");
 
     // The index column stays NULL.
     let row = sqlx::query!(
@@ -335,7 +343,7 @@ async fn verify_forgotten_reports_live_index_columns() -> anyhow::Result<()> {
         .verify_forgotten(id)
         .await
         .expect_err("live entity must not verify as forgotten");
-    let remnants = err.not_forgotten_remnants().expect("NotForgotten");
+    let remnants = not_forgotten_remnants(&err).expect("NotForgotten");
     assert_eq!(remnants.payload_rows, 1);
     assert_eq!(remnants.live_index_columns, vec!["email"]);
     assert!(remnants.event_fields.is_empty());

@@ -51,7 +51,7 @@ pub struct HookCall {
     entity = "Customer",
     forgettable,
     columns(email(ty = "String")),
-    post_persist_hook(method = "publish", error = "CustomerPublishError")
+    post_persist_hook(method = "publish", error = "errlanes::Fatal")
 )]
 pub struct CustomersWithHook {
     pool: PgPool,
@@ -77,7 +77,7 @@ impl CustomersWithHook {
         op: &mut OP,
         entity: &Customer,
         new_events: es_entity::events::LastPersisted<'_, CustomerEvent>,
-    ) -> Result<(), CustomerPublishError> {
+    ) -> Result<(), errlanes::Fatal> {
         let events: Vec<_> = new_events.collect();
         let event_types: Vec<String> = events
             .iter()
@@ -100,13 +100,19 @@ impl CustomersWithHook {
         )
         .fetch_one(op.as_executor())
         .await
-        .map_err(|e| CustomerPublishError(e.to_string()))?
+        .map_err(|e| {
+            errlanes::Fatal::from_error(
+                errlanes::FatalKind::Invariant,
+                CustomerPublishError(e.to_string()),
+            )
+        })?
         .count;
 
         if self.fail_on_forgot.load(Ordering::SeqCst) && event_types.iter().any(|t| t == "forgot") {
-            return Err(CustomerPublishError(format!(
-                "publisher rejected forgot event for {id}"
-            )));
+            return Err(errlanes::Fatal::from_error(
+                errlanes::FatalKind::Invariant,
+                CustomerPublishError(format!("publisher rejected forgot event for {id}")),
+            ));
         }
 
         self.calls.lock().unwrap().push(HookCall {
@@ -227,10 +233,12 @@ async fn hook_error_rolls_back_the_entire_erasure() -> anyhow::Result<()> {
         Ok(_) => panic!("hook failure must fail the forget"),
     };
     match err {
-        CustomerForgetError::PostPersistHookError(inner) => {
-            assert!(inner.to_string().contains("rejected forgot event"));
+        Fail::Fatal(fatal) => {
+            assert_eq!(fatal.kind, FatalKind::Invariant);
+            let source = std::error::Error::source(&fatal).expect("hook error as source");
+            assert!(source.to_string().contains("rejected forgot event"));
         }
-        e => panic!("expected PostPersistHookError, got: {e}"),
+        e => panic!("expected Fatal(Invariant), got: {e}"),
     }
 
     // The whole erasure rolled back: payloads still present, entity still
@@ -293,7 +301,7 @@ async fn stale_writer_pii_is_fenced_and_leaves_no_trace_after_forget() -> anyhow
         .update(&mut stale)
         .await
         .expect_err("stale PII write after forget must fail");
-    assert!(err.was_concurrent_modification());
+    assert!(err.is_transient());
 
     // ...the rejected write publishes nothing...
     let calls = customers.calls();

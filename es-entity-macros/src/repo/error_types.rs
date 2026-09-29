@@ -4,24 +4,18 @@ use quote::{ToTokens, quote};
 
 use std::collections::HashSet;
 
-use super::options::{PostHydrateHookConfig, PostPersistHookConfig, RepositoryOptions};
+use super::options::RepositoryOptions;
 use crate::index_catalog::ConstraintKind;
 
 pub struct ErrorTypes<'a> {
     entity: &'a syn::Ident,
     column_enum: syn::Ident,
     constraint_enum: syn::Ident,
-    create_error: syn::Ident,
-    modify_error: syn::Ident,
-    find_error: syn::Ident,
-    query_error: syn::Ident,
-    forget_error: syn::Ident,
-    forgettable: bool,
+    constraint_violation: syn::Ident,
+    table_name: &'a str,
     column_variants: Vec<ColumnVariant>,
     constraint_variants: Vec<ConstraintVariant>,
     nested: Vec<NestedErrorInfo>,
-    post_hydrate_hook: &'a Option<PostHydrateHookConfig>,
-    post_persist_hook: &'a Option<PostPersistHookConfig>,
 }
 
 struct ColumnVariant {
@@ -82,31 +76,22 @@ fn constraint_variant_ident(
 struct NestedErrorInfo {
     child_repo_ty: syn::Type,
     variant_name: syn::Ident,
-    /// When set, error types are referenced by convention-based concrete names
-    /// (e.g., `FooCreateError`) instead of associated type projections
-    /// (`<RepoType as EsRepo>::CreateError`). This avoids generic params leaking
-    /// into module-level error enums.
+    /// When set, the child's `ConstraintViolation` is referenced by
+    /// convention-based concrete name (e.g. `FooConstraintViolation`)
+    /// instead of an associated type projection
+    /// (`<RepoType as EsRepo>::ConstraintViolation`). This avoids generic
+    /// params leaking into module-level error enums.
     nested_entity: Option<syn::Ident>,
 }
 
 impl NestedErrorInfo {
-    fn create_error_ty(&self) -> TokenStream {
+    fn constraint_violation_ty(&self) -> TokenStream {
         if let Some(entity) = &self.nested_entity {
-            let error_ident = syn::Ident::new(&format!("{entity}CreateError"), Span::call_site());
-            quote! { #error_ident }
+            let ty = syn::Ident::new(&format!("{entity}ConstraintViolation"), Span::call_site());
+            quote! { #ty }
         } else {
             let child_repo_ty = &self.child_repo_ty;
-            quote! { <#child_repo_ty as es_entity::EsRepo>::CreateError }
-        }
-    }
-
-    fn modify_error_ty(&self) -> TokenStream {
-        if let Some(entity) = &self.nested_entity {
-            let error_ident = syn::Ident::new(&format!("{entity}ModifyError"), Span::call_site());
-            quote! { #error_ident }
-        } else {
-            let child_repo_ty = &self.child_repo_ty;
-            quote! { <#child_repo_ty as es_entity::EsRepo>::ModifyError }
+            quote! { <#child_repo_ty as es_entity::EsRepo>::ConstraintViolation }
         }
     }
 }
@@ -200,48 +185,31 @@ impl<'a> ErrorTypes<'a> {
                 &format!("{}Constraint", opts.entity()),
                 Span::call_site(),
             ),
-            create_error: opts.create_error(),
-            modify_error: opts.modify_error(),
-            find_error: opts.find_error(),
-            query_error: opts.query_error(),
-            forget_error: opts.forget_error(),
-            forgettable: opts.forgettable_enabled(),
+            constraint_violation: opts.constraint_violation(),
+            table_name,
             column_variants,
             constraint_variants,
             nested,
-            post_hydrate_hook: &opts.post_hydrate_hook,
-            post_persist_hook: &opts.post_persist_hook,
         }
     }
 
     pub fn generate(&self) -> TokenStream {
         let column_enum = self.generate_column_enum();
         let constraint_enum = self.generate_constraint_enum();
-        let create_error = self.generate_create_error();
-        let modify_error = self.generate_modify_error();
-        let find_error = self.generate_find_error();
-        let query_error = self.generate_query_error();
-        let forget_error = if self.forgettable {
-            self.generate_forget_error()
-        } else {
-            quote! {}
-        };
+        let constraint_violation = self.generate_constraint_violation();
 
         quote! {
             #column_enum
             #constraint_enum
-            #create_error
-            #modify_error
-            #find_error
-            #query_error
-            #forget_error
+            #constraint_violation
         }
     }
 
     /// The typed constraint enum: one variant per constraint on the entity's
     /// table known at compile time — the declared columns' unique constraints
     /// plus every unique / foreign key / check constraint discoverable from
-    /// the migrations.
+    /// the migrations — plus `Unknown`, reported when a violation names a
+    /// constraint the catalog does not recognize.
     fn generate_constraint_enum(&self) -> TokenStream {
         let constraint_enum = &self.constraint_enum;
         let variants: Vec<_> = self
@@ -282,9 +250,12 @@ impl<'a> ErrorTypes<'a> {
             .collect();
 
         quote! {
-            #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+            #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
             pub enum #constraint_enum {
                 #(#variants,)*
+                /// A violation whose constraint name the migrations-derived
+                /// catalog does not recognize.
+                Unknown,
             }
 
             impl #constraint_enum {
@@ -301,13 +272,16 @@ impl<'a> ErrorTypes<'a> {
                 pub fn name(&self) -> &'static str {
                     match *self {
                         #(#name_arms)*
+                        Self::Unknown => "unknown",
                     }
                 }
 
-                /// The kind of constraint (unique / foreign key / check).
+                /// The kind of constraint (unique / foreign key / check), when
+                /// known.
                 pub fn kind(&self) -> es_entity::ConstraintKind {
                     match *self {
                         #(#kind_arms)*
+                        Self::Unknown => es_entity::ConstraintKind::Unknown,
                     }
                 }
             }
@@ -317,93 +291,13 @@ impl<'a> ErrorTypes<'a> {
                     f.write_str(self.name())
                 }
             }
-        }
-    }
 
-    fn generate_forget_error(&self) -> TokenStream {
-        let forget_error = &self.forget_error;
-        let entity_name = self.entity.to_string();
-
-        let (pp_variant, pp_display_arm, pp_source_arm) = if let Some(config) =
-            &self.post_persist_hook
-        {
-            let error_ty = &config.error;
-            (
-                quote! { PostPersistHookError(#error_ty), },
-                quote! { Self::PostPersistHookError(e) => write!(f, "{}ForgetError - PostPersistHookError: {}", #entity_name, e), },
-                quote! { Self::PostPersistHookError(e) => Some(e), },
-            )
-        } else {
-            (quote! {}, quote! {}, quote! {})
-        };
-
-        quote! {
-            #[derive(Debug)]
-            pub enum #forget_error {
-                Sqlx(sqlx::Error),
-                HydrationError(es_entity::EntityHydrationError),
-                ConcurrentModification,
-                /// `verify_forgotten` found forgettable data still present at
-                /// the storage level.
-                NotForgotten(es_entity::ForgettableRemnants),
-                #pp_variant
-            }
-
-            impl std::fmt::Display for #forget_error {
-                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    match self {
-                        Self::Sqlx(e) => write!(f, "{}ForgetError - Sqlx: {}", #entity_name, e),
-                        Self::HydrationError(e) => write!(f, "{}ForgetError - HydrationError: {}", #entity_name, e),
-                        Self::ConcurrentModification => write!(f, "{}ForgetError - ConcurrentModification: another writer persisted events concurrently; reload the entity and re-forget", #entity_name),
-                        Self::NotForgotten(remnants) => write!(f, "{}ForgetError - NotForgotten: {}", #entity_name, remnants),
-                        #pp_display_arm
-                    }
-                }
-            }
-
-            impl std::error::Error for #forget_error {
-                fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                    match self {
-                        Self::Sqlx(e) => Some(e),
-                        Self::HydrationError(e) => Some(e),
-                        Self::ConcurrentModification => None,
-                        Self::NotForgotten(_) => None,
-                        #pp_source_arm
-                    }
-                }
-            }
-
-            impl From<sqlx::Error> for #forget_error {
-                fn from(e: sqlx::Error) -> Self {
-                    Self::Sqlx(e)
-                }
-            }
-
-            impl From<es_entity::EntityHydrationError> for #forget_error {
-                fn from(e: es_entity::EntityHydrationError) -> Self {
-                    Self::HydrationError(e)
-                }
-            }
-
-            impl #forget_error {
-                pub fn was_concurrent_modification(&self) -> bool {
-                    matches!(self, Self::ConcurrentModification)
-                }
-
-                /// Returns the remnants report when `verify_forgotten` found
-                /// forgettable data still present at the storage level.
-                pub fn not_forgotten_remnants(&self) -> Option<&es_entity::ForgettableRemnants> {
-                    match self {
-                        Self::NotForgotten(remnants) => Some(remnants),
-                        _ => None,
-                    }
+            impl From<#constraint_enum> for &'static str {
+                fn from(c: #constraint_enum) -> &'static str {
+                    c.name()
                 }
             }
         }
-    }
-
-    pub fn generate_map_constraint_fn(&self) -> TokenStream {
-        self.generate_map_constraint_column()
     }
 
     fn generate_column_enum(&self) -> TokenStream {
@@ -439,7 +333,7 @@ impl<'a> ErrorTypes<'a> {
         }
     }
 
-    fn generate_map_constraint_column(&self) -> TokenStream {
+    pub fn generate_map_constraint_fn(&self) -> TokenStream {
         let column_enum = &self.column_enum;
         let match_arms: Vec<_> = self
             .column_variants
@@ -463,778 +357,245 @@ impl<'a> ErrorTypes<'a> {
         }
     }
 
-    fn generate_create_error(&self) -> TokenStream {
-        let create_error = &self.create_error;
+    /// The one repo `Rejection`: `{Entity}ConstraintViolation`. A struct when
+    /// the repo has no nested children; an enum (`Own` plus one tuple variant
+    /// per nested field, each wrapping that child's own
+    /// `ConstraintViolation`) when it does — a child's violation widens into
+    /// the parent's via the generated `From` impl, so nested write paths only
+    /// need `.map_err(errlanes::Fail::widen)`.
+    fn generate_constraint_violation(&self) -> TokenStream {
+        let cv = &self.constraint_violation;
         let column_enum = &self.column_enum;
         let constraint_enum = &self.constraint_enum;
-        let entity = self.entity;
+        let table_name = self.table_name;
+        let entity_name = self.entity.to_string();
 
-        // Nested child variants
-        let nested_variants: Vec<_> = self
-            .nested
-            .iter()
-            .map(|n| {
-                let variant = &n.variant_name;
-                let child_error_ty = n.create_error_ty();
-                quote! { #variant(#child_error_ty), }
-            })
-            .collect();
-        let nested_display_arms: Vec<_> = self
-            .nested
-            .iter()
-            .map(|n| {
-                let variant = &n.variant_name;
-                quote! { Self::#variant(e) => write!(f, "{}: {}", stringify!(#variant), e), }
-            })
-            .collect();
-        let nested_source_arms: Vec<_> = self
-            .nested
-            .iter()
-            .map(|n| {
-                let variant = &n.variant_name;
-                quote! { Self::#variant(e) => Some(e), }
-            })
-            .collect();
-        let nested_from_impls: Vec<_> = self
-            .nested
-            .iter()
-            .map(|n| {
-                let variant = &n.variant_name;
-                let child_error_ty = n.create_error_ty();
-                quote! {
-                    impl From<#child_error_ty> for #create_error {
-                        fn from(e: #child_error_ty) -> Self {
-                            Self::#variant(e)
-                        }
-                    }
-                }
-            })
-            .collect();
-        let nested_cm_checks: Vec<_> = self
-            .nested
-            .iter()
-            .map(|n| {
-                let variant = &n.variant_name;
-                quote! { Self::#variant(e) => e.was_concurrent_modification(), }
-            })
-            .collect();
-        let nested_wd_checks: Vec<_> = self
-            .nested
-            .iter()
-            .map(|n| {
-                let variant = &n.variant_name;
-                quote! { Self::#variant(e) => e.was_duplicate(), }
-            })
-            .collect();
-        let nested_fk_checks: Vec<_> = self
-            .nested
-            .iter()
-            .map(|n| {
-                let variant = &n.variant_name;
-                quote! { Self::#variant(e) => e.was_foreign_key_violation(), }
-            })
-            .collect();
-        let nested_ck_checks: Vec<_> = self
-            .nested
-            .iter()
-            .map(|n| {
-                let variant = &n.variant_name;
-                quote! { Self::#variant(e) => e.was_check_violation(), }
-            })
-            .collect();
-        let nested_dv_checks: Vec<_> = self
-            .nested
-            .iter()
-            .map(|n| {
-                let variant = &n.variant_name;
-                quote! { Self::#variant(e) => e.duplicate_value(), }
-            })
-            .collect();
-        let nested_ph_checks: Vec<_> = self
-            .nested
-            .iter()
-            .map(|n| {
-                let variant = &n.variant_name;
-                quote! { Self::#variant(e) => e.was_post_hydrate_error(), }
-            })
-            .collect();
-        let create_ph_self_check = if self.post_hydrate_hook.is_some() {
-            quote! { Self::PostHydrateError(..) => true, }
-        } else {
-            quote! {}
+        let own_fields = quote! {
+            constraint: Option<#constraint_enum>,
+            constraint_name: Option<String>,
+            column: Option<#column_enum>,
+            /// **Security note:** attacker-influenced input rejected by a
+            /// unique constraint and may be PII (e.g. an email address).
+            /// Exposing it to untrusted API clients enables user
+            /// enumeration; logging it may place PII in log pipelines.
+            /// `Display` never prints it.
+            value: Option<String>,
         };
 
-        let entity_name = entity.to_string();
+        if self.nested.is_empty() {
+            quote! {
+                #[derive(Debug, Clone)]
+                pub struct #cv {
+                    #own_fields
+                }
 
-        let (ph_variant, ph_display_arm, ph_source_arm) = if let Some(config) =
-            &self.post_hydrate_hook
-        {
-            let error_ty = &config.error;
-            (
-                quote! { PostHydrateError(#error_ty), },
-                quote! { Self::PostHydrateError(e) => write!(f, "{}CreateError - PostHydrateError: {}", #entity_name, e), },
-                quote! { Self::PostHydrateError(e) => Some(e), },
-            )
+                impl #cv {
+                    #[doc(hidden)]
+                    pub fn new_own(
+                        constraint: Option<#constraint_enum>,
+                        constraint_name: Option<String>,
+                        column: Option<#column_enum>,
+                        value: Option<String>,
+                    ) -> Self {
+                        Self { constraint, constraint_name, column, value }
+                    }
+
+                    pub fn constraint(&self) -> Option<#constraint_enum> {
+                        self.constraint
+                    }
+
+                    pub fn constraint_name(&self) -> Option<&str> {
+                        self.constraint_name.as_deref()
+                    }
+
+                    pub fn column(&self) -> Option<#column_enum> {
+                        self.column
+                    }
+
+                    pub fn kind(&self) -> Option<es_entity::ConstraintKind> {
+                        self.constraint.map(|c| c.kind())
+                    }
+
+                    /// **Security note:** may contain PII. See the field doc.
+                    pub fn value(&self) -> Option<&str> {
+                        self.value.as_deref()
+                    }
+                }
+
+                impl std::fmt::Display for #cv {
+                    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(
+                            f,
+                            "constraint violation on {} ({})",
+                            #table_name,
+                            self.constraint_name.as_deref().unwrap_or("unknown"),
+                        )
+                    }
+                }
+
+                impl std::error::Error for #cv {}
+
+                impl errlanes::Rejection for #cv {
+                    type Code = #constraint_enum;
+
+                    fn code(&self) -> Self::Code {
+                        self.constraint.unwrap_or(#constraint_enum::Unknown)
+                    }
+                }
+
+                impl errlanes::HasConstraint for #cv {
+                    type Constraint = #constraint_enum;
+
+                    fn constraint(&self) -> Option<Self::Constraint> {
+                        self.constraint
+                    }
+
+                    fn constraint_name(&self) -> Option<&str> {
+                        self.constraint_name.as_deref()
+                    }
+                }
+            }
         } else {
-            (quote! {}, quote! {}, quote! {})
-        };
-
-        let (pp_variant, pp_display_arm, pp_source_arm) = if let Some(config) =
-            &self.post_persist_hook
-        {
-            let error_ty = &config.error;
-            (
-                quote! { PostPersistHookError(#error_ty), },
-                quote! { Self::PostPersistHookError(e) => write!(f, "{}CreateError - PostPersistHookError: {}", #entity_name, e), },
-                quote! { Self::PostPersistHookError(e) => Some(e), },
-            )
-        } else {
-            (quote! {}, quote! {}, quote! {})
-        };
-
-        quote! {
-            #[derive(Debug)]
-            pub enum #create_error {
-                Sqlx(sqlx::Error),
-                /// **Security note:** `value` is extracted from the PostgreSQL error
-                /// detail and may contain PII (e.g. an email address). Exposing it to
-                /// untrusted API clients enables user enumeration and may place PII in
-                /// logs — prefer the `was_duplicate` / `was_duplicate_by` helpers at
-                /// trust boundaries.
-                ConstraintViolation { column: Option<#column_enum>, value: Option<String>, inner: sqlx::Error },
-                ConcurrentModification,
-                HydrationError(es_entity::EntityHydrationError),
-                #pp_variant
-                #ph_variant
-                #(#nested_variants)*
-            }
-
-            impl std::fmt::Display for #create_error {
-                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    match self {
-                        Self::Sqlx(e) => write!(f, "{}CreateError - Sqlx: {}", #entity_name, e),
-                        Self::ConstraintViolation { column, value, inner } => write!(f, "{}CreateError - ConstraintViolation({:?}, {:?}): {}", #entity_name, column, value, inner),
-                        Self::ConcurrentModification => write!(f, "{}CreateError - ConcurrentModification", #entity_name),
-                        Self::HydrationError(e) => write!(f, "{}CreateError - HydrationError: {}", #entity_name, e),
-                        #pp_display_arm
-                        #ph_display_arm
-                        #(#nested_display_arms)*
-                    }
-                }
-            }
-
-            impl std::error::Error for #create_error {
-                fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                    match self {
-                        Self::Sqlx(e) => Some(e),
-                        Self::ConstraintViolation { inner, .. } => Some(inner),
-                        Self::ConcurrentModification => None,
-                        Self::HydrationError(e) => Some(e),
-                        #pp_source_arm
-                        #ph_source_arm
-                        #(#nested_source_arms)*
-                    }
-                }
-            }
-
-            impl From<sqlx::Error> for #create_error {
-                fn from(e: sqlx::Error) -> Self {
-                    Self::Sqlx(e)
-                }
-            }
-
-            impl From<es_entity::EntityHydrationError> for #create_error {
-                fn from(e: es_entity::EntityHydrationError) -> Self {
-                    Self::HydrationError(e)
-                }
-            }
-
-            #(#nested_from_impls)*
-
-            impl #create_error {
-                pub fn was_concurrent_modification(&self) -> bool {
-                    match self {
-                        Self::ConcurrentModification => true,
-                        #(#nested_cm_checks)*
-                        _ => false,
-                    }
-                }
-
-                pub fn was_duplicate(&self) -> bool {
-                    match self {
-                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. }
-                            if db_err.is_unique_violation() => true,
-                        #(#nested_wd_checks)*
-                        _ => false,
-                    }
-                }
-
-                pub fn was_foreign_key_violation(&self) -> bool {
-                    match self {
-                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. }
-                            if db_err.is_foreign_key_violation() => true,
-                        #(#nested_fk_checks)*
-                        _ => false,
-                    }
-                }
-
-                pub fn was_check_violation(&self) -> bool {
-                    match self {
-                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. }
-                            if db_err.is_check_violation() => true,
-                        #(#nested_ck_checks)*
-                        _ => false,
-                    }
-                }
-
-                pub fn was_duplicate_by(&self, column: #column_enum) -> bool {
-                    matches!(self, Self::ConstraintViolation { column: Some(c), .. } if *c == column)
-                }
-
-                /// Returns the name of the violated database constraint, if any.
-                ///
-                /// Useful for dispatching on hand-written constraints (e.g. foreign
-                /// keys or check constraints) that don't map to a recognized unique
-                /// column.
-                pub fn constraint_name(&self) -> Option<&str> {
-                    match self {
-                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. } => db_err.constraint(),
-                        _ => None,
-                    }
-                }
-
-                /// The violated constraint as a typed value, when the constraint
-                /// is known at compile time — the declared columns' unique
-                /// constraints plus every constraint discoverable from the
-                /// migrations.
-                pub fn violated_constraint(&self) -> Option<#constraint_enum> {
-                    self.constraint_name().and_then(#constraint_enum::from_name)
-                }
-
-                /// Returns the conflicting value extracted from the database error.
-                ///
-                /// **Security note:** may contain PII and enables user enumeration if
-                /// returned to untrusted clients. Handle with care.
-                pub fn duplicate_value(&self) -> Option<&str> {
-                    match self {
-                        Self::ConstraintViolation { value: Some(v), .. } => Some(v.as_str()),
-                        #(#nested_dv_checks)*
-                        _ => None,
-                    }
-                }
-
-                pub fn was_post_hydrate_error(&self) -> bool {
-                    match self {
-                        #create_ph_self_check
-                        #(#nested_ph_checks)*
-                        _ => false,
-                    }
-                }
-            }
-        }
-    }
-
-    fn generate_modify_error(&self) -> TokenStream {
-        let modify_error = &self.modify_error;
-        let column_enum = &self.column_enum;
-        let constraint_enum = &self.constraint_enum;
-        let entity = self.entity;
-
-        // Nested variants: both Modify and Create for each child
-        let nested_variants: Vec<_> = self
-            .nested
-            .iter()
-            .flat_map(|n| {
-                let modify_variant =
-                    syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
-                let create_variant =
-                    syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
-                let child_modify_ty = n.modify_error_ty();
-                let child_create_ty = n.create_error_ty();
-                vec![
-                    quote! { #modify_variant(#child_modify_ty), },
-                    quote! { #create_variant(#child_create_ty), },
-                ]
-            })
-            .collect();
-        let nested_display_arms: Vec<_> = self
-            .nested
-            .iter()
-            .flat_map(|n| {
-                let modify_variant = syn::Ident::new(
-                    &format!("{}Modify", n.variant_name),
-                    Span::call_site(),
-                );
-                let create_variant = syn::Ident::new(
-                    &format!("{}Create", n.variant_name),
-                    Span::call_site(),
-                );
-                vec![
-                    quote! { Self::#modify_variant(e) => write!(f, "{}: {}", stringify!(#modify_variant), e), },
-                    quote! { Self::#create_variant(e) => write!(f, "{}: {}", stringify!(#create_variant), e), },
-                ]
-            })
-            .collect();
-        let nested_source_arms: Vec<_> = self
-            .nested
-            .iter()
-            .flat_map(|n| {
-                let modify_variant =
-                    syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
-                let create_variant =
-                    syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
-                vec![
-                    quote! { Self::#modify_variant(e) => Some(e), },
-                    quote! { Self::#create_variant(e) => Some(e), },
-                ]
-            })
-            .collect();
-        let nested_cm_checks: Vec<_> = self
-            .nested
-            .iter()
-            .flat_map(|n| {
-                let modify_variant =
-                    syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
-                let create_variant =
-                    syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
-                vec![
-                    quote! { Self::#modify_variant(e) => e.was_concurrent_modification(), },
-                    quote! { Self::#create_variant(e) => e.was_concurrent_modification(), },
-                ]
-            })
-            .collect();
-
-        let modify_nested_wd_checks: Vec<_> = self
-            .nested
-            .iter()
-            .flat_map(|n| {
-                let modify_variant =
-                    syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
-                let create_variant =
-                    syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
-                vec![
-                    quote! { Self::#modify_variant(e) => e.was_duplicate(), },
-                    quote! { Self::#create_variant(e) => e.was_duplicate(), },
-                ]
-            })
-            .collect();
-        let modify_nested_fk_checks: Vec<_> = self
-            .nested
-            .iter()
-            .flat_map(|n| {
-                let modify_variant =
-                    syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
-                let create_variant =
-                    syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
-                vec![
-                    quote! { Self::#modify_variant(e) => e.was_foreign_key_violation(), },
-                    quote! { Self::#create_variant(e) => e.was_foreign_key_violation(), },
-                ]
-            })
-            .collect();
-        let modify_nested_ck_checks: Vec<_> = self
-            .nested
-            .iter()
-            .flat_map(|n| {
-                let modify_variant =
-                    syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
-                let create_variant =
-                    syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
-                vec![
-                    quote! { Self::#modify_variant(e) => e.was_check_violation(), },
-                    quote! { Self::#create_variant(e) => e.was_check_violation(), },
-                ]
-            })
-            .collect();
-        let nested_dv_checks: Vec<_> = self
-            .nested
-            .iter()
-            .flat_map(|n| {
-                let modify_variant =
-                    syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
-                let create_variant =
-                    syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
-                vec![
-                    quote! { Self::#modify_variant(e) => e.duplicate_value(), },
-                    quote! { Self::#create_variant(e) => e.duplicate_value(), },
-                ]
-            })
-            .collect();
-
-        let modify_nested_ph_checks: Vec<_> = self
-            .nested
-            .iter()
-            .flat_map(|n| {
-                let modify_variant =
-                    syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
-                let create_variant =
-                    syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
-                vec![
-                    quote! { Self::#modify_variant(e) => e.was_post_hydrate_error(), },
-                    quote! { Self::#create_variant(e) => e.was_post_hydrate_error(), },
-                ]
-            })
-            .collect();
-
-        let nested_from_impls: Vec<_> = self
-            .nested
-            .iter()
-            .flat_map(|n| {
-                let modify_variant =
-                    syn::Ident::new(&format!("{}Modify", n.variant_name), Span::call_site());
-                let create_variant =
-                    syn::Ident::new(&format!("{}Create", n.variant_name), Span::call_site());
-                let child_modify_ty = n.modify_error_ty();
-                let child_create_ty = n.create_error_ty();
-                vec![
+            let nested_variants: Vec<_> = self
+                .nested
+                .iter()
+                .map(|n| {
+                    let variant = &n.variant_name;
+                    let ty = n.constraint_violation_ty();
+                    quote! { #variant(#ty), }
+                })
+                .collect();
+            let nested_display_arms: Vec<_> = self
+                .nested
+                .iter()
+                .map(|n| {
+                    let variant = &n.variant_name;
+                    quote! { Self::#variant(e) => write!(f, "{}: {}", #entity_name, e), }
+                })
+                .collect();
+            let nested_source_arms: Vec<_> = self
+                .nested
+                .iter()
+                .map(|n| {
+                    let variant = &n.variant_name;
+                    quote! { Self::#variant(e) => Some(e), }
+                })
+                .collect();
+            let nested_from_impls: Vec<_> = self
+                .nested
+                .iter()
+                .map(|n| {
+                    let variant = &n.variant_name;
+                    let ty = n.constraint_violation_ty();
                     quote! {
-                        impl From<#child_modify_ty> for #modify_error {
-                            fn from(e: #child_modify_ty) -> Self {
-                                Self::#modify_variant(e)
+                        impl From<#ty> for #cv {
+                            fn from(e: #ty) -> Self {
+                                Self::#variant(e)
                             }
                         }
+                    }
+                })
+                .collect();
+
+            quote! {
+                #[derive(Debug, Clone)]
+                pub enum #cv {
+                    Own {
+                        #own_fields
                     },
-                    quote! {
-                        impl From<#child_create_ty> for #modify_error {
-                            fn from(e: #child_create_ty) -> Self {
-                                Self::#create_variant(e)
-                            }
+                    #(#nested_variants)*
+                }
+
+                impl #cv {
+                    #[doc(hidden)]
+                    pub fn new_own(
+                        constraint: Option<#constraint_enum>,
+                        constraint_name: Option<String>,
+                        column: Option<#column_enum>,
+                        value: Option<String>,
+                    ) -> Self {
+                        Self::Own { constraint, constraint_name, column, value }
+                    }
+
+                    pub fn constraint(&self) -> Option<#constraint_enum> {
+                        match self {
+                            Self::Own { constraint, .. } => *constraint,
+                            _ => None,
                         }
-                    },
-                ]
-            })
-            .collect();
-
-        let entity_name = entity.to_string();
-
-        let (pp_variant, pp_display_arm, pp_source_arm) = if let Some(config) =
-            &self.post_persist_hook
-        {
-            let error_ty = &config.error;
-            (
-                quote! { PostPersistHookError(#error_ty), },
-                quote! { Self::PostPersistHookError(e) => write!(f, "{}ModifyError - PostPersistHookError: {}", #entity_name, e), },
-                quote! { Self::PostPersistHookError(e) => Some(e), },
-            )
-        } else {
-            (quote! {}, quote! {}, quote! {})
-        };
-
-        quote! {
-            #[derive(Debug)]
-            pub enum #modify_error {
-                Sqlx(sqlx::Error),
-                /// **Security note:** `value` is extracted from the PostgreSQL error
-                /// detail and may contain PII (e.g. an email address). Exposing it to
-                /// untrusted API clients enables user enumeration and may place PII in
-                /// logs — prefer the `was_duplicate` / `was_duplicate_by` helpers at
-                /// trust boundaries.
-                ConstraintViolation { column: Option<#column_enum>, value: Option<String>, inner: sqlx::Error },
-                ConcurrentModification,
-                #pp_variant
-                #(#nested_variants)*
-            }
-
-            impl std::fmt::Display for #modify_error {
-                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    match self {
-                        Self::Sqlx(e) => write!(f, "{}ModifyError - Sqlx: {}", #entity_name, e),
-                        Self::ConstraintViolation { column, value, inner } => write!(f, "{}ModifyError - ConstraintViolation({:?}, {:?}): {}", #entity_name, column, value, inner),
-                        Self::ConcurrentModification => write!(f, "{}ModifyError - ConcurrentModification", #entity_name),
-                        #pp_display_arm
-                        #(#nested_display_arms)*
                     }
-                }
-            }
 
-            impl std::error::Error for #modify_error {
-                fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                    match self {
-                        Self::Sqlx(e) => Some(e),
-                        Self::ConstraintViolation { inner, .. } => Some(inner),
-                        Self::ConcurrentModification => None,
-                        #pp_source_arm
-                        #(#nested_source_arms)*
+                    pub fn constraint_name(&self) -> Option<&str> {
+                        match self {
+                            Self::Own { constraint_name, .. } => constraint_name.as_deref(),
+                            _ => None,
+                        }
                     }
-                }
-            }
 
-            impl From<sqlx::Error> for #modify_error {
-                fn from(e: sqlx::Error) -> Self {
-                    Self::Sqlx(e)
-                }
-            }
+                    pub fn column(&self) -> Option<#column_enum> {
+                        match self {
+                            Self::Own { column, .. } => *column,
+                            _ => None,
+                        }
+                    }
 
-            #(#nested_from_impls)*
+                    pub fn kind(&self) -> Option<es_entity::ConstraintKind> {
+                        self.constraint().map(|c| c.kind())
+                    }
 
-            impl #modify_error {
-                pub fn was_concurrent_modification(&self) -> bool {
-                    match self {
-                        Self::ConcurrentModification => true,
-                        #(#nested_cm_checks)*
-                        _ => false,
+                    /// **Security note:** may contain PII. See the `Own`
+                    /// field doc.
+                    pub fn value(&self) -> Option<&str> {
+                        match self {
+                            Self::Own { value, .. } => value.as_deref(),
+                            _ => None,
+                        }
                     }
                 }
 
-                pub fn was_duplicate(&self) -> bool {
-                    match self {
-                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. }
-                            if db_err.is_unique_violation() => true,
-                        #(#modify_nested_wd_checks)*
-                        _ => false,
+                impl std::fmt::Display for #cv {
+                    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        match self {
+                            Self::Own { constraint_name, .. } => write!(
+                                f,
+                                "constraint violation on {} ({})",
+                                #table_name,
+                                constraint_name.as_deref().unwrap_or("unknown"),
+                            ),
+                            #(#nested_display_arms)*
+                        }
                     }
                 }
 
-                pub fn was_foreign_key_violation(&self) -> bool {
-                    match self {
-                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. }
-                            if db_err.is_foreign_key_violation() => true,
-                        #(#modify_nested_fk_checks)*
-                        _ => false,
+                impl std::error::Error for #cv {
+                    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                        match self {
+                            Self::Own { .. } => None,
+                            #(#nested_source_arms)*
+                        }
                     }
                 }
 
-                pub fn was_check_violation(&self) -> bool {
-                    match self {
-                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. }
-                            if db_err.is_check_violation() => true,
-                        #(#modify_nested_ck_checks)*
-                        _ => false,
+                impl errlanes::Rejection for #cv {
+                    type Code = #constraint_enum;
+
+                    fn code(&self) -> Self::Code {
+                        self.constraint().unwrap_or(#constraint_enum::Unknown)
                     }
                 }
 
-                pub fn was_duplicate_by(&self, column: #column_enum) -> bool {
-                    matches!(self, Self::ConstraintViolation { column: Some(c), .. } if *c == column)
-                }
+                impl errlanes::HasConstraint for #cv {
+                    type Constraint = #constraint_enum;
 
-                /// Returns the name of the violated database constraint, if any.
-                ///
-                /// Useful for dispatching on hand-written constraints (e.g. foreign
-                /// keys or check constraints) that don't map to a recognized unique
-                /// column.
-                pub fn constraint_name(&self) -> Option<&str> {
-                    match self {
-                        Self::ConstraintViolation { inner: sqlx::Error::Database(db_err), .. } => db_err.constraint(),
-                        _ => None,
+                    fn constraint(&self) -> Option<Self::Constraint> {
+                        #cv::constraint(self)
+                    }
+
+                    fn constraint_name(&self) -> Option<&str> {
+                        #cv::constraint_name(self)
                     }
                 }
 
-                /// The violated constraint as a typed value, when the constraint
-                /// is known at compile time — the declared columns' unique
-                /// constraints plus every constraint discoverable from the
-                /// migrations.
-                pub fn violated_constraint(&self) -> Option<#constraint_enum> {
-                    self.constraint_name().and_then(#constraint_enum::from_name)
-                }
-
-                /// Returns the conflicting value extracted from the database error.
-                ///
-                /// **Security note:** may contain PII and enables user enumeration if
-                /// returned to untrusted clients. Handle with care.
-                pub fn duplicate_value(&self) -> Option<&str> {
-                    match self {
-                        Self::ConstraintViolation { value: Some(v), .. } => Some(v.as_str()),
-                        #(#nested_dv_checks)*
-                        _ => None,
-                    }
-                }
-
-                pub fn was_post_hydrate_error(&self) -> bool {
-                    match self {
-                        #(#modify_nested_ph_checks)*
-                        _ => false,
-                    }
-                }
-            }
-        }
-    }
-
-    fn generate_find_error(&self) -> TokenStream {
-        let find_error = &self.find_error;
-        let query_error = &self.query_error;
-        let column_enum = &self.column_enum;
-        let entity = self.entity;
-        let entity_name = entity.to_string();
-
-        let (ph_variant, ph_display_arm, ph_source_arm, ph_from_arm) = if let Some(config) =
-            &self.post_hydrate_hook
-        {
-            let error_ty = &config.error;
-            (
-                quote! { PostHydrateError(#error_ty), },
-                quote! { Self::PostHydrateError(e) => write!(f, "{}FindError - PostHydrateError: {}", #entity_name, e), },
-                quote! { Self::PostHydrateError(e) => Some(e), },
-                quote! { #query_error::PostHydrateError(e) => Self::PostHydrateError(e), },
-            )
-        } else {
-            (quote! {}, quote! {}, quote! {}, quote! {})
-        };
-        let find_ph_self_check = if self.post_hydrate_hook.is_some() {
-            quote! { Self::PostHydrateError(..) => true, }
-        } else {
-            quote! {}
-        };
-
-        quote! {
-            #[derive(Debug)]
-            pub enum #find_error {
-                Sqlx(sqlx::Error),
-                NotFound { entity: &'static str, column: Option<#column_enum>, value: String },
-                HydrationError(es_entity::EntityHydrationError),
-                #ph_variant
-            }
-
-            impl std::fmt::Display for #find_error {
-                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    match self {
-                        Self::Sqlx(e) => write!(f, "{}FindError - Sqlx: {}", #entity_name, e),
-                        Self::NotFound { entity, column: Some(column), value } => write!(f, "{}FindError - NotFound({column}={value})", entity),
-                        Self::NotFound { entity, column: None, value } => write!(f, "{}FindError - NotFound({})", entity, value),
-                        Self::HydrationError(e) => write!(f, "{}FindError - HydrationError: {}", #entity_name, e),
-                        #ph_display_arm
-                    }
-                }
-            }
-
-            impl std::error::Error for #find_error {
-                fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                    match self {
-                        Self::Sqlx(e) => Some(e),
-                        Self::NotFound { .. } => None,
-                        Self::HydrationError(e) => Some(e),
-                        #ph_source_arm
-                    }
-                }
-            }
-
-            impl From<sqlx::Error> for #find_error {
-                fn from(e: sqlx::Error) -> Self {
-                    Self::Sqlx(e)
-                }
-            }
-
-            impl From<es_entity::EntityHydrationError> for #find_error {
-                fn from(e: es_entity::EntityHydrationError) -> Self {
-                    Self::HydrationError(e)
-                }
-            }
-
-            impl From<#query_error> for #find_error {
-                fn from(e: #query_error) -> Self {
-                    match e {
-                        #query_error::Sqlx(e) => Self::Sqlx(e),
-                        #query_error::HydrationError(e) => Self::HydrationError(e),
-                        #query_error::CursorDestructureError(_) => unreachable!("CursorDestructureError cannot occur in find operations"),
-                        #ph_from_arm
-                    }
-                }
-            }
-
-            impl #find_error {
-                pub fn was_not_found(&self) -> bool {
-                    matches!(self, Self::NotFound { .. })
-                }
-
-                pub fn was_not_found_by(&self, column: #column_enum) -> bool {
-                    matches!(self, Self::NotFound { column: Some(c), .. } if *c == column)
-                }
-
-                pub fn not_found_value(&self) -> Option<&str> {
-                    match self {
-                        Self::NotFound { value, .. } => Some(value.as_str()),
-                        _ => None,
-                    }
-                }
-
-                pub fn was_post_hydrate_error(&self) -> bool {
-                    match self {
-                        #find_ph_self_check
-                        _ => false,
-                    }
-                }
-            }
-        }
-    }
-
-    fn generate_query_error(&self) -> TokenStream {
-        let query_error = &self.query_error;
-        let entity = self.entity;
-        let entity_name = entity.to_string();
-
-        let (ph_variant, ph_display_arm, ph_source_arm) = if let Some(config) =
-            &self.post_hydrate_hook
-        {
-            let error_ty = &config.error;
-            (
-                quote! { PostHydrateError(#error_ty), },
-                quote! { Self::PostHydrateError(e) => write!(f, "{}QueryError - PostHydrateError: {}", #entity_name, e), },
-                quote! { Self::PostHydrateError(e) => Some(e), },
-            )
-        } else {
-            (quote! {}, quote! {}, quote! {})
-        };
-        let query_ph_self_check = if self.post_hydrate_hook.is_some() {
-            quote! { Self::PostHydrateError(..) => true, }
-        } else {
-            quote! {}
-        };
-
-        quote! {
-            #[derive(Debug)]
-            pub enum #query_error {
-                Sqlx(sqlx::Error),
-                HydrationError(es_entity::EntityHydrationError),
-                CursorDestructureError(es_entity::CursorDestructureError),
-                #ph_variant
-            }
-
-            impl std::fmt::Display for #query_error {
-                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    match self {
-                        Self::Sqlx(e) => write!(f, "{}QueryError - Sqlx: {}", #entity_name, e),
-                        Self::HydrationError(e) => write!(f, "{}QueryError - HydrationError: {}", #entity_name, e),
-                        Self::CursorDestructureError(e) => write!(f, "{}QueryError - CursorDestructureError: {}", #entity_name, e),
-                        #ph_display_arm
-                    }
-                }
-            }
-
-            impl std::error::Error for #query_error {
-                fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                    match self {
-                        Self::Sqlx(e) => Some(e),
-                        Self::HydrationError(e) => Some(e),
-                        Self::CursorDestructureError(e) => Some(e),
-                        #ph_source_arm
-                    }
-                }
-            }
-
-            impl From<sqlx::Error> for #query_error {
-                fn from(e: sqlx::Error) -> Self {
-                    Self::Sqlx(e)
-                }
-            }
-
-            impl From<es_entity::EntityHydrationError> for #query_error {
-                fn from(e: es_entity::EntityHydrationError) -> Self {
-                    Self::HydrationError(e)
-                }
-            }
-
-            impl From<es_entity::CursorDestructureError> for #query_error {
-                fn from(e: es_entity::CursorDestructureError) -> Self {
-                    Self::CursorDestructureError(e)
-                }
-            }
-
-            impl #query_error {
-                pub fn was_post_hydrate_error(&self) -> bool {
-                    match self {
-                        #query_ph_self_check
-                        _ => false,
-                    }
-                }
+                #(#nested_from_impls)*
             }
         }
     }
@@ -1290,491 +651,4 @@ fn derive_entity_from_repo_type(ty: &syn::Type) -> Option<syn::Ident> {
         }
     }
     None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use proc_macro2::Span;
-    use syn::{Ident, parse_quote};
-
-    fn make_error_types(nested: Vec<NestedErrorInfo>) -> ErrorTypes<'static> {
-        // Leak entity ident to get a 'static reference for tests
-        let entity: &'static syn::Ident =
-            Box::leak(Box::new(Ident::new("Order", Span::call_site())));
-        let post_hydrate_hook: &'static Option<PostHydrateHookConfig> = Box::leak(Box::new(None));
-        let post_persist_hook: &'static Option<PostPersistHookConfig> = Box::leak(Box::new(None));
-        ErrorTypes {
-            entity,
-            column_enum: Ident::new("OrderColumn", Span::call_site()),
-            constraint_enum: Ident::new("OrderConstraint", Span::call_site()),
-            create_error: Ident::new("OrderCreateError", Span::call_site()),
-            modify_error: Ident::new("OrderModifyError", Span::call_site()),
-            find_error: Ident::new("OrderFindError", Span::call_site()),
-            query_error: Ident::new("OrderQueryError", Span::call_site()),
-            forget_error: Ident::new("OrderForgetError", Span::call_site()),
-            forgettable: false,
-            column_variants: vec![],
-            constraint_variants: vec![],
-            nested,
-            post_hydrate_hook,
-            post_persist_hook,
-        }
-    }
-
-    #[test]
-    fn constraint_variant_idents_disambiguate_instead_of_dropping() {
-        let mut taken = std::collections::HashSet::new();
-        // Table prefix stripped for readability.
-        let a = constraint_variant_ident("t", "t_a_b_key", &mut taken);
-        assert_eq!(a.to_string(), "ABKey");
-        // Camel-case collision with the stripped name → full-name fallback.
-        let b = constraint_variant_ident("t", "t_a__b_key", &mut taken);
-        assert_eq!(b.to_string(), "TABKey");
-        // Full name collides too → deterministic numeric suffix, never dropped.
-        let c = constraint_variant_ident("t", "t_a___b_key", &mut taken);
-        assert_eq!(c.to_string(), "TABKey2");
-        // Degenerate quoted identifier starting with a digit stays a valid ident.
-        let d = constraint_variant_ident("t", "2fa_check", &mut taken);
-        assert_eq!(d.to_string(), "Constraint2FaCheck");
-    }
-
-    #[test]
-    fn non_generic_nested_uses_associated_type() {
-        let error_types = make_error_types(vec![NestedErrorInfo {
-            child_repo_ty: parse_quote! { ItemRepo },
-            variant_name: Ident::new("Items", Span::call_site()),
-            nested_entity: None,
-        }]);
-
-        let tokens = error_types.generate_create_error();
-        let output = tokens.to_string();
-
-        // Should use associated type projection (existing behavior)
-        assert!(
-            output.contains("< ItemRepo as es_entity :: EsRepo > :: CreateError"),
-            "Expected associated type projection, got: {}",
-            output
-        );
-    }
-
-    #[test]
-    fn generic_nested_with_entity_uses_concrete_name() {
-        let error_types = make_error_types(vec![NestedErrorInfo {
-            child_repo_ty: parse_quote! { ItemRepo<Evt> },
-            variant_name: Ident::new("Items", Span::call_site()),
-            nested_entity: Some(Ident::new("InterestAccrualCycle", Span::call_site())),
-        }]);
-
-        let tokens = error_types.generate_create_error();
-        let output = tokens.to_string();
-
-        // Should use concrete error type name, NOT associated type projection
-        assert!(
-            output.contains("InterestAccrualCycleCreateError"),
-            "Expected concrete error type name, got: {}",
-            output
-        );
-        assert!(
-            !output.contains("ItemRepo"),
-            "Should not reference the generic repo type, got: {}",
-            output
-        );
-    }
-
-    #[test]
-    fn generic_nested_modify_error_uses_concrete_names() {
-        let error_types = make_error_types(vec![NestedErrorInfo {
-            child_repo_ty: parse_quote! { ItemRepo<Evt> },
-            variant_name: Ident::new("Items", Span::call_site()),
-            nested_entity: Some(Ident::new("InterestAccrualCycle", Span::call_site())),
-        }]);
-
-        let tokens = error_types.generate_modify_error();
-        let output = tokens.to_string();
-
-        // Should use concrete error type names for both Modify and Create variants
-        assert!(
-            output.contains("InterestAccrualCycleModifyError"),
-            "Expected concrete modify error type, got: {}",
-            output
-        );
-        assert!(
-            output.contains("InterestAccrualCycleCreateError"),
-            "Expected concrete create error type, got: {}",
-            output
-        );
-        assert!(
-            !output.contains("ItemRepo"),
-            "Should not reference the generic repo type, got: {}",
-            output
-        );
-    }
-
-    #[test]
-    fn mixed_nested_repos() {
-        let error_types = make_error_types(vec![
-            NestedErrorInfo {
-                child_repo_ty: parse_quote! { ItemRepo },
-                variant_name: Ident::new("Items", Span::call_site()),
-                nested_entity: None,
-            },
-            NestedErrorInfo {
-                child_repo_ty: parse_quote! { AccrualRepo<Evt> },
-                variant_name: Ident::new("Accruals", Span::call_site()),
-                nested_entity: Some(Ident::new("Accrual", Span::call_site())),
-            },
-        ]);
-
-        let tokens = error_types.generate_create_error();
-        let output = tokens.to_string();
-
-        // Non-generic nested should use associated type projection
-        assert!(
-            output.contains("< ItemRepo as es_entity :: EsRepo > :: CreateError"),
-            "Expected associated type projection for non-generic repo, got: {}",
-            output
-        );
-        // Generic nested with entity should use concrete name
-        assert!(
-            output.contains("AccrualCreateError"),
-            "Expected concrete error type for generic repo, got: {}",
-            output
-        );
-    }
-
-    #[test]
-    fn auto_derive_entity_from_repo_type_name() {
-        // When nested_entity is derived automatically (via derive_entity_from_repo_type),
-        // it strips the "Repo" suffix: ObligationRepo<Evt> → Obligation
-        let error_types = make_error_types(vec![NestedErrorInfo {
-            child_repo_ty: parse_quote! { ObligationRepo<Evt> },
-            variant_name: Ident::new("Obligations", Span::call_site()),
-            nested_entity: derive_entity_from_repo_type(&parse_quote! { ObligationRepo<Evt> }),
-        }]);
-
-        let tokens = error_types.generate_create_error();
-        let output = tokens.to_string();
-
-        assert!(
-            output.contains("ObligationCreateError"),
-            "Expected auto-derived concrete error type, got: {}",
-            output
-        );
-        assert!(
-            !output.contains("ObligationRepo"),
-            "Should not reference the generic repo type, got: {}",
-            output
-        );
-    }
-
-    #[test]
-    fn type_uses_any_generic_detects_params() {
-        let evt = Ident::new("Evt", Span::call_site());
-        let idents = vec![&evt];
-
-        // Type with generic param
-        let ty: syn::Type = parse_quote! { SomeRepo<Evt> };
-        assert!(type_uses_any_generic(&ty, &idents));
-
-        // Type without generic param
-        let ty: syn::Type = parse_quote! { SomeRepo };
-        assert!(!type_uses_any_generic(&ty, &idents));
-
-        // Type with different generic param
-        let ty: syn::Type = parse_quote! { SomeRepo<Other> };
-        assert!(!type_uses_any_generic(&ty, &idents));
-    }
-
-    #[test]
-    fn derive_entity_strips_repo_suffix() {
-        let ty: syn::Type = parse_quote! { ObligationRepo<Evt> };
-        let entity = derive_entity_from_repo_type(&ty);
-        assert_eq!(entity.unwrap().to_string(), "Obligation");
-
-        let ty: syn::Type = parse_quote! { InterestAccrualRepo<E> };
-        let entity = derive_entity_from_repo_type(&ty);
-        assert_eq!(entity.unwrap().to_string(), "InterestAccrual");
-
-        // Non-generic also works
-        let ty: syn::Type = parse_quote! { ItemRepo };
-        let entity = derive_entity_from_repo_type(&ty);
-        assert_eq!(entity.unwrap().to_string(), "Item");
-    }
-
-    #[test]
-    fn derive_entity_singularizes_plural_name() {
-        // Plural → singular convention
-        let ty: syn::Type = parse_quote! { OrderItems<Evt> };
-        let entity = derive_entity_from_repo_type(&ty);
-        assert_eq!(entity.unwrap().to_string(), "OrderItem");
-
-        let ty: syn::Type = parse_quote! { BillingPeriods<E> };
-        let entity = derive_entity_from_repo_type(&ty);
-        assert_eq!(entity.unwrap().to_string(), "BillingPeriod");
-
-        // Non-generic plural also works
-        let ty: syn::Type = parse_quote! { Users };
-        let entity = derive_entity_from_repo_type(&ty);
-        assert_eq!(entity.unwrap().to_string(), "User");
-    }
-
-    #[test]
-    fn derive_entity_returns_none_for_unrecognized() {
-        // Neither Repo suffix nor plural → None
-        let ty: syn::Type = parse_quote! { SomeType<E> };
-        assert!(derive_entity_from_repo_type(&ty).is_none());
-
-        // Singular name without Repo suffix → None
-        let ty: syn::Type = parse_quote! { Obligation<E> };
-        assert!(derive_entity_from_repo_type(&ty).is_none());
-    }
-
-    // -----------------------------------------------------------------------
-    // Hook variant and helper method generation tests
-    // -----------------------------------------------------------------------
-
-    fn make_error_types_with_hooks(
-        nested: Vec<NestedErrorInfo>,
-        post_hydrate_hook: Option<PostHydrateHookConfig>,
-        post_persist_hook: Option<PostPersistHookConfig>,
-    ) -> ErrorTypes<'static> {
-        let entity: &'static syn::Ident =
-            Box::leak(Box::new(Ident::new("Order", Span::call_site())));
-        let ph: &'static Option<PostHydrateHookConfig> = Box::leak(Box::new(post_hydrate_hook));
-        let pp: &'static Option<PostPersistHookConfig> = Box::leak(Box::new(post_persist_hook));
-        ErrorTypes {
-            entity,
-            column_enum: Ident::new("OrderColumn", Span::call_site()),
-            constraint_enum: Ident::new("OrderConstraint", Span::call_site()),
-            create_error: Ident::new("OrderCreateError", Span::call_site()),
-            modify_error: Ident::new("OrderModifyError", Span::call_site()),
-            find_error: Ident::new("OrderFindError", Span::call_site()),
-            query_error: Ident::new("OrderQueryError", Span::call_site()),
-            forget_error: Ident::new("OrderForgetError", Span::call_site()),
-            forgettable: false,
-            column_variants: vec![],
-            constraint_variants: vec![],
-            nested,
-            post_hydrate_hook: ph,
-            post_persist_hook: pp,
-        }
-    }
-
-    fn ph_hook() -> PostHydrateHookConfig {
-        PostHydrateHookConfig {
-            method: Ident::new("validate", Span::call_site()),
-            error: syn::parse_str("MyHydrateError").unwrap(),
-        }
-    }
-
-    fn pp_hook() -> PostPersistHookConfig {
-        PostPersistHookConfig {
-            method: Ident::new("on_persist", Span::call_site()),
-            error: syn::parse_str("MyPersistError").unwrap(),
-        }
-    }
-
-    #[test]
-    fn create_error_without_hooks_omits_hook_variants() {
-        let et = make_error_types_with_hooks(vec![], None, None);
-        let output = et.generate_create_error().to_string();
-
-        assert!(
-            !output.contains("PostHydrateError"),
-            "should not contain PostHydrateError variant without hook: {output}"
-        );
-        assert!(
-            !output.contains("PostPersistHookError"),
-            "should not contain PostPersistHookError variant without hook: {output}"
-        );
-    }
-
-    #[test]
-    fn create_error_without_hooks_still_generates_was_post_hydrate_error() {
-        let et = make_error_types_with_hooks(vec![], None, None);
-        let output = et.generate_create_error().to_string();
-
-        assert!(
-            output.contains("was_post_hydrate_error"),
-            "was_post_hydrate_error should always be generated: {output}"
-        );
-    }
-
-    #[test]
-    fn create_error_with_post_hydrate_hook_has_variant_and_self_check() {
-        let et = make_error_types_with_hooks(vec![], Some(ph_hook()), None);
-        let output = et.generate_create_error().to_string();
-
-        assert!(
-            output.contains("PostHydrateError (MyHydrateError)"),
-            "should contain PostHydrateError variant with custom type: {output}"
-        );
-        assert!(
-            output.contains("was_post_hydrate_error"),
-            "should contain was_post_hydrate_error helper: {output}"
-        );
-    }
-
-    #[test]
-    fn create_error_with_post_persist_hook_has_variant() {
-        let et = make_error_types_with_hooks(vec![], None, Some(pp_hook()));
-        let output = et.generate_create_error().to_string();
-
-        assert!(
-            output.contains("PostPersistHookError (MyPersistError)"),
-            "should contain PostPersistHookError variant with custom type: {output}"
-        );
-    }
-
-    #[test]
-    fn create_error_nested_cascades_was_duplicate() {
-        let et = make_error_types(vec![NestedErrorInfo {
-            child_repo_ty: parse_quote! { ItemRepo },
-            variant_name: Ident::new("Items", Span::call_site()),
-            nested_entity: None,
-        }]);
-        let output = et.generate_create_error().to_string();
-
-        // was_duplicate should cascade into nested Items variant
-        assert!(
-            output.contains("Self :: Items (e) => e . was_duplicate ()"),
-            "was_duplicate should cascade into nested variant: {output}"
-        );
-    }
-
-    #[test]
-    fn create_error_nested_cascades_was_post_hydrate_error() {
-        let et = make_error_types_with_hooks(
-            vec![NestedErrorInfo {
-                child_repo_ty: parse_quote! { ItemRepo },
-                variant_name: Ident::new("Items", Span::call_site()),
-                nested_entity: None,
-            }],
-            Some(ph_hook()),
-            None,
-        );
-        let output = et.generate_create_error().to_string();
-
-        // was_post_hydrate_error should cascade into nested Items variant
-        assert!(
-            output.contains("Self :: Items (e) => e . was_post_hydrate_error ()"),
-            "was_post_hydrate_error should cascade into nested variant: {output}"
-        );
-    }
-
-    #[test]
-    fn modify_error_with_post_persist_hook_has_variant() {
-        let et = make_error_types_with_hooks(vec![], None, Some(pp_hook()));
-        let output = et.generate_modify_error().to_string();
-
-        assert!(
-            output.contains("PostPersistHookError (MyPersistError)"),
-            "should contain PostPersistHookError variant with custom type: {output}"
-        );
-        assert!(
-            !output.contains("PostHydrateError"),
-            "modify error should never have PostHydrateError: {output}"
-        );
-    }
-
-    #[test]
-    fn modify_error_without_hooks_still_generates_was_post_hydrate_error() {
-        let et = make_error_types_with_hooks(vec![], None, None);
-        let output = et.generate_modify_error().to_string();
-
-        assert!(
-            output.contains("was_post_hydrate_error"),
-            "was_post_hydrate_error should always be generated on ModifyError: {output}"
-        );
-    }
-
-    #[test]
-    fn modify_error_nested_cascades_was_duplicate_and_was_post_hydrate_error() {
-        let et = make_error_types(vec![NestedErrorInfo {
-            child_repo_ty: parse_quote! { ItemRepo },
-            variant_name: Ident::new("Items", Span::call_site()),
-            nested_entity: None,
-        }]);
-        let output = et.generate_modify_error().to_string();
-
-        // was_duplicate cascades into both Modify and Create nested variants
-        assert!(
-            output.contains("Self :: ItemsModify (e) => e . was_duplicate ()"),
-            "was_duplicate should cascade into nested Modify variant: {output}"
-        );
-        assert!(
-            output.contains("Self :: ItemsCreate (e) => e . was_duplicate ()"),
-            "was_duplicate should cascade into nested Create variant: {output}"
-        );
-        // was_post_hydrate_error cascades into both
-        assert!(
-            output.contains("Self :: ItemsModify (e) => e . was_post_hydrate_error ()"),
-            "was_post_hydrate_error should cascade into nested Modify variant: {output}"
-        );
-        assert!(
-            output.contains("Self :: ItemsCreate (e) => e . was_post_hydrate_error ()"),
-            "was_post_hydrate_error should cascade into nested Create variant: {output}"
-        );
-    }
-
-    #[test]
-    fn find_error_with_post_hydrate_hook_has_variant() {
-        let et = make_error_types_with_hooks(vec![], Some(ph_hook()), None);
-        let output = et.generate_find_error().to_string();
-
-        assert!(
-            output.contains("PostHydrateError (MyHydrateError)"),
-            "should contain PostHydrateError variant with custom type: {output}"
-        );
-        assert!(
-            output.contains("was_post_hydrate_error"),
-            "should contain was_post_hydrate_error helper: {output}"
-        );
-    }
-
-    #[test]
-    fn find_error_without_hooks_still_generates_was_post_hydrate_error() {
-        let et = make_error_types_with_hooks(vec![], None, None);
-        let output = et.generate_find_error().to_string();
-
-        assert!(
-            output.contains("was_post_hydrate_error"),
-            "was_post_hydrate_error should always be generated on FindError: {output}"
-        );
-        assert!(
-            !output.contains("PostHydrateError"),
-            "should not contain PostHydrateError variant without hook: {output}"
-        );
-    }
-
-    #[test]
-    fn query_error_with_post_hydrate_hook_has_variant() {
-        let et = make_error_types_with_hooks(vec![], Some(ph_hook()), None);
-        let output = et.generate_query_error().to_string();
-
-        assert!(
-            output.contains("PostHydrateError (MyHydrateError)"),
-            "should contain PostHydrateError variant with custom type: {output}"
-        );
-        assert!(
-            output.contains("was_post_hydrate_error"),
-            "should contain was_post_hydrate_error helper: {output}"
-        );
-    }
-
-    #[test]
-    fn query_error_without_hooks_still_generates_was_post_hydrate_error() {
-        let et = make_error_types_with_hooks(vec![], None, None);
-        let output = et.generate_query_error().to_string();
-
-        assert!(
-            output.contains("was_post_hydrate_error"),
-            "was_post_hydrate_error should always be generated on QueryError: {output}"
-        );
-        assert!(
-            !output.contains("PostHydrateError"),
-            "should not contain PostHydrateError variant without hook: {output}"
-        );
-    }
 }

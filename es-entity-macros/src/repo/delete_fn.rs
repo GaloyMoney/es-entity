@@ -11,7 +11,7 @@ pub struct DeleteFn<'a> {
     in_op_only: bool,
     id: &'a syn::Ident,
     event: &'a syn::Ident,
-    modify_error: syn::Ident,
+    constraint_violation: syn::Ident,
     entity: &'a syn::Ident,
     table_name: &'a str,
     events_table_name: &'a str,
@@ -32,7 +32,7 @@ impl<'a> DeleteFn<'a> {
             id: opts.id(),
             event: opts.event(),
             entity: opts.entity(),
-            modify_error: opts.modify_error(),
+            constraint_violation: opts.constraint_violation(),
             columns: &opts.columns,
             table_name: opts.table_name(),
             events_table_name: opts.events_table_name(),
@@ -57,11 +57,12 @@ impl ToTokens for DeleteFn<'_> {
         }
 
         let entity = self.entity;
-        let modify_error = &self.modify_error;
+        let constraint_violation = &self.constraint_violation;
+        let table_name = self.table_name;
 
         let nested_deletes = self.nested_delete_fn_names.iter().map(|f| {
             quote! {
-                Self::#f::<_, _, #modify_error>(op, &entity).await?;
+                Self::#f(op, &entity).await.map_err(errlanes::Fail::never)?;
             }
         });
 
@@ -120,7 +121,7 @@ impl ToTokens for DeleteFn<'_> {
 
         let post_persist_check = if self.post_persist_error.is_some() {
             quote! {
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(#modify_error::PostPersistHookError)?;
+                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(errlanes::Fail::from)?;
             }
         } else {
             quote! {}
@@ -151,7 +152,12 @@ impl ToTokens for DeleteFn<'_> {
                 id_type,
                 event_type,
             }
-            .insert_per_entity(quote! { entity.events() }, modify_error, None),
+            .insert_per_entity(
+                quote! { entity.events() },
+                constraint_violation,
+                self.events_table_name,
+                None,
+            ),
             None => quote! {},
         };
 
@@ -160,7 +166,7 @@ impl ToTokens for DeleteFn<'_> {
                 pub async fn delete(
                     &self,
                     entity: #entity
-                ) -> Result<(), #modify_error> {
+                ) -> Result<(), errlanes::Fail<#constraint_violation>> {
                     let mut op = self.begin_op().await?;
                     let res = self.delete_in_op(&mut op, entity).await?;
                     op.commit().await?;
@@ -176,11 +182,11 @@ impl ToTokens for DeleteFn<'_> {
             pub async fn delete_in_op<OP>(&self,
                 op: &mut OP,
                 mut entity: #entity
-            ) -> Result<(), #modify_error>
+            ) -> Result<(), errlanes::Fail<#constraint_violation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), #modify_error> = async {
+                let __result: Result<(), errlanes::Fail<#constraint_violation>> = async {
                     #(#nested_deletes)*
                     #assignments
                     #record_id
@@ -197,7 +203,7 @@ impl ToTokens for DeleteFn<'_> {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_write_error)?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)))?;
 
                     #staged_payload_insert
 
@@ -208,7 +214,10 @@ impl ToTokens for DeleteFn<'_> {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or(#modify_error::ConcurrentModification)?;
+                            .ok_or_else(|| errlanes::Fail::from(
+                                errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                    .with_context(format!("{} row vanished", #table_name))
+                            ))?;
                         let n_events = Self::extract_events(&mut entity)
                             .mark_new_events_persisted_at(recorded_at);
 
@@ -244,7 +253,7 @@ mod tests {
             id: &id,
             event: &event,
             entity: &entity,
-            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -264,7 +273,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), EntityModifyError> {
+            ) -> Result<(), errlanes::Fail<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -275,11 +284,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), EntityModifyError>
+            ) -> Result<(), errlanes::Fail<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), EntityModifyError> = async {
+                let __result: Result<(), errlanes::Fail<EntityConstraintViolation>> = async {
                     let id = &entity.id;
 
                     let new_events = entity.events().any_new();
@@ -297,13 +306,16 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_write_error)?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")))?;
 
                     if new_events {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or(EntityModifyError::ConcurrentModification)?;
+                            .ok_or_else(|| errlanes::Fail::from(
+                                errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                    .with_context(format!("{} row vanished", "entities"))
+                            ))?;
                         let n_events = Self::extract_events(&mut entity)
                             .mark_new_events_persisted_at(recorded_at);
                     }
@@ -337,7 +349,7 @@ mod tests {
             id: &id,
             event: &event,
             entity: &entity,
-            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -357,7 +369,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), EntityModifyError> {
+            ) -> Result<(), errlanes::Fail<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -368,11 +380,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), EntityModifyError>
+            ) -> Result<(), errlanes::Fail<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), EntityModifyError> = async {
+                let __result: Result<(), errlanes::Fail<EntityConstraintViolation>> = async {
                     let id = &entity.id;
                     let name = &entity.name;
 
@@ -392,13 +404,16 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_write_error)?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")))?;
 
                     if new_events {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or(EntityModifyError::ConcurrentModification)?;
+                            .ok_or_else(|| errlanes::Fail::from(
+                                errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                    .with_context(format!("{} row vanished", "entities"))
+                            ))?;
                         let n_events = Self::extract_events(&mut entity)
                             .mark_new_events_persisted_at(recorded_at);
                     }
@@ -426,7 +441,7 @@ mod tests {
             id: &id,
             event: &event,
             entity: &entity,
-            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -446,7 +461,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), EntityModifyError> {
+            ) -> Result<(), errlanes::Fail<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -457,11 +472,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), EntityModifyError>
+            ) -> Result<(), errlanes::Fail<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), EntityModifyError> = async {
+                let __result: Result<(), errlanes::Fail<EntityConstraintViolation>> = async {
                     let id = &entity.id;
 
                     sqlx::query!(
@@ -486,7 +501,7 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_write_error)?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")))?;
 
                     let mut payload_sequences: Vec<i32> = Vec::new();
                     let mut payload_values: Vec<es_entity::prelude::serde_json::Value> = Vec::new();
@@ -497,7 +512,7 @@ mod tests {
                         }
                     }
                     if !payload_sequences.is_empty() {
-                        Self::extract_concurrent_modification(
+                        Self::classify_conflict::<_, EntityConstraintViolation>(
                             sqlx::query!(
                                 "INSERT INTO entities_forgettable_payloads (entity_id, sequence, payload) SELECT $1, unnested.sequence, unnested.payload FROM UNNEST($2::INT[], $3::JSONB[]) AS unnested(sequence, payload)",
                                 id as &EntityId,
@@ -506,7 +521,8 @@ mod tests {
                             )
                             .execute(op.as_executor())
                             .await,
-                            EntityModifyError::ConcurrentModification,
+                            "entity_events",
+                            || "forgettable payload insert conflicted on its own primary key".to_string(),
                         )?;
                     }
 
@@ -514,7 +530,10 @@ mod tests {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or(EntityModifyError::ConcurrentModification)?;
+                            .ok_or_else(|| errlanes::Fail::from(
+                                errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                    .with_context(format!("{} row vanished", "entities"))
+                            ))?;
                         let n_events = Self::extract_events(&mut entity)
                             .mark_new_events_persisted_at(recorded_at);
                     }

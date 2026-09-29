@@ -237,8 +237,8 @@ runs:
   back (the forget is retryable).
 
 If no staged events are persisted the hook is not invoked, matching
-`update`'s no-op semantics. A hook failure surfaces as
-`{Entity}ForgetError::PostPersistHookError`.
+`update`'s no-op semantics. A hook failure widens directly into `forget`'s
+`errlanes::Fail<{Entity}ConstraintViolation>` — see [Hooks](./repo-hooks.md).
 
 ## Verifying Erasure at the Storage Level
 
@@ -256,16 +256,24 @@ trust physical absence without hand-maintaining a list of PII fields:
 ```rust,ignore
 let customer = customers.forget(customer).await?;
 
-// Fails with `CustomerForgetError::NotForgotten(remnants)` if anything
-// forgettable is still physically present.
+// Fails with `Fatal(Invariant)` — source is a `ForgettableRemnants` — if
+// anything forgettable is still physically present.
 customers.verify_forgotten(customer.id).await?;
 ```
 
-The `NotForgotten` error carries a
+The failure is `errlanes::Fail::Fatal(fatal)` whose `source()` is a
 [`ForgettableRemnants`](https://docs.rs/es-entity) report describing exactly
-what survived (`payload_rows`, `live_index_columns`, `event_fields`),
-accessible via `err.not_forgotten_remnants()`. An id that was never persisted
-verifies trivially.
+what survived (`payload_rows`, `live_index_columns`, `event_fields`); recover
+it with `std::error::Error::downcast_ref`:
+
+```rust,ignore
+if let Err(es_entity::errlanes::Fail::Fatal(fatal)) = customers.verify_forgotten(customer.id).await {
+    let remnants = std::error::Error::source(&fatal)
+        .and_then(|s| s.downcast_ref::<es_entity::ForgettableRemnants>());
+}
+```
+
+An id that was never persisted verifies trivially.
 
 ## Custom Queries with `es_query!`
 

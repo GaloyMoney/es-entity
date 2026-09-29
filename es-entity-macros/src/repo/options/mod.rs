@@ -132,9 +132,9 @@ pub struct RepoField {
     #[darling(default)]
     pub nested: bool,
     /// For nested fields whose repo type is generic, specify the child entity name
-    /// so error types can be referenced concretely (e.g., `entity = "InterestAccrualCycle"`
-    /// generates `InterestAccrualCycleCreateError` instead of
-    /// `<InterestAccrualRepo<Evt> as EsRepo>::CreateError`).
+    /// so the constraint-violation type can be referenced concretely (e.g.,
+    /// `entity = "InterestAccrualCycle"` generates `InterestAccrualCycleConstraintViolation`
+    /// instead of `<InterestAccrualRepo<Evt> as EsRepo>::ConstraintViolation`).
     #[darling(default)]
     pub entity: Option<syn::Ident>,
 }
@@ -526,37 +526,12 @@ impl RepositoryOptions {
         }
     }
 
-    pub fn create_error(&self) -> syn::Ident {
+    /// The generated `{Entity}ConstraintViolation` ident — the one repo
+    /// `Rejection`. Every generated repo op returns `Result<T,
+    /// errlanes::Fail<Self::ConstraintViolation>>`.
+    pub fn constraint_violation(&self) -> syn::Ident {
         syn::Ident::new(
-            &format!("{}CreateError", self.entity_ident),
-            Span::call_site(),
-        )
-    }
-
-    pub fn modify_error(&self) -> syn::Ident {
-        syn::Ident::new(
-            &format!("{}ModifyError", self.entity_ident),
-            Span::call_site(),
-        )
-    }
-
-    pub fn find_error(&self) -> syn::Ident {
-        syn::Ident::new(
-            &format!("{}FindError", self.entity_ident),
-            Span::call_site(),
-        )
-    }
-
-    pub fn query_error(&self) -> syn::Ident {
-        syn::Ident::new(
-            &format!("{}QueryError", self.entity_ident),
-            Span::call_site(),
-        )
-    }
-
-    pub fn forget_error(&self) -> syn::Ident {
-        syn::Ident::new(
-            &format!("{}ForgetError", self.entity_ident),
+            &format!("{}ConstraintViolation", self.entity_ident),
             Span::call_site(),
         )
     }
@@ -566,7 +541,7 @@ impl RepositoryOptions {
     }
 
     /// The generated scope enum ident (`{Entity}Scope`), entity-named like
-    /// the other generated companion types (`{Entity}FindError`,
+    /// the other generated companion types (`{Entity}ConstraintViolation`,
     /// `{Entity}ByIdCursor`, ...).
     pub fn scope_type_ident(&self) -> syn::Ident {
         syn::Ident::new(&format!("{}Scope", self.entity_ident), Span::call_site())

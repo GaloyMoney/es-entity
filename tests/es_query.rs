@@ -24,7 +24,10 @@ mod tbl_prefix_param {
             Self { pool }
         }
 
-        async fn query_with_args(&self, id: UserId) -> Result<User, UserFindError> {
+        async fn query_with_args(
+            &self,
+            id: UserId,
+        ) -> Result<User, Fail<core::convert::Infallible>> {
             es_query!(
                 tbl_prefix = "ignore_prefix",
                 "SELECT * FROM ignore_prefix_users WHERE id = $1",
@@ -32,14 +35,12 @@ mod tbl_prefix_param {
             )
             .fetch_optional(self.pool())
             .await?
-            .ok_or_else(|| UserFindError::NotFound {
-                entity: "User",
-                column: Some(UserColumn::Id),
-                value: format!("{:?}", id),
-            })
+            .ok_or_else(|| not_found_fatal("User", Some("id"), format!("{:?}", id)))
         }
 
-        async fn query_without_args(&self) -> Result<(Vec<User>, bool), UserQueryError> {
+        async fn query_without_args(
+            &self,
+        ) -> Result<(Vec<User>, bool), Fail<core::convert::Infallible>> {
             es_query!(
                 tbl_prefix = "ignore_prefix",
                 "SELECT * FROM ignore_prefix_users"
@@ -108,7 +109,10 @@ mod entity_param {
             Self { pool }
         }
 
-        async fn query_with_args(&self, id: UserId) -> Result<User, UserFindError> {
+        async fn query_with_args(
+            &self,
+            id: UserId,
+        ) -> Result<User, Fail<core::convert::Infallible>> {
             let mut op = self.begin_op().await?;
             es_query!(
                 entity = User,
@@ -117,14 +121,12 @@ mod entity_param {
             )
             .fetch_optional(&mut op)
             .await?
-            .ok_or_else(|| UserFindError::NotFound {
-                entity: "User",
-                column: Some(UserColumn::Id),
-                value: format!("{:?}", id),
-            })
+            .ok_or_else(|| not_found_fatal("User", Some("id"), format!("{:?}", id)))
         }
 
-        async fn query_without_args(&self) -> Result<(Vec<User>, bool), UserQueryError> {
+        async fn query_without_args(
+            &self,
+        ) -> Result<(Vec<User>, bool), Fail<core::convert::Infallible>> {
             let mut op = self.begin_op().await?;
             es_query!(entity = User, "SELECT * FROM custom_name_for_users")
                 .fetch_n(&mut op, 2)
@@ -186,18 +188,19 @@ mod no_params {
             Self { pool }
         }
 
-        async fn query_with_args(&self, id: UserId) -> Result<User, UserFindError> {
+        async fn query_with_args(
+            &self,
+            id: UserId,
+        ) -> Result<User, Fail<core::convert::Infallible>> {
             es_query!("SELECT * FROM users WHERE id = $1", id as UserId)
                 .fetch_optional(self.pool())
                 .await?
-                .ok_or_else(|| UserFindError::NotFound {
-                    entity: "User",
-                    column: Some(UserColumn::Id),
-                    value: format!("{:?}", id),
-                })
+                .ok_or_else(|| not_found_fatal("User", Some("id"), format!("{:?}", id)))
         }
 
-        async fn query_without_args(&self) -> Result<(Vec<User>, bool), UserQueryError> {
+        async fn query_without_args(
+            &self,
+        ) -> Result<(Vec<User>, bool), Fail<core::convert::Infallible>> {
             es_query!("SELECT * FROM users")
                 .fetch_n(self.pool(), 2)
                 .await

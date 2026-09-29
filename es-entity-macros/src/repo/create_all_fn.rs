@@ -17,7 +17,7 @@ pub struct CreateAllFn<'a> {
     event_ctx: bool,
     forgettable_table_name: Option<&'a str>,
     columns: &'a Columns,
-    create_error: syn::Ident,
+    constraint_violation: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
     post_hydrate_error: Option<&'a syn::Type>,
     post_persist_error: Option<&'a syn::Type>,
@@ -36,7 +36,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateAllFn<'a> {
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
             forgettable_table_name: opts.forgettable_table_name(),
-            create_error: opts.create_error(),
+            constraint_violation: opts.constraint_violation(),
             nested_fn_names: opts
                 .all_nested()
                 .map(|f| f.create_nested_fn_name())
@@ -53,7 +53,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateAllFn<'a> {
 impl ToTokens for CreateAllFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let entity = self.entity;
-        let create_error = &self.create_error;
+        let constraint_violation = &self.constraint_violation;
 
         // Nested creation is batched once across the whole hydrated parent
         // batch (not once per parent), so it runs as its own pass after every
@@ -64,7 +64,7 @@ impl ToTokens for CreateAllFn<'_> {
         } else {
             let nested = self.nested_fn_names.iter().map(|f| {
                 quote! {
-                    self.#f(op, &mut entity_refs).await?;
+                    self.#f(op, &mut entity_refs).await.map_err(errlanes::Fail::widen)?;
                 }
             });
             quote! {
@@ -136,7 +136,7 @@ impl ToTokens for CreateAllFn<'_> {
             .unwrap_or_default();
         let forgettable_insert = payloads
             .as_ref()
-            .map(|p| p.insert_batch(create_error))
+            .map(|p| p.insert_batch(constraint_violation, self.events_table_name))
             .unwrap_or_default();
 
         #[cfg(feature = "instrument")]
@@ -162,7 +162,7 @@ impl ToTokens for CreateAllFn<'_> {
 
         let post_hydrate_check = if self.post_hydrate_error.is_some() {
             quote! {
-                self.execute_post_hydrate_hook(&entity).map_err(#create_error::PostHydrateError)?;
+                self.execute_post_hydrate_hook(&entity).map_err(|e| errlanes::Fail::<core::convert::Infallible>::from(e).never())?;
             }
         } else {
             quote! {}
@@ -170,7 +170,7 @@ impl ToTokens for CreateAllFn<'_> {
 
         let post_persist_check = if self.post_persist_error.is_some() {
             quote! {
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(#create_error::PostPersistHookError)?;
+                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(errlanes::Fail::from)?;
             }
         } else {
             quote! {}
@@ -182,40 +182,41 @@ impl ToTokens for CreateAllFn<'_> {
         // skipped entirely when neither hook is configured: an empty loop
         // would just be dead weight (and an unused-variable warning under
         // `-D warnings`).
-        let post_checks_phase =
-            if self.post_hydrate_error.is_some() || self.post_persist_error.is_some() {
-                quote! {
-                    let mut n_events_by_entity: Vec<usize> = Vec::new();
-                    for (events, n_events) in all_events.into_iter().zip(n_persisted) {
-                        let entity = Self::hydrate_entity(events)?;
-                        entities.push(entity);
-                        n_events_by_entity.push(n_events);
-                    }
-
-                    #nested_phase
-
-                    for (entity, n_events) in entities.iter().zip(n_events_by_entity) {
-                        #post_hydrate_check
-                        #post_persist_check
-                    }
+        let post_checks_phase = if self.post_hydrate_error.is_some()
+            || self.post_persist_error.is_some()
+        {
+            quote! {
+                let mut n_events_by_entity: Vec<usize> = Vec::new();
+                for (events, n_events) in all_events.into_iter().zip(n_persisted) {
+                    let entity = Self::hydrate_entity(events).map_err(es_entity::hydration_fatal)?;
+                    entities.push(entity);
+                    n_events_by_entity.push(n_events);
                 }
-            } else {
-                quote! {
-                    for (events, _n_events) in all_events.into_iter().zip(n_persisted) {
-                        let entity = Self::hydrate_entity(events)?;
-                        entities.push(entity);
-                    }
 
-                    #nested_phase
+                #nested_phase
+
+                for (entity, n_events) in entities.iter().zip(n_events_by_entity) {
+                    #post_hydrate_check
+                    #post_persist_check
                 }
-            };
+            }
+        } else {
+            quote! {
+                for (events, _n_events) in all_events.into_iter().zip(n_persisted) {
+                    let entity = Self::hydrate_entity(events).map_err(es_entity::hydration_fatal)?;
+                    entities.push(entity);
+                }
+
+                #nested_phase
+            }
+        };
 
         let standalone = (!self.in_op_only).then(|| {
             quote! {
                 pub async fn create_all(
                     &self,
                     new_entities: Vec<<#entity as es_entity::EsEntity>::New>
-                ) -> Result<Vec<#entity>, #create_error> {
+                ) -> Result<Vec<#entity>, errlanes::Fail<#constraint_violation>> {
                     let mut op = self.begin_op().await?;
                     let res = self.create_all_in_op(&mut op, new_entities).await?;
                     op.commit().await?;
@@ -232,11 +233,11 @@ impl ToTokens for CreateAllFn<'_> {
                 &self,
                 op: &mut OP,
                 new_entities: Vec<<#entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<#entity>, #create_error>
+            ) -> Result<Vec<#entity>, errlanes::Fail<#constraint_violation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<Vec<#entity>, #create_error> = async {
+                let __result: Result<Vec<#entity>, errlanes::Fail<#constraint_violation>> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     let mut entities = Vec::new();
@@ -272,15 +273,21 @@ impl ToTokens for CreateAllFn<'_> {
                     let rows = sqlx::query_with(#query, __query_args)
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_create_error)?;
+                        .map_err(Self::classify_create_write)?;
 
                     #forgettable_insert
 
                     if expected_events > 0 {
                         // Every event row joins an index row this same statement
-                        // inserted, so a short count means the join dropped rows.
+                        // inserted, so a short count means the join dropped rows —
+                        // a torn batch, not a race (every row belongs to this
+                        // statement's own transaction).
                         if rows.len() != expected_events {
-                            return Err(#create_error::ConcurrentModification);
+                            return Err(errlanes::Fail::from(errlanes::Fatal::invariant(format!(
+                                "batch wrote {} of {} events",
+                                rows.len(),
+                                expected_events
+                            ))));
                         }
 
                         let recorded_at = rows
@@ -313,7 +320,7 @@ mod tests {
     #[test]
     fn create_all_fn() {
         let entity = Ident::new("Entity", Span::call_site());
-        let create_error = syn::Ident::new("EntityCreateError", Span::call_site());
+        let constraint_violation = syn::Ident::new("EntityConstraintViolation", Span::call_site());
         let id = Ident::new("EntityId", Span::call_site());
         let event = Ident::new("EntityEvent", Span::call_site());
 
@@ -331,7 +338,7 @@ mod tests {
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: None,
-            create_error,
+            constraint_violation,
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_hydrate_error: None,
@@ -347,7 +354,7 @@ mod tests {
             pub async fn create_all(
                 &self,
                 new_entities: Vec<<Entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<Entity>, EntityCreateError> {
+            ) -> Result<Vec<Entity>, errlanes::Fail<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.create_all_in_op(&mut op, new_entities).await?;
                 op.commit().await?;
@@ -358,11 +365,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 new_entities: Vec<<Entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<Entity>, EntityCreateError>
+            ) -> Result<Vec<Entity>, errlanes::Fail<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<Vec<Entity>, EntityCreateError> = async {
+                let __result: Result<Vec<Entity>, errlanes::Fail<EntityConstraintViolation>> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     let mut entities = Vec::new();
@@ -421,11 +428,15 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_create_error)?;
+                        .map_err(Self::classify_create_write)?;
 
                     if expected_events > 0 {
                         if rows.len() != expected_events {
-                            return Err(EntityCreateError::ConcurrentModification);
+                            return Err(errlanes::Fail::from(errlanes::Fatal::invariant(format!(
+                                "batch wrote {} of {} events",
+                                rows.len(),
+                                expected_events
+                            ))));
                         }
 
                         let recorded_at = rows
@@ -438,7 +449,7 @@ mod tests {
                     }
 
                     for (events, _n_events) in all_events.into_iter().zip(n_persisted) {
-                        let entity = Self::hydrate_entity(events)?;
+                        let entity = Self::hydrate_entity(events).map_err(es_entity::hydration_fatal)?;
                         entities.push(entity);
                     }
 

@@ -1,63 +1,45 @@
 # Error Types
 
-`EsRepo` generates four per-entity error types and a column enum. For an entity called `User`, the macro produces:
+Every generated repo op returns `Result<T, errlanes::Fail<D>>` — the `errlanes` crate's four-lane model: `Rejected(D)` (a typed domain outcome, caller-correctable), `Denied` (authorization), `Transient` (retry the same call), or `Fatal` (a broken invariant or infrastructure failure — page an operator). `EsRepo` is "born-classified": it picks the lane for you, so a caller never has to sniff a `sqlx::Error` to know whether something is worth retrying.
 
-| Type | Used by |
-|------|---------|
+For an entity called `User`, the macro produces one domain rejection type and two supporting enums:
+
+| Type | Description |
+|------|-------------|
 | `UserColumn` | Enum of indexed columns (e.g. `Id`, `Name`, `Email`) |
-| `UserCreateError` | `create`, `create_all` |
-| `UserModifyError` | `update`, `update_all`, `delete` |
-| `UserFindError` | `find_by_*`, `maybe_find_by_*` |
-| `UserQueryError` | `find_all`, `list_by_*`, `list_for_*`, `list_for_filters` |
+| `UserConstraint` | Enum of the table's known constraints (unique / foreign key / check), plus `Unknown` |
+| `UserConstraintViolation` | The repo's one `Rejection` — returned as `errlanes::Fail::Rejected` from `create`/`create_all`/`update`/`update_all`/`forget`/`delete` |
 
-## UserCreateError
+Every write op's signature is `Result<T, errlanes::Fail<UserConstraintViolation>>`. Every find/list op's signature is `Result<T, errlanes::Fail<core::convert::Infallible>>` — `core::convert::Infallible` because reads never reject; a missing row is `Fatal`, not a domain rejection (see [Not found](#not-found), below).
+
+## `UserConstraintViolation`
 
 ```rust,ignore
-pub enum UserCreateError {
-    Sqlx(sqlx::Error),
-    ConstraintViolation {
-        column: Option<UserColumn>,
-        value: Option<String>,
-        inner: sqlx::Error,
-    },
-    ConcurrentModification,
-    HydrationError(EntityHydrationError),
-    PostPersistHookError(/* only if post_persist_hook configured */),
-    PostHydrateError(/* only if post_hydrate_hook configured */),
+pub struct UserConstraintViolation {
+    constraint: Option<UserConstraint>,
+    constraint_name: Option<String>,
+    column: Option<UserColumn>,
+    value: Option<String>,
 }
 ```
 
-> `PostPersistHookError` and `PostHydrateError` are only present when the corresponding hook is configured. `PostPersistHookError` wraps `sqlx::Error` by default, or a custom error type if configured via `post_persist_hook(error = "...")`. See [Hooks](./repo-hooks.md) for details.
+When a `create`, `create_all`, `update`, `update_all`, or `forget` operation violates a **unique**, **foreign key**, or **check** constraint, the error comes back as `errlanes::Fail::Rejected(UserConstraintViolation { .. })`. (`NOT NULL` and exclusion violations are not classified and surface as `Fatal` instead — they indicate a programming error, not a caller-correctable domain conflict.) For unique violations, `column()` identifies which column caused the violation and `value()` contains the conflicting value extracted from the PostgreSQL error detail. For foreign key and check violations — or unique constraints not recognized as belonging to one of the entity's columns — `column()` and `value()` are `None`; use `constraint()` (or the raw `constraint_name()`) to identify the constraint instead.
 
-### Handling constraint violations
+`UserConstraintViolation` implements `errlanes::Rejection` (`Code = UserConstraint`) and `errlanes::HasConstraint`.
 
-When a `create` or `create_all` operation violates a **unique**, **foreign key**, or **check** constraint, the error is returned as `ConstraintViolation` rather than a raw `Sqlx` error. (`NOT NULL` and exclusion violations are not classified and remain `Sqlx`.) For unique violations, the `column` field identifies which column caused the violation and the `value` field contains the conflicting value extracted from the PostgreSQL error detail. For foreign key and check violations — or unique constraints not recognized as belonging to one of the entity's columns — `column` and `value` are `None`; use the typed `violated_constraint()` helper (or the raw `constraint_name()`) to identify the constraint instead.
-
-> **Security note:** `value` (and the `duplicate_value()` helper) contains attacker-influenced input that was rejected by a unique constraint and is frequently PII (e.g. an email address). Do not propagate it to untrusted API clients — a caller can probe which values already exist (user enumeration) — and be aware it may end up in logs via the error's `Display`/`Debug` output. At trust boundaries, prefer the boolean helpers `was_duplicate()` / `was_duplicate_by(column)` and map the error to a neutral client-facing message.
+> **Security note:** `value()` contains attacker-influenced input that was rejected by a unique constraint and is frequently PII (e.g. an email address). Do not propagate it to untrusted API clients — a caller can probe which values already exist (user enumeration) — and be aware it may end up in logs via the error's `Display`/`Debug` output. `Display` never prints it; at trust boundaries, prefer matching on `constraint()` / `column()` and map the error to a neutral client-facing message.
 
 ```rust,ignore
 let result = users.create(new_user).await;
 match result {
     Ok(user) => { /* success */ }
-    // Column-agnostic check
-    Err(e) if e.was_duplicate() => {
-        println!("some unique constraint violated");
-    }
-    Err(e) => return Err(e.into()),
-}
-
-// Or check a specific column:
-match result {
-    Ok(user) => { /* success */ }
-    Err(e) if e.was_duplicate_by(UserColumn::Email) => {
-        let value = e.duplicate_value(); // Option<&str>
+    Err(errlanes::Fail::Rejected(cv)) if cv.column() == Some(UserColumn::Email) => {
+        let value = cv.value(); // Option<&str>
         println!("email {} already taken", value.unwrap_or("unknown"));
     }
     Err(e) => return Err(e.into()),
 }
 ```
-
-The `was_duplicate()` / `was_duplicate_by(column)` helpers only fire for **unique** violations; `was_foreign_key_violation()` and `was_check_violation()` cover the other classified kinds.
 
 ### Typed constraints: `UserConstraint`
 
@@ -68,126 +50,67 @@ This makes dispatching on a hand-written foreign-key or check constraint typo-pr
 ```rust,ignore
 match result {
     Ok(entry) => { /* success */ }
-    Err(e) if e.violated_constraint() == Some(EntryConstraint::AccountNotAccountSetFkey) => {
+    Err(errlanes::Fail::Rejected(cv))
+        if cv.constraint() == Some(EntryConstraint::AccountNotAccountSetFkey) =>
+    {
         return Err(AppError::EntryTargetsAccountSet);
     }
     Err(e) => return Err(e.into()),
 }
 ```
 
-Each variant knows its raw name (`constraint.name()` / `Display`) and kind (`constraint.kind()` → `ConstraintKind::{Unique, ForeignKey, Check}`). Constraints created outside discoverable migrations can't be typed; fall back to `constraint_name()` for those:
+Each variant knows its raw name (`constraint.name()` / `Display`) and kind (`constraint.kind()` → `ConstraintKind::{Unique, ForeignKey, Check}`). Constraints created outside discoverable migrations can't be typed and report `UserConstraint::Unknown`; fall back to `constraint_name()` for those:
 
 ```rust,ignore
-Err(e) if e.constraint_name() == Some("added_at_runtime_fkey") => { /* ... */ }
+Err(errlanes::Fail::Rejected(cv)) if cv.constraint_name() == Some("added_at_runtime_fkey") => { /* ... */ }
 ```
 
 The macro maps PostgreSQL constraint names to columns automatically. It uses the convention `{table}_{column}_key` for unique constraints and `{table}_pkey` for the primary key, and additionally derives the real names of any **named** single-column unique index from your migrations (the same index catalog that drives `list_for_filters` specialization — see [list_for_filters](./repo-list-for-filters.md)). So a `CREATE UNIQUE INDEX idx_unique_email ON users (email)` in a migration is mapped to the `email` column with no extra annotation — as long as the migrations directory is discoverable (crate-local `migrations/`, an ancestor `migrations/` up to the repo root, or `ES_ENTITY_MIGRATIONS_DIR`). A composite `UNIQUE (a, b)` is mapped to its **last** key column (`b`) — the discriminating column, with the leading columns acting as its scope — so a `UNIQUE (partner_id, name)` violation reports the `name` column.
 
-### Concurrent modification
-
-When optimistic concurrency control detects a conflict (duplicate event sequence), the error is `ConcurrentModification`:
-
-```rust,ignore
-if e.was_concurrent_modification() {
-    // retry the operation
-}
-```
-
-## UserModifyError
-
-`UserModifyError` has the same structure as `UserCreateError` (minus `HydrationError` and `PostHydrateError`) and is returned by `update`, `update_all`, and `delete`. `PostPersistHookError` is only present when `post_persist_hook` is configured. It provides the same `was_duplicate`, `was_duplicate_by`, `duplicate_value`, and `was_concurrent_modification` helpers.
-
 ### Nested entity errors
 
-For aggregates with nested entities (e.g. `Order` containing `OrderItem`s), `CreateError` and `ModifyError` include additional variants wrapping the child's errors. The `duplicate_value` and `was_concurrent_modification` helpers cascade into nested errors automatically:
-
-```rust,ignore
-// If a nested OrderItem creation triggers a constraint violation,
-// duplicate_value() still returns the conflicting value:
-let val = err.duplicate_value(); // cascades into nested variants
-```
-
-The `was_duplicate_by` helper does **not** cascade because nested entities have a different column enum. To check which nested column was violated, match the nested variant directly:
+For aggregates with nested entities (e.g. `Order` containing `OrderItem`s), `OrderConstraintViolation` is an enum instead of a struct: an `Own { .. }` variant for the parent's own violations, plus one tuple variant per nested child wrapping that child's own `{Child}ConstraintViolation`. A child violation widens into the parent's via the generated `From` impl, so nested write paths only need `.map_err(errlanes::Fail::widen)`:
 
 ```rust,ignore
 match err {
-    OrderModifyError::OrderItemsCreate(item_err)
-        if item_err.was_duplicate_by(OrderItemColumn::Sku) =>
+    errlanes::Fail::Rejected(OrderConstraintViolation::OrderItems(item_cv))
+        if item_cv.column() == Some(OrderItemColumn::Sku) =>
     {
-        let val = item_err.duplicate_value();
+        let val = item_cv.value();
     }
     _ => return Err(err.into()),
 }
 ```
 
-## UserFindError
+`constraint()`, `constraint_name()`, `column()`, and `value()` on the parent only report the parent's own violations (`Own { .. }`); they return `None` for a nested variant — match the nested variant directly to inspect it, as above.
+
+## Concurrent modification
+
+When optimistic concurrency control detects a conflict (duplicate event sequence) on `update`, `update_all`, `forget`, or `delete`, that is not a domain rejection — it is `errlanes::Fail::Transient(..)`, because the correct response is "reload and retry", not "ask the caller to fix their input". Wrap the call in `errlanes::retry` to have this handled automatically, or match the lane directly:
 
 ```rust,ignore
-pub enum UserFindError {
-    Sqlx(sqlx::Error),
-    NotFound { entity: &'static str, column: Option<UserColumn>, value: String },
-    HydrationError(EntityHydrationError),
-    PostHydrateError(/* only if post_hydrate_hook configured */),
-}
-```
-
-The `NotFound` variant is returned by `find_by_*` methods when no matching row exists. It includes the entity name, the column searched (as the `UserColumn` enum), and the value that was not found.
-
-### Checking for not-found
-
-```rust,ignore
-let result = users.find_by_id(some_id).await;
-match result {
-    Ok(user) => { /* found */ }
-    Err(e) if e.was_not_found() => {
-        println!("user not found");
+match users.update(&mut user).await {
+    Err(e) if e.is_transient() => {
+        // reload and retry
     }
     Err(e) => return Err(e.into()),
+    Ok(()) => {}
 }
 ```
 
-### Matching on a specific column
+## Not found
 
-Use `was_not_found_by` to check which column was searched, or pattern-match directly on the `NotFound` variant for full control:
+`find_by_*` returns `Result<Entity, errlanes::Fail<core::convert::Infallible>>`: a missing row is `Fatal(Invariant)`, not a rejection — by calling `find_by_*` instead of `maybe_find_by_*`, the caller has already asserted the row must exist, so its absence is a broken invariant, not something the caller is meant to branch on. Its source is a `NotFound` carrying the entity name, the column searched, and the value that was not found (see [es_query](./es-query.md)).
+
+Use `maybe_find_by_*` to get `Ok(None)` instead of an error when the entity legitimately may not exist:
 
 ```rust,ignore
-// Helper method
-if e.was_not_found_by(UserColumn::Email) {
-    let value = e.not_found_value(); // Option<&str>
-    println!("no user with email {}", value.unwrap_or("unknown"));
-}
-
-// Pattern matching for custom error conversion
-impl From<UserFindError> for AppError {
-    fn from(error: UserFindError) -> Self {
-        match error {
-            UserFindError::NotFound {
-                column: Some(UserColumn::Id),
-                value,
-                ..
-            } => Self::UserNotFoundById(value),
-            UserFindError::NotFound {
-                column: Some(UserColumn::Email),
-                value,
-                ..
-            } => Self::UserNotFoundByEmail(value),
-            other => Self::Internal(other.into()),
-        }
-    }
+match users.maybe_find_by_id(some_id).await? {
+    Some(user) => { /* found */ }
+    None => { /* not found — an expected outcome, not an error */ }
 }
 ```
 
-Use `maybe_find_by_*` to get `Ok(None)` instead of an error when the entity doesn't exist.
+## Hooks
 
-## UserQueryError
-
-```rust,ignore
-pub enum UserQueryError {
-    Sqlx(sqlx::Error),
-    HydrationError(EntityHydrationError),
-    CursorDestructureError(CursorDestructureError),
-    PostHydrateError(/* only if post_hydrate_hook configured */),
-}
-```
-
-Returned by paginated list operations (`list_by_*`, `list_for_*`, `list_for_filters`). The `CursorDestructureError` variant occurs when a pagination cursor cannot be decoded.
+`PostPersistHookError` and `PostHydrateError` surface as `Fatal` — see [Hooks](./repo-hooks.md) for how they're wrapped.

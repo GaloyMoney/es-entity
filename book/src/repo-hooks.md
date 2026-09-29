@@ -7,6 +7,8 @@
 | `post_persist_hook` | After events are persisted (inside the transaction) | `async fn(&self, &mut OP, &Entity, LastPersisted<Event>) -> Result<(), E>` | Auditing, side-effect recording, cross-entity writes |
 | `post_hydrate_hook` | After an entity is reconstructed from events | `fn(&self, &Entity) -> Result<(), E>` | Validation against external config, policy enforcement |
 
+A hook cannot return a domain rejection — `E` must convert into `errlanes::Fail<core::convert::Infallible>`, so in practice `error` is `errlanes::Fatal` (or `errlanes::Denied` / `errlanes::Transient`, if the hook's failure is one of those lanes instead). A hook failure always widens into whatever `errlanes::Fail<D>` the calling op returns — see [Error Types](./repo-errors.md).
+
 ## post_persist_hook
 
 Runs after events have been written to the database but before the entity is returned to the caller. The hook executes inside the same transaction, so it can perform additional database operations or reject the persist.
@@ -14,14 +16,14 @@ Runs after events have been written to the database but before the entity is ret
 ### Configuration
 
 ```rust,ignore
-// Simple syntax (error defaults to sqlx::Error):
+// Simple syntax (error defaults to sqlx::Error, widened via errlanes' classifier):
 #[es_repo(entity = "User", post_persist_hook = "on_persist")]
 
 // Explicit syntax with default error:
 #[es_repo(entity = "User", post_persist_hook(method = "on_persist"))]
 
-// Explicit syntax with custom error type:
-#[es_repo(entity = "User", post_persist_hook(method = "on_persist", error = "MyPersistError"))]
+// Explicit syntax with a custom error, which must convert into errlanes::Fail<core::convert::Infallible>:
+#[es_repo(entity = "User", post_persist_hook(method = "on_persist", error = "errlanes::Fatal"))]
 ```
 
 ### Hook method
@@ -35,7 +37,7 @@ impl Users {
         op: &mut OP,
         entity: &User,
         new_events: es_entity::events::LastPersisted<'_, UserEvent>,
-    ) -> Result<(), MyPersistError> {
+    ) -> Result<(), errlanes::Fatal> {
         // Inspect newly persisted events, write audit records, etc.
         for event in new_events {
             // ...
@@ -51,12 +53,12 @@ The hook runs on every generated operation that persists events: `create`, `crea
 
 ### Error propagation
 
-When the hook returns an error it is wrapped in the `PostPersistHookError` variant of `CreateError`, `ModifyError`, or `ForgetError`:
+When the hook returns an error it widens directly into the op's `errlanes::Fail<UserConstraintViolation>` — as `Fatal` (or whichever lane the hook error carries), not a separate variant:
 
 ```rust,ignore
 match users.create(new_user).await {
     Err(e) => {
-        // e is UserCreateError::PostPersistHookError(MyPersistError)
+        // e is errlanes::Fail::Fatal(..) if the persist hook rejected
         println!("persist hook failed: {e}");
     }
     Ok(user) => { /* success */ }
@@ -72,11 +74,11 @@ Runs synchronously every time an entity is reconstructed from its event stream �
 ```rust,ignore
 #[es_repo(
     entity = "User",
-    post_hydrate_hook(method = "validate_user", error = "UserValidationError")
+    post_hydrate_hook(method = "validate_user", error = "errlanes::Fatal")
 )]
 ```
 
-Both `method` and `error` are required.
+Both `method` and `error` are required; `error` must convert into `errlanes::Fail<core::convert::Infallible>` — see the note above.
 
 ### Hook method
 
@@ -84,9 +86,9 @@ The method is synchronous and receives a shared reference to the entity:
 
 ```rust,ignore
 impl Users {
-    fn validate_user(&self, entity: &User) -> Result<(), UserValidationError> {
+    fn validate_user(&self, entity: &User) -> Result<(), errlanes::Fatal> {
         if entity.name == "BANNED" {
-            return Err(UserValidationError("banned name".into()));
+            return Err(errlanes::Fatal::invariant("banned name"));
         }
         Ok(())
     }
@@ -95,17 +97,11 @@ impl Users {
 
 ### Error propagation
 
-The error appears as a `PostHydrateError` variant on the relevant error type:
-
-| Operation | Error type |
-|-----------|-----------|
-| `create`, `create_all` | `UserCreateError::PostHydrateError(...)` |
-| `find_by_*` | `UserFindError::PostHydrateError(...)` |
-| `list_by_*`, `list_for_*`, `find_all` | `UserQueryError::PostHydrateError(...)` |
+The error widens directly into the op's `errlanes::Fail<D>` — as `Fatal` (or whichever lane the hook error carries) — for `create`, `create_all`, `find_by_*`, `list_by_*`, `list_for_*`, and `find_all`:
 
 ```rust,ignore
 match users.find_by_id(id).await {
-    Err(e) if e.was_post_hydrate_error() => {
+    Err(e) if e.lane() == es_entity::errlanes::Lane::Fatal => {
         println!("entity failed validation: {e}");
     }
     Err(e) => return Err(e.into()),
@@ -129,8 +125,8 @@ During `update`, only `post_persist_hook` runs — no hydration occurs because t
 #[derive(EsRepo)]
 #[es_repo(
     entity = "User",
-    post_persist_hook(method = "audit_persist", error = "AuditError"),
-    post_hydrate_hook(method = "validate_user", error = "ValidationError"),
+    post_persist_hook(method = "audit_persist", error = "errlanes::Fatal"),
+    post_hydrate_hook(method = "validate_user", error = "errlanes::Fatal"),
 )]
 pub struct Users {
     pool: sqlx::PgPool,

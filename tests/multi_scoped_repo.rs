@@ -36,7 +36,7 @@ impl Facilities {
 /// prove overridden and defaulted columns compose on the same repo.
 ///
 /// Wrapped in its own module: the derive generates entity-named companion
-/// types (`FacilityScope`, `FacilityFindError`, ...) keyed off `entity`, not
+/// types (`FacilityScope`, `FacilityConstraintViolation`, ...) keyed off `entity`, not
 /// the repo struct name, so a second `entity = "Facility"` repo in the same
 /// scope as [`Facilities`] would collide.
 pub mod overridden_scope {
@@ -119,7 +119,7 @@ async fn multi_scoped_point_reads() -> anyhow::Result<()> {
 
     // cross-dimension / foreign misses look identical to a missing row
     let err = facilities.find_by_id(partner_b, id_ax).await;
-    assert!(matches!(err, Err(FacilityFindError::NotFound { .. })));
+    assert!(matches!(err, Err(Fail::Fatal(_))));
     assert!(
         facilities
             .maybe_find_by_id(customer_y, id_ax)
@@ -386,7 +386,7 @@ async fn scope_variant_override_dispatches_correctly() -> anyhow::Result<()> {
 
     // foreign partner under the overridden variant still misses correctly
     let err = facilities.find_by_id(partner_b, id_a).await;
-    assert!(matches!(err, Err(FacilityFindError::NotFound { .. })));
+    assert!(matches!(err, Err(Fail::Fatal(_))));
 
     // the un-overridden customer dimension on the same repo still works
     facilities.find_by_id(customer_x, id_a).await?;

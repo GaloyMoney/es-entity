@@ -399,21 +399,21 @@ pub trait EsEntity: TryFromEvents<Self::Event, Self::Snapshot> + Send {
 /// ```
 pub trait EsRepo: Send {
     type Entity: EsEntity;
-    type CreateError;
-    type ModifyError;
-    type FindError: From<sqlx::Error> + From<EntityHydrationError> + Send;
-    type QueryError: From<sqlx::Error> + From<EntityHydrationError> + Send;
+    /// The one repo `Rejection`: a violated database constraint the domain
+    /// did not otherwise account for. Every generated write op returns
+    /// `Result<T, errlanes::Fail<Self::ConstraintViolation>>`; find/list ops
+    /// return `Result<T, errlanes::Fail<core::convert::Infallible>>` — there
+    /// is no `NotFound` rejection, only `Fatal`.
+    type ConstraintViolation: crate::errlanes::HasConstraint;
     type EsQueryFlavor;
 
     fn nested_tree_spec() -> TreeSpec;
 
-    fn hydrate_nested_from_rows<E>(
+    fn hydrate_nested_from_rows(
         rows_by_tag: &mut HashMap<i32, Vec<db::Row>>,
         tag_cursor: &mut i32,
         entities: &mut [Self::Entity],
-    ) -> Result<(), E>
-    where
-        E: From<sqlx::Error> + From<EntityHydrationError>;
+    ) -> Result<(), crate::errlanes::Fail<core::convert::Infallible>>;
 }
 
 pub trait RetryableInto<T>: Into<T> + Copy + std::fmt::Debug {}

@@ -18,7 +18,7 @@ pub struct UpdateFn<'a> {
     forgettable_table_name: Option<&'a str>,
     snapshot_table_name: Option<&'a str>,
     columns: &'a Columns,
-    modify_error: syn::Ident,
+    constraint_violation: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
     post_persist_error: Option<&'a syn::Type>,
     #[cfg(feature = "instrument")]
@@ -32,7 +32,7 @@ impl<'a> From<&'a RepositoryOptions> for UpdateFn<'a> {
             entity: opts.entity(),
             id: opts.id(),
             event: opts.event(),
-            modify_error: opts.modify_error(),
+            constraint_violation: opts.constraint_violation(),
             columns: &opts.columns,
             table_name: opts.table_name(),
             events_table_name: opts.events_table_name(),
@@ -53,11 +53,13 @@ impl<'a> From<&'a RepositoryOptions> for UpdateFn<'a> {
 impl ToTokens for UpdateFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let entity = self.entity;
-        let modify_error = &self.modify_error;
+        let constraint_violation = &self.constraint_violation;
+        let table_name = self.table_name;
+        let events_table_name = self.events_table_name;
 
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
-                self.#f(op, &mut [&mut *entity]).await?;
+                self.#f(op, &mut [&mut *entity]).await.map_err(errlanes::Fail::widen)?;
             }
         });
 
@@ -150,7 +152,8 @@ impl ToTokens for UpdateFn<'_> {
                 }
                 .insert_per_entity(
                     quote! { entity.events() },
-                    modify_error,
+                    constraint_violation,
+                    self.events_table_name,
                     snapshot_expr,
                 ),
                 None => quote! {},
@@ -169,7 +172,7 @@ impl ToTokens for UpdateFn<'_> {
                 )
                     .fetch_all(op.as_executor())
                     .await
-                    .map_err(Self::classify_write_error)?;
+                    .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)))?;
 
                 #forgettable_code
 
@@ -181,7 +184,10 @@ impl ToTokens for UpdateFn<'_> {
                 let recorded_at = rows
                     .first()
                     .map(|row| row.recorded_at)
-                    .ok_or(#modify_error::ConcurrentModification)?;
+                    .ok_or_else(|| errlanes::Fail::from(
+                        errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                            .with_context(format!("{} row vanished", #table_name))
+                    ))?;
                 let n_events = Self::extract_events(entity).mark_new_events_persisted_at(recorded_at);
             }
         } else if snapshot_upsert.is_some() {
@@ -193,9 +199,10 @@ impl ToTokens for UpdateFn<'_> {
                 let __snapshot_first = Self::extract_events(entity).entity_first_persisted_at();
                 let n_events = {
                     let events = Self::extract_events(entity);
-                    Self::extract_concurrent_modification(
+                    Self::classify_conflict::<_, #constraint_violation>(
                         self.persist_events(op, events, __snapshot.as_ref()).await,
-                        #modify_error::ConcurrentModification,
+                        #events_table_name,
+                        || format!("{} seq conflict", #table_name),
                     )?
                 };
                 // `persist_events` reports only the count, not the
@@ -203,15 +210,19 @@ impl ToTokens for UpdateFn<'_> {
                 // the entity itself for `compact_to_snapshot` below.
                 let recorded_at = Self::extract_events(entity)
                     .entity_last_modified_at()
-                    .ok_or(#modify_error::ConcurrentModification)?;
+                    .ok_or_else(|| errlanes::Fail::from(
+                        errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                            .with_context(format!("{} row vanished", #table_name))
+                    ))?;
             }
         } else {
             quote! {
                 let n_events = {
                     let events = Self::extract_events(entity);
-                    Self::extract_concurrent_modification(
+                    Self::classify_conflict::<_, #constraint_violation>(
                         self.persist_events(op, events).await,
-                        #modify_error::ConcurrentModification,
+                        #events_table_name,
+                        || format!("{} seq conflict", #table_name),
                     )?
                 };
             }
@@ -267,7 +278,7 @@ impl ToTokens for UpdateFn<'_> {
 
         let post_persist_check = if self.post_persist_error.is_some() {
             quote! {
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(#modify_error::PostPersistHookError)?;
+                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(errlanes::Fail::from)?;
             }
         } else {
             quote! {}
@@ -278,7 +289,7 @@ impl ToTokens for UpdateFn<'_> {
                 pub async fn update(
                     &self,
                     entity: &mut #entity
-                ) -> Result<usize, #modify_error> {
+                ) -> Result<usize, errlanes::Fail<#constraint_violation>> {
                     let mut op = self.begin_op().await?;
                     let res = self.update_in_op(&mut op, entity).await?;
                     op.commit().await?;
@@ -305,11 +316,11 @@ impl ToTokens for UpdateFn<'_> {
                 &self,
                 op: &mut OP,
                 entity: &mut #entity
-            ) -> Result<usize, #modify_error>
+            ) -> Result<usize, errlanes::Fail<#constraint_violation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, #modify_error> = async {
+                let __result: Result<usize, errlanes::Fail<#constraint_violation>> = async {
                     #record_id
                     #(#nested)*
 
@@ -364,7 +375,7 @@ mod tests {
             event_ctx: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
-            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_persist_error: None,
@@ -389,7 +400,7 @@ mod tests {
             pub async fn update(
                 &self,
                 entity: &mut Entity
-            ) -> Result<usize, EntityModifyError> {
+            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -400,11 +411,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entity: &mut Entity
-            ) -> Result<usize, EntityModifyError>
+            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, EntityModifyError> = async {
+                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation>> = async {
                     if !Self::extract_events(entity).any_new() {
                         return Ok(0);
                     }
@@ -426,12 +437,15 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_write_error)?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")))?;
 
                     let recorded_at = rows
                         .first()
                         .map(|row| row.recorded_at)
-                        .ok_or(EntityModifyError::ConcurrentModification)?;
+                        .ok_or_else(|| errlanes::Fail::from(
+                            errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                .with_context(format!("{} row vanished", "entities"))
+                        ))?;
                     let n_events = Self::extract_events(entity).mark_new_events_persisted_at(recorded_at);
 
                     Ok(n_events)
@@ -463,7 +477,7 @@ mod tests {
             event_ctx: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
-            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_persist_error: None,
@@ -488,7 +502,7 @@ mod tests {
             pub async fn update(
                 &self,
                 entity: &mut Entity
-            ) -> Result<usize, EntityModifyError> {
+            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -499,20 +513,21 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entity: &mut Entity
-            ) -> Result<usize, EntityModifyError>
+            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, EntityModifyError> = async {
+                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation>> = async {
                     if !Self::extract_events(entity).any_new() {
                         return Ok(0);
                     }
 
                     let n_events = {
                         let events = Self::extract_events(entity);
-                        Self::extract_concurrent_modification(
+                        Self::classify_conflict::<_, EntityConstraintViolation>(
                             self.persist_events(op, events).await,
-                            EntityModifyError::ConcurrentModification,
+                            "entity_events",
+                            || format!("{} seq conflict", "entities"),
                         )?
                     };
 
@@ -554,7 +569,7 @@ mod tests {
             event_ctx: false,
             forgettable_table_name: None,
             snapshot_table_name: Some("entity_snapshots"),
-            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_persist_error: None,
@@ -606,7 +621,7 @@ mod tests {
             event_ctx: false,
             forgettable_table_name: None,
             snapshot_table_name: Some("entity_snapshots"),
-            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_persist_error: None,

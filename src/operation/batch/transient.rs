@@ -13,6 +13,9 @@
 ///
 /// Both are properties of the contention, not of the items being probed, so a
 /// bisect re-probes the same range unsplit.
+#[deprecated(
+    note = "use errlanes::lane_of, or errlanes::sqlx::transient_sqlstate for the raw code"
+)]
 pub fn retryable_conflict_code(err: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
     let mut source = Some(err);
     while let Some(err) = source {
@@ -32,6 +35,8 @@ pub fn retryable_conflict_code(err: &(dyn std::error::Error + 'static)) -> Optio
 }
 
 /// [`retryable_conflict_code`] as a predicate.
+#[deprecated(note = "use errlanes::lane_of(e) == Some(errlanes::Lane::Transient)")]
+#[allow(deprecated)]
 pub fn is_retryable_conflict(err: &(dyn std::error::Error + 'static)) -> bool {
     retryable_conflict_code(err).is_some()
 }
@@ -71,7 +76,13 @@ impl<P> TransientPolicy<P> {
 }
 
 /// The default classifier, as a plain function so it can be named in a
-/// [`TransientPolicy`] without boxing.
+/// [`TransientPolicy`] without boxing. Prefers the lane an error was born
+/// with; falls back to the raw SQLSTATE walk for an error that never went
+/// through errlanes' classifier.
 pub(super) fn sqlstate_is_transient<E: std::error::Error + 'static>(error: &E) -> bool {
-    is_retryable_conflict(error)
+    match crate::errlanes::lane_of(error) {
+        Some(lane) => lane == crate::errlanes::Lane::Transient,
+        #[allow(deprecated)]
+        None => is_retryable_conflict(error),
+    }
 }

@@ -56,7 +56,7 @@ async fn id_scoped_point_reads() -> anyhow::Result<()> {
 
     // foreign scope: missing and not-yours look identical
     let err = partners.find_by_id(partner_b, partner_a).await;
-    assert!(matches!(err, Err(PartnerFindError::NotFound { .. })));
+    assert!(matches!(err, Err(Fail::Fatal(_))));
     assert!(
         partners
             .maybe_find_by_id(partner_a, partner_b)
@@ -241,8 +241,8 @@ async fn id_scoped_view_delegates() -> anyhow::Result<()> {
 /// `id(scope(variant = "Tenant"))` — proves the override reaches the
 /// macro-owned `id` column, not just ordinary scope columns. Wrapped in its
 /// own module: both repos share `entity = "Partner"`, so their
-/// derive-generated companion types (`PartnerScope`, `PartnerFindError`, ...)
-/// would otherwise collide.
+/// derive-generated companion types (`PartnerScope`,
+/// `PartnerConstraintViolation`, ...) would otherwise collide.
 pub mod overridden_id_scope {
     use sqlx::PgPool;
 
@@ -293,7 +293,7 @@ async fn id_scope_variant_override_dispatches_correctly() -> anyhow::Result<()> 
     let foreign = PartnerId::new();
     assert!(matches!(
         partners.find_by_id(foreign, id).await,
-        Err(PartnerFindError::NotFound { .. })
+        Err(Fail::Fatal(_))
     ));
 
     // All still reads across scopes

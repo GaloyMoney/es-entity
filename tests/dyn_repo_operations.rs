@@ -90,15 +90,15 @@ impl std::fmt::Display for DummyHookError {
 impl std::error::Error for DummyHookError {}
 
 // A second, distinct entity (`Task`) — `#[derive(EsRepo)]` generates
-// companion types named after the entity (`UserCreateError`, ...), so a
-// second repo over `User` in this same file would collide with `Users`'.
+// companion types named after the entity (`UserConstraintViolation`, ...), so
+// a second repo over `User` in this same file would collide with `Users`'.
 use entities::task::*;
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "Task",
     columns(status(ty = "String", create(accessor = "status"))),
-    post_persist_hook(method = "on_persist", error = "DummyHookError")
+    post_persist_hook(method = "on_persist", error = "errlanes::Fatal")
 )]
 pub struct TasksWithHook {
     pool: PgPool,
@@ -120,9 +120,10 @@ impl TasksWithHook {
         _op: &mut OP,
         _entity: &Task,
         _new_events: es_entity::LastPersisted<'_, TaskEvent>,
-    ) -> Result<(), DummyHookError> {
+    ) -> Result<(), errlanes::Fatal> {
         self.hook_calls
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let _ = DummyHookError;
         Ok(())
     }
 }

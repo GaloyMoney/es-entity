@@ -17,6 +17,17 @@ impl Customers {
     }
 }
 
+/// `verify_forgotten` reports remnants as a `Fatal(Invariant)` whose source
+/// is the `ForgettableRemnants` itself.
+fn not_forgotten_remnants<D>(err: &Fail<D>) -> Option<&ForgettableRemnants> {
+    match err {
+        Fail::Fatal(fatal) => {
+            std::error::Error::source(fatal).and_then(|s| s.downcast_ref::<ForgettableRemnants>())
+        }
+        _ => None,
+    }
+}
+
 #[tokio::test]
 async fn create_and_load_with_forgettable_fields() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -191,10 +202,7 @@ async fn staged_erasure_event_fences_stale_writers() -> anyhow::Result<()> {
         .update(&mut stale)
         .await
         .expect_err("stale update after fenced forget must fail");
-    assert!(
-        err.was_concurrent_modification(),
-        "expected ConcurrentModification, got: {err}"
-    );
+    assert!(err.is_transient(), "expected Transient, got: {err}");
 
     // And the forgotten value stays forgotten.
     let reloaded = customers.find_by_id(id).await?;
@@ -306,9 +314,7 @@ async fn verify_forgotten_reports_remnants_before_and_passes_after_forget() -> a
         .verify_forgotten(id)
         .await
         .expect_err("live entity must not verify as forgotten");
-    let remnants = err
-        .not_forgotten_remnants()
-        .expect("expected NotForgotten error");
+    let remnants = not_forgotten_remnants(&err).expect("expected NotForgotten error");
     assert_eq!(remnants.payload_rows, 2);
     assert!(remnants.live_index_columns.is_empty());
     assert!(remnants.event_fields.is_empty());
@@ -354,7 +360,7 @@ async fn verify_forgotten_detects_out_of_band_event_json_writes() -> anyhow::Res
         .verify_forgotten(id)
         .await
         .expect_err("leaked event JSON must fail verification");
-    let remnants = err.not_forgotten_remnants().expect("NotForgotten");
+    let remnants = not_forgotten_remnants(&err).expect("NotForgotten");
     assert_eq!(remnants.payload_rows, 0);
     assert_eq!(
         remnants.event_fields,

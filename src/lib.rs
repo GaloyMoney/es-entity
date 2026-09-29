@@ -58,7 +58,9 @@ pub mod prelude {
 #[doc(inline)]
 pub use context::*;
 pub use errlanes;
-pub use errlanes::{Denied, Fail, Failure, Fatal, Lane, Rejection, Settled, Transient};
+pub use errlanes::{
+    Denied, Fail, Failure, Fatal, FatalKind, Lane, Rejection, Settled, Transient, TransientKind,
+};
 #[doc(inline)]
 pub use error::*;
 pub use es_entity_macros::EsEntity;
@@ -67,7 +69,6 @@ pub use es_entity_macros::EsRepo;
 pub use es_entity_macros::EsSnapshot;
 pub use es_entity_macros::es_event_context;
 pub use es_entity_macros::expand_es_query;
-pub use es_entity_macros::retry_on_concurrent_modification;
 #[doc(inline)]
 pub use events::*;
 #[doc(inline)]

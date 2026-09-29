@@ -18,7 +18,7 @@ pub struct UpdateAllFn<'a> {
     forgettable_table_name: Option<&'a str>,
     snapshot_table_name: Option<&'a str>,
     columns: &'a Columns,
-    modify_error: syn::Ident,
+    constraint_violation: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
     post_persist_error: Option<&'a syn::Type>,
     #[cfg(feature = "instrument")]
@@ -32,7 +32,7 @@ impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
             entity: opts.entity(),
             id: opts.id(),
             event: opts.event(),
-            modify_error: opts.modify_error(),
+            constraint_violation: opts.constraint_violation(),
             columns: &opts.columns,
             table_name: opts.table_name(),
             events_table_name: opts.events_table_name(),
@@ -90,7 +90,9 @@ impl ToTokens for UpdateAllFn<'_> {
 impl UpdateAllFn<'_> {
     fn build(&self, mode: BatchMode) -> TokenStream {
         let entity = self.entity;
-        let modify_error = &self.modify_error;
+        let constraint_violation = &self.constraint_violation;
+        let table_name = self.table_name;
+        let events_table_name = self.events_table_name;
 
         let (fn_name, entities_param, entities_prelude, iter_ref, iter_mut_ref) = match mode {
             BatchMode::OwnedSlice => (
@@ -122,10 +124,10 @@ impl UpdateAllFn<'_> {
         } else {
             let nested_calls = self.nested_fn_names.iter().map(|f| match mode {
                 BatchMode::OwnedSlice => quote! {
-                    self.#f(op, &mut __nested_refs).await?;
+                    self.#f(op, &mut __nested_refs).await.map_err(errlanes::Fail::widen)?;
                 },
                 BatchMode::RefVec => quote! {
-                    self.#f(op, &mut entities).await?;
+                    self.#f(op, &mut entities).await.map_err(errlanes::Fail::widen)?;
                 },
             });
             let setup = matches!(mode, BatchMode::OwnedSlice).then(|| {
@@ -160,7 +162,7 @@ impl UpdateAllFn<'_> {
             .unwrap_or_default();
         let forgettable_insert = payloads
             .as_ref()
-            .map(|p| p.insert_batch(modify_error))
+            .map(|p| p.insert_batch(constraint_violation, self.events_table_name))
             .unwrap_or_default();
 
         let snapshot_upsert = self
@@ -241,14 +243,25 @@ impl UpdateAllFn<'_> {
                         #snap_binds
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_write_error)?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} batch conflict", #table_name)))?;
 
                     #forgettable_insert
 
                     // Every event row joins an index row this same statement
-                    // updated, so a short count means a row went missing.
+                    // updated, so a short count means at least one row went
+                    // missing — unlike `create_all`, these are pre-existing
+                    // rows, so a concurrent delete of any one of them is a
+                    // genuine race, not a torn batch.
                     if rows.len() != expected_events {
-                        return Err(#modify_error::ConcurrentModification);
+                        return Err(errlanes::Fail::from(
+                            errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                .with_context(format!(
+                                    "{} batch wrote {} of {} events",
+                                    #table_name,
+                                    rows.len(),
+                                    expected_events
+                                )),
+                        ));
                     }
 
                     let recorded_at = rows
@@ -275,9 +288,10 @@ impl UpdateAllFn<'_> {
                             if events.any_new() { Some(events) } else { None }
                         })
                         .collect();
-                    let n_persisted = Self::extract_concurrent_modification(
+                    let n_persisted = Self::classify_conflict::<_, #constraint_violation>(
                         self.persist_events_batch(op, &mut all_event_refs).await,
-                        #modify_error::ConcurrentModification,
+                        #events_table_name,
+                        || format!("{} batch conflict", #table_name),
                     )?;
                     drop(all_event_refs);
                 },
@@ -367,7 +381,7 @@ impl UpdateAllFn<'_> {
 
         let post_persist_check = if self.post_persist_error.is_some() {
             quote! {
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(#modify_error::PostPersistHookError)?;
+                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(errlanes::Fail::from)?;
             }
         } else {
             quote! {}
@@ -394,7 +408,7 @@ impl UpdateAllFn<'_> {
                     pub async fn update_all(
                         &self,
                         entities: &mut [#entity]
-                    ) -> Result<usize, #modify_error> {
+                    ) -> Result<usize, errlanes::Fail<#constraint_violation>> {
                         let mut op = self.begin_op().await?;
                         let res = self.update_all_in_op(&mut op, entities).await?;
                         op.commit().await?;
@@ -411,11 +425,11 @@ impl UpdateAllFn<'_> {
                 &self,
                 op: &mut OP,
                 #entities_param
-            ) -> Result<usize, #modify_error>
+            ) -> Result<usize, errlanes::Fail<#constraint_violation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, #modify_error> = async {
+                let __result: Result<usize, errlanes::Fail<#constraint_violation>> = async {
                     use es_entity::prelude::sqlx::Row;
 
                     #entities_prelude
@@ -502,7 +516,7 @@ mod tests {
             event_ctx: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
-            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_persist_error: None,
@@ -517,7 +531,7 @@ mod tests {
             pub async fn update_all(
                 &self,
                 entities: &mut [Entity]
-            ) -> Result<usize, EntityModifyError> {
+            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_all_in_op(&mut op, entities).await?;
                 op.commit().await?;
@@ -528,11 +542,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entities: &mut [Entity]
-            ) -> Result<usize, EntityModifyError>
+            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, EntityModifyError> = async {
+                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation>> = async {
                     use es_entity::prelude::sqlx::Row;
 
                     if entities.is_empty() {
@@ -586,10 +600,18 @@ mod tests {
                         .bind(&all_serialized)
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_write_error)?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} batch conflict", "entities")))?;
 
                     if rows.len() != expected_events {
-                        return Err(EntityModifyError::ConcurrentModification);
+                        return Err(errlanes::Fail::from(
+                            errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                .with_context(format!(
+                                    "{} batch wrote {} of {} events",
+                                    "entities",
+                                    rows.len(),
+                                    expected_events
+                                )),
+                        ));
                     }
 
                     let recorded_at = rows
@@ -622,11 +644,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entities: impl IntoIterator<Item = &mut Entity>
-            ) -> Result<usize, EntityModifyError>
+            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, EntityModifyError> = async {
+                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation>> = async {
                     use es_entity::prelude::sqlx::Row;
 
                     let mut entities: Vec<&mut Entity> = entities.into_iter().collect();
@@ -682,10 +704,18 @@ mod tests {
                         .bind(&all_serialized)
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_write_error)?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} batch conflict", "entities")))?;
 
                     if rows.len() != expected_events {
-                        return Err(EntityModifyError::ConcurrentModification);
+                        return Err(errlanes::Fail::from(
+                            errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                .with_context(format!(
+                                    "{} batch wrote {} of {} events",
+                                    "entities",
+                                    rows.len(),
+                                    expected_events
+                                )),
+                        ));
                     }
 
                     let recorded_at = rows
@@ -737,7 +767,7 @@ mod tests {
             event_ctx: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
-            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_persist_error: None,
@@ -752,7 +782,7 @@ mod tests {
             pub async fn update_all(
                 &self,
                 entities: &mut [Entity]
-            ) -> Result<usize, EntityModifyError> {
+            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_all_in_op(&mut op, entities).await?;
                 op.commit().await?;
@@ -763,11 +793,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entities: &mut [Entity]
-            ) -> Result<usize, EntityModifyError>
+            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, EntityModifyError> = async {
+                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation>> = async {
                     use es_entity::prelude::sqlx::Row;
 
                     if entities.is_empty() {
@@ -792,9 +822,10 @@ mod tests {
                             if events.any_new() { Some(events) } else { None }
                         })
                         .collect();
-                    let n_persisted = Self::extract_concurrent_modification(
+                    let n_persisted = Self::classify_conflict::<_, EntityConstraintViolation>(
                         self.persist_events_batch(op, &mut all_event_refs).await,
-                        EntityModifyError::ConcurrentModification,
+                        "entity_events",
+                        || format!("{} batch conflict", "entities"),
                     )?;
                     drop(all_event_refs);
 
@@ -817,11 +848,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entities: impl IntoIterator<Item = &mut Entity>
-            ) -> Result<usize, EntityModifyError>
+            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, EntityModifyError> = async {
+                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation>> = async {
                     use es_entity::prelude::sqlx::Row;
 
                     let mut entities: Vec<&mut Entity> = entities.into_iter().collect();
@@ -848,9 +879,10 @@ mod tests {
                             if events.any_new() { Some(events) } else { None }
                         })
                         .collect();
-                    let n_persisted = Self::extract_concurrent_modification(
+                    let n_persisted = Self::classify_conflict::<_, EntityConstraintViolation>(
                         self.persist_events_batch(op, &mut all_event_refs).await,
-                        EntityModifyError::ConcurrentModification,
+                        "entity_events",
+                        || format!("{} batch conflict", "entities"),
                     )?;
                     drop(all_event_refs);
 
@@ -894,7 +926,7 @@ mod tests {
             event_ctx: false,
             forgettable_table_name: None,
             snapshot_table_name: Some("entity_snapshots"),
-            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_persist_error: None,

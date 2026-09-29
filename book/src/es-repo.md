@@ -45,7 +45,8 @@ use es_entity::*;
     // id = "UserId",                  // The type of the `id`
     // new = "NewUser",                // The type of the `NewEntity`
     // event = "UserEvent",            // The type of the `Event` enum
-    // Per-operation error types are generated: UserCreateError, UserModifyError, UserFindError, UserQueryError
+    // Every generated write op returns errlanes::Fail<UserConstraintViolation>;
+    // find/list ops return errlanes::Fail<core::convert::Infallible>.
     // tbl = "users",                  // The name of the index table
     // events_tbl = "user_events",     // The name of the events table
     // tbl_prefix = "",                // A table prefix that should be added to the derived table names
