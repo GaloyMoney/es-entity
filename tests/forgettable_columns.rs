@@ -139,17 +139,6 @@ impl Subscribers {
     }
 }
 
-/// `verify_forgotten` reports remnants as a `Fatal(Invariant)` whose source
-/// is the `ForgettableRemnants` itself.
-fn not_forgotten_remnants<D>(err: &Fail<D>) -> Option<&ForgettableRemnants> {
-    match err {
-        Fail::Fatal(fatal) => {
-            std::error::Error::source(fatal).and_then(|s| s.downcast_ref::<ForgettableRemnants>())
-        }
-        _ => None,
-    }
-}
-
 /// Creates a subscriber with an email unique to this run (the table is shared
 /// across tests and runs, so a fixed value would collide). Returns the entity
 /// and its email.
@@ -325,33 +314,6 @@ async fn soft_delete_auto_forgets_the_index_column() -> anyhow::Result<()> {
     assert!(row.deleted);
     assert_eq!(row.email, None);
     assert_eq!(row.plan, "pro");
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn verify_forgotten_reports_live_index_columns() -> anyhow::Result<()> {
-    let pool = helpers::init_pool().await?;
-    let subscribers = Subscribers::new(pool);
-
-    let (mut subscriber, _email) = new_subscriber(&subscribers).await?;
-    let id = subscriber.id;
-
-    // Live entity: both the payload row and the materialised index column
-    // still hold the value.
-    let err = subscribers
-        .verify_forgotten(id)
-        .await
-        .expect_err("live entity must not verify as forgotten");
-    let remnants = not_forgotten_remnants(&err).expect("NotForgotten");
-    assert_eq!(remnants.payload_rows, 1);
-    assert_eq!(remnants.live_index_columns, vec!["email"]);
-    assert!(remnants.event_fields.is_empty());
-
-    // After a fenced forget everything is physically absent.
-    subscriber.record_erasure();
-    subscribers.forget(subscriber).await?;
-    subscribers.verify_forgotten(id).await?;
 
     Ok(())
 }

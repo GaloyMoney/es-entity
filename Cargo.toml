@@ -60,6 +60,13 @@ futures = { workspace = true }
 tracing-subscriber = { workspace = true }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 proptest = "1"
+# `derive` (off in the main `errlanes` dependency above, to keep it out of
+# the published library) is needed by tests that write their own
+# `#[derive(errlanes::Rejection)]` domain rejections (e.g. tests/lanes.rs).
+# A per-package build (`cargo sqlx prepare`, `cargo check -p es-entity`)
+# does not unify features across the workspace the way a full `--workspace`
+# build does, so this has to be requested explicitly rather than relied on.
+errlanes = { workspace = true, features = ["sqlx", "derive"] }
 
 [[bench]]
 name = "context"

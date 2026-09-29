@@ -52,6 +52,11 @@ pub trait Rejection: Error + Send + Sync + 'static {
 /// names a constraint": any Tier-1 boundary (a ledger's own rejection subset,
 /// an HTTP client's `{status, code}`, a payment processor's 409 body) can
 /// implement this the same way.
+///
+/// `Key` is a path into the aggregate: a nested aggregate's key names the
+/// child constraint through the parent's variant (e.g.
+/// `OrderConstraint::OrderItems(OrderItemConstraint::SkuKey)`), so a domain
+/// can hoist a specific nested violation without unwrapping it by hand.
 pub trait Liftable: Rejection {
     type Key: Copy + Eq + fmt::Debug + Into<&'static str>;
 

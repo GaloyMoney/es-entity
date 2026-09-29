@@ -123,6 +123,11 @@ async fn create_duplicate_email_returns_constraint_violation_with_value() -> any
         ProfileConstraint::IdxProfilesEmail.kind(),
         ConstraintKind::Unique
     );
+    assert!(cv.is_unique());
+    assert!(!cv.is_foreign_key());
+    assert!(!cv.is_check());
+    assert!(cv.is_duplicate_of(ProfileColumn::Email));
+    assert!(!cv.is_duplicate_of(ProfileColumn::Id));
 
     Ok(())
 }
@@ -306,6 +311,10 @@ async fn create_fk_violation_returns_constraint_violation() -> anyhow::Result<()
     );
     assert_eq!(cv.value(), None);
     assert_eq!(cv.column(), None);
+    assert!(cv.is_foreign_key());
+    assert!(!cv.is_unique());
+    assert!(!cv.is_check());
+    assert!(!cv.is_duplicate_of(OrderItemColumn::Id));
 
     Ok(())
 }
@@ -362,6 +371,10 @@ async fn create_check_violation_returns_constraint_violation() -> anyhow::Result
     );
     assert_eq!(cv.value(), None);
     assert_eq!(cv.column(), None);
+    assert!(cv.is_check());
+    assert!(!cv.is_unique());
+    assert!(!cv.is_foreign_key());
+    assert!(!cv.is_duplicate_of(ProfileColumn::Email));
 
     Ok(())
 }

@@ -24,8 +24,12 @@ struct RejectionVariant {
     code: Option<String>,
     #[darling(default)]
     level: Option<String>,
+    /// A pattern over the lift target's `Liftable::Key`, matched with
+    /// `matches!(x.key(), Some(<pattern>))` — usually a single path
+    /// (`UserConstraint::EmailKey`), but a nested aggregate's key is a path
+    /// into it: `OrderConstraint::OrderItems(OrderItemConstraint::SkuKey)`.
     #[darling(default)]
-    key: Option<Path>,
+    key: Option<syn::Expr>,
     /// Which `lift = X` target this `key` belongs to. A `key`'s own path
     /// (e.g. `UserConstraint::EmailKey`) names the *key* type, not the
     /// *lift* (`Liftable`) type — the two are unrelated types the macro has
@@ -248,14 +252,14 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             match (&v.with, v.fields.style) {
                 (Some(with), _) => {
                     lift_arms.push(quote! {
-                        if key == Some(#key) {
+                        if matches!(key, Some(#key)) {
                             return Ok((#with)(x));
                         }
                     });
                 }
                 (None, ast::Style::Unit) => {
                     lift_arms.push(quote! {
-                        if key == Some(#key) {
+                        if matches!(key, Some(#key)) {
                             return Ok(Self::#variant_ident);
                         }
                     });

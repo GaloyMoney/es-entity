@@ -73,7 +73,7 @@ pub use es_entity_macros::expand_es_query;
 #[doc(inline)]
 pub use events::*;
 #[doc(inline)]
-pub use forgettable::{Forgettable, ForgettableRef, ForgettableRemnants};
+pub use forgettable::{Forgettable, ForgettableRef};
 #[doc(inline)]
 pub use idempotent::*;
 #[doc(inline)]

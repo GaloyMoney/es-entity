@@ -2,6 +2,8 @@
 
 Every generated repo op returns `errlanes`' four-lane model: `Rejected(D)` (a typed domain outcome, caller-correctable), `Denied` (authorization), `Transient` (retry the same call), or `Fatal` (a broken invariant or infrastructure failure — page an operator). `EsRepo` is "born-classified": it picks the lane for you, so a caller never has to sniff a `sqlx::Error` to know whether something is worth retrying.
 
+`Fatal` carries `kind`, `context` and a `source` for operators (traces, logs) and for tests, which may inspect the source directly to assert what happened. Production code never inspects it: the response to a `Fatal` is the same regardless of its source — stop, surface, page. If you find yourself needing the payload, the outcome was a value or a `Rejection` and the API should be changed, not the call site.
+
 ### `Fail` vs `Fault`
 
 A write can reject: `create`/`create_all`/`update`/`update_all`/`forget`/`delete` return `Result<T, errlanes::Fail<{Entity}ConstraintViolation>>`, where `Fail<D>` is the full four-arm view (`Rejected(D)`/`Denied`/`Transient`/`Fatal`). A read cannot: `find_by_*`/`maybe_find_by_*`/`find_all`/`list_by_*`/`list_for_*` return `Result<T, errlanes::Fault>`, where `Fault` is `Fail` minus the `Rejected` arm — the type itself says a read never hands back a domain outcome. `?` widens a `Fault` into any `Fail<D>` for free, so calling a read from inside a write path needs no `map_err`:
@@ -34,19 +36,18 @@ pub struct UserConstraintViolation {
 }
 ```
 
-When a `create`, `create_all`, `update`, `update_all`, or `forget` operation violates a **unique**, **foreign key**, or **check** constraint, the error comes back as `errlanes::Fail::Rejected(UserConstraintViolation { .. })`. (`NOT NULL` and exclusion violations are not classified and surface as `Fatal` instead — they indicate a programming error, not a caller-correctable domain conflict.) For unique violations, `column()` identifies which column caused the violation and `value()` contains the conflicting value extracted from the PostgreSQL error detail. For foreign key and check violations — or unique constraints not recognized as belonging to one of the entity's columns — `column()` and `value()` are `None`; use `constraint()` (or the raw `constraint_name()`) to identify the constraint instead.
+When a `create`, `create_all`, `update`, `update_all`, or `forget` operation violates a **unique**, **foreign key**, or **check** constraint, the error comes back as `errlanes::Fail::Rejected(UserConstraintViolation { .. })`. (`NOT NULL` and exclusion violations are not classified and surface as `Fatal` instead — they indicate a programming error, not a caller-correctable domain conflict.) For unique violations, `column()` identifies which column caused the violation and `value()` contains the conflicting value extracted from the PostgreSQL error detail. For foreign key and check violations — or unique constraints not recognized as belonging to one of the entity's columns — `column()` and `value()` are `None`; use `constraint()` (or the raw `constraint_name()`) to identify the constraint instead. `is_unique()`, `is_foreign_key()`, and `is_check()` read `kind()` without the `Option`; `is_duplicate_of(column)` is `is_unique() && column() == Some(column)` in one call.
 
 `UserConstraintViolation` implements `errlanes::Rejection` (`Code = UserConstraint`) and `errlanes::Liftable` (`Key = UserConstraint`) — the trait a domain rejection's `#[rejection(lift = UserConstraintViolation)]` reads to lift a constraint into one of its own variants (see the `errlanes` crate docs).
 
-> **Security note:** `value()` contains attacker-influenced input that was rejected by a unique constraint and is frequently PII (e.g. an email address). Do not propagate it to untrusted API clients — a caller can probe which values already exist (user enumeration) — and be aware it may end up in logs via the error's `Display`/`Debug` output. `Display` never prints it; at trust boundaries, prefer matching on `constraint()` / `column()` and map the error to a neutral client-facing message.
+> **Security note:** `value()` contains attacker-influenced input that was rejected by a unique constraint and is frequently PII (e.g. an email address). Do not propagate it to untrusted API clients — a caller can probe which values already exist (user enumeration) — and be aware it may end up in logs via the error's `Display`/`Debug` output. `Display` never prints it; at trust boundaries, prefer matching on `is_duplicate_of()` / `constraint()` and map the error to a neutral client-facing message.
 
 ```rust,ignore
 let result = users.create(new_user).await;
 match result {
     Ok(user) => { /* success */ }
-    Err(errlanes::Fail::Rejected(cv)) if cv.column() == Some(UserColumn::Email) => {
-        let value = cv.value(); // Option<&str>
-        println!("email {} already taken", value.unwrap_or("unknown"));
+    Err(errlanes::Fail::Rejected(cv)) if cv.is_duplicate_of(UserColumn::Email) => {
+        println!("email already taken");
     }
     Err(e) => return Err(e.into()),
 }
@@ -93,7 +94,21 @@ match err {
 }
 ```
 
-`constraint()`, `constraint_name()`, `column()`, and `value()` on the parent only report the parent's own violations (`Own { .. }`); they return `None` for a nested variant — match the nested variant directly to inspect it, as above.
+`constraint_name()`, `column()`, `value()`, and the kind-sugar methods (`is_unique()`, `is_foreign_key()`, `is_check()`, `is_duplicate_of()`) on the parent only report the parent's own violations (`Own { .. }`); they return `None`/`false` for a nested variant — match the nested variant directly to inspect it, as above.
+
+`constraint()` (and `Liftable::key()`) is the exception: the parent key is a **path** into the aggregate, so it reports `Some(OrderConstraint::OrderItems(child_key))` for a nested variant, letting a domain rejection hoist a specific nested constraint by naming that path — `via` disambiguates which `lift` target the pattern reads from when a rejection lifts more than one type:
+
+```rust,ignore
+#[derive(Debug, Clone, thiserror::Error, errlanes::Rejection)]
+#[rejection(lift(OrderConstraintViolation))]
+enum OrderRejection {
+    #[error("duplicate SKU on an order item")]
+    #[rejection(key = OrderConstraint::OrderItems(OrderItemConstraint::SkuKey))]
+    DuplicateSku,
+}
+```
+
+An unhoisted nested constraint (no matching `key`) still demotes to `Fatal(Invariant)`, whose `context` names the *child's* constraint.
 
 ## Concurrent modification
 

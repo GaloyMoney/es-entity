@@ -17,8 +17,8 @@ pub struct EsEvent {
 struct ForgettableInfo {
     /// Whether any variant has forgettable fields.
     has_forgettable: bool,
-    /// Per-variant: (variant_ident, event_type_value, list_of_forgettable_field_idents)
-    variants: Vec<(syn::Ident, String, Vec<syn::Ident>)>,
+    /// Per-variant: (variant_ident, list_of_forgettable_field_idents)
+    variants: Vec<(syn::Ident, Vec<syn::Ident>)>,
 }
 
 pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream> {
@@ -34,7 +34,7 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
     let match_arms: Vec<_> = forgettable_info
         .variants
         .iter()
-        .map(|(variant_ident, _tag_value, field_idents)| {
+        .map(|(variant_ident, field_idents)| {
             if field_idents.is_empty() {
                 quote! {
                     #ident::#variant_ident { .. } => None,
@@ -70,7 +70,7 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
     let forget_match_arms: Vec<_> = forgettable_info
         .variants
         .iter()
-        .map(|(variant_ident, _tag_value, field_idents)| {
+        .map(|(variant_ident, field_idents)| {
             if field_idents.is_empty() {
                 quote! {
                     #ident::#variant_ident { .. } => {}
@@ -93,29 +93,10 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
         })
         .collect();
 
-    // (event_type column value, forgettable field JSON key) pairs across all
-    // variants — consumed by the repo's generated `verify_forgotten` storage
-    // check, which joins the first element against the `event_type` column.
-    let forgettable_json_fields: Vec<_> = forgettable_info
-        .variants
-        .iter()
-        .flat_map(|(_, event_type_value, field_idents)| {
-            field_idents.iter().map(move |field_id| {
-                let field_name = field_id.to_string();
-                quote! { (#event_type_value, #field_name) }
-            })
-        })
-        .collect();
-
     tokens.append_all(quote! {
         impl #ident {
             #[doc(hidden)]
             pub const HAS_FORGETTABLE_FIELDS: bool = #has_forgettable;
-
-            #[doc(hidden)]
-            pub const FORGETTABLE_JSON_FIELDS: &'static [(&'static str, &'static str)] = &[
-                #(#forgettable_json_fields),*
-            ];
 
             #[doc(hidden)]
             pub fn extract_forgettable_payloads(&self) -> Option<es_entity::prelude::serde_json::Value> {
@@ -141,8 +122,7 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
 /// Deliberately the snake-cased *ident*, not the serde tag: the column is
 /// populated from the generated `EsEvent::event_type`, which knows nothing
 /// about serde renames, so anything matching against that column has to agree
-/// with it. Both emission sites go through here — the `event_type` arms and
-/// `FORGETTABLE_JSON_FIELDS` — so the two cannot drift apart.
+/// with it.
 fn event_type_value(variant_ident: &syn::Ident) -> String {
     variant_ident.to_string().to_case(Case::Snake)
 }
@@ -155,7 +135,6 @@ fn extract_forgettable_info(ast: &syn::DeriveInput) -> ForgettableInfo {
             .iter()
             .map(|variant| {
                 let variant_ident = variant.ident.clone();
-                let event_type_value = event_type_value(&variant_ident);
                 let forgettable_fields = variant
                     .fields
                     .iter()
@@ -167,13 +146,13 @@ fn extract_forgettable_info(ast: &syn::DeriveInput) -> ForgettableInfo {
                         }
                     })
                     .collect::<Vec<_>>();
-                (variant_ident, event_type_value, forgettable_fields)
+                (variant_ident, forgettable_fields)
             })
             .collect(),
         _ => Vec::new(),
     };
 
-    let has_forgettable = variants.iter().any(|(_, _, fields)| !fields.is_empty());
+    let has_forgettable = variants.iter().any(|(_, fields)| !fields.is_empty());
 
     ForgettableInfo {
         has_forgettable,
@@ -270,40 +249,5 @@ mod tests {
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
-    }
-
-    /// `verify_forgotten` joins `FORGETTABLE_JSON_FIELDS` against the
-    /// `event_type` column, which is written from `event_type()` — the
-    /// snake-cased ident, which knows nothing about serde renames. Keying
-    /// the const on the serde tag instead would make the join match nothing
-    /// and silently report a forgotten entity as clean. Every entity in this
-    /// repo happens to use `rename_all = "snake_case"`, where the two agree,
-    /// so this pins the case where they do not.
-    #[test]
-    fn forgettable_json_fields_key_on_the_event_type_column_not_the_serde_tag() {
-        let input: syn::DeriveInput = syn::parse_quote! {
-            #[es_event(id = "SubscriberId")]
-            #[serde(tag = "type", rename_all = "camelCase")]
-            enum SubscriberEvent {
-                #[serde(rename = "totally_custom")]
-                Initialized { id: SubscriberId, email: Forgettable<String> },
-                EmailChanged { email: Forgettable<String> },
-            }
-        };
-
-        let out = derive(input).unwrap().to_string();
-
-        // Both variants keyed by the snake_case ident, matching `event_type()`.
-        assert!(
-            out.contains(r#"("initialized" , "email")"#),
-            "expected snake_case ident key, got: {out}"
-        );
-        assert!(
-            out.contains(r#"("email_changed" , "email")"#),
-            "expected snake_case ident key, got: {out}"
-        );
-        // Never the serde tag or the rename_all casing.
-        assert!(!out.contains(r#""totally_custom""#));
-        assert!(!out.contains(r#""emailChanged""#));
     }
 }

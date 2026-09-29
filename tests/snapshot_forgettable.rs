@@ -87,8 +87,7 @@ async fn snapshot_writes_forgettable_payload_at_sequence_zero() -> anyhow::Resul
 
 /// `forget` on a snapshotted, forgettable entity: the payload row (including
 /// the reserved sequence-0 one) and the old snapshot row are both gone; the
-/// repo immediately re-snapshots with a forgotten email baked in, and
-/// `verify_forgotten` passes.
+/// repo immediately re-snapshots with a forgotten email baked in.
 #[tokio::test]
 async fn forget_forgets_the_snapshot_and_resnapshots() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -107,8 +106,6 @@ async fn forget_forgets_the_snapshot_and_resnapshots() -> anyhow::Result<()> {
         forgotten.has_snapshot(),
         "forget_in_op re-snapshots immediately"
     );
-
-    repo.verify_forgotten(client.id).await?;
 
     // No sequence-0 (or any) payload row survives.
     assert_eq!(payload_row_count(&pool, client.id).await?, 0);
@@ -152,7 +149,6 @@ async fn forget_with_a_stale_fingerprint_snapshot_still_resnapshots_cleanly() ->
     let forgotten = repo.forget(loaded).await?;
     assert_eq!(forgotten.email(), None);
 
-    repo.verify_forgotten(client.id).await?;
     assert_eq!(payload_row_count(&pool, client.id).await?, 0);
     assert_eq!(snapshot_email(&pool, client.id).await?, Some(None));
 

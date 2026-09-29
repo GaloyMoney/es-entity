@@ -127,20 +127,20 @@ pub struct Users {
 }
 impl Users {
     pub async fn find_by_name(&self, name: String) -> Result<User, Fault> {
-        es_query!(
+        Ok(es_query!(
             "SELECT id FROM users WHERE name = $1",
             name
         )
         .fetch_optional(&self.pool)
         .await?
-        .ok_or_else(|| not_found_fatal("User", None, name))
+        .ok_or(NotFound { entity: "User", column: Some("name"), value: name })?)
     }
 }
 ```
 
 The `es_query!` macro only works within `fn`s defined on structs with `EsRepo` derived.
 
-`es_query!` provides `fetch_optional` which returns `Result<Option<Entity>, errlanes::Fault>` — `Fault` because a read can never reject; it can only be denied, retried, or fatal. To return a concrete entity (not `Option`), use `ok_or_else` to construct the missing-row error with `not_found_fatal` — a `Fatal(Invariant)` whose source is a `NotFound` carrying the entity name, column, and value (there is no `NotFound` rejection: a caller that tolerates absence uses `maybe_find_by_*`, returning `Option`, instead):
+`es_query!` provides `fetch_optional` which returns `Result<Option<Entity>, errlanes::Fault>` — `Fault` because a read can never reject; it can only be denied, retried, or fatal. To return a concrete entity (not `Option`), construct a `NotFound` and propagate it with `?`: `NotFound` converts into any `Fault`/`Fail<D>` as `Fatal(Invariant)`. There is no `NotFound` rejection — a caller that tolerates absence uses `maybe_find_by_*`, returning `Option`, instead:
 
 ```rust,ignore
 async fn fetch_optional(<executor>) -> Result<Option<Entity>, errlanes::Fault>

@@ -260,8 +260,9 @@ pub enum CustomerEvent {
 let customer = customers.forget(customer).await?;
 assert!(customer.name.is_forgotten());
 
-// And a storage-level check that the data is physically absent
-customers.verify_forgotten(customer.id).await?;
+// forget() guarantees its result — to confirm an erasure, call it again
+// (an idempotent no-op that persists nothing and runs no hook).
+customers.forget(customer).await?;
 ```
 
 See the [Forgettable Data](https://galoymoney.github.io/es-entity/forgettable.html) chapter in the book for details.

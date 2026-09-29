@@ -159,6 +159,13 @@ impl fmt::Display for FatalKind {
 
 /// A failure that will not succeed on retry: a bug, a misconfiguration, or
 /// corrupt state.
+///
+/// `kind`, `context` and `source` are for operators (traces, logs) and for
+/// tests (which may `downcast_ref` the source to assert what happened).
+/// Production code never inspects a `Fatal`'s payload: the response to a
+/// `Fatal` is the same regardless of its source — stop, surface, page. If you
+/// find yourself needing the payload, the outcome was a value or a
+/// `Rejection` and the API should be changed, not the call site.
 #[derive(Debug, Clone)]
 pub struct Fatal {
     pub kind: FatalKind,

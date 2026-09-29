@@ -112,10 +112,17 @@ pub enum ConstraintKind {
     Unknown,
 }
 
-/// A repo op that requires a row (`find_by_*`) found none. Always the
-/// `source()` of a `Fatal(Invariant)` — there is no `NotFound` rejection;
-/// callers that tolerate absence use `maybe_find_by_*`, which returns
-/// `Option` instead.
+/// A repo op that requires a row (`find_by_*`) found none. There is no
+/// `NotFound` rejection — callers that tolerate absence use
+/// `maybe_find_by_*`, which returns `Option` instead. Construct one and
+/// propagate it with `?`: it converts into any `errlanes::Fault` or
+/// `errlanes::Fail<D>` as `Fatal(Invariant)`.
+///
+/// **Never `impl errlanes::Rejection for NotFound`** — the `From<NotFound>`
+/// impls below are only orphan-legal, and only skip errlanes' blanket
+/// `impl<D: Rejection> From<D> for Fail<D>`, because `NotFound: Rejection` is
+/// not implemented (so it can never collide with that blanket at `D =
+/// NotFound`).
 ///
 /// **Security note:** `value`'s `Debug` may contain PII (e.g. an email
 /// address looked up by a caller-supplied value). `Display` omits it.
@@ -124,6 +131,20 @@ pub struct NotFound {
     pub entity: &'static str,
     pub column: Option<&'static str>,
     pub value: String,
+}
+
+impl NotFound {
+    pub fn new(
+        entity: &'static str,
+        column: Option<&'static str>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self {
+            entity,
+            column,
+            value: value.into(),
+        }
+    }
 }
 
 impl std::fmt::Display for NotFound {
@@ -136,6 +157,18 @@ impl std::fmt::Display for NotFound {
 }
 
 impl std::error::Error for NotFound {}
+
+impl From<NotFound> for errlanes::Fault {
+    fn from(n: NotFound) -> Self {
+        errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, n).into()
+    }
+}
+
+impl<D> From<NotFound> for errlanes::Fail<D> {
+    fn from(n: NotFound) -> Self {
+        errlanes::Fault::from(n).into()
+    }
+}
 
 #[doc(hidden)]
 pub fn hydration_fatal(e: EntityHydrationError) -> errlanes::Fault {
@@ -153,15 +186,7 @@ pub fn not_found_fatal(
     column: Option<&'static str>,
     value: String,
 ) -> errlanes::Fault {
-    errlanes::Fatal::from_error(
-        errlanes::FatalKind::Invariant,
-        NotFound {
-            entity,
-            column,
-            value,
-        },
-    )
-    .into()
+    NotFound::new(entity, column, value).into()
 }
 
 #[doc(hidden)]

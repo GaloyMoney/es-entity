@@ -94,6 +94,20 @@ impl NestedErrorInfo {
             quote! { <#child_repo_ty as es_entity::EsRepo>::ConstraintViolation }
         }
     }
+
+    /// The child's `{Entity}Constraint` type — what its own `Liftable::Key`
+    /// resolves to. Named directly when the child entity is known by
+    /// convention; otherwise projected through `Liftable`, which normalizes
+    /// to the same concrete type for a non-generic child repo.
+    fn constraint_ty(&self) -> TokenStream {
+        if let Some(entity) = &self.nested_entity {
+            let ty = syn::Ident::new(&format!("{entity}Constraint"), Span::call_site());
+            quote! { #ty }
+        } else {
+            let cv_ty = self.constraint_violation_ty();
+            quote! { <#cv_ty as errlanes::Liftable>::Key }
+        }
+    }
 }
 
 impl<'a> ErrorTypes<'a> {
@@ -209,13 +223,24 @@ impl<'a> ErrorTypes<'a> {
     /// table known at compile time — the declared columns' unique constraints
     /// plus every unique / foreign key / check constraint discoverable from
     /// the migrations — plus `Unknown`, reported when a violation names a
-    /// constraint the catalog does not recognize.
+    /// constraint the catalog does not recognize. A nested aggregate also
+    /// gets one variant per nested child, carrying the child's own
+    /// `{Child}Constraint` — the parent key is a path into the aggregate.
     fn generate_constraint_enum(&self) -> TokenStream {
         let constraint_enum = &self.constraint_enum;
         let variants: Vec<_> = self
             .constraint_variants
             .iter()
             .map(|v| &v.variant_name)
+            .collect();
+        let nested_variants: Vec<_> = self
+            .nested
+            .iter()
+            .map(|n| {
+                let variant = &n.variant_name;
+                let ty = n.constraint_ty();
+                quote! { #variant(#ty), }
+            })
             .collect();
         let from_name_arms: Vec<_> = self
             .constraint_variants
@@ -235,6 +260,14 @@ impl<'a> ErrorTypes<'a> {
                 quote! { Self::#variant => #name, }
             })
             .collect();
+        let nested_name_arms: Vec<_> = self
+            .nested
+            .iter()
+            .map(|n| {
+                let variant = &n.variant_name;
+                quote! { Self::#variant(c) => c.name(), }
+            })
+            .collect();
         let kind_arms: Vec<_> = self
             .constraint_variants
             .iter()
@@ -248,11 +281,20 @@ impl<'a> ErrorTypes<'a> {
                 quote! { Self::#variant => #kind, }
             })
             .collect();
+        let nested_kind_arms: Vec<_> = self
+            .nested
+            .iter()
+            .map(|n| {
+                let variant = &n.variant_name;
+                quote! { Self::#variant(c) => c.kind(), }
+            })
+            .collect();
 
         quote! {
             #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
             pub enum #constraint_enum {
                 #(#variants,)*
+                #(#nested_variants)*
                 /// A violation whose constraint name the migrations-derived
                 /// catalog does not recognize.
                 Unknown,
@@ -268,19 +310,22 @@ impl<'a> ErrorTypes<'a> {
                     }
                 }
 
-                /// The database constraint name.
+                /// The database constraint name — the nested child's own
+                /// name, for a nested variant.
                 pub fn name(&self) -> &'static str {
                     match *self {
                         #(#name_arms)*
+                        #(#nested_name_arms)*
                         Self::Unknown => "unknown",
                     }
                 }
 
                 /// The kind of constraint (unique / foreign key / check), when
-                /// known.
+                /// known — the nested child's own kind, for a nested variant.
                 pub fn kind(&self) -> es_entity::ConstraintKind {
                     match *self {
                         #(#kind_arms)*
+                        #(#nested_kind_arms)*
                         Self::Unknown => es_entity::ConstraintKind::Unknown,
                     }
                 }
@@ -420,6 +465,23 @@ impl<'a> ErrorTypes<'a> {
                     pub fn value(&self) -> Option<&str> {
                         self.value.as_deref()
                     }
+
+                    pub fn is_unique(&self) -> bool {
+                        self.kind() == Some(es_entity::ConstraintKind::Unique)
+                    }
+
+                    pub fn is_foreign_key(&self) -> bool {
+                        self.kind() == Some(es_entity::ConstraintKind::ForeignKey)
+                    }
+
+                    pub fn is_check(&self) -> bool {
+                        self.kind() == Some(es_entity::ConstraintKind::Check)
+                    }
+
+                    /// True when this is a unique-constraint violation on `column`.
+                    pub fn is_duplicate_of(&self, column: #column_enum) -> bool {
+                        self.is_unique() && self.column == Some(column)
+                    }
                 }
 
                 impl std::fmt::Display for #cv {
@@ -492,6 +554,20 @@ impl<'a> ErrorTypes<'a> {
                     }
                 })
                 .collect();
+            // A nested variant's key is a path: the parent's own constraint
+            // enum wrapping whatever the child itself reports — not just
+            // `Some(..)` for a recognized child violation, but exactly what
+            // the child's own `constraint()` returns (so an unrecognized
+            // child constraint stays `None`, same as it would on the child
+            // directly).
+            let nested_constraint_arms: Vec<_> = self
+                .nested
+                .iter()
+                .map(|n| {
+                    let variant = &n.variant_name;
+                    quote! { Self::#variant(c) => c.constraint().map(#constraint_enum::#variant), }
+                })
+                .collect();
 
             quote! {
                 #[derive(Debug, Clone)]
@@ -513,10 +589,13 @@ impl<'a> ErrorTypes<'a> {
                         Self::Own { constraint, constraint_name, column, value }
                     }
 
+                    /// `Some({Field}(c))` for a nested variant — the parent
+                    /// key is a path into the aggregate, naming the child's
+                    /// own constraint through the nesting variant.
                     pub fn constraint(&self) -> Option<#constraint_enum> {
                         match self {
                             Self::Own { constraint, .. } => *constraint,
-                            _ => None,
+                            #(#nested_constraint_arms)*
                         }
                     }
 
@@ -534,8 +613,14 @@ impl<'a> ErrorTypes<'a> {
                         }
                     }
 
+                    /// `None` for a nested variant: the kind-sugar methods
+                    /// below only speak to this aggregate's own violation —
+                    /// match the nested variant to ask the child.
                     pub fn kind(&self) -> Option<es_entity::ConstraintKind> {
-                        self.constraint().map(|c| c.kind())
+                        match self {
+                            Self::Own { constraint, .. } => constraint.map(|c| c.kind()),
+                            _ => None,
+                        }
                     }
 
                     /// **Security note:** may contain PII. See the `Own`
@@ -544,6 +629,31 @@ impl<'a> ErrorTypes<'a> {
                         match self {
                             Self::Own { value, .. } => value.as_deref(),
                             _ => None,
+                        }
+                    }
+
+                    /// `false` for a nested variant: the domain matches that
+                    /// against the child's own kind instead.
+                    pub fn is_unique(&self) -> bool {
+                        self.kind() == Some(es_entity::ConstraintKind::Unique)
+                    }
+
+                    pub fn is_foreign_key(&self) -> bool {
+                        self.kind() == Some(es_entity::ConstraintKind::ForeignKey)
+                    }
+
+                    pub fn is_check(&self) -> bool {
+                        self.kind() == Some(es_entity::ConstraintKind::Check)
+                    }
+
+                    /// True when this is a unique-constraint violation on
+                    /// `column` on this aggregate's own row (`Own`); `false`
+                    /// for a nested variant — match the nested variant to ask
+                    /// the child.
+                    pub fn is_duplicate_of(&self, column: #column_enum) -> bool {
+                        match self {
+                            Self::Own { .. } => self.is_unique() && self.column() == Some(column),
+                            _ => false,
                         }
                     }
                 }
