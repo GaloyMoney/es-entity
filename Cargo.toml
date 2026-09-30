@@ -20,7 +20,10 @@ event-context = ["es-entity-macros/event-context", "event-context-enabled"]
 event-context-enabled = ["es-entity-macros/event-context-enabled"]
 json-schema = ["dep:schemars"]
 mdbook-test = ["dep:anyhow"]
-instrument = ["es-entity-macros/instrument", "dep:tracing", "errlanes/tracing"]
+# Split out so a consumer (job) can pull in the errlanes recorder without
+# turning on repo-span instrumentation.
+errlanes-tracing = ["errlanes/tracing"]
+instrument = ["es-entity-macros/instrument", "dep:tracing", "errlanes-tracing"]
 
 [dependencies]
 es-entity-macros = { workspace = true }
