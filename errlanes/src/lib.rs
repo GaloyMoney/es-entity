@@ -30,7 +30,7 @@ pub use lane::{Denied, Exhausted, Fatal, FatalKind, Lane, Transient, TransientKi
 pub use sqlx::{classify_sqlx, classify_sqlx_fault, transient_sqlstate};
 
 #[cfg(feature = "tracing")]
-pub use record::{FIELDS, record, record_fail, record_fault};
+pub use record::{FIELDS, RecordResult, record, record_fail, record_fault};
 
 #[cfg(feature = "derive")]
 pub use errlanes_derive::{__compose_rejection, Failure, Lift, Rejection, compose};

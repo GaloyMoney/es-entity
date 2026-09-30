@@ -41,8 +41,10 @@ fn level_str(level: Level) -> &'static str {
 /// `Rejection::code`, never from `Fail`'s `Display`/`to_string()` — a
 /// rejection's message may embed caller-supplied input, so the *code* is the
 /// only thing safe to key metrics, alerts, or a GraphQL error extension on.
-/// `exception.message` is written only for `Fatal`/`Exhausted`, where the
-/// message is operator-facing by construction.
+/// `exception.message` is written for `Transient` and `Fatal`/`Exhausted`,
+/// where the message is operator-safe by construction (`Transient::context`
+/// is documented as a non-PII breadcrumb); `Rejected` and `Denied` stay
+/// code-only.
 pub fn record_fail<D: Rejection, L: LaneProfile>(span: &tracing::Span, f: &Fail<D, L>) {
     span.record("error", true);
     span.record("error.lane", f.lane().as_str());
@@ -58,6 +60,7 @@ pub fn record_fail<D: Rejection, L: LaneProfile>(span: &tracing::Span, f: &Fail<
         Fail::Transient(t) => {
             span.record("error.code", t.marker().kind.as_str());
             span.record("error.level", "INFO");
+            span.record("exception.message", f.to_string());
         }
         Fail::Fatal(x) => {
             span.record("error.code", x.marker().kind.as_str());
@@ -80,6 +83,7 @@ pub fn record_fault<L: LaneProfile>(span: &tracing::Span, f: &Fault<L>) {
         Fault::Transient(t) => {
             span.record("error.code", t.marker().kind.as_str());
             span.record("error.level", "INFO");
+            span.record("exception.message", f.to_string());
         }
         Fault::Fatal(x) => {
             span.record("error.code", x.marker().kind.as_str());
@@ -97,3 +101,20 @@ pub fn record_fault<L: LaneProfile>(span: &tracing::Span, f: &Fault<L>) {
 /// what the separate `"EXHAUSTED"` string used to mean — now spelled
 /// consistently with `invariant` / `config` / `corrupt_state`.
 pub use record_fail as record;
+
+/// Records onto the current span, then hands the result straight back — for
+/// a call site that must record and keep going rather than propagate
+/// (`?`), such as a batch dispatcher writing its own `conclusion` after the
+/// fact.
+pub trait RecordResult {
+    fn record(self) -> Self;
+}
+
+impl<T, E: crate::fail::Laned> RecordResult for Result<T, E> {
+    fn record(self) -> Self {
+        if let Err(e) = &self {
+            e.record(&tracing::Span::current());
+        }
+        self
+    }
+}

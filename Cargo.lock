@@ -729,6 +729,7 @@ dependencies = [
  "sqlx",
  "thiserror",
  "tracing",
+ "tracing-subscriber",
  "trybuild",
  "upstream",
 ]

@@ -1,0 +1,154 @@
+#![cfg(feature = "tracing")]
+//! `Laned::record` is the single write path every boundary recorder (a
+//! batch dispatcher via `RecordResult`, or a future instrumented site) goes
+//! through. This exercises it directly with a capturing subscriber,
+//! asserting the exact fields `FIELDS` promises for each lane.
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
+use errlanes::{Denied, Fail, Fatal, FatalKind, Laned, RecordResult, Transient, TransientKind};
+use tracing::field::{Field, Visit};
+use tracing_subscriber::{Layer, layer::SubscriberExt};
+
+#[derive(Debug, Clone, thiserror::Error, errlanes::Rejection)]
+enum Small {
+    #[error("small")]
+    #[rejection(code = "SMALL")]
+    Unit,
+}
+
+#[derive(Clone, Default)]
+struct Captured(Arc<Mutex<HashMap<String, String>>>);
+
+impl Captured {
+    fn get(&self, key: &str) -> Option<String> {
+        self.0.lock().unwrap().get(key).cloned()
+    }
+}
+
+struct CaptureVisitor(Arc<Mutex<HashMap<String, String>>>);
+
+impl Visit for CaptureVisitor {
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(field.name().to_string(), value.to_string());
+    }
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(field.name().to_string(), value.to_string());
+    }
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(field.name().to_string(), format!("{value:?}"));
+    }
+}
+
+struct CaptureLayer(Arc<Mutex<HashMap<String, String>>>);
+
+impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+    fn on_record(
+        &self,
+        _id: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut visitor = CaptureVisitor(self.0.clone());
+        values.record(&mut visitor);
+    }
+}
+
+/// Declares exactly the six `FIELDS` as `Empty`, then records `failure` onto
+/// that span through `Laned::record` under a subscriber that captures every
+/// value written.
+fn record<E: Laned>(failure: E) -> Captured {
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::registry().with(CaptureLayer(captured.0.clone()));
+    tracing::subscriber::with_default(subscriber, || {
+        let span = tracing::info_span!(
+            "boundary",
+            error = tracing::field::Empty,
+            error.lane = tracing::field::Empty,
+            error.code = tracing::field::Empty,
+            error.level = tracing::field::Empty,
+            exception.message = tracing::field::Empty,
+            exception.type = tracing::field::Empty,
+        );
+        failure.record(&span);
+    });
+    captured
+}
+
+#[test]
+fn record_declares_exactly_the_fields_constant() {
+    assert_eq!(errlanes::FIELDS.len(), 6);
+}
+
+#[test]
+fn record_fills_every_field_per_lane() {
+    let rejected: Fail<Small> = Fail::Rejected(Small::Unit);
+    let captured = record(rejected);
+    assert_eq!(captured.get("error").as_deref(), Some("true"));
+    assert_eq!(captured.get("error.lane").as_deref(), Some("rejected"));
+    assert_eq!(captured.get("error.code").as_deref(), Some("SMALL"));
+    assert_eq!(captured.get("error.level").as_deref(), Some("INFO"));
+    assert!(
+        captured.get("exception.message").is_none(),
+        "a rejection's message may embed caller-supplied input"
+    );
+
+    let denied: Fail<Small> = Denied::default().into();
+    let captured = record(denied);
+    assert_eq!(captured.get("error.lane").as_deref(), Some("denied"));
+    assert_eq!(captured.get("error.code").as_deref(), Some("FORBIDDEN"));
+    assert_eq!(captured.get("error.level").as_deref(), Some("WARN"));
+    assert!(captured.get("exception.message").is_none());
+
+    let transient: Fail<Small> = Transient::new(TransientKind::Deadlock).into();
+    let captured = record(transient);
+    assert_eq!(captured.get("error.lane").as_deref(), Some("transient"));
+    assert_eq!(captured.get("error.code").as_deref(), Some("deadlock"));
+    assert_eq!(captured.get("error.level").as_deref(), Some("INFO"));
+    assert!(
+        captured.get("exception.message").is_some(),
+        "Transient::context is a non-PII breadcrumb by contract, so it is operator-safe"
+    );
+
+    let fatal: Fail<Small> = Fatal::new(FatalKind::Invariant).into();
+    let captured = record(fatal);
+    assert_eq!(captured.get("error.lane").as_deref(), Some("fatal"));
+    assert_eq!(captured.get("error.code").as_deref(), Some("invariant"));
+    assert_eq!(captured.get("error.level").as_deref(), Some("ERROR"));
+    assert!(captured.get("exception.message").is_some());
+    assert_eq!(captured.get("exception.type").as_deref(), Some("invariant"));
+}
+
+#[test]
+fn record_result_records_onto_the_current_span_and_returns_self() {
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::registry().with(CaptureLayer(captured.0.clone()));
+    tracing::subscriber::with_default(subscriber, || {
+        let span = tracing::info_span!(
+            "boundary",
+            error = tracing::field::Empty,
+            error.lane = tracing::field::Empty,
+            error.code = tracing::field::Empty,
+            error.level = tracing::field::Empty,
+            exception.message = tracing::field::Empty,
+            exception.type = tracing::field::Empty,
+        );
+        let _enter = span.enter();
+        let result: Result<(), Fail<Small>> = Err(Fail::Rejected(Small::Unit)).record();
+        assert!(matches!(result, Err(Fail::Rejected(Small::Unit))));
+        let ok: Result<u8, Fail<Small>> = Ok(7).record();
+        assert_eq!(ok.unwrap(), 7);
+    });
+    assert_eq!(captured.get("error.lane").as_deref(), Some("rejected"));
+}

@@ -552,6 +552,9 @@ pub trait Laned: sealed::Sealed + Error + Send + Sync + 'static + Sized {
     }
 
     fn settle(self, attempts: u32) -> Self::Settled;
+
+    #[cfg(feature = "tracing")]
+    fn record(&self, span: &tracing::Span);
 }
 
 /// Note the `Settling` bound: a profile that admits `Transient` but not
@@ -571,6 +574,11 @@ where
     fn settle(self, attempts: u32) -> Self::Settled {
         self.into_fail().settle(attempts)
     }
+
+    #[cfg(feature = "tracing")]
+    fn record(&self, span: &tracing::Span) {
+        crate::record::record_fail(span, self.as_fail());
+    }
 }
 
 impl<L: LaneProfile> Laned for Fault<L>
@@ -585,6 +593,11 @@ where
 
     fn settle(self, attempts: u32) -> Self::Settled {
         Fault::settle(self, attempts)
+    }
+
+    #[cfg(feature = "tracing")]
+    fn record(&self, span: &tracing::Span) {
+        crate::record::record_fault(span, self);
     }
 }
 
