@@ -1,7 +1,17 @@
 # Repository errors
 
-Repository writes return `Fail<EntityConstraintViolation, RepoLanes>` and reads
-return `Fault<RepoLanes>`. `RepoLanes` enables Transient and Fatal, never Denied.
+Repository writes return `es_entity::RepoWriteError<EntityConstraintViolation>`
+and reads return `es_entity::RepoReadError`. These aliases belong to es-entity:
+
+```rust
+# extern crate es_entity;
+use es_entity::errlanes::{Fail, Fault, lanes};
+
+pub type RepoReadError = Fault<lanes!(Transient, Fatal)>;
+pub type RepoWriteError<C> = Fail<C, lanes!(Transient, Fatal)>;
+```
+
+Both enable Transient and Fatal, never Denied.
 A write may return a structured, caller-correctable rejection; a read cannot.
 Both carriers preserve the standard lane markers and their original sources.
 
@@ -71,7 +81,7 @@ pub enum RegistrationRejection {
 }
 
 use errlanes::ResultExt;
-async fn register(...) -> Result<User, Fail<RegistrationRejection, RepoLanes>> {
+async fn register(...) -> Result<User, Fail<RegistrationRejection, errlanes::lanes!(Transient, Fatal)>> {
     Ok(repo.create(new_user).await.lift()?)
 }
 ```
@@ -125,7 +135,7 @@ let user = repo.maybe_find_by_id(id).await?
 Hydration/stored-data failures remain Fatal(CorruptState). Denial cannot enter
 ordinary repository signatures: custom hooks must convert into the declared
 profile, and a hook that can deny does not satisfy that bound. Default SQLx
-hooks fit `RepoLanes`.
+hooks convert into `RepoReadError` or `RepoWriteError<C>`.
 
 Fatal payloads are diagnostic data for operators and tests. Production code
 handles the lane uniformly: stop, surface, and alert at the owning boundary.

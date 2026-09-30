@@ -37,7 +37,7 @@ impl ToTokens for Nested<'_> {
             // already holds scattered `&mut P` borrows (this same fn one
             // level up the nesting, recursing into grandchildren) can pass
             // them straight through without needing contiguous storage.
-            async fn #create_fn_name<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), errlanes::Fail<<#nested_repo_ty as es_entity::EsRepo>::ConstraintViolation, errlanes::RepoLanes>>
+            async fn #create_fn_name<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), es_entity::RepoWriteError<<#nested_repo_ty as es_entity::EsRepo>::ConstraintViolation>>
                 where
                     P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation + ?Sized
@@ -73,7 +73,7 @@ impl ToTokens for Nested<'_> {
             // for the whole parent batch, not one per child per parent — then
             // batches new children via `#create_fn_name`. Returns the child
             // repo's own `ConstraintViolation`, unwidened.
-            async fn #update_fn_name<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), errlanes::Fail<<#nested_repo_ty as es_entity::EsRepo>::ConstraintViolation, errlanes::RepoLanes>>
+            async fn #update_fn_name<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), es_entity::RepoWriteError<<#nested_repo_ty as es_entity::EsRepo>::ConstraintViolation>>
                 where
                     P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation + ?Sized
@@ -94,7 +94,7 @@ impl ToTokens for Nested<'_> {
                 rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
                 tag_cursor: &mut i32,
                 entities: &mut [P],
-            ) -> Result<(), errlanes::Fault::<errlanes::RepoLanes>>
+            ) -> Result<(), es_entity::RepoReadError>
                 where
                     P: es_entity::Parent<<#nested_repo_ty as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
                     #nested_repo_ty: es_entity::HydrateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
@@ -103,7 +103,7 @@ impl ToTokens for Nested<'_> {
                 <#nested_repo_ty>::hydrate_in_op(rows_by_tag, tag_cursor, lookup)
             }
 
-            async fn #delete_fn_name<OP, P>(op: &mut OP, entity: &P) -> Result<(), errlanes::Fault::<errlanes::RepoLanes>>
+            async fn #delete_fn_name<OP, P>(op: &mut OP, entity: &P) -> Result<(), es_entity::RepoReadError>
                 where
                     OP: es_entity::AtomicOperation + ?Sized,
                     P: es_entity::EsEntity,
@@ -139,7 +139,7 @@ mod tests {
         cursor.to_tokens(&mut tokens);
 
         let expected = quote! {
-            async fn create_nested_users_in_op<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), errlanes::Fail<<UserRepo as es_entity::EsRepo>::ConstraintViolation, errlanes::RepoLanes>>
+            async fn create_nested_users_in_op<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), es_entity::RepoWriteError<<UserRepo as es_entity::EsRepo>::ConstraintViolation>>
                 where
                     P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation + ?Sized
@@ -164,7 +164,7 @@ mod tests {
                 Ok(())
             }
 
-            async fn update_nested_users_in_op<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), errlanes::Fail<<UserRepo as es_entity::EsRepo>::ConstraintViolation, errlanes::RepoLanes>>
+            async fn update_nested_users_in_op<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), es_entity::RepoWriteError<<UserRepo as es_entity::EsRepo>::ConstraintViolation>>
                 where
                     P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation + ?Sized
@@ -184,7 +184,7 @@ mod tests {
                 rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
                 tag_cursor: &mut i32,
                 entities: &mut [P],
-            ) -> Result<(), errlanes::Fault::<errlanes::RepoLanes>>
+            ) -> Result<(), es_entity::RepoReadError>
                 where
                     P: es_entity::Parent<<UserRepo as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
                     UserRepo: es_entity::HydrateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
@@ -193,7 +193,7 @@ mod tests {
                 <UserRepo>::hydrate_in_op(rows_by_tag, tag_cursor, lookup)
             }
 
-            async fn delete_nested_users_in_op<OP, P>(op: &mut OP, entity: &P) -> Result<(), errlanes::Fault::<errlanes::RepoLanes>>
+            async fn delete_nested_users_in_op<OP, P>(op: &mut OP, entity: &P) -> Result<(), es_entity::RepoReadError>
                 where
                     OP: es_entity::AtomicOperation + ?Sized,
                     P: es_entity::EsEntity,

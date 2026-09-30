@@ -120,9 +120,7 @@ use users_with_persist_hook::UsersWithPersistHook;
 
 /// The hook's own error, as `Fatal`'s source message. Panics if `err` isn't
 /// `Fail::Fatal` at all.
-fn fatal_source_message<D: std::fmt::Debug>(
-    err: &es_entity::Fail<D, es_entity::errlanes::RepoLanes>,
-) -> String {
+fn fatal_source_message<D: std::fmt::Debug>(err: &es_entity::RepoWriteError<D>) -> String {
     match err {
         es_entity::Fail::Fatal(fatal) => std::error::Error::source(fatal)
             .map(|s| s.to_string())
@@ -133,7 +131,7 @@ fn fatal_source_message<D: std::fmt::Debug>(
 
 /// [`fatal_source_message`] for a read path's `Fault`. Panics if `err` isn't
 /// `Fault::Fatal` at all.
-fn fault_source_message(err: &es_entity::Fault<es_entity::errlanes::RepoLanes>) -> String {
+fn fault_source_message(err: &es_entity::RepoReadError) -> String {
     match err {
         es_entity::Fault::Fatal(fatal) => std::error::Error::source(fatal)
             .map(|s| s.to_string())

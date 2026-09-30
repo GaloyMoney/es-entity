@@ -167,7 +167,7 @@ impl ToTokens for DeleteFn<'_> {
                 pub async fn delete(
                     &self,
                     entity: #entity
-                ) -> Result<(), errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> {
+                ) -> Result<(), es_entity::RepoWriteError<#constraint_violation>> {
                     let mut op = self.begin_op().await?;
                     let res = self.delete_in_op(&mut op, entity).await?;
                     op.commit().await?;
@@ -183,11 +183,11 @@ impl ToTokens for DeleteFn<'_> {
             pub async fn delete_in_op<OP>(&self,
                 op: &mut OP,
                 mut entity: #entity
-            ) -> Result<(), errlanes::Fail<#constraint_violation, errlanes::RepoLanes>>
+            ) -> Result<(), es_entity::RepoWriteError<#constraint_violation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> = async {
+                let __result: Result<(), es_entity::RepoWriteError<#constraint_violation>> = async {
                     #(#nested_deletes)*
                     #assignments
                     #constraint_values
@@ -275,7 +275,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -286,11 +286,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
+                let __result: Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> = async {
                     let id = &entity.id;
                     let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), };
 
@@ -372,7 +372,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -383,11 +383,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
+                let __result: Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> = async {
                     let id = &entity.id;
                     let name = &entity.name;
                     let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), name: Some((*name).clone()), };
@@ -465,7 +465,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -476,11 +476,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
+                let __result: Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> = async {
                     let id = &entity.id;
                     let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), };
 

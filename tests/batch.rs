@@ -108,7 +108,7 @@ async fn a_clean_bisect_probes_exactly_once() -> anyhow::Result<()> {
             for item in slice {
                 insert(sp, *item).await?;
             }
-            Ok::<_, errlanes::Fault<es_entity::errlanes::RepoLanes>>(())
+            Ok::<_, es_entity::RepoReadError>(())
         })
         .await?;
 
@@ -141,7 +141,7 @@ async fn a_bisect_isolates_its_culprit_and_salvages_the_siblings() -> anyhow::Re
             for item in slice {
                 insert(sp, *item).await?;
             }
-            Ok::<_, errlanes::Fault<es_entity::errlanes::RepoLanes>>(())
+            Ok::<_, es_entity::RepoReadError>(())
         })
         .await?;
 
@@ -186,7 +186,7 @@ async fn budget_exhaustion_leaves_unprobed_items_unresolved() -> anyhow::Result<
             for item in slice {
                 insert(sp, *item).await?;
             }
-            Ok::<_, errlanes::Fault<es_entity::errlanes::RepoLanes>>(())
+            Ok::<_, es_entity::RepoReadError>(())
         })
         .await?;
 
@@ -378,7 +378,7 @@ trait BatchRunner: Send + Sync {
         &self,
         op: &mut DbOp<'static>,
         items: &[i32],
-    ) -> Result<usize, errlanes::Fault<es_entity::errlanes::RepoLanes>>;
+    ) -> Result<usize, es_entity::RepoReadError>;
 }
 
 #[async_trait::async_trait]
@@ -387,7 +387,7 @@ impl BatchRunner for Runner {
         &self,
         op: &mut DbOp<'static>,
         items: &[i32],
-    ) -> Result<usize, errlanes::Fault<es_entity::errlanes::RepoLanes>> {
+    ) -> Result<usize, es_entity::RepoReadError> {
         // Borrows `&self` directly, with no owned clone, and builds a wrapper
         // context per probe.
         let isolated = op
@@ -410,7 +410,7 @@ impl BatchRunner for Runner {
                     Ok::<_, sqlx::Error>(*item)
                 })
                 .await?;
-                Ok::<_, errlanes::Fault<es_entity::errlanes::RepoLanes>>(())
+                Ok::<_, es_entity::RepoReadError>(())
             })
             .await?;
 
@@ -432,7 +432,7 @@ async fn a_closure_borrowing_self_composes_inside_an_async_trait_runner() -> any
         let mut op = DbOp::init(&pool).await?;
         let n = runner.run(&mut op, &items).await?;
         op.commit().await?;
-        Ok::<_, errlanes::Fault<es_entity::errlanes::RepoLanes>>((n, pool))
+        Ok::<_, es_entity::RepoReadError>((n, pool))
     });
 
     let (n, pool) = handle.await??;

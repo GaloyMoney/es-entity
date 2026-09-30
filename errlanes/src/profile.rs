@@ -76,8 +76,6 @@ profile!(true, true, false; Denied, Transient, Infallible);
 profile!(true, true, true; Denied, Transient, Fatal);
 
 pub type AllLanes = Profile<true, true, true>;
-/// Ordinary repositories can fail transiently or fatally, but cannot deny.
-pub type RepoLanes = Profile<false, true, true>;
 
 /// Select a subset of `Denied`, `Transient`, and `Fatal`, in any order.
 #[macro_export]

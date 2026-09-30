@@ -162,7 +162,7 @@ impl ToTokens for CreateAllFn<'_> {
 
         let post_hydrate_check = if self.post_hydrate_error.is_some() {
             quote! {
-                self.execute_post_hydrate_hook(&entity).map_err(errlanes::Fault::<errlanes::RepoLanes>::from)?;
+                self.execute_post_hydrate_hook(&entity).map_err(es_entity::RepoReadError::from)?;
             }
         } else {
             quote! {}
@@ -216,7 +216,7 @@ impl ToTokens for CreateAllFn<'_> {
                 pub async fn create_all(
                     &self,
                     new_entities: Vec<<#entity as es_entity::EsEntity>::New>
-                ) -> Result<Vec<#entity>, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> {
+                ) -> Result<Vec<#entity>, es_entity::RepoWriteError<#constraint_violation>> {
                     let mut op = self.begin_op().await?;
                     let res = self.create_all_in_op(&mut op, new_entities).await?;
                     op.commit().await?;
@@ -233,11 +233,11 @@ impl ToTokens for CreateAllFn<'_> {
                 &self,
                 op: &mut OP,
                 new_entities: Vec<<#entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<#entity>, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>>
+            ) -> Result<Vec<#entity>, es_entity::RepoWriteError<#constraint_violation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<Vec<#entity>, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> = async {
+                let __result: Result<Vec<#entity>, es_entity::RepoWriteError<#constraint_violation>> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     let mut entities = Vec::new();
@@ -354,7 +354,7 @@ mod tests {
             pub async fn create_all(
                 &self,
                 new_entities: Vec<<Entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<Entity>, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
+            ) -> Result<Vec<Entity>, es_entity::RepoWriteError<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.create_all_in_op(&mut op, new_entities).await?;
                 op.commit().await?;
@@ -365,11 +365,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 new_entities: Vec<<Entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<Entity>, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
+            ) -> Result<Vec<Entity>, es_entity::RepoWriteError<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<Vec<Entity>, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
+                let __result: Result<Vec<Entity>, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     let mut entities = Vec::new();

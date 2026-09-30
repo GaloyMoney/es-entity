@@ -528,7 +528,7 @@ impl RepositoryOptions {
 
     /// The generated `{Entity}ConstraintViolation` ident — the one repo
     /// `Rejection`. Every generated repo op returns `Result<T,
-    /// errlanes::Fail<Self::ConstraintViolation, errlanes::RepoLanes>>`.
+    /// es_entity::RepoWriteError<Self::ConstraintViolation>>`.
     pub fn constraint_violation(&self) -> syn::Ident {
         syn::Ident::new(
             &format!("{}ConstraintViolation", self.entity_ident),

@@ -2,6 +2,14 @@
 
 use thiserror::Error;
 
+/// Repository read failures: transient infrastructure faults or fatal failures.
+/// Reads cannot reject or deny; optional reads represent absence with `None`.
+pub type RepoReadError = errlanes::Fault<errlanes::lanes!(Transient, Fatal)>;
+
+/// Repository write failures, with `C` carrying the typed constraint violation.
+/// Writes may reject, fail transiently, or fail fatally, but cannot deny.
+pub type RepoWriteError<C> = errlanes::Fail<C, errlanes::lanes!(Transient, Fatal)>;
+
 /// Error type for entity hydration failures (reconstructing entities from events).
 #[derive(Error, Debug)]
 pub enum EntityHydrationError {
@@ -171,12 +179,12 @@ impl<D, L: errlanes::LaneProfile<Fatal = errlanes::Fatal>> From<NotFound> for er
 }
 
 #[doc(hidden)]
-pub fn hydration_fatal(e: EntityHydrationError) -> errlanes::Fault<errlanes::RepoLanes> {
+pub fn hydration_fatal(e: EntityHydrationError) -> crate::RepoReadError {
     errlanes::Fatal::from_error(errlanes::FatalKind::CorruptState, e).into()
 }
 
 #[doc(hidden)]
-pub fn cursor_decode_fatal(e: CursorDestructureError) -> errlanes::Fault<errlanes::RepoLanes> {
+pub fn cursor_decode_fatal(e: CursorDestructureError) -> crate::RepoReadError {
     errlanes::Fatal::from_error(errlanes::FatalKind::Config, e).into()
 }
 
@@ -185,7 +193,7 @@ pub fn not_found_fatal(
     entity: &'static str,
     column: Option<&'static str>,
     value: String,
-) -> errlanes::Fault<errlanes::RepoLanes> {
+) -> crate::RepoReadError {
     NotFound::new(entity, column, value).into()
 }
 

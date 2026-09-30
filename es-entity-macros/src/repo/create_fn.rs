@@ -164,7 +164,7 @@ impl ToTokens for CreateFn<'_> {
 
         let post_hydrate_check = if self.post_hydrate_error.is_some() {
             quote! {
-                self.execute_post_hydrate_hook(&entity).map_err(errlanes::Fault::<errlanes::RepoLanes>::from)?;
+                self.execute_post_hydrate_hook(&entity).map_err(es_entity::RepoReadError::from)?;
             }
         } else {
             quote! {}
@@ -183,7 +183,7 @@ impl ToTokens for CreateFn<'_> {
                 pub async fn create(
                     &self,
                     new_entity: <#entity as es_entity::EsEntity>::New
-                ) -> Result<#entity, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> {
+                ) -> Result<#entity, es_entity::RepoWriteError<#constraint_violation>> {
                     let mut op = self.begin_op().await?;
                     let res = self.create_in_op(&mut op, new_entity).await?;
                     op.commit().await?;
@@ -220,11 +220,11 @@ impl ToTokens for CreateFn<'_> {
                 &self,
                 op: &mut OP,
                 new_entity: <#entity as es_entity::EsEntity>::New
-            ) -> Result<#entity, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>>
+            ) -> Result<#entity, es_entity::RepoWriteError<#constraint_violation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<#entity, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> = async {
+                let __result: Result<#entity, es_entity::RepoWriteError<#constraint_violation>> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     #assignments
@@ -329,7 +329,7 @@ mod tests {
             pub async fn create(
                 &self,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
+            ) -> Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.create_in_op(&mut op, new_entity).await?;
                 op.commit().await?;
@@ -340,11 +340,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
+            ) -> Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<Entity, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
+                let __result: Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     let id = &new_entity.id;
@@ -443,7 +443,7 @@ mod tests {
             pub async fn create(
                 &self,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
+            ) -> Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.create_in_op(&mut op, new_entity).await?;
                 op.commit().await?;
@@ -454,11 +454,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
+            ) -> Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<Entity, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
+                let __result: Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     let id = &new_entity.id;

@@ -3,8 +3,8 @@
 The `find_all` function allows you to fetch multiple entities by their IDs in a single database query.
 
 ```rust,ignore
-fn find_all<Out: From<Entity>>(&self, ids: &[EntityId]) -> Result<HashMap<EntityId, Out>, errlanes::Fault<errlanes::RepoLanes>>
-fn find_all_in_op<Out: From<Entity>>(&self, op: OP, ids: &[EntityId]) -> Result<HashMap<EntityId, Out>, errlanes::Fault<errlanes::RepoLanes>>
+fn find_all<Out: From<Entity>>(&self, ids: &[EntityId]) -> Result<HashMap<EntityId, Out>, es_entity::RepoReadError>
+fn find_all_in_op<Out: From<Entity>>(&self, op: OP, ids: &[EntityId]) -> Result<HashMap<EntityId, Out>, es_entity::RepoReadError>
 ```
 
 This is more efficient than calling `find_by_id` multiple times, as it performs a single database query with `WHERE id = ANY($1)`.

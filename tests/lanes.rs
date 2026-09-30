@@ -22,7 +22,7 @@ enum NothingHoisted {
 }
 
 fn rejected(
-    err: Fail<LaneParentConstraintViolation, es_entity::errlanes::RepoLanes>,
+    err: es_entity::RepoWriteError<LaneParentConstraintViolation>,
 ) -> LaneParentConstraintViolation {
     match err {
         Fail::Rejected(cv) => cv,
@@ -99,8 +99,8 @@ async fn duplicate_nested_sku_hoists_through_the_parent_path() -> anyhow::Result
 
     // An unmapped leaf becomes Fatal(Invariant), retaining the original
     // rejection and its child constraint diagnostics in the source chain.
-    let failure: Fail<NothingHoisted, errlanes::RepoLanes> =
-        Fail::<_, errlanes::RepoLanes>::Rejected(cv).lift();
+    let failure: Fail<NothingHoisted, errlanes::lanes!(Transient, Fatal)> =
+        es_entity::RepoWriteError::<_>::Rejected(cv).lift();
     let Fail::Fatal(fatal) = failure else {
         panic!("expected invariant")
     };

@@ -64,7 +64,7 @@ impl OrderItems {
 }
 
 fn rejected(
-    err: Fail<ProfileConstraintViolation, es_entity::errlanes::RepoLanes>,
+    err: es_entity::RepoWriteError<ProfileConstraintViolation>,
 ) -> ProfileConstraintViolation {
     match err {
         Fail::Rejected(cv) => cv,
@@ -73,7 +73,7 @@ fn rejected(
 }
 
 fn rejected_user(
-    err: Fail<UserConstraintViolation, es_entity::errlanes::RepoLanes>,
+    err: es_entity::RepoWriteError<UserConstraintViolation>,
 ) -> UserConstraintViolation {
     match err {
         Fail::Rejected(cv) => cv,
@@ -82,7 +82,7 @@ fn rejected_user(
 }
 
 fn rejected_order_item(
-    err: Fail<OrderItemConstraintViolation, es_entity::errlanes::RepoLanes>,
+    err: es_entity::RepoWriteError<OrderItemConstraintViolation>,
 ) -> OrderItemConstraintViolation {
     match err {
         Fail::Rejected(cv) => cv,

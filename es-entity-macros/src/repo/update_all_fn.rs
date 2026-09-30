@@ -408,7 +408,7 @@ impl UpdateAllFn<'_> {
                     pub async fn update_all(
                         &self,
                         entities: &mut [#entity]
-                    ) -> Result<usize, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> {
+                    ) -> Result<usize, es_entity::RepoWriteError<#constraint_violation>> {
                         let mut op = self.begin_op().await?;
                         let res = self.update_all_in_op(&mut op, entities).await?;
                         op.commit().await?;
@@ -425,11 +425,11 @@ impl UpdateAllFn<'_> {
                 &self,
                 op: &mut OP,
                 #entities_param
-            ) -> Result<usize, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>>
+            ) -> Result<usize, es_entity::RepoWriteError<#constraint_violation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> = async {
+                let __result: Result<usize, es_entity::RepoWriteError<#constraint_violation>> = async {
                     use es_entity::prelude::sqlx::Row;
 
                     #entities_prelude
@@ -531,7 +531,7 @@ mod tests {
             pub async fn update_all(
                 &self,
                 entities: &mut [Entity]
-            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
+            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_all_in_op(&mut op, entities).await?;
                 op.commit().await?;
@@ -542,11 +542,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entities: &mut [Entity]
-            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
+            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
+                let __result: Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
                     use es_entity::prelude::sqlx::Row;
 
                     if entities.is_empty() {
@@ -644,11 +644,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entities: impl IntoIterator<Item = &mut Entity>
-            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
+            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
+                let __result: Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
                     use es_entity::prelude::sqlx::Row;
 
                     let mut entities: Vec<&mut Entity> = entities.into_iter().collect();
@@ -782,7 +782,7 @@ mod tests {
             pub async fn update_all(
                 &self,
                 entities: &mut [Entity]
-            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
+            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_all_in_op(&mut op, entities).await?;
                 op.commit().await?;
@@ -793,11 +793,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entities: &mut [Entity]
-            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
+            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
+                let __result: Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
                     use es_entity::prelude::sqlx::Row;
 
                     if entities.is_empty() {
@@ -848,11 +848,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entities: impl IntoIterator<Item = &mut Entity>
-            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
+            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
+                let __result: Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
                     use es_entity::prelude::sqlx::Row;
 
                     let mut entities: Vec<&mut Entity> = entities.into_iter().collect();

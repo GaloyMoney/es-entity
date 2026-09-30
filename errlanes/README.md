@@ -15,18 +15,16 @@ enum Validation {
     #[error("invalid amount")]
     InvalidAmount,
 }
-type Infra = lanes!(Transient, Fatal);
-type WriteError = Fail<Validation, Infra>;
-type ReadError = Fault<Infra>;
+type WriteError = Fail<Validation, lanes!(Transient, Fatal)>;
+type ReadError = Fault<lanes!(Transient, Fatal)>;
 type ValidationError = Fail<Validation, lanes!(Fatal)>;
 ```
 
 `R` selects the rejected payload; `L` selects the additional fault lanes.
 `Fail<R>` and `Fault` default to all three fault lanes for compatibility.
-`RepoLanes` is `lanes!(Transient, Fatal)`. Pure validation can return
-`Result<T, R>` without a carrier. Lane order is immaterial; `lanes!()` enables
-no fault lanes. Profiles are sealed: applications cannot replace a standard
-lane's payload or register arbitrary lanes.
+Pure validation can return `Result<T, R>` without a carrier. Lane order is
+immaterial; `lanes!()` enables no fault lanes. Profiles are sealed: applications
+cannot replace a standard lane's payload or register arbitrary lanes.
 
 Disabled slots contain `Infallible`. Rust still exposes their variant names,
 including in borrowed exhaustive matches:
@@ -190,10 +188,12 @@ through boxed subset carriers. They do not reflect arbitrary erased rejection
 payloads. Wrappers must expose a source chain. Fatal sources are for diagnosis
 and tests; production code handles the Fatal lane uniformly.
 
-The `sqlx` feature supplies the central SQL classifier. It requires Transient
-and Fatal, never Denied. Repositories handle known constraints before invoking
-that classifier; unknown constraints are invariants. SQLx `Protocol` remains
-Fatal(Dependency), not a retryable connection loss.
+The optional `sqlx` feature supplies the SQL classifier and conversions from
+`sqlx::Error`. It is off by default; without it, errlanes has no SQLx dependency.
+The classifier returns `Fault<lanes!(Transient, Fatal)>`; conversions require
+Transient and Fatal in the destination. Repositories handle known constraints
+before invoking that classifier; unknown constraints are invariants. SQLx
+`Protocol` remains Fatal(Dependency), not a retryable connection loss.
 
 ## Compatibility
 

@@ -401,8 +401,8 @@ pub trait EsRepo: Send {
     type Entity: EsEntity;
     /// The one repo `Rejection`: a violated database constraint the domain
     /// did not otherwise account for. Every generated write op returns
-    /// `Result<T, errlanes::Fail<Self::ConstraintViolation>>`; find/list ops
-    /// return `Result<T, errlanes::Fault>` — reads never reject, so there is
+    /// `Result<T, crate::RepoWriteError<Self::ConstraintViolation>>`; find/list ops
+    /// return `Result<T, crate::RepoReadError>` — reads never reject, so there is
     /// no `NotFound` rejection, only `Fatal`.
     type ConstraintViolation: crate::errlanes::Rejection;
     type EsQueryFlavor;
@@ -413,7 +413,7 @@ pub trait EsRepo: Send {
         rows_by_tag: &mut HashMap<i32, Vec<db::Row>>,
         tag_cursor: &mut i32,
         entities: &mut [Self::Entity],
-    ) -> Result<(), crate::errlanes::Fault<crate::errlanes::RepoLanes>>;
+    ) -> Result<(), crate::RepoReadError>;
 }
 
 pub trait RetryableInto<T>: Into<T> + Copy + std::fmt::Debug {}

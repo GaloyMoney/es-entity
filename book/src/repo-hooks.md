@@ -7,9 +7,9 @@
 | `post_persist_hook` | After events are persisted (inside the transaction) | `async fn(&self, &mut OP, &Entity, LastPersisted<Event>) -> Result<(), E>` | Auditing, side-effect recording, cross-entity writes |
 | `post_hydrate_hook` | After an entity is reconstructed from events | `fn(&self, &Entity) -> Result<(), E>` | Validation against external config, policy enforcement |
 
-Repository hooks use the repository's `RepoLanes` profile (`Transient` and `Fatal`).
-`post_persist_hook` errors must convert into `Fail<EntityConstraintViolation, RepoLanes>`;
-`post_hydrate_hook` errors must convert into `Fault<RepoLanes>` because hydration also runs
+Repository hooks use the repository error aliases, which enable `Transient` and `Fatal`.
+`post_persist_hook` errors must convert into `es_entity::RepoWriteError<EntityConstraintViolation>`;
+`post_hydrate_hook` errors must convert into `es_entity::RepoReadError` because hydration also runs
 on reads. A broader `Fault` containing `Denied` cannot narrow into either signature.
 Use `Fatal` for invalid stored state or configuration and `Transient` for retryable
 infrastructure failures. Authorization and caller-input validation belong before the
@@ -29,7 +29,7 @@ Runs after events have been written to the database but before the entity is ret
 // Explicit syntax with default error:
 #[es_repo(entity = "User", post_persist_hook(method = "on_persist"))]
 
-// Explicit syntax with a custom error, which must convert into errlanes::Fail<UserConstraintViolation, errlanes::RepoLanes>:
+// Explicit syntax with a custom error, which must convert into es_entity::RepoWriteError<UserConstraintViolation>:
 #[es_repo(entity = "User", post_persist_hook(method = "on_persist", error = "errlanes::Fatal"))]
 ```
 
@@ -65,7 +65,7 @@ The hook runs on every generated operation that persists events: `create`, `crea
 
 ### Error propagation
 
-When the hook returns an error it widens directly into the op's `errlanes::Fail<UserConstraintViolation, errlanes::RepoLanes>` — as `Fatal` (or whichever lane the hook error carries), not a separate variant:
+When the hook returns an error it widens directly into the op's `es_entity::RepoWriteError<UserConstraintViolation>` — as `Fatal` (or whichever lane the hook error carries), not a separate variant:
 
 ```rust,ignore
 match users.create(new_user).await {
@@ -86,11 +86,11 @@ Runs synchronously every time an entity is reconstructed from its event stream �
 ```rust,ignore
 #[es_repo(
     entity = "User",
-    post_hydrate_hook(method = "validate_user", error = "errlanes::Fault<errlanes::RepoLanes>")
+    post_hydrate_hook(method = "validate_user", error = "es_entity::RepoReadError")
 )]
 ```
 
-Both `method` and `error` are required; `error` must convert into `errlanes::Fault<errlanes::RepoLanes>` — see the note above.
+Both `method` and `error` are required; `error` must convert into `es_entity::RepoReadError` — see the note above.
 
 ### Hook method
 
@@ -98,7 +98,7 @@ The method is synchronous and receives a shared reference to the entity. Its fai
 
 ```rust,ignore
 impl Users {
-    fn validate_user(&self, entity: &User) -> Result<(), errlanes::Fault<errlanes::RepoLanes>> {
+    fn validate_user(&self, entity: &User) -> Result<(), es_entity::RepoReadError> {
         if entity.config_schema_version > CURRENT_SCHEMA_VERSION {
             return Err(errlanes::Fatal::new(errlanes::FatalKind::Config)
                 .with_context("user config schema v1 loaded under v2")
@@ -111,7 +111,7 @@ impl Users {
 
 ### Error propagation
 
-The error widens directly into whatever the calling op returns — `errlanes::Fail<D, errlanes::RepoLanes>` on `create`/`create_all`, `errlanes::Fault<errlanes::RepoLanes>` on `find_by_*`/`list_by_*`/`list_for_*`/`find_all` — as `Fatal` (or whichever lane the hook error carries):
+The error widens directly into whatever the calling op returns — `es_entity::RepoWriteError<D>` on `create`/`create_all`, `es_entity::RepoReadError` on `find_by_*`/`list_by_*`/`list_for_*`/`find_all` — as `Fatal` (or whichever lane the hook error carries):
 
 ```rust,ignore
 match users.find_by_id(id).await {
@@ -140,7 +140,7 @@ During `update`, only `post_persist_hook` runs — no hydration occurs because t
 #[es_repo(
     entity = "User",
     post_persist_hook(method = "audit_persist", error = "errlanes::Fatal"),
-    post_hydrate_hook(method = "validate_user", error = "errlanes::Fault<errlanes::RepoLanes>"),
+    post_hydrate_hook(method = "validate_user", error = "es_entity::RepoReadError"),
 )]
 pub struct Users {
     pool: sqlx::PgPool,

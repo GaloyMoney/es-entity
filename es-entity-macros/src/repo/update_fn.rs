@@ -291,7 +291,7 @@ impl ToTokens for UpdateFn<'_> {
                 pub async fn update(
                     &self,
                     entity: &mut #entity
-                ) -> Result<usize, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> {
+                ) -> Result<usize, es_entity::RepoWriteError<#constraint_violation>> {
                     let mut op = self.begin_op().await?;
                     let res = self.update_in_op(&mut op, entity).await?;
                     op.commit().await?;
@@ -318,11 +318,11 @@ impl ToTokens for UpdateFn<'_> {
                 &self,
                 op: &mut OP,
                 entity: &mut #entity
-            ) -> Result<usize, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>>
+            ) -> Result<usize, es_entity::RepoWriteError<#constraint_violation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> = async {
+                let __result: Result<usize, es_entity::RepoWriteError<#constraint_violation>> = async {
                     #record_id
                     #(#nested)*
 
@@ -402,7 +402,7 @@ mod tests {
             pub async fn update(
                 &self,
                 entity: &mut Entity
-            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
+            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -413,11 +413,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entity: &mut Entity
-            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
+            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
+                let __result: Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
                     if !Self::extract_events(entity).any_new() {
                         return Ok(0);
                     }
@@ -505,7 +505,7 @@ mod tests {
             pub async fn update(
                 &self,
                 entity: &mut Entity
-            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
+            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -516,11 +516,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entity: &mut Entity
-            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
+            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
+                let __result: Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
                     if !Self::extract_events(entity).any_new() {
                         return Ok(0);
                     }

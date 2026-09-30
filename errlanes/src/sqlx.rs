@@ -38,7 +38,7 @@ pub fn classify_sqlx<D, L: crate::LaneProfile<Transient = Transient, Fatal = Fat
 
 /// Same classification as [`classify_sqlx`], as a [`Fault`] rather than a
 /// `Fail<D>` — what `impl From<sqlx::Error> for Fault` delegates to.
-pub fn classify_sqlx_fault(e: ::sqlx::Error) -> Fault<crate::RepoLanes> {
+pub fn classify_sqlx_fault(e: ::sqlx::Error) -> Fault<crate::lanes!(Transient, Fatal)> {
     match e {
         ::sqlx::Error::PoolTimedOut => Transient::new(TransientKind::PoolTimeout).into(),
         ::sqlx::Error::Io(err) => Transient::new(TransientKind::ConnectionLost)

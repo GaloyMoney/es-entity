@@ -468,7 +468,7 @@ impl ToTokens for EsRepo<'_> {
                    rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
                    tag_cursor: &mut i32,
                    entities: &mut [#entity],
-               ) -> Result<(), errlanes::Fault::<errlanes::RepoLanes>>
+               ) -> Result<(), es_entity::RepoReadError>
                {
                    #(Self::#hydrate_nested_fns(rows_by_tag, tag_cursor, entities)?;)*
                    Ok(())

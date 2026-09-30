@@ -11,7 +11,7 @@ mod dynamic;
 mod fail;
 mod lane;
 pub mod profile;
-pub use profile::{AllLanes, LaneProfile, RepoLanes};
+pub use profile::{AllLanes, LaneProfile};
 
 #[cfg(feature = "sqlx")]
 pub mod sqlx;

@@ -215,7 +215,7 @@ impl ToTokens for ForgetFn<'_> {
                             .await
                         {
                             Ok(e) => e,
-                            Err(errlanes::Fault::<errlanes::RepoLanes>::Fatal(fatal)) if es_entity::fatal_is_not_found(&fatal) => {
+                            Err(es_entity::RepoReadError::Fatal(fatal)) if es_entity::fatal_is_not_found(&fatal) => {
                                 return Err(errlanes::Fail::from(
                                     errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
                                         .with_context(format!("{} vanished during forget", #table_name))
@@ -249,7 +249,7 @@ impl ToTokens for ForgetFn<'_> {
                 pub async fn forget(
                     &self,
                     entity: #entity_type
-                ) -> Result<#entity_type, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> {
+                ) -> Result<#entity_type, es_entity::RepoWriteError<#constraint_violation>> {
                     let mut op = self.begin_op().await?;
                     let entity = self.forget_in_op(&mut op, entity).await?;
                     op.commit().await?;
@@ -297,7 +297,7 @@ impl ToTokens for ForgetFn<'_> {
                 &self,
                 op: &mut OP,
                 mut entity: #entity_type
-            ) -> Result<#entity_type, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>>
+            ) -> Result<#entity_type, es_entity::RepoWriteError<#constraint_violation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
@@ -356,7 +356,7 @@ mod tests {
         // Consume-and-return: forget takes the entity by value and returns the
         // rebuilt (forgotten) entity — no `&mut`, no in-place assignment.
         assert!(output.contains(
-            "entity : Entity) -> Result < Entity , errlanes :: Fail < EntityConstraintViolation , errlanes :: RepoLanes >>"
+            "entity : Entity) -> Result < Entity , es_entity :: RepoWriteError < EntityConstraintViolation >>"
         ));
         assert!(!output.contains("& mut Entity"));
         assert!(!output.contains("* entity ="));

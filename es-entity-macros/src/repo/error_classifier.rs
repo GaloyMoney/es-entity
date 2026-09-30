@@ -112,7 +112,7 @@ fn create_write_classifier_fn(
     let index_arm = index_violation_arm(constraint_violation, events_table);
     quote! {
         #[inline(always)]
-        fn classify_create_write(e: sqlx::Error) -> errlanes::Fail<#constraint_violation, errlanes::RepoLanes> {
+        fn classify_create_write(e: sqlx::Error) -> es_entity::RepoWriteError<#constraint_violation> {
             match &e {
                 sqlx::Error::Database(db_err)
                     if db_err.is_unique_violation()
@@ -154,7 +154,7 @@ fn update_write_classifier_fn(
         fn classify_update_write(
             e: sqlx::Error,
             context: impl Into<std::borrow::Cow<'static, str>>,
-        ) -> errlanes::Fail<#constraint_violation, errlanes::RepoLanes> {
+        ) -> es_entity::RepoWriteError<#constraint_violation> {
             match &e {
                 sqlx::Error::Database(db_err)
                     if db_err.is_unique_violation()
@@ -192,7 +192,7 @@ pub fn classify_conflict_fn() -> TokenStream {
             res: Result<T, sqlx::Error>,
             events_table: &'static str,
             context: impl FnOnce() -> String,
-        ) -> Result<T, errlanes::Fail<D, errlanes::RepoLanes>> {
+        ) -> Result<T, es_entity::RepoWriteError<D>> {
             let events_table = events_table.rsplit('.').next().unwrap_or(events_table);
             match res {
                 Ok(v) => Ok(v),

@@ -100,7 +100,7 @@ impl Users {
     pub async fn update(
         &self,
         entity: &mut User
-    ) -> Result<usize, errlanes::Fail<UserConstraintViolation, errlanes::RepoLanes>> {
+    ) -> Result<usize, es_entity::RepoWriteError<UserConstraintViolation>> {
         // Check if there are any new events to persist
         if !entity.events().any_new() {
             return Ok(0);
