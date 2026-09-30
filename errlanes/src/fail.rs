@@ -1,6 +1,6 @@
 use std::{error::Error, fmt};
 
-use crate::profile::{AllLanes, LaneProfile, TransientSlot};
+use crate::profile::{AllLanes, LaneProfile, Settling};
 
 use crate::lane::{Denied, Exhausted, Fatal, Lane, Transient};
 
@@ -95,21 +95,6 @@ impl UnmappedInto<Fatal> for Fatal {
     }
 }
 
-#[doc(hidden)]
-pub trait ExhaustionInto<F> {
-    fn exhaustion_into(self) -> F;
-}
-impl<F> ExhaustionInto<F> for core::convert::Infallible {
-    fn exhaustion_into(self) -> F {
-        match self {}
-    }
-}
-impl ExhaustionInto<Fatal> for Exhausted {
-    fn exhaustion_into(self) -> Fatal {
-        Fatal::from_error(crate::FatalKind::Exhausted, self)
-    }
-}
-
 /// `Fail` minus the `Rejected` lane: what an operation that cannot reject
 /// (nothing about it is the caller's to correct) returns. Reads return
 /// `Fault<L>`; writes return `Fail<{Entity}ConstraintViolation, L>` — the type
@@ -134,22 +119,28 @@ impl<L: LaneProfile> Fault<L> {
         matches!(self, Fault::Transient(_))
     }
 
-    /// Consumes the `Transient` lane. `attempts` is what the retry loop
-    /// counted.
-    pub fn settle(self, attempts: u32) -> SettledFault<L> {
+    /// Consumes the `Transient` lane, yielding the same profile with its
+    /// transient slot disabled. `attempts` is what the retry loop counted; an
+    /// exhausted transient becomes `Fatal(Exhausted)` with the last transient
+    /// as its source.
+    pub fn settle(self, attempts: u32) -> Fault<crate::profile::Settled<L>>
+    where
+        L::Transient: Settling<L::Fatal>,
+    {
         match self {
-            Fault::Denied(d) => SettledFault::Denied(d),
-            Fault::Transient(last) => SettledFault::Exhausted(last.settle(attempts)),
-            Fault::Fatal(f) => SettledFault::Fatal(f),
+            Fault::Denied(d) => Fault::Denied(d),
+            Fault::Transient(last) => Fault::Fatal(last.settling(attempts)),
+            Fault::Fatal(f) => Fault::Fatal(f),
         }
     }
 }
 
-/// Borrowed lane accessors. A *by-value* match names only the lanes a profile
-/// enables, but a borrowed match still demands an arm for every variant. These
-/// accessors are the borrowed form, so no caller has to write `match *never {}`.
-/// Each exists only when the profile enables that lane, so `as_denied` on a
-/// no-denial profile is a compile error rather than a permanent `None`.
+/// Borrowed lane accessors. `min_exhaustive_patterns` lets a *by-value* match
+/// name only the lanes a profile enables, but a borrowed match still demands an
+/// arm for every variant. These accessors are the borrowed form, so no caller
+/// ever has to write a `match *never {}` arm. Each is available only when the
+/// profile enables that lane, so `e.as_denied()` on a no-denial profile is a
+/// compile error rather than a permanent `None`.
 impl<L: LaneProfile<Denied = Denied>> Fault<L> {
     pub fn as_denied(&self) -> Option<&Denied> {
         match self {
@@ -280,55 +271,6 @@ where
     }
 }
 
-/// `Fault<L>` after retries have run: no `Transient` arm.
-#[derive(Debug, Clone)]
-pub enum SettledFault<L: LaneProfile = AllLanes> {
-    Denied(L::Denied),
-    Exhausted(<L::Transient as TransientSlot>::Exhausted),
-    Fatal(L::Fatal),
-}
-
-impl<L: LaneProfile> SettledFault<L> {
-    /// `Exhausted` reports as `Lane::Fatal`, as `Settled::lane` does.
-    pub fn lane(&self) -> Lane {
-        match self {
-            SettledFault::Denied(_) => Lane::Denied,
-            SettledFault::Exhausted(_) => Lane::Fatal,
-            SettledFault::Fatal(_) => Lane::Fatal,
-        }
-    }
-}
-
-impl<L: LaneProfile> fmt::Display for SettledFault<L> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SettledFault::Denied(d) => write!(f, "{d}"),
-            SettledFault::Exhausted(e) => write!(f, "{e}"),
-            SettledFault::Fatal(x) => write!(f, "{x}"),
-        }
-    }
-}
-
-impl<L: LaneProfile> Error for SettledFault<L> {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            SettledFault::Denied(d) => Some(d),
-            SettledFault::Exhausted(e) => Some(e),
-            SettledFault::Fatal(x) => Some(x),
-        }
-    }
-}
-
-impl<D, L: LaneProfile> From<SettledFault<L>> for Settled<D, L> {
-    fn from(f: SettledFault<L>) -> Self {
-        match f {
-            SettledFault::Denied(d) => Settled::Denied(d),
-            SettledFault::Exhausted(e) => Settled::Exhausted(e),
-            SettledFault::Fatal(x) => Settled::Fatal(x),
-        }
-    }
-}
-
 /// The generic view over a domain rejection `D`, before retries have run.
 ///
 /// **Display discipline**: [`Display`](fmt::Display)'s `Rejected` arm keeps
@@ -343,16 +285,6 @@ pub enum Fail<D, L: LaneProfile = AllLanes> {
     Rejected(D),
     Denied(L::Denied),
     Transient(L::Transient),
-    Fatal(L::Fatal),
-}
-
-/// The view over a domain rejection `D` after retries have run: no
-/// `Transient` arm, so nothing downstream can forget to handle it.
-#[derive(Debug, Clone)]
-pub enum Settled<D, L: LaneProfile = AllLanes> {
-    Rejected(D),
-    Denied(L::Denied),
-    Exhausted(<L::Transient as TransientSlot>::Exhausted),
     Fatal(L::Fatal),
 }
 
@@ -454,48 +386,19 @@ impl<D, L: LaneProfile> Fail<D, L> {
 
     /// Consumes the `Transient` lane. `attempts` is what the retry loop
     /// counted.
-    pub fn settle(self, attempts: u32) -> Settled<D, L> {
-        match self {
-            Fail::Rejected(d) => Settled::Rejected(d),
-            Fail::Denied(d) => Settled::Denied(d),
-            Fail::Transient(last) => Settled::Exhausted(last.settle(attempts)),
-            Fail::Fatal(f) => Settled::Fatal(f),
-        }
-    }
-}
-
-impl<D, L: LaneProfile> Settled<D, L> {
-    /// `Exhausted` reports as `Lane::Fatal` — by the time retries are done,
-    /// it pages just like any other fatal outcome.
-    pub fn lane(&self) -> Lane {
-        match self {
-            Settled::Rejected(_) => Lane::Rejected,
-            Settled::Denied(_) => Lane::Denied,
-            Settled::Exhausted(_) => Lane::Fatal,
-            Settled::Fatal(_) => Lane::Fatal,
-        }
-    }
-
-    pub fn rejected(self) -> Result<D, SettledFault<L>> {
-        match self {
-            Settled::Rejected(d) => Ok(d),
-            Settled::Denied(d) => Err(SettledFault::Denied(d)),
-            Settled::Exhausted(e) => Err(SettledFault::Exhausted(e)),
-            Settled::Fatal(f) => Err(SettledFault::Fatal(f)),
-        }
-    }
-
-    pub fn into_fail<M: LaneProfile>(self) -> Fail<D, M>
+    /// Consumes the `Transient` lane, yielding the same rejection over `L`
+    /// with its transient slot disabled. An exhausted transient becomes
+    /// `Fatal(Exhausted)`, carrying `attempts` and the last transient as its
+    /// source.
+    pub fn settle(self, attempts: u32) -> Fail<D, crate::profile::Settled<L>>
     where
-        L::Denied: Into<M::Denied>,
-        L::Fatal: Into<M::Fatal>,
-        <L::Transient as TransientSlot>::Exhausted: ExhaustionInto<M::Fatal>,
+        L::Transient: Settling<L::Fatal>,
     {
         match self {
-            Self::Rejected(d) => Fail::Rejected(d),
-            Self::Denied(d) => Fail::Denied(d.into()),
-            Self::Exhausted(e) => Fail::Fatal(e.exhaustion_into()),
-            Self::Fatal(f) => Fail::Fatal(f.into()),
+            Fail::Rejected(d) => Fail::Rejected(d),
+            Fail::Denied(d) => Fail::Denied(d),
+            Fail::Transient(last) => Fail::Fatal(last.settling(attempts)),
+            Fail::Fatal(f) => Fail::Fatal(f),
         }
     }
 }
@@ -583,28 +486,6 @@ impl<D: Error + 'static, L: LaneProfile> Error for Fail<D, L> {
     }
 }
 
-impl<D: fmt::Display, L: LaneProfile> fmt::Display for Settled<D, L> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Settled::Rejected(d) => write!(f, "rejected: {d}"),
-            Settled::Denied(d) => write!(f, "{d}"),
-            Settled::Exhausted(e) => write!(f, "{e}"),
-            Settled::Fatal(x) => write!(f, "{x}"),
-        }
-    }
-}
-
-impl<D: Error + 'static, L: LaneProfile> Error for Settled<D, L> {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Settled::Rejected(d) => Some(d),
-            Settled::Denied(d) => Some(d),
-            Settled::Exhausted(e) => Some(e),
-            Settled::Fatal(x) => Some(x),
-        }
-    }
-}
-
 /// Implemented by per-crate carrier newtypes, typically via
 /// `#[derive(errlanes::Failure)]`. Generic machinery (retry, boundary
 /// recorders) is written against this, not against `Fail<D, L>` directly.
@@ -664,8 +545,15 @@ pub trait Laned: sealed::Sealed + Error + Send + Sync + 'static + Sized {
     fn settle(self, attempts: u32) -> Self::Settled;
 }
 
-impl<F: Failure> Laned for F {
-    type Settled = Settled<F::Rejection, F::Lanes>;
+/// Note the `Settling` bound: a profile that admits `Transient` but not
+/// `Fatal` is not `Laned`, so `retry` cannot be handed one. Retrying an
+/// operation that claims it can never fail permanently is exactly the
+/// contradiction the bound rules out.
+impl<F: Failure> Laned for F
+where
+    <F::Lanes as LaneProfile>::Transient: Settling<<F::Lanes as LaneProfile>::Fatal>,
+{
+    type Settled = Fail<F::Rejection, crate::profile::Settled<F::Lanes>>;
 
     fn lane(&self) -> Lane {
         Failure::lane(self)
@@ -676,8 +564,11 @@ impl<F: Failure> Laned for F {
     }
 }
 
-impl<L: LaneProfile> Laned for Fault<L> {
-    type Settled = SettledFault<L>;
+impl<L: LaneProfile> Laned for Fault<L>
+where
+    L::Transient: Settling<L::Fatal>,
+{
+    type Settled = Fault<crate::profile::Settled<L>>;
 
     fn lane(&self) -> Lane {
         Fault::lane(self)
@@ -859,15 +750,22 @@ mod tests {
     fn settle_turns_transient_into_exhausted_and_leaves_everything_else_alone() {
         let t: Fail<Small> = Transient::new(TransientKind::Deadlock).into();
         match t.settle(3) {
-            Settled::Exhausted(e) => assert_eq!(e.attempts, 3),
-            other => panic!("expected Exhausted, got {other:?}"),
+            Fail::Fatal(f) => {
+                assert_eq!(f.kind, FatalKind::Exhausted);
+                let e = Error::source(&f)
+                    .and_then(|s| s.downcast_ref::<Exhausted>())
+                    .expect("exhaustion is the fatal's source");
+                assert_eq!(e.attempts, 3);
+                assert_eq!(e.last.kind, TransientKind::Deadlock);
+            }
+            other => panic!("expected Fatal(Exhausted), got {other:?}"),
         }
 
         let r: Fail<Small> = Fail::Rejected(Small);
-        assert!(matches!(r.settle(1), Settled::Rejected(Small)));
+        assert!(matches!(r.settle(1), Fail::Rejected(Small)));
 
         let fatal: Fail<Small> = Fatal::new(FatalKind::Config).into();
-        assert!(matches!(fatal.settle(1), Settled::Fatal(_)));
+        assert!(matches!(fatal.settle(1), Fail::Fatal(_)));
     }
 
     #[test]
@@ -902,10 +800,21 @@ mod tests {
 
     #[test]
     fn laned_settle_agrees_between_fail_and_fault() {
+        fn exhausted_attempts(e: &(dyn Error + 'static)) -> u32 {
+            e.source()
+                .and_then(|s| s.downcast_ref::<Exhausted>())
+                .expect("exhaustion is the fatal's source")
+                .attempts
+        }
+
         let t: Fail<Small> = Transient::new(TransientKind::Deadlock).into();
-        assert!(matches!(Laned::settle(t, 2), Settled::Exhausted(e) if e.attempts == 2));
+        let settled: Fail<Small, crate::profile::Settled<AllLanes>> = Laned::settle(t, 2);
+        assert_eq!(settled.lane(), Lane::Fatal);
+        assert_eq!(exhausted_attempts(settled.as_fatal().unwrap()), 2);
 
         let t: Fault = Transient::new(TransientKind::Deadlock).into();
-        assert!(matches!(Laned::settle(t, 2), SettledFault::Exhausted(e) if e.attempts == 2));
+        let settled: Fault<crate::profile::Settled<AllLanes>> = Laned::settle(t, 2);
+        assert_eq!(settled.lane(), Lane::Fatal);
+        assert_eq!(exhausted_attempts(settled.as_fatal().unwrap()), 2);
     }
 }

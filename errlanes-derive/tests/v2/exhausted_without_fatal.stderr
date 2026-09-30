@@ -1,5 +1,21 @@
-error[E0271]: type mismatch resolving `<Profile<false, true, false> as LaneProfile>::Fatal == Fatal`
-  --> tests/v2/exhausted_without_fatal.rs:10:53
+error[E0277]: the trait bound `errlanes::Transient: errlanes::profile::Settling<Infallible>` is not satisfied
+  --> tests/v2/exhausted_without_fatal.rs:16:6
    |
-10 |     let _: Fail<Child, lanes!(Transient)> = settled.into_fail();
-   |                                                     ^^^^^^^^^ expected `Fatal`, found `Infallible`
+16 |     .settle(2);
+   |      ^^^^^^ the trait `errlanes::profile::Settling<Infallible>` is not implemented for `errlanes::Transient`
+   |
+help: the trait `Settling<Infallible>` is not implemented for `errlanes::Transient`
+      but trait `Settling<errlanes::Fatal>` is implemented for it
+  --> $WORKSPACE/errlanes/src/profile.rs
+   |
+   | impl Settling<Fatal> for Transient {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for that trait implementation, expected `errlanes::Fatal`, found `Infallible`
+note: required by a bound in `Fail::<D, L>::settle`
+  --> $WORKSPACE/errlanes/src/fail.rs
+   |
+   |     pub fn settle(self, attempts: u32) -> Fail<D, crate::profile::Settled<L>>
+   |            ------ required by a bound in this associated function
+   |     where
+   |         L::Transient: Settling<L::Fatal>,
+   |                       ^^^^^^^^^^^^^^^^^^ required by this bound in `Fail::<D, L>::settle`

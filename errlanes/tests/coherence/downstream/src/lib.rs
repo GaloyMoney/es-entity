@@ -92,11 +92,14 @@ pub fn smoke() {
     let settled = rt.block_on(errlanes::retry(&policy, || async {
         upstream_transient_call()
     }));
+    // A settled failure has no transient arm at all, so the match names only
+    // the lanes that can still occur. Exhaustion arrives in the fatal lane,
+    // tagged `FatalKind::Exhausted` and carrying the last transient as source.
     let lane = match settled {
-        Err(errlanes::Settled::Rejected(_)) => "rejected",
-        Err(errlanes::Settled::Denied(_)) => "denied",
-        Err(errlanes::Settled::Exhausted(_)) => "exhausted",
-        Err(errlanes::Settled::Fatal(_)) => "fatal",
+        Err(errlanes::Fail::Rejected(_)) => "rejected",
+        Err(errlanes::Fail::Denied(_)) => "denied",
+        Err(errlanes::Fail::Fatal(f)) if f.kind == errlanes::FatalKind::Exhausted => "exhausted",
+        Err(errlanes::Fail::Fatal(_)) => "fatal",
         Ok(()) => "ok",
     };
     assert_eq!(lane, "exhausted");
@@ -105,9 +108,9 @@ pub fn smoke() {
     // compiles via `Laned` and settles into `SettledFault`.
     let settled_fault = rt.block_on(errlanes::retry(&policy, || fake_find_by_id(true)));
     let lane = match settled_fault {
-        Err(errlanes::SettledFault::Denied(_)) => "denied",
-        Err(errlanes::SettledFault::Exhausted(_)) => "exhausted",
-        Err(errlanes::SettledFault::Fatal(_)) => "fatal",
+        Err(errlanes::Fault::Denied(_)) => "denied",
+        Err(errlanes::Fault::Fatal(f)) if f.kind == errlanes::FatalKind::Exhausted => "exhausted",
+        Err(errlanes::Fault::Fatal(_)) => "fatal",
         Ok(()) => "ok",
     };
     assert_eq!(lane, "exhausted");

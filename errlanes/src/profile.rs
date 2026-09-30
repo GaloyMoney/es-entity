@@ -25,24 +25,33 @@ macro_rules! disabled {
 }
 disabled!(Denied, Transient, Fatal, Exhausted);
 
+/// How a transient slot is consumed when retries stop: an enabled `Transient`
+/// becomes `Fatal(Exhausted)` carrying the attempt count and the last transient
+/// as its source; a disabled slot has no value to consume.
+///
+/// There is deliberately no `Settling<Infallible> for Transient`: a profile
+/// that admits `Transient` but not `Fatal` claims an operation can be retried
+/// but can never fail permanently, which is not true of anything worth
+/// retrying. Such a profile is therefore not settleable, and — through the
+/// [`crate::Laned`] impls — not retryable either.
 #[doc(hidden)]
-pub trait TransientSlot: Slot<Transient> {
-    type Exhausted: Slot<Exhausted>;
-    fn settle(self, attempts: u32) -> Self::Exhausted;
+pub trait Settling<F> {
+    fn settling(self, attempts: u32) -> F;
 }
-impl TransientSlot for Transient {
-    type Exhausted = Exhausted;
-    fn settle(self, attempts: u32) -> Exhausted {
-        Exhausted {
-            attempts,
-            last: self,
-        }
+impl<F> Settling<F> for Infallible {
+    fn settling(self, _: u32) -> F {
+        match self {}
     }
 }
-impl TransientSlot for Infallible {
-    type Exhausted = Infallible;
-    fn settle(self, _: u32) -> Infallible {
-        match self {}
+impl Settling<Fatal> for Transient {
+    fn settling(self, attempts: u32) -> Fatal {
+        Fatal::from_error(
+            crate::FatalKind::Exhausted,
+            Exhausted {
+                attempts,
+                last: self,
+            },
+        )
     }
 }
 
@@ -50,8 +59,12 @@ impl TransientSlot for Infallible {
 /// established markers. Use [`crate::lanes!`] to select a subset.
 pub trait LaneProfile: sealed::Sealed + Debug + Clone + Send + Sync + 'static {
     type Denied: Slot<Denied>;
-    type Transient: TransientSlot;
+    type Transient: Slot<Transient>;
     type Fatal: Slot<Fatal>;
+
+    /// This profile with the transient lane consumed. `Fail<D, L::Settled>` is
+    /// what `settle`/`retry` hand back, and is what [`crate::Settled`] aliases.
+    type Settled: LaneProfile<Denied = Self::Denied, Transient = Infallible, Fatal = Self::Fatal>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -63,6 +76,7 @@ macro_rules! profile {
             type Denied = $denied;
             type Transient = $transient;
             type Fatal = $fatal;
+            type Settled = Profile<$d, false, $f>;
         }
     };
 }
@@ -76,6 +90,13 @@ profile!(true, true, false; Denied, Transient, Infallible);
 profile!(true, true, true; Denied, Transient, Fatal);
 
 pub type AllLanes = Profile<true, true, true>;
+
+/// `L` with its transient lane consumed — an adjective on the *profile*, not a
+/// second carrier enum. `Fail<R, Settled<L>>` and `Fault<Settled<L>>` are what
+/// `settle`/`retry` return: ordinary `Fail`/`Fault` values whose `Transient`
+/// slot is uninhabited, so a by-value match names only the lanes that remain
+/// and an exhausted retry arrives as `Fatal(Exhausted)`.
+pub type Settled<L> = <L as LaneProfile>::Settled;
 
 /// Select a subset of `Denied`, `Transient`, and `Fatal`, in any order.
 #[macro_export]

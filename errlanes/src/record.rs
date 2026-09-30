@@ -1,4 +1,4 @@
-use crate::fail::{Fail, Fault, Level, Rejection, Settled, SettledFault};
+use crate::fail::{Fail, Fault, Level, Rejection};
 use crate::profile::{LaneProfile, Slot};
 
 /// Span fields a boundary span must declare as `tracing::field::Empty` for
@@ -90,53 +90,10 @@ pub fn record_fault<L: LaneProfile>(span: &tracing::Span, f: &Fault<L>) {
     }
 }
 
-/// [`record`] for a [`SettledFault`].
-pub fn record_settled_fault<L: LaneProfile>(span: &tracing::Span, f: &SettledFault<L>) {
-    span.record("error", true);
-    span.record("error.lane", f.lane().as_str());
-    match f {
-        SettledFault::Denied(_) => {
-            span.record("error.code", "FORBIDDEN");
-            span.record("error.level", "WARN");
-        }
-        SettledFault::Exhausted(_) => {
-            span.record("error.code", "EXHAUSTED");
-            span.record("error.level", "ERROR");
-            span.record("exception.message", f.to_string());
-            span.record("exception.type", "EXHAUSTED");
-        }
-        SettledFault::Fatal(x) => {
-            span.record("error.code", x.marker().kind.as_str());
-            span.record("error.level", "ERROR");
-            span.record("exception.message", f.to_string());
-            span.record("exception.type", x.marker().kind.as_str());
-        }
-    }
-}
-
-pub fn record<D: Rejection, L: LaneProfile>(span: &tracing::Span, f: &Settled<D, L>) {
-    span.record("error", true);
-    span.record("error.lane", f.lane().as_str());
-    match f {
-        Settled::Rejected(d) => {
-            span.record("error.code", Into::<&'static str>::into(d.code()));
-            span.record("error.level", level_str(d.level()));
-        }
-        Settled::Denied(_) => {
-            span.record("error.code", "FORBIDDEN");
-            span.record("error.level", "WARN");
-        }
-        Settled::Exhausted(_) => {
-            span.record("error.code", "EXHAUSTED");
-            span.record("error.level", "ERROR");
-            span.record("exception.message", f.to_string());
-            span.record("exception.type", "EXHAUSTED");
-        }
-        Settled::Fatal(x) => {
-            span.record("error.code", x.marker().kind.as_str());
-            span.record("error.level", "ERROR");
-            span.record("exception.message", f.to_string());
-            span.record("exception.type", x.marker().kind.as_str());
-        }
-    }
-}
+/// `record` and `record_settled_fault` are gone: a settled failure *is* a
+/// `Fail`/`Fault` whose transient slot is disabled, so [`record_fail`] and
+/// [`record_fault`] cover it. An exhausted retry records through the `Fatal`
+/// arm as `error.code = "exhausted"` (`FatalKind::Exhausted`), which is also
+/// what the separate `"EXHAUSTED"` string used to mean — now spelled
+/// consistently with `invariant` / `config` / `corrupt_state`.
+pub use record_fail as record;

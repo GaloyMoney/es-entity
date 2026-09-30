@@ -1,11 +1,17 @@
 #![allow(unused_imports)]
-use errlanes::{Fail, Fatal, Denied, lanes};
+use errlanes::{Denied, Fail, Fatal, lanes};
 #[derive(Debug, thiserror::Error, errlanes::Rejection)]
 enum Child {
-    #[error("one {0}")] One(u32),
-    #[error("two")] Two,
+    #[error("one {0}")]
+    One(u32),
+    #[error("two")]
+    Two,
 }
 fn main() {
-    let settled = Fail::<Child, lanes!(Transient)>::Transient(errlanes::Transient::new(errlanes::TransientKind::Deadlock)).settle(2);
-    let _: Fail<Child, lanes!(Transient)> = settled.into_fail();
+    // A profile with Transient but no Fatal has nowhere to put an exhausted
+    // retry, so it cannot be settled (and `Laned`, hence `retry`, excludes it).
+    let _ = Fail::<Child, lanes!(Transient)>::Transient(errlanes::Transient::new(
+        errlanes::TransientKind::Deadlock,
+    ))
+    .settle(2);
 }

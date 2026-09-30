@@ -116,20 +116,23 @@ fn strict_lift_needs_no_fatal_lane() {
     ));
     let source: Fail<Child, lanes!()> = Fail::Rejected(Child::Unit);
     let lifted: Fail<Parent, lanes!()> = source.lift();
-    let restored: Fail<Parent, lanes!()> = lifted.settle(1).into_fail();
+    // Settling a profile with no transient lane is the identity on the value,
+    // and its type is already a `Fail` -- there is nothing to convert back.
+    let restored: Fail<Parent, lanes!()> = lifted.settle(1);
     assert!(matches!(restored, Fail::Rejected(Parent::Unit)));
 }
 #[test]
-fn borrowed_no_transient_settlement_is_exhaustive() {
-    fn inspect(value: &Settled<Child, lanes!(Fatal)>) -> Lane {
-        match value {
-            Settled::Rejected(_) => Lane::Rejected,
-            Settled::Fatal(_) => Lane::Fatal,
-            Settled::Denied(never) | Settled::Exhausted(never) => match *never {},
-        }
+fn borrowed_settlement_needs_no_uninhabited_arms() {
+    // `lane()` and the borrowed accessors cover every borrowed inspection, so
+    // no caller writes `match *never {}`.
+    fn inspect(value: &Fail<Child, Settled<lanes!(Fatal)>>) -> Lane {
+        value.lane()
     }
     let value: Fail<Child, lanes!(Fatal)> = Fatal::invariant("broken").into();
-    assert_eq!(inspect(&value.settle(1)), Lane::Fatal);
+    let settled = value.settle(1);
+    assert_eq!(inspect(&settled), Lane::Fatal);
+    assert!(settled.as_fatal().is_some());
+    assert!(settled.as_rejected().is_none());
 }
 #[test]
 fn widening_preserves_transient_details_and_boxed_marker() {
@@ -139,15 +142,17 @@ fn widening_preserves_transient_details_and_boxed_marker() {
         .into();
     let widened: Fail<Parent, lanes!(Fatal, Transient)> = original.widen();
     assert_eq!(errlanes::lane_of(&widened), Some(Lane::Transient));
-    let settled = widened.settle(3);
-    let Settled::Exhausted(ref e) = settled else {
-        panic!("expected exhaustion")
-    };
+    let settled: Fail<Parent, lanes!(Fatal)> = widened.settle(3);
+    let fatal = settled.as_fatal().expect("expected exhaustion");
+    assert_eq!(fatal.kind, errlanes::FatalKind::Exhausted);
+    let e = fatal
+        .source()
+        .and_then(|s| s.downcast_ref::<errlanes::Exhausted>())
+        .expect("exhaustion is the fatal's source");
     assert_eq!(e.attempts, 3);
     assert_eq!(e.last.kind, TransientKind::Deadlock);
     assert!(e.last.source().unwrap().is::<std::io::Error>());
-    let carrier: Fail<Parent, lanes!(Fatal)> = settled.into_fail();
-    let boxed: Box<dyn Error + Send + Sync> = Box::new(carrier);
+    let boxed: Box<dyn Error + Send + Sync> = Box::new(settled);
     assert_eq!(errlanes::lane_of(boxed.as_ref()), Some(Lane::Fatal));
 }
 #[test]
@@ -178,7 +183,10 @@ async fn retry_respects_subset_and_preserves_retry_after() {
         || {
             attempts.set(attempts.get() + 1);
             async {
-                Err::<(), Fail<Child, lanes!(Transient)>>(
+                // `lanes!(Transient)` alone is no longer retryable: settling it
+                // would have nowhere to put the exhaustion. Anything worth
+                // retrying can fail permanently, so it must admit Fatal.
+                Err::<(), Fail<Child, lanes!(Transient, Fatal)>>(
                     Transient::new(TransientKind::Deadlock)
                         .with_retry_after(Duration::from_millis(7))
                         .into(),
@@ -192,7 +200,16 @@ async fn retry_respects_subset_and_preserves_retry_after() {
         },
     )
     .await;
-    assert!(matches!(result, Err(Settled::Exhausted(e)) if e.attempts == 3));
+    let fatal = result.as_ref().unwrap_err().as_fatal().unwrap();
+    assert_eq!(fatal.kind, errlanes::FatalKind::Exhausted);
+    assert_eq!(
+        fatal
+            .source()
+            .and_then(|s| s.downcast_ref::<errlanes::Exhausted>())
+            .unwrap()
+            .attempts,
+        3
+    );
     assert_eq!(attempts.get(), 3);
     assert_eq!(sleeps.get(), 2);
     let result = errlanes::retry_with(
@@ -203,7 +220,7 @@ async fn retry_respects_subset_and_preserves_retry_after() {
         |_| async { panic!("a fatal-only profile cannot retry") },
     )
     .await;
-    assert!(matches!(result, Err(Settled::Fatal(_))));
+    assert!(matches!(result, Err(Fail::Fatal(_))));
 }
 
 #[test]

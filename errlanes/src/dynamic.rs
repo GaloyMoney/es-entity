@@ -50,9 +50,13 @@ impl<D: crate::fail::Rejection> Classify for crate::fail::Fail<D> {
     }
 }
 
-impl<D: crate::fail::Rejection> Classify for crate::fail::Settled<D> {
+impl<D: crate::fail::Rejection> Classify
+    for crate::fail::Fail<D, crate::profile::Settled<crate::AllLanes>>
+{
     fn lane(&self) -> Lane {
-        crate::fail::Settled::lane(self)
+        // `Settled<D>` *is* a `Fail`, so this is `Fail::lane`. Naming the alias
+        // here would ask rustc to invert the `LaneProfile::Settled` projection.
+        crate::fail::Fail::lane(self)
     }
 }
 
@@ -62,9 +66,9 @@ impl Classify for crate::fail::Fault {
     }
 }
 
-impl Classify for crate::fail::SettledFault {
+impl Classify for crate::fail::Fault<crate::profile::Settled<crate::AllLanes>> {
     fn lane(&self) -> Lane {
-        crate::fail::SettledFault::lane(self)
+        crate::fail::Fault::lane(self)
     }
 }
 
