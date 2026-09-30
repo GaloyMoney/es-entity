@@ -133,24 +133,26 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             };
             arms.push(quote! { #(#cfg)* #arm });
         }
-        let (unmapped, fallback) = if registration.partial {
-            (quote!(#source), quote!(unhandled => Err(unhandled)))
-        } else {
-            (quote!(core::convert::Infallible), quote!())
-        };
-        out.extend(quote! {
-            impl #impl_generics errlanes::Lift<#source> for #name #ty_generics #where_clause {
-                type Unmapped = #unmapped;
-                fn lift(source: #source) -> Result<Self, Self::Unmapped> {
-                    match source { #(#arms,)* #fallback }
+        // Strict mode emits only `From`: errlanes' blanket `impl<X, P: From<X>>
+        // Lift<X> for P` supplies the `Lift` view with `Unmapped = Infallible`,
+        // so one call-site method (`widen`) covers strict and partial alike.
+        // Emitting both here would collide with that blanket (E0119).
+        if registration.partial {
+            out.extend(quote! {
+                impl #impl_generics errlanes::Lift<#source> for #name #ty_generics #where_clause {
+                    type Unmapped = #source;
+                    fn lift(source: #source) -> Result<Self, Self::Unmapped> {
+                        match source { #(#arms,)* unhandled => Err(unhandled) }
+                    }
                 }
-            }
-        });
-        if !registration.partial {
+            });
+        } else {
             out.extend(quote! {
                 impl #impl_generics From<#source> for #name #ty_generics #where_clause {
                     fn from(source: #source) -> Self {
-                        match <Self as errlanes::Lift<#source>>::lift(source) {
+                        let mapped: Result<Self, core::convert::Infallible> =
+                            match source { #(#arms,)* };
+                        match mapped {
                             Ok(mapped) => mapped, Err(never) => match never {},
                         }
                     }

@@ -1,4 +1,4 @@
-use errlanes::{Fail, Level, LiftResult, Rejection, WidenResult, lanes};
+use errlanes::{Fail, Level, Rejection, WidenResult, lanes};
 
 use std::error::Error;
 
@@ -56,7 +56,7 @@ fn whole_family_and_partial_mapping_keep_their_own_modes() {
 
     let accepted: Result<(), Fail<Constraint, lanes!(Transient, Fatal)>> =
         Err(Fail::Rejected(Constraint::Code("USD".into())));
-    let result: Result<(), Fail<Operation, lanes!(Transient, Fatal)>> = accepted.lift();
+    let result: Result<(), Fail<Operation, lanes!(Transient, Fatal)>> = accepted.widen();
     let mapped = result.unwrap_err().rejected().unwrap();
     assert!(matches!(&mapped, Operation::CodeAlreadyExists(value) if value == "USD"));
     assert_eq!(
@@ -67,7 +67,7 @@ fn whole_family_and_partial_mapping_keep_their_own_modes() {
 
     let unaccepted: Result<(), Fail<Constraint, lanes!(Fatal)>> =
         Err(Fail::Rejected(Constraint::Pkey));
-    let result: Result<(), Fail<Operation, lanes!(Fatal)>> = unaccepted.lift();
+    let result: Result<(), Fail<Operation, lanes!(Fatal)>> = unaccepted.widen();
     let error = result.unwrap_err();
     assert!(matches!(error, Fail::Fatal(_)));
     let mut source: &dyn Error = &error;

@@ -608,27 +608,14 @@ where
     }
 }
 
-impl<T, R, P: From<R>, L: LaneProfile, M: LaneProfile> WidenResult<T, Fail<P, M>>
-    for Result<T, Fail<R, L>>
-where
-    L::Denied: Into<M::Denied>,
-    L::Transient: Into<M::Transient>,
-    L::Fatal: Into<M::Fatal>,
-{
-    fn widen(self) -> Result<T, Fail<P, M>> {
-        self.map_err(Fail::widen)
-    }
-}
-
-/// Target-inferred rejection lifting for results containing [`Fail`].
-///
-/// Partial mappings require Fatal in the destination and preserve an unmapped
-/// rejection as the source of a fatal invariant. Strict mappings also work here.
-pub trait LiftResult<T, E>: Sized {
-    fn lift(self) -> Result<T, E>;
-}
-
-impl<T, R, P: Lift<R>, L: LaneProfile, M: LaneProfile> LiftResult<T, Fail<P, M>>
+/// One rule for every rejection remapping. `P: Lift<R>` is satisfied by a total
+/// `From<R>` (through errlanes' blanket, `Unmapped = Infallible`) and by a
+/// partial `#[lift(Source, unhandled = fatal)]` mapping (`Unmapped = Source`).
+/// The `UnmappedInto` bound then enforces, per destination, exactly what each
+/// mode needs: a total mapping works into any profile, while a partial one
+/// requires the destination to admit `Fatal`. The strict/partial choice is
+/// declared once on the destination enum, so the call site does not repeat it.
+impl<T, R, P: Lift<R>, L: LaneProfile, M: LaneProfile> WidenResult<T, Fail<P, M>>
     for Result<T, Fail<R, L>>
 where
     L::Denied: Into<M::Denied>,
@@ -636,7 +623,7 @@ where
     L::Fatal: Into<M::Fatal>,
     P::Unmapped: UnmappedInto<M::Fatal>,
 {
-    fn lift(self) -> Result<T, Fail<P, M>> {
+    fn widen(self) -> Result<T, Fail<P, M>> {
         self.map_err(Fail::lift)
     }
 }
@@ -816,5 +803,14 @@ mod tests {
         let settled: Fault<crate::profile::Settled<AllLanes>> = Laned::settle(t, 2);
         assert_eq!(settled.lane(), Lane::Fatal);
         assert_eq!(exhausted_attempts(settled.as_fatal().unwrap()), 2);
+    }
+}
+
+/// Route-1 probe: a blanket bridge so a single call-site method can require
+/// only `Lift`, with a total `From` counting as a strict lift.
+impl<X, P: From<X>> Lift<X> for P {
+    type Unmapped = core::convert::Infallible;
+    fn lift(x: X) -> Result<Self, Self::Unmapped> {
+        Ok(P::from(x))
     }
 }

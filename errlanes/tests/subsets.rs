@@ -1,6 +1,6 @@
 use errlanes::{
-    Fail, Fatal, FatalKind, Fault, Lane, LiftResult, Rejection, Settled, Transient, TransientKind,
-    WidenResult, lanes,
+    Fail, Fatal, FatalKind, Fault, Lane, Rejection, Settled, Transient, TransientKind, WidenResult,
+    lanes,
 };
 use std::{convert::Infallible, error::Error};
 
@@ -91,7 +91,7 @@ pub enum Partial {
 fn partial_lift_preserves_unmapped_source() {
     fn run() -> Result<(), Fail<Partial, lanes!(Fatal)>> {
         Err::<(), Fail<Child, lanes!()>>(Fail::Rejected(Child::Range { low: 2, high: 4 }))
-            .lift()?;
+            .widen()?;
         Ok(())
     }
     let Fail::Fatal(f) = run().unwrap_err() else {
@@ -115,7 +115,7 @@ fn strict_lift_needs_no_fatal_lane() {
         Err(Fail::Rejected(Parent::Range { low: 2, high: 4 }))
     ));
     let source: Fail<Child, lanes!()> = Fail::Rejected(Child::Unit);
-    let lifted: Fail<Parent, lanes!()> = source.lift();
+    let lifted: Fail<Parent, lanes!()> = source.widen();
     // Settling a profile with no transient lane is the identity on the value,
     // and its type is already a `Fail` -- there is nothing to convert back.
     let restored: Fail<Parent, lanes!()> = lifted.settle(1);

@@ -38,14 +38,6 @@ enum MetadataOnly {
     Renamed(String),
 }
 
-impl Lift<Source> for MetadataOnly {
-    type Unmapped = std::convert::Infallible;
-
-    fn lift(source: Source) -> Result<Self, Self::Unmapped> {
-        Ok(Self::from(source))
-    }
-}
-
 impl From<Source> for MetadataOnly {
     fn from(source: Source) -> Self {
         let Source::Value(value) = source;

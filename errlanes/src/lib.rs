@@ -24,7 +24,7 @@ mod record;
 
 pub use dynamic::{Classify, lane_of, transient_of};
 pub use fail::{
-    Fail, Failure, Fault, Laned, Level, Lift, LiftResult, Liftable, Rejection, RejectionField,
+    Fail, Failure, Fault, Laned, Level, Lift, Liftable, Rejection, RejectionField,
     RejectionMetadata, UnmappedInto, WidenResult,
 };
 pub use lane::{Denied, Exhausted, Fatal, FatalKind, Lane, Transient, TransientKind};
