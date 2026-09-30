@@ -19,7 +19,7 @@ pub mod sqlx;
 #[cfg(feature = "tracing")]
 mod record;
 
-pub use dynamic::{lane_of, transient_of};
+pub use dynamic::{denied_of, fatal_of, lane_of, transient_of};
 pub use fail::{
     Fail, Failure, Fault, Laned, Level, Lift, Liftable, Rejection, RejectionField,
     RejectionMetadata, UnmappedInto, WidenResult,

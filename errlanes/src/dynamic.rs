@@ -38,45 +38,49 @@ pub fn transient_of<'a>(e: &'a (dyn Error + 'static)) -> Option<&'a Transient> {
     None
 }
 
+/// Same walk as [`transient_of`], returning the `Fatal` payload. An
+/// `Exhausted` in the chain is always wrapped by a `Fatal`, so this finds it.
+pub fn fatal_of<'a>(e: &'a (dyn Error + 'static)) -> Option<&'a Fatal> {
+    let mut cur: Option<&(dyn Error + 'static)> = Some(e);
+    while let Some(x) = cur {
+        if let Some(f) = x.downcast_ref::<Fatal>() {
+            return Some(f);
+        }
+        cur = x.source();
+    }
+    None
+}
+
+/// Same walk as [`transient_of`] and [`fatal_of`], returning the `Denied`
+/// payload.
+pub fn denied_of<'a>(e: &'a (dyn Error + 'static)) -> Option<&'a Denied> {
+    let mut cur: Option<&(dyn Error + 'static)> = Some(e);
+    while let Some(x) = cur {
+        if let Some(d) = x.downcast_ref::<Denied>() {
+            return Some(d);
+        }
+        cur = x.source();
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
+    use std::fmt;
+
     use super::*;
     use crate::lane::{FatalKind, TransientKind};
 
+    /// A source-chain link around any inner `Error`, so the same type nests
+    /// to any depth: `Wrapped(Wrapped(Wrapped(payload)))` is three hops deep.
     #[derive(Debug)]
-    struct WrapperA(Transient);
-    impl std::fmt::Display for WrapperA {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "wrapper a: {}", self.0)
+    struct Wrapped<E>(E);
+    impl<E: fmt::Display> fmt::Display for Wrapped<E> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "wrapped: {}", self.0)
         }
     }
-    impl Error for WrapperA {
-        fn source(&self) -> Option<&(dyn Error + 'static)> {
-            Some(&self.0)
-        }
-    }
-
-    #[derive(Debug)]
-    struct WrapperB(WrapperA);
-    impl std::fmt::Display for WrapperB {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "wrapper b: {}", self.0)
-        }
-    }
-    impl Error for WrapperB {
-        fn source(&self) -> Option<&(dyn Error + 'static)> {
-            Some(&self.0)
-        }
-    }
-
-    #[derive(Debug)]
-    struct WrapperC(WrapperB);
-    impl std::fmt::Display for WrapperC {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "wrapper c: {}", self.0)
-        }
-    }
-    impl Error for WrapperC {
+    impl<E: Error + 'static> Error for Wrapped<E> {
         fn source(&self) -> Option<&(dyn Error + 'static)> {
             Some(&self.0)
         }
@@ -85,9 +89,25 @@ mod tests {
     #[test]
     fn finds_transient_three_levels_deep() {
         let t = Transient::new(TransientKind::Deadlock);
-        let chain = WrapperC(WrapperB(WrapperA(t)));
+        let chain = Wrapped(Wrapped(Wrapped(t)));
         assert_eq!(lane_of(&chain), Some(Lane::Transient));
         assert!(transient_of(&chain).is_some());
+    }
+
+    #[test]
+    fn finds_fatal_of_three_levels_deep() {
+        let f = Fatal::new(FatalKind::CorruptState);
+        let chain = Wrapped(Wrapped(Wrapped(f)));
+        assert_eq!(lane_of(&chain), Some(Lane::Fatal));
+        assert!(fatal_of(&chain).is_some());
+    }
+
+    #[test]
+    fn finds_denied_of_three_levels_deep() {
+        let d = Denied::default();
+        let chain = Wrapped(Wrapped(Wrapped(d)));
+        assert_eq!(lane_of(&chain), Some(Lane::Denied));
+        assert!(denied_of(&chain).is_some());
     }
 
     #[test]
@@ -107,6 +127,7 @@ mod tests {
         }
         let chain = W(fatal);
         assert_eq!(lane_of(&chain), Some(Lane::Fatal));
+        assert!(fatal_of(&chain).is_some());
     }
 
     #[test]
