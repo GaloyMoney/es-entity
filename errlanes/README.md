@@ -334,16 +334,17 @@ every case:
 | a lane marker (`Transient`, `Fatal`, `Denied`) | any carrier enabling it | `?` |
 | `Fault<S>` | `Fail<R, D>` | `?` |
 | a bare rejection `C` | `Fail<R, D>`, given `R: From<C>` | `?` |
+| a bare rejection `C` | `Fail<R, D>`, given a partial `#[lift(C)]` on `R` | `.widen()?` |
 | `Fail<C, S>` | `Fail<R, D>` | `.widen()?` |
 | `Fault<S>` | `Fault<D>` | `.widen()?` |
 
 `?` handles anything that needs no decision. `.widen()` is for the one case that
 does, changing the rejection type, and its destination is inferred from the
 return type. A total `#[lift(C)]` supplies the `R: From<C>` that lets a bare
-rejection propagate with `?`; a partial lift does not, so its source must
-already be in a `Fail` to widen. Widening only ever adds lanes: dropping one
-that the source can still produce is a compile error, because somebody has to
-handle it.
+rejection propagate with `?`; a partial lift does not, so a bare rejection
+crosses it with `.widen()?` like any other source. Widening only ever adds
+lanes: dropping one that the source can still produce is a compile error,
+because somebody has to handle it.
 
 ## Composing rejection families
 

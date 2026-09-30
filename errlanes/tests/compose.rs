@@ -83,6 +83,40 @@ fn whole_family_and_partial_mapping_keep_their_own_modes() {
     assert_eq!(Operation::Local.to_string(), "local");
 }
 
+// A validator that returns its bare rejection has no `From` path under a
+// partial mapping; `.widen()` lifts it directly, mapped or demoted.
+#[test]
+fn bare_rejection_widens_through_a_partial_mapping() {
+    fn check(code: &str) -> Result<(), Constraint> {
+        match code {
+            "USD" => Err(Constraint::Code(code.into())),
+            "PK" => Err(Constraint::Pkey),
+            _ => Ok(()),
+        }
+    }
+
+    fn outer(code: &str) -> Result<(), Fail<Operation, lanes!(Fatal)>> {
+        check(code).widen()?;
+        Ok(())
+    }
+
+    assert!(outer("EUR").is_ok());
+    let mapped = outer("USD").unwrap_err().rejected().unwrap();
+    assert!(matches!(&mapped, Operation::CodeAlreadyExists(value) if value == "USD"));
+    let demoted = outer("PK").unwrap_err();
+    assert!(matches!(demoted, Fail::Fatal(_)));
+    let mut source: &dyn Error = &demoted;
+    while source.downcast_ref::<Constraint>().is_none() {
+        source = source
+            .source()
+            .expect("original constraint in fatal source chain");
+    }
+    assert!(matches!(
+        source.downcast_ref::<Constraint>(),
+        Some(Constraint::Pkey)
+    ));
+}
+
 // Explicit strict lifts preserve custom or previously unprefixed names.
 #[errlanes::compose]
 #[derive(Debug, thiserror::Error)]

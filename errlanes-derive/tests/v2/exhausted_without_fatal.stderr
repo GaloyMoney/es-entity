@@ -1,15 +1,11 @@
-error[E0277]: the trait bound `errlanes::Transient: errlanes::profile::Settling<Infallible>` is not satisfied
+error[E0277]: the trait bound `errlanes::Transient: Settling<Infallible>` is not satisfied
   --> tests/v2/exhausted_without_fatal.rs:16:6
    |
 16 |     .settle(2);
-   |      ^^^^^^ the trait `errlanes::profile::Settling<Infallible>` is not implemented for `errlanes::Transient`
+   |      ^^^^^^ the trait `Settling<Infallible>` is not implemented for `errlanes::Transient`
    |
-help: the trait `Settling<Infallible>` is not implemented for `errlanes::Transient`
-      but trait `Settling<errlanes::Fatal>` is implemented for it
-  --> $WORKSPACE/errlanes/src/profile.rs
-   |
-   | impl Settling<Fatal> for Transient {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: the trait `Settling<Infallible>` is not implemented for `errlanes::Transient`
+           but trait `Settling<errlanes::Fatal>` is implemented for it
    = help: for that trait implementation, expected `errlanes::Fatal`, found `Infallible`
 note: required by a bound in `Fail::<D, L>::settle`
   --> $WORKSPACE/errlanes/src/fail.rs

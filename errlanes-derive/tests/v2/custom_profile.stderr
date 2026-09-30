@@ -1,3 +1,11 @@
+error[E0046]: not all trait items implemented, missing: `Settled`
+ --> tests/v2/custom_profile.rs:3:1
+  |
+3 | impl errlanes::LaneProfile for Custom {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `Settled` in implementation
+  |
+  = help: implement the missing item: `type Settled = /* Type */;`
+
 error[E0277]: the trait bound `Custom: profile::sealed::Sealed` is not satisfied
  --> tests/v2/custom_profile.rs:3:32
   |

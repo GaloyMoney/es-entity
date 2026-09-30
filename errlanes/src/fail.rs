@@ -71,6 +71,15 @@ pub trait Lift<X>: Sized {
     fn lift(x: X) -> Result<Self, Self::Unmapped>;
 }
 
+/// A total `From` counts as a strict lift, so one call-site method can require
+/// only `Lift` and still cover both mapping modes.
+impl<X, P: From<X>> Lift<X> for P {
+    type Unmapped = core::convert::Infallible;
+    fn lift(x: X) -> Result<Self, Self::Unmapped> {
+        Ok(P::from(x))
+    }
+}
+
 /// Conversion of an unmapped value into an enabled fatal slot. Strict lifts
 /// have no unmapped values and therefore work with any destination profile.
 #[doc(hidden)]
@@ -628,6 +637,23 @@ where
     }
 }
 
+/// A bare rejection is a `Fail` with no fault lanes, so it widens by the same
+/// rule. A total mapping already propagates with `?` through `From`; this is
+/// what a *partial* mapping needs, since it deliberately has no `From` — the
+/// unmapped cases become `Fatal`, so the destination must admit it. `Fail` is
+/// never a `Rejection`, so this cannot overlap the carrier impls above.
+impl<T, C: Rejection, P: Lift<C>, M: LaneProfile> WidenResult<T, Fail<P, M>> for Result<T, C>
+where
+    P::Unmapped: UnmappedInto<M::Fatal>,
+{
+    fn widen(self) -> Result<T, Fail<P, M>> {
+        self.map_err(|rejection| match P::lift(rejection) {
+            Ok(mapped) => Fail::Rejected(mapped),
+            Err(unmapped) => Fail::Fatal(unmapped.unmapped_into()),
+        })
+    }
+}
+
 impl<L: LaneProfile> Fault<L> {
     pub fn widen<M: LaneProfile>(self) -> Fault<M>
     where
@@ -803,14 +829,5 @@ mod tests {
         let settled: Fault<crate::profile::Settled<AllLanes>> = Laned::settle(t, 2);
         assert_eq!(settled.lane(), Lane::Fatal);
         assert_eq!(exhausted_attempts(settled.as_fatal().unwrap()), 2);
-    }
-}
-
-/// Route-1 probe: a blanket bridge so a single call-site method can require
-/// only `Lift`, with a total `From` counting as a strict lift.
-impl<X, P: From<X>> Lift<X> for P {
-    type Unmapped = core::convert::Infallible;
-    fn lift(x: X) -> Result<Self, Self::Unmapped> {
-        Ok(P::from(x))
     }
 }
