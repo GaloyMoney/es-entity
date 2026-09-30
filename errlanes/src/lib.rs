@@ -39,4 +39,4 @@ pub use retry::{RetryPolicy, retry, retry_with};
 pub use record::{FIELDS, record, record_fail, record_fault, record_settled_fault};
 
 #[cfg(feature = "derive")]
-pub use errlanes_derive::{__compose_rejection, Classify, Failure, Rejection, rejection};
+pub use errlanes_derive::{__compose_rejection, Classify, Failure, Lift, Rejection, rejection};

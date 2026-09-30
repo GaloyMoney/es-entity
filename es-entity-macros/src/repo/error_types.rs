@@ -182,7 +182,7 @@ impl<'a> ErrorTypes<'a> {
             #[derive(Default)]
             pub struct #values { #(pub #fields: Option<#types>),* }
             #[es_entity::errlanes::rejection]
-            #[derive(Debug, Clone, es_entity::ConstraintRejection)]
+            #[derive(Debug, Clone, es_entity::ConstraintRejection, es_entity::errlanes::Lift)]
             pub enum #cv { #(#variants),* }
             impl #cv {
                 #[doc(hidden)]

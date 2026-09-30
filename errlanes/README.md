@@ -52,7 +52,7 @@ pub enum Child {
     #[error("limit {0}")]
     Limit(u64),
 }
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
 #[lift(Child)]
 pub enum Parent {
     #[error("limit {0}")]
@@ -79,6 +79,11 @@ conflict with Rust's identity conversion, so it deliberately does not exist.
 
 ## Strict and partial lifting
 
+Derive `errlanes::Lift` for conversions and `errlanes::Rejection` for codes and
+levels. Either derive can be used alone. `Lift` works on ordinary enums without
+requiring `Error` or `Rejection`; it never generates rejection metadata.
+`Rejection` never generates `Lift` or `From` implementations.
+
 `Lift<Source>` consumes a source and returns `Result<Self, Self::Unmapped>`.
 Enum-level `#[lift(Source)]` defaults to strict. Qualify every mapped variant
 with its source family. Unit, tuple, and named fields forward automatically.
@@ -100,6 +105,19 @@ A destination variant accepting multiple source cases must likewise explicitly
 choose its canonical code. Ordinary forwarding requires neither a mapper nor
 a new code.
 
+With both derives, a simple `#[lift(Source::Variant)]` also supplies the default
+code and level to `Rejection`: renaming a destination variant preserves the
+source's identity and severity. The source must derive `Rejection` (or implement
+its metadata protocol). Explicit `#[rejection(code = "LOCAL", level = "info")]`
+selects local metadata instead; specifying only a code uses the default Info
+level, and specifying only a level uses the destination's default variant code.
+There is no need to repeat the source in a second annotation.
+
+To forward metadata independently of conversion, use
+`#[rejection(forward = Source::Variant)]`. The destination fields must match the
+source case. This forwards code and level only, and conflicts with `code`,
+`level`, or `delegate` on the same variant.
+
 ## Compose rejection families
 
 ```rust
@@ -110,7 +128,7 @@ pub enum Velocity {
     Limit(u64),
 }
 #[errlanes::rejection]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, errlanes::Lift)]
 pub enum Posting {
     #[flatten(prefix = "Velocity")]
     Velocity(Velocity),
@@ -122,8 +140,10 @@ assert!(matches!(posting, Posting::VelocityLimit(42)));
 ```
 
 The attribute runs before derives and replaces the placeholder with real
-variants. There is no leftover `Velocity(Velocity)` fallback. It generates the
-same exhaustive `Lift` / `From` conversion as strict explicit mapping. A whole
+variants. There is no leftover `Velocity(Velocity)` fallback. It adds the
+`Rejection` derive and explicit metadata forwarding for imported cases. The
+separately requested `Lift` derive generates the same exhaustive `Lift` / `From`
+conversion as strict explicit mapping. A whole
 family import intentionally picks up future source cases; use explicit strict
 mapping when additions must force human review.
 
@@ -197,9 +217,11 @@ before invoking that classifier; unknown constraints are invariants. SQLx
 
 ## Compatibility
 
-The old `Liftable` discriminator helpers and `#[rejection(lift(...))]` grammar
-remain compatibility adapters; new APIs use the `#[lift(Source::Variant)]`
-grammar above. `Failure` now has an associated `Lanes` profile. The legacy
+The old `Liftable` runtime helpers remain available, but the combined
+`#[rejection(lift(...))]` / `key` / `via` conversion grammar is no longer accepted.
+Use `#[derive(errlanes::Lift)]` with `#[lift(Source)]` and qualified source cases.
+Existing v2 mappings also need the separate `Lift` derive; their default code
+and level forwarding is unchanged. `Failure` has an associated `Lanes` profile. The legacy
 `Failure` newtype derive remains available for all-lanes wrappers; canonical
 module APIs should use `Fail<R, L>` / `Fault<L>` directly. `Classify` remains the
 adapter for legacy heterogeneous errors.

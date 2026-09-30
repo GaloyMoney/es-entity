@@ -6,6 +6,6 @@ enum Child {
     #[error("two")] Two,
 }
 #[errlanes::rejection]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, errlanes::Lift)]
 enum Parent { #[flatten] Child(Child), #[error("one")] One }
 fn main() {}

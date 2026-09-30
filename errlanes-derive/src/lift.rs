@@ -52,9 +52,13 @@ impl Parse for Mapping {
 }
 pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
     let syn::Data::Enum(data) = &input.data else {
-        return Ok(TokenStream::new());
+        return Err(syn::Error::new_spanned(
+            input,
+            "Lift can only be derived for enums",
+        ));
     };
     let name = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     let mut registrations = Vec::new();
     for attr in &input.attrs {
         if attr.path().is_ident("lift") {
@@ -135,7 +139,7 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             (quote!(core::convert::Infallible), quote!())
         };
         out.extend(quote! {
-            impl errlanes::Lift<#source> for #name {
+            impl #impl_generics errlanes::Lift<#source> for #name #ty_generics #where_clause {
                 type Unmapped = #unmapped;
                 fn lift(source: #source) -> Result<Self, Self::Unmapped> {
                     match source { #(#arms,)* #fallback }
@@ -144,7 +148,7 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         });
         if !registration.partial {
             out.extend(quote! {
-                impl From<#source> for #name {
+                impl #impl_generics From<#source> for #name #ty_generics #where_clause {
                     fn from(source: #source) -> Self {
                         match <Self as errlanes::Lift<#source>>::lift(source) {
                             Ok(mapped) => mapped, Err(never) => match never {},

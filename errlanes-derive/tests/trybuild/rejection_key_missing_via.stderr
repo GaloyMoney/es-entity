@@ -1,5 +1,0 @@
-error: more than one #[rejection(lift = ...)] target: this `key = ...` variant needs `via = ...` to say which one it lifts from
-  --> tests/trybuild/rejection_key_missing_via.rs:11:5
-   |
-11 |     EmailTaken,
-   |     ^^^^^^^^^^

@@ -13,7 +13,7 @@ pub enum Child {
     #[error("unit")]
     Unit,
 }
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
 #[lift(Child)]
 pub enum Parent {
     #[error("taken {0}")]
@@ -26,7 +26,7 @@ pub enum Parent {
     #[lift(Child::Unit)]
     Unit,
 }
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
 #[lift(Child, unhandled = fatal)]
 pub enum Partial {
     #[error("taken {0}")]
@@ -164,7 +164,7 @@ fn transparent_subset_wrapper_retains_lane_markers() {
     assert_eq!(errlanes::lane_of(boxed.as_ref()), Some(Lane::Fatal));
 }
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
 #[lift(Child)]
 pub enum Renamed {
     #[lift(Child::Taken)]
@@ -183,7 +183,7 @@ fn explicit_strict_rename_preserves_leaf_code() {
     assert_eq!(Into::<&'static str>::into(parent.code()), "TAKEN");
 }
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
 #[lift(Child, strict)]
 pub enum Transformed {
     #[error("canonical {0}")]
@@ -216,7 +216,7 @@ pub enum Other {
     #[rejection(code = "OTHER", level = "warn")]
     Unit,
 }
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
 #[lift(Other)]
 #[lift(Child)]
 pub enum Combined {

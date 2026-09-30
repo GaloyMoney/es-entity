@@ -1,5 +1,0 @@
-error: #[rejection(key = ...)] requires enum-level #[rejection(lift = ...)]
- --> tests/trybuild/rejection_key_without_lift.rs:5:5
-  |
-5 |     EmailTaken,
-  |     ^^^^^^^^^^

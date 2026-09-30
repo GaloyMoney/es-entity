@@ -1,5 +1,5 @@
 use convert_case::{Case, Casing};
-use darling::{FromDeriveInput, FromVariant, ast, util::PathList};
+use darling::{FromDeriveInput, FromVariant, ast};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Field, Ident, Path};
@@ -11,8 +11,6 @@ struct RejectionInput {
     data: ast::Data<RejectionVariant, ()>,
     #[darling(default)]
     code_prefix: Option<String>,
-    #[darling(default)]
-    lift: PathList,
 }
 
 #[derive(Debug, FromVariant)]
@@ -31,31 +29,6 @@ struct RejectionVariant {
     origin: Option<String>,
     #[darling(default)]
     level: Option<String>,
-    /// A pattern over the lift target's `Liftable::Key`, matched with
-    /// `matches!(x.key(), Some(<pattern>))` — usually a single path
-    /// (`UserConstraint::EmailKey`), but a nested aggregate's key is a path
-    /// into it: `OrderConstraint::OrderItems(OrderItemConstraint::SkuKey)`.
-    #[darling(default)]
-    key: Option<syn::Expr>,
-    /// Which target in `lift(X, ...)` this `key` belongs to. A `key`'s own path
-    /// (e.g. `UserConstraint::EmailKey`) names the *key* type, not the
-    /// *lift* (`Liftable`) type — the two are unrelated types the macro has
-    /// no way to connect syntactically — so with more than one `lift`
-    /// target this is required to disambiguate. With exactly one target
-    /// it's implied and may be omitted.
-    #[darling(default)]
-    via: Option<Path>,
-    #[darling(default)]
-    with: Option<Path>,
-}
-
-/// Ident-by-ident path equality — syn::Path has no `PartialEq`.
-fn paths_equal(a: &Path, b: &Path) -> bool {
-    a.segments.len() == b.segments.len()
-        && a.segments
-            .iter()
-            .zip(b.segments.iter())
-            .all(|(x, y)| x.ident == y.ident)
 }
 
 impl RejectionVariant {
@@ -101,7 +74,6 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
     let input = RejectionInput::from_derive_input(ast)?;
     let ident = &input.ident;
     let schema = crate::composition::schema(ast).map_err(darling::Error::from)?;
-    let lifts = crate::lift::derive(ast).map_err(darling::Error::from)?;
     let code_ident = quote::format_ident!("{}Code", ident);
     let variants = match &input.data {
         ast::Data::Enum(v) => v,
@@ -112,40 +84,6 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             );
         }
     };
-
-    if input.lift.is_empty() {
-        for v in variants {
-            if v.key.is_some() {
-                return Err(darling::Error::custom(
-                    "#[rejection(key = ...)] requires enum-level #[rejection(lift = ...)]",
-                )
-                .with_span(&v.ident));
-            }
-        }
-    } else {
-        for v in variants {
-            if v.key.is_none() {
-                continue;
-            }
-            match (&v.via, input.lift.len()) {
-                (Some(via), _) => {
-                    if !input.lift.iter().any(|lift_ty| paths_equal(via, lift_ty)) {
-                        return Err(darling::Error::custom(
-                            "#[rejection(via = ...)] does not name a declared #[rejection(lift = ...)] target",
-                        )
-                        .with_span(&v.ident));
-                    }
-                }
-                (None, 1) => {}
-                (None, _) => {
-                    return Err(darling::Error::custom(
-                        "more than one #[rejection(lift = ...)] target: this `key = ...` variant needs `via = ...` to say which one it lifts from",
-                    )
-                    .with_span(&v.ident));
-                }
-            }
-        }
-    }
 
     let mut code_variants = Vec::new();
     let mut into_str_arms = Vec::new();
@@ -158,6 +96,20 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
     };
     let mut metadata = TokenStream::new();
     for (v, raw) in variants.iter().zip(&raw.variants) {
+        if let Some(source) = &v.forward {
+            if source.segments.len() < 2 {
+                return Err(darling::Error::custom(
+                    "forward requires a qualified source variant: Source::Variant",
+                )
+                .with_span(source));
+            }
+            if v.code.is_some() || v.level.is_some() || v.delegate {
+                return Err(darling::Error::custom(
+                    "forward conflicts with code, level, and delegate; choose source metadata or local metadata",
+                )
+                .with_span(&v.ident));
+            }
+        }
         if v.delegate
             && (v.code.is_some()
                 || v.level.is_some()
@@ -189,6 +141,8 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             ast::Style::Struct => quote!(Self::#variant_ident { #(#fields),* }),
         };
         let mut forward = v.forward.clone();
+        // Lift owns conversion generation. Its mapping also identifies the
+        // default metadata source; no Lift implementation is required here.
         if forward.is_none() && v.code.is_none() && v.level.is_none() && !v.delegate {
             let mappings: Vec<_> = raw
                 .attrs
@@ -301,64 +255,7 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
         }
     };
 
-    let single_target = input.lift.len() == 1;
-    for lift_ty in input.lift.iter() {
-        let mut lift_arms = Vec::new();
-        for v in variants {
-            let Some(key) = &v.key else {
-                continue;
-            };
-            let belongs = match &v.via {
-                Some(via) => paths_equal(via, lift_ty),
-                None => single_target,
-            };
-            if !belongs {
-                continue;
-            }
-            let variant_ident = &v.ident;
-            match (&v.with, v.fields.style) {
-                (Some(with), _) => {
-                    lift_arms.push(quote! {
-                        if matches!(key, Some(#key)) {
-                            return Ok((#with)(x));
-                        }
-                    });
-                }
-                (None, ast::Style::Unit) => {
-                    lift_arms.push(quote! {
-                        if matches!(key, Some(#key)) {
-                            return Ok(Self::#variant_ident);
-                        }
-                    });
-                }
-                (None, _) => {
-                    return Err(darling::Error::custom(
-                        "a `key = ...` variant with fields needs `with = path::to::fn`",
-                    )
-                    .with_span(&v.ident));
-                }
-            }
-        }
-
-        tokens.extend(quote! {
-            impl errlanes::Lift<#lift_ty> for #ident {
-                type Unmapped = errlanes::Fatal;
-                fn lift(x: #lift_ty) -> Result<Self, errlanes::Fatal> {
-                    let key = errlanes::Liftable::key(&x);
-                    #(#lift_arms)*
-                    let unknown = match key {
-                        Some(k) => <<#lift_ty as errlanes::Liftable>::Key as Into<&'static str>>::into(k).to_string(),
-                        None => "unknown".to_string(),
-                    };
-                    Err(errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, x)
-                        .with_context(unknown))
-                }
-            }
-        });
-    }
-
     tokens.extend(metadata);
     tokens.extend(schema);
-    tokens.extend(lifts);
     Ok(tokens)
 }

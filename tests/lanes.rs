@@ -4,7 +4,7 @@ use es_entity::*;
 use repo_composition_source::*;
 
 /// Maps the imported child leaf directly into a domain outcome.
-#[derive(Debug, Clone, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, Clone, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
 #[lift(LaneParentConstraintViolation, unhandled = fatal)]
 enum LaneOrderRejection {
     #[error("duplicate sku on a lane item")]
@@ -14,7 +14,7 @@ enum LaneOrderRejection {
 
 /// An explicit partial boundary that accepts none of the repository cases.
 #[allow(dead_code)]
-#[derive(Debug, Clone, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, Clone, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
 #[lift(LaneParentConstraintViolation, unhandled = fatal)]
 enum NothingHoisted {
     #[error("placeholder — never constructed")]

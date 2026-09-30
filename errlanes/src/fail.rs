@@ -59,10 +59,13 @@ pub trait Liftable: Rejection {
     fn key(&self) -> Option<Self::Key>;
 }
 
-/// Consuming rejection mapping. `#[lift(Source)]` generates an exhaustive
+/// Consuming mapping. `#[derive(Lift)]` with `#[lift(Source)]` generates an exhaustive
 /// mapping with `Unmapped = Infallible` and a total `From<Source>` conversion.
 /// `#[lift(Source, unhandled = fatal)]` returns the original unmapped source;
 /// [`Fail::lift`] wraps it as a fatal invariant with its source intact.
+/// The derive does not require or implement [`Rejection`]. Derive `Rejection`
+/// separately to provide codes and levels; simple lift mappings forward that
+/// metadata by default unless the destination declares its own.
 pub trait Lift<X>: Sized {
     type Unmapped;
     fn lift(x: X) -> Result<Self, Self::Unmapped>;

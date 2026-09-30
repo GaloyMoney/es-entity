@@ -1,108 +1,26 @@
-// One `lift(A, B)` list declares multiple foreign `Liftable` targets.
-// Each `key` variant's `via` selects its target; the key's path names a
-// separate type and cannot identify that target. This fixture pins routing
-// across two distinct targets.
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, std::hash::Hash)]
-enum AKey {
-    Frozen,
-}
-impl From<AKey> for &'static str {
-    fn from(k: AKey) -> Self {
-        match k {
-            AKey::Frozen => "FROZEN",
-        }
-    }
-}
-impl std::fmt::Display for AKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str((*self).into())
-    }
-}
-
+// Multiple source families remain independent from rejection metadata.
 #[derive(Debug)]
-struct AViolation(Option<AKey>);
-impl std::fmt::Display for AViolation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "a violation")
-    }
-}
-impl std::error::Error for AViolation {}
-impl errlanes::Rejection for AViolation {
-    type Code = AKey;
-    fn code(&self) -> Self::Code {
-        self.0.unwrap_or(AKey::Frozen)
-    }
-}
-impl errlanes::Liftable for AViolation {
-    type Key = AKey;
-    fn key(&self) -> Option<AKey> {
-        self.0
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, std::hash::Hash)]
-enum BKey {
-    Blocked,
-}
-impl From<BKey> for &'static str {
-    fn from(k: BKey) -> Self {
-        match k {
-            BKey::Blocked => "BLOCKED",
-        }
-    }
-}
-impl std::fmt::Display for BKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str((*self).into())
-    }
-}
-
+enum A { Frozen, Other }
 #[derive(Debug)]
-struct BViolation(Option<BKey>);
-impl std::fmt::Display for BViolation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "b violation")
-    }
-}
-impl std::error::Error for BViolation {}
-impl errlanes::Rejection for BViolation {
-    type Code = BKey;
-    fn code(&self) -> Self::Code {
-        self.0.unwrap_or(BKey::Blocked)
-    }
-}
-impl errlanes::Liftable for BViolation {
-    type Key = BKey;
-    fn key(&self) -> Option<BKey> {
-        self.0
-    }
-}
+enum B { Blocked }
 
-#[derive(Debug, Clone, thiserror::Error, errlanes::Rejection)]
-#[rejection(lift(AViolation, BViolation))]
+#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
+#[lift(A, unhandled = fatal)]
+#[lift(B)]
 enum MultiRejection {
     #[error("a frozen")]
-    #[rejection(key = AKey::Frozen, via = AViolation)]
+    #[rejection(code = "FROZEN")]
+    #[lift(A::Frozen)]
     AFrozen,
     #[error("b blocked")]
-    #[rejection(key = BKey::Blocked, via = BViolation)]
+    #[rejection(code = "BLOCKED")]
+    #[lift(B::Blocked)]
     BBlocked,
 }
 
 fn main() {
     use errlanes::Lift;
-
-    match MultiRejection::lift(AViolation(Some(AKey::Frozen))) {
-        Ok(MultiRejection::AFrozen) => {}
-        other => panic!("expected AFrozen, got {other:?}"),
-    }
-    match MultiRejection::lift(BViolation(Some(BKey::Blocked))) {
-        Ok(MultiRejection::BBlocked) => {}
-        other => panic!("expected BBlocked, got {other:?}"),
-    }
-    match MultiRejection::lift(AViolation(None)) {
-        Err(fatal) => assert_eq!(fatal.kind, errlanes::FatalKind::Invariant),
-        other => panic!("expected Fatal(Invariant), got {other:?}"),
-    }
+    assert!(matches!(MultiRejection::lift(A::Frozen), Ok(MultiRejection::AFrozen)));
+    assert!(matches!(MultiRejection::from(B::Blocked), MultiRejection::BBlocked));
+    assert!(matches!(MultiRejection::lift(A::Other), Err(A::Other)));
 }

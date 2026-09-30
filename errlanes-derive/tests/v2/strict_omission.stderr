@@ -1,8 +1,8 @@
 error[E0004]: non-exhaustive patterns: `Child::Two` not covered
- --> tests/v2/strict_omission.rs:8:35
+ --> tests/v2/strict_omission.rs:8:56
   |
-8 | #[derive(Debug, thiserror::Error, errlanes::Rejection)]
-  |                                   ^^^^^^^^^^^^^^^^^^^ pattern `Child::Two` not covered
+8 | #[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
+  |                                                        ^^^^^^^^^^^^^^ pattern `Child::Two` not covered
   |
 note: `Child` defined here
  --> tests/v2/strict_omission.rs:4:6
@@ -13,4 +13,4 @@ note: `Child` defined here
 6 |     #[error("two")] Two,
   |                     --- not covered
   = note: the matched value is of type `Child`
-  = note: this error originates in the derive macro `errlanes::Rejection` (in Nightly builds, run with -Z macro-backtrace for more info)
+  = note: this error originates in the derive macro `errlanes::Lift` (in Nightly builds, run with -Z macro-backtrace for more info)

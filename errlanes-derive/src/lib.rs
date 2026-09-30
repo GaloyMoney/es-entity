@@ -1,4 +1,4 @@
-//! Proc macros for `errlanes`: `#[derive(Rejection)]`, `#[derive(Failure)]`,
+//! Proc macros for `errlanes`: `#[derive(Rejection)]`, `#[derive(Lift)]`, `#[derive(Failure)]`,
 //! `#[derive(Classify)]`.
 
 mod classify;
@@ -72,6 +72,11 @@ fn expand(
 #[proc_macro_derive(Rejection, attributes(rejection, lift))]
 pub fn derive_rejection(input: TokenStream) -> TokenStream {
     expand(input, rejection::derive)
+}
+
+#[proc_macro_derive(Lift, attributes(lift))]
+pub fn derive_lift(input: TokenStream) -> TokenStream {
+    expand(input, |ast| lift::derive(ast).map_err(darling::Error::from))
 }
 
 #[proc_macro_derive(Failure, attributes(failure))]

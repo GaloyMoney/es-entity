@@ -16,7 +16,7 @@ help: the trait `RejectionMetadata<13055771691597938983>` is not implemented for
 error[E0277]: the trait bound `Child: RejectionMetadata<13055771691597938983>` is not satisfied
  --> tests/v2/unknown_variant.rs:8:35
   |
-8 | #[derive(Debug, thiserror::Error, errlanes::Rejection)]
+8 | #[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
   |                                   ^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
   |
 help: the trait `RejectionMetadata<13055771691597938983>` is not implemented for `Child`

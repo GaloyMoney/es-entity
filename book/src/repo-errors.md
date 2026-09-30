@@ -71,7 +71,7 @@ Use one lifting framework for exhaustive forwarding and explicit partial domain
 mapping:
 
 ```rust,ignore
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
 #[lift(UserConstraintViolation, unhandled = fatal)]
 pub enum RegistrationRejection {
     #[error("email already exists: {0}")]
@@ -93,17 +93,20 @@ the repository boundary. Partial mode never creates an infallible
 that truly indicate a violated domain invariant; legitimate alternatives must
 remain rejections.
 
-Omitting `unhandled = fatal` selects strict mode. Name every case with
+`derive(Lift)` generates conversions; `derive(Rejection)` generates codes and
+levels. Omitting `unhandled = fatal` selects strict mode. Name every case with
 `#[lift(Source::Variant)]`; omitted cases fail compilation. Matching fields
 forward automatically, and a total `From<Source>` enables `.widen()?` on a
 failure result or `?` on a bare rejection. Forwarded metadata preserves the leaf
-code and severity; an explicit code denotes a domain reinterpretation.
+code and severity by default; an explicit code denotes a domain reinterpretation.
+Neither derive implements the other's trait. `Lift` can also be used without
+`Rejection` when only conversion is needed.
 
 To import an entire family without repeating its cases:
 
 ```rust,ignore
 #[errlanes::rejection]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, errlanes::Lift)]
 pub enum RegistrationRejection {
     #[flatten(prefix = "User")]
     User(UserConstraintViolation),
