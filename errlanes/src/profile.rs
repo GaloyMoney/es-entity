@@ -62,8 +62,8 @@ pub trait LaneProfile: sealed::Sealed + Debug + Clone + Send + Sync + 'static {
     type Transient: Slot<Transient>;
     type Fatal: Slot<Fatal>;
 
-    /// This profile with the transient lane consumed. `Fail<D, L::Settled>` is
-    /// what `settle`/`retry` hand back, and is what [`crate::Settled`] aliases.
+    /// This profile with the transient lane consumed: the projection `settle`
+    /// and `retry` return through, spelled [`crate::Settled`].
     type Settled: LaneProfile<Denied = Self::Denied, Transient = Infallible, Fatal = Self::Fatal>;
 }
 
@@ -91,11 +91,16 @@ profile!(true, true, true; Denied, Transient, Fatal);
 
 pub type AllLanes = Profile<true, true, true>;
 
-/// `L` with its transient lane consumed — an adjective on the *profile*, not a
-/// second carrier enum. `Fail<R, Settled<L>>` and `Fault<Settled<L>>` are what
-/// `settle`/`retry` return: ordinary `Fail`/`Fault` values whose `Transient`
-/// slot is uninhabited, so a by-value match names only the lanes that remain
-/// and an exhausted retry arrives as `Fatal(Exhausted)`.
+/// `L` with its transient lane consumed — sugar for
+/// [`LaneProfile::Settled`], which is what `settle` and `retry` return
+/// through. Settling is a projection on the profile, not a second family of
+/// carriers: `Fault<Settled<L>>` is an ordinary `Fault` whose `Transient` slot
+/// is uninhabited, and an exhausted retry arrives as `Fatal(Exhausted)`.
+///
+/// Prefer naming the resulting profile directly wherever you can — settling
+/// `lanes!(Transient, Fatal)` yields `lanes!(Fatal)`, and writing that keeps a
+/// lane the caller can never see out of the signature. This alias is for code
+/// generic over `L`, where there is no concrete name to reach for.
 pub type Settled<L> = <L as LaneProfile>::Settled;
 
 /// Select a subset of `Denied`, `Transient`, and `Fatal`, in any order.

@@ -1,5 +1,5 @@
 //! Compiles `upstream`/`downstream` (a dev-dependency of this crate) so the
-//! six `?`-widening paths and the exhaustive `Settled` match from Appendix A
+//! six `?`-widening paths and the settled match from Appendix A
 //! of the error-handling research doc are checked on every `cargo test`, and
 //! pins that the generic widening from Option C (`impl From<Fail<A>> for
 //! Fail<B>` in a downstream crate) does not compile.

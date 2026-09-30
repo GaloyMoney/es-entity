@@ -1,6 +1,5 @@
 use errlanes::{
-    Fail, Fatal, FatalKind, Fault, Lane, Rejection, Settled, Transient, TransientKind, WidenResult,
-    lanes,
+    Fail, Fatal, FatalKind, Fault, Lane, Rejection, Transient, TransientKind, WidenResult, lanes,
 };
 use std::{convert::Infallible, error::Error};
 
@@ -125,7 +124,7 @@ fn strict_lift_needs_no_fatal_lane() {
 fn borrowed_settlement_needs_no_uninhabited_arms() {
     // `lane()` and the borrowed accessors cover every borrowed inspection, so
     // no caller writes `match *never {}`.
-    fn inspect(value: &Fail<Child, Settled<lanes!(Fatal)>>) -> Lane {
+    fn inspect(value: &Fail<Child, lanes!(Fatal)>) -> Lane {
         value.lane()
     }
     let value: Fail<Child, lanes!(Fatal)> = Fatal::invariant("broken").into();

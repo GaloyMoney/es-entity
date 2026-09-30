@@ -70,7 +70,7 @@ async fn find_by_id_into_carrier() -> Result<(), CustomerError> {
 
 /// Exercises the `?`-widening paths from Appendix A of the error-handling
 /// research doc, plus `retry` over a `Failure` and a `Fault`-returning read,
-/// and the exhaustive `Settled`/`SettledFault` matches with no `Transient`
+/// and the settled matches with no `Transient`
 /// arm.
 pub fn smoke() {
     assert!(from_own_rejection().is_err());

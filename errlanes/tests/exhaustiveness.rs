@@ -1,7 +1,7 @@
 //! A by-value match names exactly the lanes a profile enables: arms for
 //! disabled slots are not merely unnecessary, they are inexpressible. A
 //! borrowed match is the exception, which the `as_*` accessors cover instead.
-use errlanes::{Fail, Fatal, FatalKind, Fault, Lane, Settled, Transient, TransientKind, lanes};
+use errlanes::{Fail, Fatal, FatalKind, Fault, Lane, Transient, TransientKind, lanes};
 
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("nope")]
@@ -83,9 +83,18 @@ fn a_by_value_match_names_only_the_selected_lanes() {
     let _: Nope = rejected_only(Fail::Rejected(Nope));
 }
 
-/// A settled profile drops the transient lane, so this names one fewer arm
-/// than its unsettled counterpart -- and exhaustion arrives in the fatal lane.
-fn settled(failure: Fail<Nope, Settled<lanes!(Transient, Fatal)>>) -> &'static str {
+/// `Settled<L>` is sugar for the same projection, so the two spellings are one
+/// type. Concrete signatures use the concrete profile; the alias is for code
+/// generic over `L`.
+fn alias_is_the_concrete_profile(
+    failure: Fail<Nope, errlanes::Settled<lanes!(Transient, Fatal)>>,
+) -> Fail<Nope, lanes!(Fatal)> {
+    failure
+}
+
+/// Settling `lanes!(Transient, Fatal)` yields `lanes!(Fatal)`, so this names one
+/// arm fewer than its unsettled counterpart and exhaustion arrives as a fatal.
+fn settled(failure: Fail<Nope, lanes!(Fatal)>) -> &'static str {
     match failure {
         Fail::Rejected(_) => "rejected",
         Fail::Fatal(fatal) if fatal.kind == FatalKind::Exhausted => "exhausted",
@@ -101,6 +110,13 @@ fn settling_removes_an_arm_rather_than_renaming_one() {
     let transient: Fail<Nope, lanes!(Transient, Fatal)> =
         Transient::new(TransientKind::Deadlock).into();
     assert_eq!(settled(transient.settle(3)), "exhausted");
+
+    let transient: Fail<Nope, lanes!(Transient, Fatal)> =
+        Transient::new(TransientKind::Deadlock).into();
+    assert_eq!(
+        settled(alias_is_the_concrete_profile(transient.settle(3))),
+        "exhausted"
+    );
 }
 
 /// Borrowed inspection goes through the accessors, not a match.

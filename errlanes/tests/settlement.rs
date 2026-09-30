@@ -16,8 +16,8 @@ async fn execute(
         |_| async {},
     )
     .await
-    // Nothing here: `retry` already returns `Fault<Settled<lanes!(Transient,
-    // Fatal)>>`, which *is* `Fault<lanes!(Fatal)>`. No adapter, no `map_err`.
+    // Nothing here: settling `lanes!(Transient, Fatal)` already yields
+    // `lanes!(Fatal)`, so this is the return type. No adapter, no `map_err`.
 }
 
 #[tokio::test]

@@ -187,13 +187,13 @@ an outcome: a transient that never succeeded becomes `Fatal(Exhausted)`,
 keeping the last transient as its source.
 
 ```rust
-use errlanes::{Fault, Settled, Transient, TransientKind, lanes};
+use errlanes::{Fault, Transient, TransientKind, lanes};
 
 const BUDGET: u32 = 3;
 
 fn execute(
     mut attempt_once: impl FnMut() -> Result<u64, Fault<lanes!(Transient, Fatal)>>,
-) -> Result<u64, Fault<Settled<lanes!(Transient, Fatal)>>> {
+) -> Result<u64, Fault<lanes!(Fatal)>> {
     let mut attempts = 0;
     loop {
         attempts += 1;
@@ -229,22 +229,19 @@ assert_eq!(exhausted.attempts, BUDGET);
 assert_eq!(exhausted.last.kind, TransientKind::Deadlock);
 ```
 
-`Settled<L>` is `L` with its transient lane spent — an adjective on the
-*profile*, not a second pair of carriers. So the return type above is literally
-`Fault<lanes!(Fatal)>`, and the single remaining lane destructures with one
-irrefutable `let`:
+Look at what `execute` returns. Settling consumed the transient lane, so
+`lanes!(Transient, Fatal)` went in and `lanes!(Fatal)` came out: there is no
+second family of settled carriers, just the same `Fault` over a smaller lane
+set. A caller of `execute` has one lane to handle, and it destructures with a
+single irrefutable `let`:
 
 ```rust
-# use errlanes::{Fault, Settled, lanes};
+# use errlanes::{Fault, lanes};
 fn only_fatal(failure: Fault<lanes!(Fatal)>) -> errlanes::FatalKind {
     let Fault::Fatal(fatal) = failure;
     fatal.kind
 }
-
-fn hand_over(failure: Fault<Settled<lanes!(Transient, Fatal)>>) -> errlanes::FatalKind {
-    only_fatal(failure)
-}
-# assert_eq!(hand_over(errlanes::Fatal::invariant("x").into()), errlanes::FatalKind::Invariant);
+# assert_eq!(only_fatal(errlanes::Fatal::invariant("x").into()), errlanes::FatalKind::Invariant);
 ```
 
 The `tokio` feature does all of this for you: `retry` and `retry_with` apply a
