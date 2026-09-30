@@ -1,5 +1,5 @@
 //! Proc macros for `errlanes`: `#[derive(Rejection)]`, `#[derive(Lift)]`, `#[derive(Failure)]`,
-//! `#[derive(Classify)]`.
+//! `#[derive(Classify)]`, and `#[compose]`.
 
 mod classify;
 mod composition;
@@ -90,11 +90,11 @@ pub fn derive_classify(input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn rejection(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn compose(args: TokenStream, input: TokenStream) -> TokenStream {
     if !args.is_empty() {
         return syn::Error::new(
             proc_macro2::Span::call_site(),
-            "rejection takes no arguments; configure the enum with #[rejection(...)]",
+            "compose takes no arguments; use #[compose(flatten)] on source placeholders",
         )
         .to_compile_error()
         .into();

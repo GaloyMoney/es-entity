@@ -1,5 +1,5 @@
 error: the same rejection leaf arrives through multiple imports; narrow the source families or map explicitly to a canonical destination
   --> tests/v2/diamond.rs:13:5
    |
-13 |     #[flatten(prefix = "Right")] Right(Right),
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+13 |     #[compose(flatten)] Right(Right),
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

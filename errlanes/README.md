@@ -127,10 +127,10 @@ pub enum Velocity {
     #[rejection(code = "VELOCITY_LIMIT", level = "warn")]
     Limit(u64),
 }
-#[errlanes::rejection]
-#[derive(Debug, thiserror::Error, errlanes::Lift)]
+#[errlanes::compose]
+#[derive(Debug, thiserror::Error)]
 pub enum Posting {
-    #[flatten(prefix = "Velocity")]
+    #[compose(flatten)]
     Velocity(Velocity),
     #[error("batch too large")]
     BatchTooLarge,
@@ -140,18 +140,49 @@ assert!(matches!(posting, Posting::VelocityLimit(42)));
 ```
 
 The attribute runs before derives and replaces the placeholder with real
-variants. There is no leftover `Velocity(Velocity)` fallback. It adds the
-`Rejection` derive and explicit metadata forwarding for imported cases. The
-separately requested `Lift` derive generates the same exhaustive `Lift` / `From`
-conversion as strict explicit mapping. A whole
-family import intentionally picks up future source cases; use explicit strict
-mapping when additions must force human review.
+variants. There is no leftover `Velocity(Velocity)` fallback. `compose` supplies
+both `Rejection` and `Lift`, leaving `Debug`, `Error`, and unrelated derives to
+the caller. Redundant `Rejection`/`Lift` entries in ordinary derive lists are
+deduplicated. Standalone derives remain independent.
 
-Use `#[flatten(prefix = "Velocity", rename(Limit = LimitExceeded))]` to rename
-individual cases; explicit names override the prefix. Name collisions are errors.
+`#[compose(flatten)] Wrapper(Source)` prefixes every imported case with
+`Wrapper`. It preserves leaf codes, levels, formatting, payloads, and sources,
+and generates exhaustive `Lift` / `From` conversions. A whole-family import
+intentionally picks up future source cases; use explicit strict mapping when
+additions must force human review or cases need custom/unprefixed names.
+There are no `prefix` or `rename` arguments. Name collisions are errors.
 Importing the same leaf through multiple composition paths is rejected. Narrow
 those source families or write explicit mappings to one canonical destination.
 A layer with no additional semantics should reuse the child type or an alias.
+
+Whole-family imports and explicit lifts from other sources can coexist:
+
+```rust,ignore
+#[errlanes::compose]
+#[derive(Debug, thiserror::Error)]
+#[lift(AccountConstraintViolation, unhandled = fatal)]
+pub enum OperationRejection {
+    #[compose(flatten)]
+    Velocity(VelocityEnforcementRejection),
+
+    #[lift(AccountConstraintViolation::CodeKey)]
+    #[rejection(code = "ACCOUNT_CODE_ALREADY_EXISTS")]
+    #[error("account code already exists: {0}")]
+    AccountCodeAlreadyExists(#[source] ConstraintConflict<String>),
+}
+```
+
+Velocity converts totally and supports `.widen()?`; the partial repository
+mapping uses `.lift()?`, preserving unaccepted cases as the source of
+Fatal(Invariant). `compose` also supports enums with only explicit lifts.
+Do not import a whole family and explicitly map that same source again.
+
+Migration: replace the old enum attribute `#[errlanes::rejection]` with
+`#[errlanes::compose]` and remove explicit `Rejection`/`Lift` derives. Replace
+`#[flatten(prefix = "X")] Placeholder(Source)` with
+`#[compose(flatten)] X(Source)` to retain public names. For old unprefixed or
+renamed cases, write explicit strict lifts to preserve names, or deliberately
+update public match paths. The old composition spelling is no longer exported.
 
 Each derived family exports a companion macro named `FamilySchema` beside
 `Family`. Reexport both when reexporting or renaming a source:

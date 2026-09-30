@@ -1,0 +1,13 @@
+error: source family already mapped; choose whole-family #[compose(flatten)] or explicit #[lift] mappings for that source
+  --> tests/v2/compose_duplicate_source.rs:11:5
+   |
+11 | /     #[compose(flatten)]
+12 | |     Whole(Source),
+   | |_________________^
+
+error: source family already mapped; choose whole-family #[compose(flatten)] or explicit #[lift] mappings for that source
+  --> tests/v2/compose_duplicate_source.rs:23:5
+   |
+23 | /     #[compose(flatten)]
+24 | |     Second(Source),
+   | |__________________^

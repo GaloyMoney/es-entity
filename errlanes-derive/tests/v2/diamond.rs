@@ -1,15 +1,15 @@
 #[derive(Debug, thiserror::Error, errlanes::Rejection)]
 pub enum Leaf { #[error("one")] One }
-#[errlanes::rejection]
-#[derive(Debug, thiserror::Error, errlanes::Lift)]
-pub enum Left { #[flatten] Leaf(Leaf) }
-#[errlanes::rejection]
-#[derive(Debug, thiserror::Error, errlanes::Lift)]
-pub enum Right { #[flatten] Leaf(Leaf) }
-#[errlanes::rejection]
-#[derive(Debug, thiserror::Error, errlanes::Lift)]
+#[errlanes::compose]
+#[derive(Debug, thiserror::Error)]
+pub enum Left { #[compose(flatten)] Leaf(Leaf) }
+#[errlanes::compose]
+#[derive(Debug, thiserror::Error)]
+pub enum Right { #[compose(flatten)] Leaf(Leaf) }
+#[errlanes::compose]
+#[derive(Debug, thiserror::Error)]
 pub enum Diamond {
-    #[flatten(prefix = "Left")] Left(Left),
-    #[flatten(prefix = "Right")] Right(Right),
+    #[compose(flatten)] Left(Left),
+    #[compose(flatten)] Right(Right),
 }
 fn main() {}

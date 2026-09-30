@@ -171,8 +171,7 @@ impl<'a> ErrorTypes<'a> {
             last.ident = format_ident!("{entity}ConstraintViolation");
             last.arguments = syn::PathArguments::None;
             let name = nested.nested_variant_name();
-            let prefix = name.to_string();
-            variants.push(quote! { #[flatten(prefix = #prefix)] #name(#path) });
+            variants.push(quote! { #[compose(flatten)] #name(#path) });
         }
         let fields: Vec<_> = columns.iter().map(|c| c.name()).collect();
         let types: Vec<_> = columns.iter().map(|c| c.ty()).collect();
@@ -181,8 +180,8 @@ impl<'a> ErrorTypes<'a> {
             #[doc(hidden)]
             #[derive(Default)]
             pub struct #values { #(pub #fields: Option<#types>),* }
-            #[es_entity::errlanes::rejection]
-            #[derive(Debug, Clone, es_entity::ConstraintRejection, es_entity::errlanes::Lift)]
+            #[es_entity::errlanes::compose]
+            #[derive(Debug, Clone, es_entity::ConstraintRejection)]
             pub enum #cv { #(#variants),* }
             impl #cv {
                 #[doc(hidden)]

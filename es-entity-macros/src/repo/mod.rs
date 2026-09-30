@@ -587,7 +587,7 @@ mod tests {
         };
         let out = derive(nested).unwrap().to_string();
         assert!(out.contains("pub enum OrderConstraintViolation"));
-        assert!(out.contains(r#"flatten (prefix = "Items")"#));
+        assert!(out.contains("compose (flatten)"));
     }
 
     // Guard 1 (event has Forgettable fields but the repo omits `forgettable`)

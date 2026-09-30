@@ -199,12 +199,12 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             impl errlanes::RejectionMetadata<#id> for #ident {
                 type Fields<'a> = (#(&'a #types,)*);
                 #[allow(unused_variables, unused_assignments)]
-                fn field_code(fields: Self::Fields<'_>) -> Self::Code {
+                fn field_code(fields: <Self as errlanes::RejectionMetadata<#id>>::Fields<'_>) -> #code_ident {
                     let (#(#fields,)*) = fields;
                     #code
                 }
                 #[allow(unused_variables, unused_assignments)]
-                fn field_level(fields: Self::Fields<'_>) -> errlanes::Level {
+                fn field_level(fields: <Self as errlanes::RejectionMetadata<#id>>::Fields<'_>) -> errlanes::Level {
                     let (#(#fields,)*) = fields;
                     #level
                 }
@@ -240,7 +240,7 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             type Code = #code_ident;
 
             #[allow(unused_variables, unused_assignments)]
-            fn code(&self) -> Self::Code {
+            fn code(&self) -> #code_ident {
                 match self {
                     #(#code_match_arms),*
                 }

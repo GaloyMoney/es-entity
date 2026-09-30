@@ -105,15 +105,21 @@ Neither derive implements the other's trait. `Lift` can also be used without
 To import an entire family without repeating its cases:
 
 ```rust,ignore
-#[errlanes::rejection]
-#[derive(Debug, thiserror::Error, errlanes::Lift)]
+#[errlanes::compose]
+#[derive(Debug, thiserror::Error)]
 pub enum RegistrationRejection {
-    #[flatten(prefix = "User")]
+    #[compose(flatten)]
     User(UserConstraintViolation),
     #[error("registration closed")]
     Closed,
 }
 ```
+
+`compose` supplies both `Rejection` and `Lift`; only unrelated derives need to
+be listed. Each source case becomes `UserCase`, using the placeholder name as
+its prefix. Codes and levels stay those of the source. Explicit strict/partial
+`#[lift(...)]` mappings from other families can coexist with whole-family
+imports, and explicit lifts provide custom or unprefixed destination names.
 
 The placeholder disappears. Nested repositories use the same schema protocol,
 with the nested field name as prefix: `OrderConstraintViolation::ItemsSkuKey`

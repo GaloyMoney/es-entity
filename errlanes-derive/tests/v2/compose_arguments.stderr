@@ -1,0 +1,31 @@
+error: compose takes no arguments; use #[compose(flatten)] on source placeholders
+ --> tests/v2/compose_arguments.rs:1:1
+  |
+1 | #[errlanes::compose(prefix = "X")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `errlanes::compose` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: expected #[compose(flatten)]; the placeholder name supplies the prefix, with no prefix or rename arguments
+ --> tests/v2/compose_arguments.rs:6:5
+  |
+6 |     #[compose(flatten, prefix = "X")]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: expected exactly one #[compose(flatten)] on a source placeholder
+  --> tests/v2/compose_arguments.rs:12:5
+   |
+12 |     #[compose(rename)]
+   |     ^^^^^^^^^^^^^^^^^^
+
+error: expected exactly one #[compose(flatten)] on a source placeholder
+  --> tests/v2/compose_arguments.rs:19:5
+   |
+19 |     #[compose(flatten)]
+   |     ^^^^^^^^^^^^^^^^^^^
+
+error: use #[compose(flatten)] and the placeholder name as prefix; use explicit lifts for custom names
+  --> tests/v2/compose_arguments.rs:25:5
+   |
+25 |     #[flatten]
+   |     ^^^^^^^^^^

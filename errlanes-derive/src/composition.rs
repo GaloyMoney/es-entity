@@ -83,36 +83,107 @@ pub fn schema(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
     })
 }
 
+fn is_placeholder(variant: &syn::Variant) -> bool {
+    variant.attrs.iter().any(|a| a.path().is_ident("compose"))
+}
+
 pub fn expand(mut item: ItemEnum) -> syn::Result<TokenStream> {
-    let Some(index) = item
-        .variants
-        .iter()
-        .position(|v| v.attrs.iter().any(|a| a.path().is_ident("flatten")))
-    else {
-        item.attrs
-            .insert(0, parse_quote!(#[derive(errlanes::Rejection)]));
+    for variant in &item.variants {
+        let mut flatten = false;
+        for attr in &variant.attrs {
+            if attr.path().is_ident("flatten") {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "use #[compose(flatten)] and the placeholder name as prefix; use explicit lifts for custom names",
+                ));
+            }
+            if attr.path().is_ident("compose") {
+                let option = attr.parse_args::<syn::Ident>().map_err(|_| {
+                    syn::Error::new_spanned(
+                        attr,
+                        "expected #[compose(flatten)]; the placeholder name supplies the prefix, with no prefix or rename arguments",
+                    )
+                })?;
+                if option != "flatten" || flatten {
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        "expected exactly one #[compose(flatten)] on a source placeholder",
+                    ));
+                }
+                flatten = true;
+            }
+        }
+    }
+    let Some(index) = item.variants.iter().position(is_placeholder) else {
+        // The attribute owns these derives, including redundant user requests.
+        // Keep all unrelated derives and add each of ours exactly once.
+        let mut attrs = Vec::new();
+        for attr in item.attrs {
+            if attr.path().is_ident("derive") {
+                let derives = attr.parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Path, Token![,]>::parse_terminated,
+                )?;
+                let derives: Vec<_> = derives
+                    .into_iter()
+                    .filter(|path| {
+                        !path.segments.last().is_some_and(|segment| {
+                            segment.ident == "Rejection" || segment.ident == "Lift"
+                        })
+                    })
+                    .collect();
+                if !derives.is_empty() {
+                    attrs.push(parse_quote!(#[derive(#(#derives),*)]));
+                }
+            } else {
+                attrs.push(attr);
+            }
+        }
+        item.attrs = attrs;
+        item.attrs.insert(
+            0,
+            parse_quote!(#[derive(errlanes::Rejection, errlanes::Lift)]),
+        );
         return Ok(quote!(#item));
     };
     let variant = &item.variants[index];
     let syn::Fields::Unnamed(fields) = &variant.fields else {
         return Err(syn::Error::new_spanned(
             variant,
-            "flatten requires one source family: Name(Source)",
+            "compose(flatten) requires one source family: Name(Source)",
         ));
     };
     if fields.unnamed.len() != 1 {
         return Err(syn::Error::new_spanned(
             fields,
-            "flatten requires one source family",
+            "compose(flatten) requires one source family: Name(Source)",
         ));
     }
     let source = &fields.unnamed[0].ty;
     let syn::Type::Path(source_path) = source else {
         return Err(syn::Error::new_spanned(
             source,
-            "flatten requires a named source enum",
+            "compose(flatten) requires a named source enum",
         ));
     };
+    if source_path.qself.is_some() {
+        return Err(syn::Error::new_spanned(
+            source,
+            "compose(flatten) requires a named source enum, not an associated type",
+        ));
+    }
+    for attr in &item.attrs {
+        if attr.path().is_ident("lift") {
+            let registration = attr.parse_args::<crate::lift::Registration>()?;
+            if registration.source.to_token_stream().to_string()
+                == source.to_token_stream().to_string()
+            {
+                return Err(syn::Error::new_spanned(
+                    variant,
+                    "source family already mapped; choose whole-family #[compose(flatten)] or explicit #[lift] mappings for that source",
+                ));
+            }
+        }
+    }
     let mut helper = source_path.path.clone();
     let last = helper.segments.last_mut().unwrap();
     if !matches!(last.arguments, syn::PathArguments::None) {
@@ -150,42 +221,9 @@ pub fn callback(input: TokenStream) -> syn::Result<TokenStream> {
         source,
         schema,
     } = syn::parse2(input)?;
-    let index = item
-        .variants
-        .iter()
-        .position(|v| v.attrs.iter().any(|a| a.path().is_ident("flatten")))
-        .unwrap();
+    let index = item.variants.iter().position(is_placeholder).unwrap();
     let placeholder = &item.variants[index];
-    let mut prefix = String::new();
-    let mut renames = std::collections::HashMap::<String, syn::Ident>::new();
-    for attr in &placeholder.attrs {
-        if attr.path().is_ident("flatten") {
-            if matches!(attr.meta, syn::Meta::Path(_)) {
-                continue;
-            }
-            attr.parse_nested_meta(|m| {
-                if m.path.is_ident("prefix") {
-                    prefix = m.value()?.parse::<syn::LitStr>()?.value();
-                } else if m.path.is_ident("rename") {
-                    m.parse_nested_meta(|r| {
-                        let from = r
-                            .path
-                            .get_ident()
-                            .ok_or_else(|| r.error("expected variant name"))?
-                            .to_string();
-                        let to: syn::Ident = r.value()?.parse()?;
-                        renames.insert(from, to);
-                        Ok(())
-                    })?;
-                } else {
-                    return Err(
-                        m.error("expected prefix or rename(SourceVariant = DestinationVariant)")
-                    );
-                }
-                Ok(())
-            })?;
-        }
-    }
+    let prefix = placeholder.ident.to_string();
     fn substitute(tokens: TokenStream, source: &syn::Type) -> TokenStream {
         use proc_macro2::{Group, TokenTree};
         tokens
@@ -244,13 +282,11 @@ pub fn callback(input: TokenStream) -> syn::Result<TokenStream> {
             ));
         }
         let original = variant.ident.clone();
-        variant.ident = renames
-            .remove(&original.to_string())
-            .unwrap_or_else(|| format_ident!("{prefix}{original}"));
+        variant.ident = format_ident!("{prefix}{original}");
         if !names.insert(variant.ident.to_string()) {
             return Err(syn::Error::new_spanned(
                 &variant.ident,
-                "flattened variant name collision; use prefix or rename",
+                "composed variant name collision; change the placeholder name or use explicit lifts",
             ));
         }
         variant
@@ -260,12 +296,6 @@ pub fn callback(input: TokenStream) -> syn::Result<TokenStream> {
             .attrs
             .push(parse_quote!(#[rejection(forward = #source::#original)]));
         imported.push(variant);
-    }
-    if !renames.is_empty() {
-        return Err(syn::Error::new_spanned(
-            placeholder,
-            "rename names an unknown source variant",
-        ));
     }
     let mut variants = syn::punctuated::Punctuated::new();
     for (i, variant) in item.variants.into_iter().enumerate() {

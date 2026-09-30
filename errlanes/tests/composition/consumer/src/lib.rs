@@ -1,10 +1,10 @@
 use errlanes::{Fail, Fault, Rejection, ResultExt, lanes};
 
-#[errlanes::rejection]
-#[derive(Debug, thiserror::Error, errlanes::Lift)]
+#[errlanes::compose]
+#[derive(Debug, thiserror::Error)]
 pub enum Api {
-    #[flatten(prefix = "Post")]
-    Posting(middle::Posting),
+    #[compose(flatten)]
+    Post(middle::Posting),
     #[error("local")]
     Local,
 }
@@ -32,6 +32,20 @@ pub fn check() {
         Api::PostVelocityLimit(value) => assert_eq!(value.0, 42),
         _ => panic!("wrong mapping"),
     }
+    let disabled = Api::from(middle::Posting::VelocityDisabled);
+    assert!(matches!(disabled, Api::PostVelocityDisabled));
+    assert_eq!(
+        Into::<&'static str>::into(disabled.code()),
+        "VELOCITY_DISABLED"
+    );
+    let range = Api::from(middle::Posting::VelocityRange { min: 1, max: 9 });
+    assert!(matches!(range, Api::PostVelocityRange { min: 1, max: 9 }));
+    assert_eq!(range.to_string(), "range 1..9");
+    let with_source = Api::from(middle::limit());
+    assert_eq!(
+        std::error::Error::source(&with_source).unwrap().to_string(),
+        "limit 42"
+    );
     assert!(matches!(
         bare(),
         Err(Fail::Rejected(Api::PostVelocityLimit(_)))

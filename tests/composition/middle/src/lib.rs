@@ -1,7 +1,7 @@
-#[errlanes::rejection]
-#[derive(Debug, thiserror::Error, errlanes::Lift)]
+#[errlanes::compose]
+#[derive(Debug, thiserror::Error)]
 pub enum WriteRejection {
-    #[flatten(prefix = "Order")]
+    #[compose(flatten)]
     Order(foreign::LaneParentConstraintViolation),
     #[error("local")]
     Local,

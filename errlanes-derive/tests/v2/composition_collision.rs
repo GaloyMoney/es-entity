@@ -5,7 +5,7 @@ enum Child {
     #[error("one {0}")] One(u32),
     #[error("two")] Two,
 }
-#[errlanes::rejection]
-#[derive(Debug, thiserror::Error, errlanes::Lift)]
-enum Parent { #[flatten] Child(Child), #[error("one")] One }
+#[errlanes::compose]
+#[derive(Debug, thiserror::Error)]
+enum Parent { #[compose(flatten)] Child(Child), #[error("one")] ChildOne }
 fn main() {}

@@ -2,8 +2,8 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use syn::{Fields, Path, Token, parse::Parse};
 
-struct Registration {
-    source: Path,
+pub(crate) struct Registration {
+    pub(crate) source: Path,
     partial: bool,
 }
 impl Parse for Registration {
