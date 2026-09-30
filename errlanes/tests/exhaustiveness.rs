@@ -1,124 +1,127 @@
-//! A by-value match names exactly the lanes a profile enables: the arms for
-//! disabled slots are not just unnecessary, they are inexpressible. A borrowed
-//! match is the exception, which the `as_*` accessors cover instead.
-use errlanes::{Fail, Fatal, FatalKind, Fault, Settled, Transient, TransientKind, lanes};
+//! A by-value match names exactly the lanes a profile enables: arms for
+//! disabled slots are not merely unnecessary, they are inexpressible. A
+//! borrowed match is the exception, which the `as_*` accessors cover instead.
+use errlanes::{Fail, Fatal, FatalKind, Fault, Lane, Settled, Transient, TransientKind, lanes};
 
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("nope")]
 struct Nope;
-impl errlanes::Rejection for Nope {
-    type Code = NopeCode;
-    fn code(&self) -> NopeCode {
-        NopeCode::Nope
-    }
-}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum NopeCode {
     Nope,
 }
+
 impl std::fmt::Display for NopeCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("NOPE")
     }
 }
+
 impl From<NopeCode> for &'static str {
     fn from(_: NopeCode) -> Self {
         "NOPE"
     }
 }
 
-// (1) exactly the two named arms, by value
-fn two_arms(f: Fault<lanes!(Transient, Fatal)>) -> &'static str {
-    match f {
+impl errlanes::Rejection for Nope {
+    type Code = NopeCode;
+    fn code(&self) -> NopeCode {
+        NopeCode::Nope
+    }
+}
+
+fn two_lanes(failure: Fault<lanes!(Transient, Fatal)>) -> &'static str {
+    match failure {
         Fault::Transient(_) => "transient",
         Fault::Fatal(_) => "fatal",
     }
 }
 
-// (2) one named arm, by value
-fn one_arm(f: Fault<lanes!(Fatal)>) -> Fatal {
-    match f {
-        Fault::Fatal(x) => x,
+fn one_lane(failure: Fault<lanes!(Fatal)>) -> Fatal {
+    match failure {
+        Fault::Fatal(fatal) => fatal,
     }
 }
 
-// (3) irrefutable let for a single-lane fault
-fn one_arm_let(f: Fault<lanes!(Fatal)>) -> Fatal {
-    let Fault::Fatal(x) = f;
-    x
+/// A single inhabited lane destructures irrefutably.
+fn one_lane_let(failure: Fault<lanes!(Fatal)>) -> Fatal {
+    let Fault::Fatal(fatal) = failure;
+    fatal
 }
 
-// (4) Fail: Rejected plus exactly the named fault lanes
-fn fail_arms(f: Fail<Nope, lanes!(Transient, Fatal)>) -> &'static str {
-    match f {
+fn rejected_plus_two(failure: Fail<Nope, lanes!(Transient, Fatal)>) -> &'static str {
+    match failure {
         Fail::Rejected(_) => "rejected",
         Fail::Transient(_) => "transient",
         Fail::Fatal(_) => "fatal",
     }
 }
 
-// (5) Fail with no fault lanes at all: one arm
-fn fail_rejected_only(f: Fail<Nope, lanes!()>) -> Nope {
-    let Fail::Rejected(r) = f;
-    r
+/// `lanes!()` selects no fault lanes, leaving only the rejection.
+fn rejected_only(failure: Fail<Nope, lanes!()>) -> Nope {
+    let Fail::Rejected(rejection) = failure;
+    rejection
 }
 
-// (6) A settled profile is just `Fail` with the transient slot off: the arms
-// are the lanes that remain, and exhaustion is in the fatal lane.
-fn settled_arms(f: Fail<Nope, Settled<lanes!(Transient, Fatal)>>) -> &'static str {
-    match f {
+#[test]
+fn a_by_value_match_names_only_the_selected_lanes() {
+    assert_eq!(
+        two_lanes(Transient::new(TransientKind::Deadlock).into()),
+        "transient"
+    );
+    assert_eq!(two_lanes(Fatal::invariant("x").into()), "fatal");
+    assert_eq!(
+        one_lane(Fatal::invariant("x").into()).kind,
+        FatalKind::Invariant
+    );
+    assert_eq!(
+        one_lane_let(Fatal::invariant("x").into()).kind,
+        FatalKind::Invariant
+    );
+    assert_eq!(rejected_plus_two(Fail::Rejected(Nope)), "rejected");
+    let _: Nope = rejected_only(Fail::Rejected(Nope));
+}
+
+/// A settled profile drops the transient lane, so this names one fewer arm
+/// than its unsettled counterpart -- and exhaustion arrives in the fatal lane.
+fn settled(failure: Fail<Nope, Settled<lanes!(Transient, Fatal)>>) -> &'static str {
+    match failure {
         Fail::Rejected(_) => "rejected",
-        Fail::Fatal(f) if f.kind == FatalKind::Exhausted => "exhausted",
+        Fail::Fatal(fatal) if fatal.kind == FatalKind::Exhausted => "exhausted",
         Fail::Fatal(_) => "fatal",
     }
 }
 
 #[test]
-fn by_value_matches_need_only_the_named_lanes() {
-    assert_eq!(
-        two_arms(Transient::new(TransientKind::Deadlock).into()),
-        "transient"
-    );
-    assert_eq!(
-        one_arm(Fatal::invariant("x").into()).kind,
-        FatalKind::Invariant
-    );
-    assert_eq!(
-        one_arm_let(Fatal::invariant("x").into()).kind,
-        FatalKind::Invariant
-    );
-    assert_eq!(fail_arms(Fail::Rejected(Nope)), "rejected");
-    let _: Nope = fail_rejected_only(Fail::Rejected(Nope));
-    assert_eq!(settled_arms(Fail::Rejected(Nope)), "rejected");
-    let t: Fail<Nope, lanes!(Transient, Fatal)> = Transient::new(TransientKind::Deadlock).into();
-    assert_eq!(settled_arms(t.settle(3)), "exhausted");
+fn settling_removes_an_arm_rather_than_renaming_one() {
+    assert_eq!(settled(Fail::Rejected(Nope)), "rejected");
+    assert_eq!(settled(Fatal::invariant("x").into()), "fatal");
+
+    let transient: Fail<Nope, lanes!(Transient, Fatal)> =
+        Transient::new(TransientKind::Deadlock).into();
+    assert_eq!(settled(transient.settle(3)), "exhausted");
 }
 
-// (7) borrowed inspection without a dead arm
-fn borrowed(e: &Fault<lanes!(Transient, Fatal)>) -> &'static str {
-    if e.as_transient().is_some() {
-        "transient"
-    } else if e.as_fatal().is_some() {
-        "fatal"
-    } else {
-        unreachable!()
+/// Borrowed inspection goes through the accessors, not a match.
+fn inspect(failure: &Fault<lanes!(Transient, Fatal)>) -> Lane {
+    if let Some(transient) = failure.as_transient() {
+        assert_eq!(transient.kind, TransientKind::Deadlock);
     }
-}
-
-// (8) the REFERENCE example, without any match at all
-fn lane_of(e: &Fault<lanes!(Fatal)>) -> errlanes::Lane {
-    e.lane()
+    failure.lane()
 }
 
 #[test]
 fn borrowed_accessors_replace_borrowed_matches() {
-    let t: Fault<lanes!(Transient, Fatal)> = Transient::new(TransientKind::Deadlock).into();
-    assert_eq!(borrowed(&t), "transient");
-    assert_eq!(t.as_transient().unwrap().kind, TransientKind::Deadlock);
-    assert!(t.as_fatal().is_none());
-    let f: Fault<lanes!(Fatal)> = Fatal::invariant("x").into();
-    assert_eq!(lane_of(&f), errlanes::Lane::Fatal);
-    let r: Fail<Nope, lanes!(Transient, Fatal)> = Fail::Rejected(Nope);
-    assert!(r.as_rejected().is_some());
-    assert!(r.as_transient().is_none());
+    let transient: Fault<lanes!(Transient, Fatal)> = Transient::new(TransientKind::Deadlock).into();
+    assert_eq!(inspect(&transient), Lane::Transient);
+    assert!(transient.as_fatal().is_none());
+
+    let fatal: Fault<lanes!(Fatal)> = Fatal::invariant("x").into();
+    assert_eq!(fatal.lane(), Lane::Fatal);
+    assert!(fatal.as_fatal().is_some());
+
+    let rejected: Fail<Nope, lanes!(Transient, Fatal)> = Fail::Rejected(Nope);
+    assert!(rejected.as_rejected().is_some());
+    assert!(rejected.as_transient().is_none());
 }

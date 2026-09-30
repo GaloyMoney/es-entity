@@ -21,7 +21,7 @@ async fn execute(
 }
 
 #[tokio::test]
-async fn retry_lowers_the_profile_without_a_dead_arm() {
+async fn retry_hands_back_the_settled_profile() {
     let mut attempts = 0;
     let value = execute(|| {
         attempts += 1;
