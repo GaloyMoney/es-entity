@@ -1,0 +1,7 @@
+error: `Rejected` is not a fault lane: it is selected by the carrier, not the profile. Use `Fail<YourRejection, lanes!(..)>` instead of `Fault<lanes!(Rejected, ..)>`.
+ --> tests/v2/rejected_is_not_a_lane.rs:3:25
+  |
+3 |     let _: Option<Fault<lanes!(Rejected, Fatal)>> = None;
+  |                         ^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `$crate::lanes` which comes from the expansion of the macro `lanes` (in Nightly builds, run with -Z macro-backtrace for more info)

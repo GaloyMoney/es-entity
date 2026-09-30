@@ -145,6 +145,65 @@ impl<L: LaneProfile> Fault<L> {
     }
 }
 
+/// Borrowed lane accessors. A *by-value* match names only the lanes a profile
+/// enables, but a borrowed match still demands an arm for every variant. These
+/// accessors are the borrowed form, so no caller has to write `match *never {}`.
+/// Each exists only when the profile enables that lane, so `as_denied` on a
+/// no-denial profile is a compile error rather than a permanent `None`.
+impl<L: LaneProfile<Denied = Denied>> Fault<L> {
+    pub fn as_denied(&self) -> Option<&Denied> {
+        match self {
+            Fault::Denied(d) => Some(d),
+            _ => None,
+        }
+    }
+}
+
+impl<L: LaneProfile<Transient = Transient>> Fault<L> {
+    pub fn as_transient(&self) -> Option<&Transient> {
+        match self {
+            Fault::Transient(t) => Some(t),
+            _ => None,
+        }
+    }
+}
+
+impl<L: LaneProfile<Fatal = Fatal>> Fault<L> {
+    pub fn as_fatal(&self) -> Option<&Fatal> {
+        match self {
+            Fault::Fatal(f) => Some(f),
+            _ => None,
+        }
+    }
+}
+
+impl<D, L: LaneProfile<Denied = Denied>> Fail<D, L> {
+    pub fn as_denied(&self) -> Option<&Denied> {
+        match self {
+            Fail::Denied(d) => Some(d),
+            _ => None,
+        }
+    }
+}
+
+impl<D, L: LaneProfile<Transient = Transient>> Fail<D, L> {
+    pub fn as_transient(&self) -> Option<&Transient> {
+        match self {
+            Fail::Transient(t) => Some(t),
+            _ => None,
+        }
+    }
+}
+
+impl<D, L: LaneProfile<Fatal = Fatal>> Fail<D, L> {
+    pub fn as_fatal(&self) -> Option<&Fatal> {
+        match self {
+            Fail::Fatal(f) => Some(f),
+            _ => None,
+        }
+    }
+}
+
 impl<L: LaneProfile> fmt::Display for Fault<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

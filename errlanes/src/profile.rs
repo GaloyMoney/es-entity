@@ -80,20 +80,38 @@ pub type AllLanes = Profile<true, true, true>;
 /// Select a subset of `Denied`, `Transient`, and `Fatal`, in any order.
 #[macro_export]
 macro_rules! lanes {
-    ($($lane:ident),* $(,)?) => {
-        $crate::profile::Profile<
-            { false $(|| $crate::lanes!(@denied $lane))* },
-            { false $(|| $crate::lanes!(@transient $lane))* },
-            { false $(|| $crate::lanes!(@fatal $lane))* }
-        >
+    ($($lane:ident),* $(,)?) => { $crate::lanes!(@acc [false, false, false] $($lane,)*) };
+
+    (@acc [$d:expr, $t:expr, $f:expr]) => { $crate::profile::Profile<{ $d }, { $t }, { $f }> };
+    (@acc [$d:expr, $t:expr, $f:expr] Denied, $($rest:ident,)*) => {
+        $crate::lanes!(@acc [true, $t, $f] $($rest,)*)
     };
-    (@denied Denied) => { true };
-    (@denied Transient) => { false };
-    (@denied Fatal) => { false };
-    (@transient Denied) => { false };
-    (@transient Transient) => { true };
-    (@transient Fatal) => { false };
-    (@fatal Denied) => { false };
-    (@fatal Transient) => { false };
-    (@fatal Fatal) => { true };
+    (@acc [$d:expr, $t:expr, $f:expr] Transient, $($rest:ident,)*) => {
+        $crate::lanes!(@acc [$d, true, $f] $($rest,)*)
+    };
+    (@acc [$d:expr, $t:expr, $f:expr] Fatal, $($rest:ident,)*) => {
+        $crate::lanes!(@acc [$d, $t, true] $($rest,)*)
+    };
+    // Both diagnostics expand to a well-formed `Profile`, so the only error
+    // reported is the message itself -- no follow-on `(): LaneProfile`.
+    (@acc [$d:expr, $t:expr, $f:expr] Rejected, $($rest:ident,)*) => {
+        $crate::profile::Profile<{{
+            compile_error!(
+                "`Rejected` is not a fault lane: it is selected by the carrier, not the \
+                 profile. Use `Fail<YourRejection, lanes!(..)>` instead of \
+                 `Fault<lanes!(Rejected, ..)>`."
+            );
+            $d
+        }}, { $t }, { $f }>
+    };
+    (@acc [$d:expr, $t:expr, $f:expr] $other:ident, $($rest:ident,)*) => {
+        $crate::profile::Profile<{{
+            compile_error!(concat!(
+                "unknown lane `",
+                stringify!($other),
+                "`: expected `Denied`, `Transient`, or `Fatal`"
+            ));
+            $d
+        }}, { $t }, { $f }>
+    };
 }
