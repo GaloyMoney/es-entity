@@ -1,59 +1,135 @@
 # errlanes
 
-Errors communicate that something went wrong up the call stack. What went wrong
-can vary widely: a caller supplied an invalid amount, a user lacks permission,
-a database transaction hit a deadlock, or the application encountered corrupt
-state. Each calls for a different response, often from a different part of the
-application. Representing that information so callers can decide what to do
-becomes harder as errors pass through several layers.
+"Something went wrong" is rarely enough. A caller supplied an invalid amount, a
+user lacks permission, a transaction hit a deadlock, stored state is corrupt —
+each needs a different response, often from a different layer. The usual flat
+error enum makes every layer re-derive which kind it is holding, and that
+judgement gets re-made, inconsistently, at every hop.
 
-This crate takes an opinionated approach: categorize errors into four *lanes*,
-each with a distinct meaning for the caller. The layer that understands an error
-assigns its lane; callers can then handle or propagate it without having to
-interpret the original error again.
+errlanes sorts failures into four **lanes** and carries the choice in the type.
+The layer that understands a failure assigns its lane once; every layer above
+propagates it without interpreting it again.
 
-The lanes are represented by two carrier enums. Leaving lane selection aside
-for a moment, their structure looks like this:
+| Lane | Means | Response |
+|---|---|---|
+| `Rejected(R)` | A domain outcome the caller can act on | Handle it, or tell the end user |
+| `Denied` | The caller is not authorized | Audit and refuse |
+| `Transient` | Retrying may succeed | Retry, within a budget |
+| `Fatal` | A bug, misconfiguration, or corrupt state | Stop, surface, page |
+
+Two carrier enums hold them. Setting lane selection aside for a moment:
 
 ```rust
 use errlanes::{Denied, Fatal, Transient};
 
 enum Fault {
-    Denied(Denied),       // The caller is not authorized.
-    Transient(Transient), // Retrying the operation may succeed.
-    Fatal(Fatal),         // Operator attention is needed.
+    Denied(Denied),
+    Transient(Transient),
+    Fatal(Fatal),
 }
 
 enum Fail<R> {
-    Rejected(R),          // A domain outcome the caller can act on.
+    Rejected(R),
     Denied(Denied),
     Transient(Transient),
     Fatal(Fatal),
 }
 ```
 
-`Fault` carries the three outcomes whose handling does not depend on a domain
-error type. `Fail` adds Rejected, carrying an application-defined type `R` so
-callers can distinguish individual domain cases. Both preserve the underlying
-source for diagnosis.
+`Fault` covers the three outcomes whose handling does not depend on a domain
+type. `Fail` adds `Rejected`, carrying an application-defined `R` so callers can
+tell individual domain cases apart. Both keep the underlying source for
+diagnosis.
 
-## Faults and lane selection
+Which carrier a function returns is itself information: a `Fault` says *nothing
+about this call is the caller's to correct*.
 
-A particular operation will usually produce only some of these outcomes.
-For example, a storage function might return Transient or Fatal but have no
-reason to deny access. Its signature can express that with
-`Fault<lanes!(Transient, Fatal)>`.
+## Selecting lanes
 
-The `lanes!` macro selects which fault lanes a type permits. That selection
-tells callers what they need to handle. It can change as an error travels up
-the call stack: a caller may introduce an additional outcome or take
-responsibility for handling one.
+Most operations produce only some of the lanes. Storage might fail transiently
+or fatally but has no business denying access; `lanes!` says so in the
+signature:
+
+```rust
+use errlanes::{Fail, Fault, lanes};
+# #[derive(Debug, thiserror::Error, errlanes::Rejection)]
+# enum Validation {
+#     #[error("amount must be positive")]
+#     InvalidAmount,
+# }
+
+type ReadError = Fault<lanes!(Transient, Fatal)>;
+type PayError = Fail<Validation, lanes!(Transient, Fatal)>;
+```
+
+A disabled lane is uninhabited, so no value can ever occupy it. A **by-value
+match therefore names exactly the lanes you selected** — nothing to fill in for
+the ones you left out:
+
+```rust
+use errlanes::{Fault, lanes};
+
+fn describe(failure: Fault<lanes!(Transient, Fatal)>) -> &'static str {
+    match failure {
+        Fault::Transient(_) => "worth another attempt",
+        Fault::Fatal(_) => "needs a human",
+    }
+}
+
+// With a single lane left, there is nothing to match at all.
+fn unwrap_fatal(failure: Fault<lanes!(Fatal)>) -> errlanes::Fatal {
+    let Fault::Fatal(fatal) = failure;
+    fatal
+}
+# let _ = describe(errlanes::Transient::new(errlanes::TransientKind::Deadlock).into());
+# let _ = unwrap_fatal(errlanes::Fatal::invariant("x").into());
+```
+
+Two rules round this out. Lane order does not matter, and `lanes!()` selects no
+fault lanes at all. And `lanes!` names only the three fault lanes: the
+`Rejected` lane is selected by *which carrier* you use, `Fail` or `Fault`.
+
+Matching a **borrowed** failure is the one place Rust still asks about
+uninhabited variants, so reach for an accessor instead of a `match`. Each is
+available only when the profile enables that lane:
+
+```rust
+use errlanes::{Fault, Lane, lanes};
+
+fn log(failure: &Fault<lanes!(Transient, Fatal)>) -> Lane {
+    if let Some(transient) = failure.as_transient() {
+        assert!(transient.retry_after.is_none());
+    }
+    failure.lane()
+}
+# assert_eq!(log(&errlanes::Fatal::invariant("x").into()), Lane::Fatal);
+```
+
+`Fail` adds `as_rejected` to `as_denied` / `as_transient` / `as_fatal`, and
+`lane()` works on any profile.
+
+## Moving between signatures
+
+A failure changes shape as it travels: the lane set grows when a caller can
+produce outcomes the callee could not, and the rejection type changes when a
+failure crosses into a domain with its own vocabulary. Three operations cover
+every case:
+
+| From | To | Use |
+|---|---|---|
+| the same carrier | itself | `?` |
+| a lane marker (`Transient`, `Fatal`, `Denied`) | any carrier enabling it | `?` |
+| `Fault<S>` | `Fail<R, D>` | `?` |
+| a bare rejection `C` | `Fail<R, D>`, given `R: From<C>` | `?` |
+| `Fail<C, S>` | `Fail<R, D>` | `.widen()?` |
+| `Fault<S>` | `Fault<D>` | `.widen()?` |
+
+`?` handles anything that needs no decision. `.widen()` is for the one case that
+does — changing the rejection type — and its destination is inferred from the
+return type. Widening only ever *adds* lanes: dropping one that the source can
+still produce is a compile error, because somebody has to handle it.
 
 ### Authorization adds a lane
-
-Consider an inner operation that can only fail fatally. An outer function
-checks whether the subject is allowed to perform it before calling it. The
-outer function can therefore return Denied as well as Fatal:
 
 ```rust
 use errlanes::{Denied, Fault, WidenResult, lanes};
@@ -62,91 +138,131 @@ fn authorize(subject: &str) -> Result<(), Denied> {
     if subject == "admin" { Ok(()) } else { Err(Denied::default()) }
 }
 
-fn inner() -> Result<u64, Fault<lanes!(Fatal)>> {
+fn load() -> Result<u64, Fault<lanes!(Fatal)>> {
     Ok(42)
 }
 
-fn outer(subject: &str) -> Result<u64, Fault<lanes!(Fatal, Denied)>> {
+fn load_as(subject: &str) -> Result<u64, Fault<lanes!(Denied, Fatal)>> {
     authorize(subject)?;
-    let value = inner().widen()?;
-    Ok(value)
+    Ok(load().widen()?)
 }
 
-assert_eq!(outer("admin").unwrap(), 42);
-assert!(matches!(outer("guest"), Err(Fault::Denied(_))));
+assert_eq!(load_as("admin").unwrap(), 42);
+assert!(matches!(load_as("guest"), Err(Fault::Denied(_))));
 ```
 
+The denial enters through `?` because `Denied` is a lane marker. The inner
+`Fatal` survives `.widen()` with its kind, context and source intact.
 
-The authorization failure enters the Denied lane through `?`. The inner
-operation's result uses `.widen()?` to fit the outer function's larger set of
-lanes. This method comes from `WidenResult`, and its destination is inferred
-from the return type. An inner Fatal remains Fatal, with its source and context
-intact.
+### Retrying removes one
 
-### Retrying handles a lane
-
-The reverse situation occurs when an inner operation can return Transient,
-but its caller owns retrying the operation. After handling Transient, that
-caller only needs to expose Fatal to its own callers:
+A transient failure is *born* where the meaning is known — usually at the edge
+that talks to storage or an upstream service. That is the only place with the
+evidence, so it is where classification belongs:
 
 ```rust
-use errlanes::{Fault, lanes};
+use errlanes::{Fault, Transient, TransientKind, lanes};
+use std::time::Duration;
+
+/// The storage edge: it knows a serialization failure is worth repeating, and
+/// roughly when.
+fn classify(sqlstate: &str) -> Fault<lanes!(Transient, Fatal)> {
+    match sqlstate {
+        "40001" | "40P01" => Transient::new(TransientKind::SerializationFailure)
+            .with_context("commit lost to a concurrent writer")
+            .with_retry_after(Duration::from_millis(10))
+            .into(),
+        other => errlanes::Fatal::from_error(
+            errlanes::FatalKind::Dependency,
+            std::io::Error::other(format!("sqlstate {other}")),
+        )
+        .into(),
+    }
+}
+```
+
+The caller that owns a *safe* repetition then handles the lane, and stops
+offering it to its own callers. `settle` is what turns the attempt count into
+an outcome: a transient that never succeeded becomes `Fatal(Exhausted)`,
+keeping the last transient as its source.
+
+```rust
+use errlanes::{Fault, Settled, Transient, TransientKind, lanes};
+
+const BUDGET: u32 = 3;
 
 fn execute(
-    mut inner: impl FnMut() -> Result<u64, Fault<lanes!(Transient, Fatal)>>,
-) -> Result<u64, Fault<lanes!(Fatal)>> {
+    mut attempt_once: impl FnMut() -> Result<u64, Fault<lanes!(Transient, Fatal)>>,
+) -> Result<u64, Fault<Settled<lanes!(Transient, Fatal)>>> {
+    let mut attempts = 0;
     loop {
-        match inner() {
+        attempts += 1;
+        match attempt_once() {
             Ok(value) => return Ok(value),
-            Err(Fault::Transient(_)) => continue,
-            Err(Fault::Fatal(error)) => return Err(Fault::Fatal(error)),
-            Err(Fault::Denied(never)) => match never {},
+            Err(failure) if failure.is_transient() && attempts < BUDGET => continue,
+            Err(failure) => return Err(failure.settle(attempts)),
         }
     }
 }
 
+// A transient that later succeeds never reaches the caller.
 let mut attempts = 0;
-let result = execute(|| {
+let value = execute(|| {
     attempts += 1;
     if attempts == 1 {
-        Err(errlanes::Transient::new(errlanes::TransientKind::Deadlock).into())
+        Err(Transient::new(TransientKind::Deadlock).into())
     } else {
         Ok(42)
     }
 });
-assert_eq!(result.unwrap(), 42);
+assert_eq!(value.unwrap(), 42);
 assert_eq!(attempts, 2);
-assert!(matches!(
-    execute(|| Err(errlanes::Fatal::invariant("broken state").into())),
-    Err(Fault::Fatal(_))
-));
+
+// One that never succeeds is spent, and says so.
+let spent = execute(|| Err(Transient::new(TransientKind::Deadlock).into())).unwrap_err();
+let Fault::Fatal(fatal) = spent;
+assert_eq!(fatal.kind, errlanes::FatalKind::Exhausted);
+let exhausted = std::error::Error::source(&fatal)
+    .and_then(|source| source.downcast_ref::<errlanes::Exhausted>())
+    .expect("the exhaustion is the fatal's source");
+assert_eq!(exhausted.attempts, BUDGET);
+assert_eq!(exhausted.last.kind, TransientKind::Deadlock);
 ```
 
+`Settled<L>` is `L` with its transient lane spent — an adjective on the
+*profile*, not a second pair of carriers. So the return type above is literally
+`Fault<lanes!(Fatal)>`, and the single remaining lane destructures with one
+irrefutable `let`:
 
-Here, `execute` takes the inner operation as a closure so it can call it again.
-Its return type omits Transient because the loop handles that case. Widening
-alone cannot remove a lane; the caller must account for the outcome.
+```rust
+# use errlanes::{Fault, Settled, lanes};
+fn only_fatal(failure: Fault<lanes!(Fatal)>) -> errlanes::FatalKind {
+    let Fault::Fatal(fatal) = failure;
+    fatal.kind
+}
 
-The Denied arm needs a little explanation. Disabled lanes still appear as enum
-variants, but their payload is `Infallible`. The expression `match never {}`
-tells Rust that there can be no value in that arm. Lane order does not matter,
-and `lanes!()` with no names disables all fault lanes.
+fn hand_over(failure: Fault<Settled<lanes!(Transient, Fatal)>>) -> errlanes::FatalKind {
+    only_fatal(failure)
+}
+# assert_eq!(hand_over(errlanes::Fatal::invariant("x").into()), errlanes::FatalKind::Invariant);
+```
 
-The loop illustrates who handles Transient. In practice, that owner also
-decides whether repeating the operation is safe and when to stop retrying.
-The optional `tokio` feature provides `retry` and `retry_with` with retry
-budgets and delays.
+The `tokio` feature does all of this for you: `retry` and `retry_with` apply a
+`RetryPolicy` (attempt budget, exponential backoff, jitter), honour a
+transient's `retry_after`, and return the settled profile. Retry at the boundary
+that owns a safe repetition — a lane says a failure *may* succeed on retry, not
+that repeating an ambiguous commit is safe.
+
+Because a settled profile has nowhere to put an exhaustion unless it admits
+`Fatal`, `lanes!(Transient)` on its own is neither settleable nor retryable.
+Anything worth retrying can fail permanently.
 
 ## Domain rejections
 
-Some errors require more specific handling than retrying, denying access, or
-reporting a fatal failure. A payment amount might be invalid, or an email
-address might already be registered. The caller may need to handle the case
-directly or communicate it to an end user who can correct the request.
-
-These cases belong in the Rejected lane. An application-defined enum describes
-the individual outcomes. `derive(Rejection)` gives each outcome a stable
-`code()` and a recording `level()`:
+Some outcomes are neither retryable nor operator business: an amount is
+invalid, an email is already registered. The caller may need to handle the case,
+or tell an end user who can correct the request. Those belong in `Rejected`,
+described by an ordinary `thiserror` enum:
 
 ```rust
 use errlanes::{Level, Rejection};
@@ -164,25 +280,20 @@ assert_eq!(public_code, "INVALID_AMOUNT");
 assert_eq!(rejection.level(), Level::Info);
 ```
 
+The variant lets Rust callers match the case. The **code** is a stable identity
+for an API boundary and for telemetry, and stays typed inside the application —
+it becomes a string only at the wire, so a typo is a compile error and a
+reworded message never breaks a consumer. Never build either from `Display`: a
+rejection's message may embed caller-supplied input.
 
-The enum variant lets Rust callers match the case. The code lets an API expose
-a stable identity and lets telemetry group occurrences of the same outcome,
-even if its human-readable message changes. Codes remain typed inside the
-application and can be converted to strings at the API boundary.
-
-The level tells the recording boundary how severely to log the rejection.
-Info is the default because rejections are expected domain outcomes. A case
-that needs different operational visibility can override it with, for example,
-`#[rejection(code = "INVALID_AMOUNT", level = "warn")]`. Its lane is still Rejected.
+The **level** tells the recording boundary how loudly to log it. Rejections
+default to `Info` because they are expected outcomes; `#[rejection(code = "…",
+level = "warn")]` raises one without changing its lane.
 
 ### Rejections alongside faults
 
-An operation can reject a request for a domain reason and also encounter a
-fault while carrying it out. `Fail<R, L>` expresses both: `R` names the domain
-rejections, and `L` selects the fault lanes.
-
-For example, paying can reject an invalid amount before reaching storage,
-while storage can fail fatally:
+An operation can reject a request *and* trip over a fault while carrying it
+out. `Fail<R, L>` expresses both:
 
 ```rust
 use errlanes::{Fail, Fault, lanes};
@@ -197,7 +308,7 @@ fn save() -> Result<(), Fault<lanes!(Fatal)>> { Ok(()) }
 
 fn pay(amount: u64) -> Result<(), Fail<Validation, lanes!(Fatal)>> {
     if amount == 0 {
-        return Err(Fail::Rejected(Validation::InvalidAmount));
+        return Err(Validation::InvalidAmount.into());
     }
     save()?;
     Ok(())
@@ -207,22 +318,17 @@ assert!(matches!(pay(0), Err(Fail::Rejected(Validation::InvalidAmount))));
 assert!(pay(1).is_ok());
 ```
 
+A function that only validates its input needs no carrier at all — return
+`Result<T, Validation>` and let the caller's `?` place it in the `Rejected`
+lane.
 
-`Fail::Rejected` carries the validation case. The storage function returns a
-`Fault`, which `?` converts into the compatible `Fail` while retaining its
-lane. A function that only validates input can return `Result<T, Validation>`
-directly; it has no fault lanes to combine with its rejections.
+## Crossing a domain boundary
 
-## Rejections across domain boundaries
-
-As an error moves up the call stack, it may cross into a domain with its own
-rejection enum. A payment operation, for example, may need to expose a
-validation rejection as one of its own cases. The fault lanes already have
-shared meanings, but the two domain enums need an explicit conversion.
-
-`derive(Lift)` generates that conversion. The enum-level `#[lift(Validation)]`
-names the source, and an annotation on each destination variant says which
-source case it represents:
+Moving up the stack, a failure may reach a domain with its own rejection enum.
+The fault lanes already mean the same thing everywhere; the two rejection types
+need a conversion, and `#[derive(Lift)]` writes it. The enum-level
+`#[lift(Source)]` names the source; each destination variant says which source
+case it stands for:
 
 ```rust
 use errlanes::{Fail, Rejection, WidenResult, lanes};
@@ -243,7 +349,7 @@ enum Payment {
 }
 
 fn inner() -> Result<(), Fail<Validation, lanes!(Fatal)>> {
-    Err(Fail::Rejected(Validation::InvalidAmount))
+    Err(Validation::InvalidAmount.into())
 }
 
 fn outer() -> Result<(), Fail<Payment, lanes!(Denied, Fatal)>> {
@@ -251,46 +357,43 @@ fn outer() -> Result<(), Fail<Payment, lanes!(Denied, Fatal)>> {
     Ok(())
 }
 
-let error = outer().unwrap_err().rejected().unwrap();
-assert!(matches!(error, Payment::AmountNotPositive));
-assert_eq!(Into::<&'static str>::into(error.code()), "INVALID_AMOUNT");
+let rejection = outer().unwrap_err().rejected().unwrap();
+assert!(matches!(rejection, Payment::AmountNotPositive));
+assert_eq!(Into::<&'static str>::into(rejection.code()), "INVALID_AMOUNT");
 ```
 
+A mapping accounts for every source case by default: the derive generates an
+exhaustive match plus `From`, so a new `Validation` case fails to compile until
+this boundary decides what it means. Unit, tuple and named payloads forward
+automatically; `#[lift(Source::Variant, with = mapper)]` handles a genuine
+payload transformation.
 
-`WidenResult` works on `Fail` results as well as `Fault` results. In this
-example, `.widen()?` converts the validation rejection into the payment
-rejection and permits Denied in the result. Faults retain their payloads, and
-successful values pass through unchanged.
+Conversion and identity stay separate. `Lift` generates the conversion,
+`Rejection` the code and level, and either derive works alone. When both are
+present a simple mapping also forwards the source's metadata — the renamed
+`AmountNotPositive` above keeps the code `INVALID_AMOUNT` and its level, because
+a prefix or an intermediate Rust name is not a change of meaning. Declare
+`#[rejection(code = "…")]` on the destination when the mapping genuinely
+reinterprets the outcome.
 
-By default, a lift must account for every source case. The derive generates
-an exhaustive mapping and a `From` implementation. If Validation gains another
-case, this mapping must be updated before it compiles. A bare Validation value
-can also convert through `Payment::from(value)` or propagate through `?` into
-a compatible `Fail`.
+### When only some cases belong
 
-Conversion and metadata are separate concerns. `Lift` generates the conversion;
-`Rejection` generates the code and level. Either derive can be used alone.
-When both are present, a simple lift annotation also identifies where to get
-the metadata. The renamed `AmountNotPositive` case therefore keeps the source
-code `INVALID_AMOUNT` and its level. A destination can declare its own
-`#[rejection(code = "...")]` when the mapping gives the error a new domain meaning.
+Sometimes only a subset of the source cases makes sense in the destination
+domain, and the rest would mean a violated invariant.
+`#[lift(Source, unhandled = fatal)]` declares that: mapped cases become
+rejections, and anything unmapped becomes `Fatal(Invariant)` with the original
+rejection as its source.
 
-Sometimes only a subset of the source cases makes sense as a rejection in the
-destination domain. If the remaining cases would indicate a violated invariant,
-`#[lift(Source, unhandled = fatal)]` allows a partial mapping. Callers then use
-`.lift()?` from `LiftResult`. An unmapped rejection becomes Fatal with the
-original rejection as its source, so the destination must permit Fatal. A
-partial mapping does not generate `From`.
+That is a property of the destination enum, declared once — so the call site is
+the same `.widen()?` either way. Partial mappings need the destination to admit
+`Fatal`, which the compiler checks, and they generate no `From`: there is no
+infallible conversion to be had.
 
-The [reference](https://github.com/GaloyMoney/es-entity/blob/main/errlanes/REFERENCE.md)
-covers mapping options, metadata rules, feature integrations, and migration.
+## Composing a whole family
 
-## Composing rejection families
-
-An outer domain may also want to expose every case from an inner rejection
-family, including cases added in the future. In that situation, there is no
-individual mapping decision to make for each case.
-`#[errlanes::compose]` expresses that relationship directly:
+An outer domain sometimes wants to expose *every* case of an inner family,
+including ones added later. There is no per-case decision to make, so
+`#[errlanes::compose]` states the relationship instead:
 
 ```rust
 use errlanes::Rejection;
@@ -316,22 +419,59 @@ assert!(matches!(payment, Payment::AmountInvalidAmount));
 assert_eq!(Into::<&'static str>::into(payment.code()), "INVALID_AMOUNT");
 ```
 
+The placeholder `Amount(Validation)` expands into real variants —
+`AmountInvalidAmount` — lending its name as the prefix. Imported cases keep
+their payloads, codes, levels, formatting and sources. `compose` supplies both
+`Rejection` and `Lift`, so the result widens like any other family, and it can
+sit alongside explicit lifts from other sources.
 
-The placeholder `Amount(Validation)` expands into variants such as
-`AmountInvalidAmount`. Its name supplies the prefix; the imported cases keep
-their payloads, codes, levels, formatting, and sources. The attribute supplies
-both `Rejection` and `Lift`, including total `From` conversions, so the
-resulting family supports `.widen()?` just like the explicit mapping above.
+Composition picks up future source cases on purpose. Prefer an explicit mapping
+when each addition deserves review or a case needs its own name; prefer reusing
+the inner type outright when a layer adds no meaning of its own.
 
-Composition includes new source cases automatically. Explicit strict lifts
-are useful when each addition needs review or individual cases need different
-names. When an outer layer adds no semantics of its own, it can simply reuse
-the inner rejection type.
+## Recording, at one boundary
+
+The `tracing` feature turns a failure into span fields, once, at the boundary
+that disposes of it — not at every layer it passed through. `record_fail` takes
+a `Fail`, `record_fault` a `Fault`; both accept settled profiles.
+
+```rust,ignore
+let span = tracing::info_span!("http.request", /* errlanes::FIELDS as Empty */);
+if let Err(ref failure) = outcome {
+    errlanes::record_fail(&span, failure);
+}
+```
+
+Declare `errlanes::FIELDS` on the span as `tracing::field::Empty`. `error.code`
+and `error.level` come from `Rejection` for a rejection, and from the lane
+otherwise: `FORBIDDEN`/`WARN` for denied, the transient or fatal kind
+otherwise. Only `Fatal` writes `exception.message` and `exception.type`, where
+the text is operator-facing by construction.
+
+`lane_of` and `transient_of` recover a lane from an arbitrary `dyn Error` by
+walking its source chain, including through boxed or newtype wrappers — the
+interop point for code that has not adopted these carriers, alongside
+`#[derive(Classify)]` for classifying a legacy enum. A wrapper must expose its
+source for either to work.
+
+## Features
+
+| Feature | Default | Provides |
+|---|---|---|
+| `derive` | yes | `Rejection`, `Lift`, `Failure`, `Classify`, `compose` |
+| `tokio` | no | `retry`, `retry_with`, `RetryPolicy` |
+| `tracing` | no | `record_fail`, `record_fault`, `FIELDS` |
+| `sqlx` | no | `classify_sqlx`, `lane_of_sqlx`, `From<sqlx::Error>` |
+
+The `sqlx` classifier maps serialization failures, deadlocks, pool timeouts and
+connection loss to `Transient`, and everything else — including `Protocol`
+errors, which are not retryable connection loss — to `Fatal`. A repository
+should recognise its own constraints before falling back to it; an unknown
+constraint is an invariant, not a domain outcome.
 
 ---
 
-The Rust snippets above are checked by the crate's doctests. The opening enum
-sketch compiles, and the examples execute their assertions:
+Every Rust snippet above is a doctest:
 
 ```sh
 nix develop -c cargo test --profile mdbook-test -p errlanes --doc
