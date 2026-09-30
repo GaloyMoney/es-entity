@@ -28,7 +28,6 @@ fn fault_results_widen_at_question_mark_boundaries() {
 fn widening_fault_results_preserves_transient_and_denied_payloads() {
     let transient = Transient::new(TransientKind::Deadlock)
         .with_context("retry transaction")
-        .with_retry_after(std::time::Duration::from_millis(7))
         .with_source(std::io::Error::other("deadlock"));
     let original_source = transient.source_arc().unwrap().clone();
     let result: Result<(), Fault<lanes!(Transient)>> = Err(transient.into());
@@ -38,7 +37,6 @@ fn widening_fault_results_preserves_transient_and_denied_payloads() {
     };
     assert_eq!(error.kind, TransientKind::Deadlock);
     assert_eq!(error.context.as_deref(), Some("retry transaction"));
-    assert_eq!(error.retry_after, Some(std::time::Duration::from_millis(7)));
     assert!(std::sync::Arc::ptr_eq(
         &original_source,
         error.source_arc().unwrap()
@@ -167,38 +165,30 @@ fn infallible_and_boxed_conversions_are_coherent() {
     assert_eq!(Into::<&'static str>::into(Child::Unit.code()), "UNIT");
 }
 
-#[cfg(feature = "tokio")]
-#[tokio::test]
-async fn retry_respects_subset_and_preserves_retry_after() {
-    use std::{cell::Cell, time::Duration};
-    let attempts = Cell::new(0);
-    let sleeps = Cell::new(0);
-    let policy = errlanes::RetryPolicy {
-        max_attempts: 3,
-        ..Default::default()
-    };
-    let result = errlanes::retry_with(
-        &policy,
-        || {
-            attempts.set(attempts.get() + 1);
-            async {
-                // `lanes!(Transient)` alone is no longer retryable: settling it
-                // would have nowhere to put the exhaustion. Anything worth
-                // retrying can fail permanently, so it must admit Fatal.
-                Err::<(), Fail<Child, lanes!(Transient, Fatal)>>(
-                    Transient::new(TransientKind::Deadlock)
-                        .with_retry_after(Duration::from_millis(7))
-                        .into(),
-                )
+#[test]
+fn retry_loop_respects_subset() {
+    // `lanes!(Transient)` alone is no longer retryable: settling it would
+    // have nowhere to put the exhaustion. Anything worth retrying can fail
+    // permanently, so it must admit Fatal.
+    fn retry(
+        mut op: impl FnMut() -> Result<(), Fail<Child, lanes!(Transient, Fatal)>>,
+    ) -> Result<(), Fail<Child, lanes!(Fatal)>> {
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            match op() {
+                Ok(()) => return Ok(()),
+                Err(failure) if failure.is_transient() && attempts < 3 => continue,
+                Err(failure) => return Err(failure.settle(attempts)),
             }
-        },
-        |delay| {
-            assert_eq!(delay, Duration::from_millis(7));
-            sleeps.set(sleeps.get() + 1);
-            async {}
-        },
-    )
-    .await;
+        }
+    }
+
+    let mut attempts = 0;
+    let result = retry(|| {
+        attempts += 1;
+        Err(Transient::new(TransientKind::Deadlock).into())
+    });
     let fatal = result.as_ref().unwrap_err().as_fatal().unwrap();
     assert_eq!(fatal.kind, errlanes::FatalKind::Exhausted);
     assert_eq!(
@@ -209,16 +199,16 @@ async fn retry_respects_subset_and_preserves_retry_after() {
             .attempts,
         3
     );
-    assert_eq!(attempts.get(), 3);
-    assert_eq!(sleeps.get(), 2);
-    let result = errlanes::retry_with(
-        &policy,
-        || async {
-            Err::<(), Fail<Child, lanes!(Fatal)>>(Fatal::invariant("stored corruption").into())
-        },
-        |_| async { panic!("a fatal-only profile cannot retry") },
-    )
-    .await;
+    assert_eq!(attempts, 3);
+
+    fn fatal_only(
+        mut op: impl FnMut() -> Result<(), Fail<Child, lanes!(Fatal)>>,
+    ) -> Result<(), Fail<Child, lanes!(Fatal)>> {
+        // A fatal-only profile has no transient lane to loop on: nothing
+        // here ever calls `op` more than once.
+        op()
+    }
+    let result = fatal_only(|| Err(Fatal::invariant("stored corruption").into()));
     assert!(matches!(result, Err(Fail::Fatal(_))));
 }
 

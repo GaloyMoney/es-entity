@@ -68,10 +68,24 @@ async fn find_by_id_into_carrier() -> Result<(), CustomerError> {
     Ok(())
 }
 
+/// Hand-rolled retry loop generic over anything `Laned`: a `Failure` carrier
+/// or a bare `Fault`-returning read alike, with no retry machinery to depend
+/// on.
+fn retry<T, E: errlanes::Laned>(mut op: impl FnMut() -> Result<T, E>) -> Result<T, E::Settled> {
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        match op() {
+            Ok(t) => return Ok(t),
+            Err(e) if errlanes::Laned::is_transient(&e) && attempts < 3 => continue,
+            Err(e) => return Err(errlanes::Laned::settle(e, attempts)),
+        }
+    }
+}
+
 /// Exercises the `?`-widening paths from Appendix A of the error-handling
-/// research doc, plus `retry` over a `Failure` and a `Fault`-returning read,
-/// and the settled matches with no `Transient`
-/// arm.
+/// research doc, plus a hand-rolled retry loop over a `Failure` and a
+/// `Fault`-returning read, and the settled matches with no `Transient` arm.
 pub fn smoke() {
     assert!(from_own_rejection().is_err());
     assert!(from_own_fail_view().is_err());
@@ -87,11 +101,7 @@ pub fn smoke() {
     assert!(rt.block_on(find_by_id_into_fail_view()).is_err());
     assert!(rt.block_on(find_by_id_into_carrier()).is_err());
 
-    let policy = errlanes::RetryPolicy::default();
-
-    let settled = rt.block_on(errlanes::retry(&policy, || async {
-        upstream_transient_call()
-    }));
+    let settled = retry(upstream_transient_call);
     // A settled failure has no transient arm at all, so the match names only
     // the lanes that can still occur. Exhaustion arrives in the fatal lane,
     // tagged `FatalKind::Exhausted` and carrying the last transient as source.
@@ -104,9 +114,9 @@ pub fn smoke() {
     };
     assert_eq!(lane, "exhausted");
 
-    // `retry` over a bare read (`Fault`-returning, no `Failure` impl)
-    // compiles via `Laned` and settles into `SettledFault`.
-    let settled_fault = rt.block_on(errlanes::retry(&policy, || fake_find_by_id(true)));
+    // A bare read (`Fault`-returning, no `Failure` impl) retries via the same
+    // `Laned` bound and settles into a settled `Fault`.
+    let settled_fault = retry(|| rt.block_on(fake_find_by_id(true)));
     let lane = match settled_fault {
         Err(errlanes::Fault::Denied(_)) => "denied",
         Err(errlanes::Fault::Fatal(f)) if f.kind == errlanes::FatalKind::Exhausted => "exhausted",

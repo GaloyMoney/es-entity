@@ -16,9 +16,6 @@ pub use profile::{AllLanes, LaneProfile, Settled};
 #[cfg(feature = "sqlx")]
 pub mod sqlx;
 
-#[cfg(feature = "tokio")]
-mod retry;
-
 #[cfg(feature = "tracing")]
 mod record;
 
@@ -31,9 +28,6 @@ pub use lane::{Denied, Exhausted, Fatal, FatalKind, Lane, Transient, TransientKi
 
 #[cfg(feature = "sqlx")]
 pub use sqlx::{classify_sqlx, classify_sqlx_fault, lane_of_sqlx, transient_sqlstate};
-
-#[cfg(feature = "tokio")]
-pub use retry::{RetryPolicy, retry, retry_with};
 
 #[cfg(feature = "tracing")]
 pub use record::{FIELDS, record, record_fail, record_fault};

@@ -25,8 +25,8 @@ pub fn lane_of(e: &(dyn Error + 'static)) -> Option<Lane> {
     None
 }
 
-/// Same walk as [`lane_of`], returning the `Transient` payload (for its
-/// `retry_after`) rather than just the lane.
+/// Same walk as [`lane_of`], returning the `Transient` payload rather than
+/// just the lane.
 pub fn transient_of<'a>(e: &'a (dyn Error + 'static)) -> Option<&'a Transient> {
     let mut cur: Option<&(dyn Error + 'static)> = Some(e);
     while let Some(x) = cur {

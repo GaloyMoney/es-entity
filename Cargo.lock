@@ -728,7 +728,6 @@ dependencies = [
  "errlanes-derive",
  "sqlx",
  "thiserror",
- "tokio",
  "tracing",
  "trybuild",
  "upstream",

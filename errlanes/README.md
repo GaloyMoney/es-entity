@@ -171,9 +171,6 @@ outcome. Because a settled profile needs somewhere to put an exhaustion,
 
 The loop illustrates who handles Transient. In practice, that owner also
 decides whether repeating the operation is safe and when to stop retrying.
-The optional `tokio` feature provides `retry` and `retry_with`, which apply a
-`RetryPolicy` (attempt budget, backoff, jitter), honour a transient's
-`retry_after`, and return the settled profile.
 
 ## Domain rejections
 

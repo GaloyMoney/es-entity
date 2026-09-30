@@ -12,21 +12,18 @@ categories = ["data-structures"]
 default = ["derive"]
 derive = ["dep:errlanes-derive"]
 sqlx = ["dep:sqlx"]
-tokio = ["dep:tokio"]
 tracing = ["dep:tracing"]
 
 [dependencies]
 errlanes-derive = { workspace = true, optional = true }
 
 sqlx = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 composition-consumer = { path = "tests/composition/consumer" }
 downstream = { path = "tests/coherence/downstream" }
 upstream = { path = "tests/coherence/upstream" }
-tokio = { workspace = true }
 trybuild = "1"
 thiserror = "2"
 

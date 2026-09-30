@@ -1,4 +1,4 @@
-use std::{borrow::Cow, error::Error, fmt, sync::Arc, time::Duration};
+use std::{borrow::Cow, error::Error, fmt, sync::Arc};
 
 /// Which of the four lanes an outcome travels in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -65,7 +65,6 @@ impl fmt::Display for TransientKind {
 #[derive(Debug, Clone)]
 pub struct Transient {
     pub kind: TransientKind,
-    pub retry_after: Option<Duration>,
     /// A non-PII breadcrumb, e.g. `"customers/<id> seq 42"`.
     pub context: Option<Cow<'static, str>>,
     source: Option<Arc<dyn Error + Send + Sync + 'static>>,
@@ -75,7 +74,6 @@ impl Transient {
     pub fn new(kind: TransientKind) -> Self {
         Self {
             kind,
-            retry_after: None,
             context: None,
             source: None,
         }
@@ -95,11 +93,6 @@ impl Transient {
 
     pub fn with_context(mut self, c: impl Into<Cow<'static, str>>) -> Self {
         self.context = Some(c.into());
-        self
-    }
-
-    pub fn with_retry_after(mut self, d: Duration) -> Self {
-        self.retry_after = Some(d);
         self
     }
 
