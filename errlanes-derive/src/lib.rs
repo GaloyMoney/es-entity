@@ -1,7 +1,6 @@
 //! Proc macros for `errlanes`: `#[derive(Rejection)]`, `#[derive(Lift)]`, `#[derive(Failure)]`,
-//! `#[derive(Classify)]`, and `#[compose]`.
+//! and `#[compose]`.
 
-mod classify;
 mod composition;
 mod failure;
 mod lift;
@@ -82,11 +81,6 @@ pub fn derive_lift(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Failure, attributes(failure))]
 pub fn derive_failure(input: TokenStream) -> TokenStream {
     expand(input, failure::derive)
-}
-
-#[proc_macro_derive(Classify, attributes(lane))]
-pub fn derive_classify(input: TokenStream) -> TokenStream {
-    expand(input, classify::derive)
 }
 
 #[proc_macro_attribute]

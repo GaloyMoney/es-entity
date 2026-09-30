@@ -19,7 +19,7 @@ pub mod sqlx;
 #[cfg(feature = "tracing")]
 mod record;
 
-pub use dynamic::{Classify, lane_of, transient_of};
+pub use dynamic::{lane_of, transient_of};
 pub use fail::{
     Fail, Failure, Fault, Laned, Level, Lift, Liftable, Rejection, RejectionField,
     RejectionMetadata, UnmappedInto, WidenResult,
@@ -27,10 +27,10 @@ pub use fail::{
 pub use lane::{Denied, Exhausted, Fatal, FatalKind, Lane, Transient, TransientKind};
 
 #[cfg(feature = "sqlx")]
-pub use sqlx::{classify_sqlx, classify_sqlx_fault, lane_of_sqlx, transient_sqlstate};
+pub use sqlx::{classify_sqlx, classify_sqlx_fault, transient_sqlstate};
 
 #[cfg(feature = "tracing")]
 pub use record::{FIELDS, record, record_fail, record_fault};
 
 #[cfg(feature = "derive")]
-pub use errlanes_derive::{__compose_rejection, Classify, Failure, Lift, Rejection, compose};
+pub use errlanes_derive::{__compose_rejection, Failure, Lift, Rejection, compose};

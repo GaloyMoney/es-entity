@@ -38,64 +38,6 @@ pub fn transient_of<'a>(e: &'a (dyn Error + 'static)) -> Option<&'a Transient> {
     None
 }
 
-/// Bridge trait for legacy `thiserror` enums that have not adopted
-/// [`crate::Fail`]. Derived by `#[derive(errlanes::Classify)]`.
-pub trait Classify {
-    fn lane(&self) -> Lane;
-}
-
-impl<D: crate::fail::Rejection> Classify for crate::fail::Fail<D> {
-    fn lane(&self) -> Lane {
-        crate::fail::Fail::lane(self)
-    }
-}
-
-impl<D: crate::fail::Rejection> Classify
-    for crate::fail::Fail<D, crate::profile::Settled<crate::AllLanes>>
-{
-    fn lane(&self) -> Lane {
-        // `Settled<D>` *is* a `Fail`, so this is `Fail::lane`. Naming the alias
-        // here would ask rustc to invert the `LaneProfile::Settled` projection.
-        crate::fail::Fail::lane(self)
-    }
-}
-
-impl Classify for crate::fail::Fault {
-    fn lane(&self) -> Lane {
-        crate::fail::Fault::lane(self)
-    }
-}
-
-impl Classify for crate::fail::Fault<crate::profile::Settled<crate::AllLanes>> {
-    fn lane(&self) -> Lane {
-        crate::fail::Fault::lane(self)
-    }
-}
-
-impl Classify for Transient {
-    fn lane(&self) -> Lane {
-        Lane::Transient
-    }
-}
-
-impl Classify for Fatal {
-    fn lane(&self) -> Lane {
-        Lane::Fatal
-    }
-}
-
-impl Classify for Denied {
-    fn lane(&self) -> Lane {
-        Lane::Denied
-    }
-}
-
-impl Classify for crate::lane::Exhausted {
-    fn lane(&self) -> Lane {
-        Lane::Fatal
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

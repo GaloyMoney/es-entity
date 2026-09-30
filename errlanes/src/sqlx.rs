@@ -12,7 +12,7 @@
 
 use crate::{
     fail::{Fail, Fault},
-    lane::{Fatal, FatalKind, Lane, Transient, TransientKind},
+    lane::{Fatal, FatalKind, Transient, TransientKind},
 };
 
 pub fn transient_sqlstate(code: &str) -> Option<TransientKind> {
@@ -84,26 +84,6 @@ pub fn classify_sqlx_fault(e: ::sqlx::Error) -> Fault<crate::lanes!(Transient, F
     }
 }
 
-/// Same table as [`classify_sqlx`] without consuming the error — for
-/// `#[derive(errlanes::Classify)]`'s `#[lane(sqlx)]`.
-pub fn lane_of_sqlx(e: &::sqlx::Error) -> Lane {
-    match e {
-        ::sqlx::Error::PoolTimedOut
-        | ::sqlx::Error::Io(_)
-        | ::sqlx::Error::Tls(_)
-        | ::sqlx::Error::PoolClosed
-        | ::sqlx::Error::WorkerCrashed => Lane::Transient,
-        ::sqlx::Error::Database(db) => {
-            if db.code().is_some_and(|c| transient_sqlstate(&c).is_some()) {
-                Lane::Transient
-            } else {
-                Lane::Fatal
-            }
-        }
-        _ => Lane::Fatal,
-    }
-}
-
 impl<D, L: crate::LaneProfile<Transient = Transient, Fatal = Fatal>> From<::sqlx::Error>
     for Fail<D, L>
 {
@@ -121,6 +101,7 @@ impl<L: crate::LaneProfile<Transient = Transient, Fatal = Fatal>> From<::sqlx::E
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lane::Lane;
 
     #[test]
     fn pool_timed_out_is_transient_pool_timeout() {
