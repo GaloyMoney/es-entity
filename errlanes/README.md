@@ -280,12 +280,12 @@ enum Payment {
     AmountNotPositive,
 }
 
-fn inner() -> Result<(), Fail<Validation, lanes!(Fatal)>> {
-    Err(Validation::InvalidAmount.into())
+fn validate(amount: u64) -> Result<(), Validation> {
+    if amount == 0 { Err(Validation::InvalidAmount) } else { Ok(()) }
 }
 
 fn outer() -> Result<(), Fail<Payment, lanes!(Denied, Fatal)>> {
-    inner().widen()?;
+    validate(0).widen()?;
     Ok(())
 }
 
@@ -294,10 +294,10 @@ assert!(matches!(rejection, Payment::AmountNotPositive));
 assert_eq!(Into::<&'static str>::into(rejection.code()), "INVALID_AMOUNT");
 ```
 
-`WidenResult` works on `Fail` results as well as `Fault` results. In this
-example, `.widen()?` converts the validation rejection into the payment
-rejection and permits Denied in the result. Faults retain their payloads, and
-successful values pass through unchanged.
+`.widen()?` converts the validation rejection into the payment rejection and
+places it in the Rejected lane of the outer result. `WidenResult` accepts a
+bare rejection, as here, or a `Fail` or `Fault` result; faults retain their
+payloads, and successful values pass through unchanged.
 
 By default, a lift must account for every source case. The derive generates
 an exhaustive mapping and a `From` implementation. If Validation gains another
