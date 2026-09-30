@@ -128,15 +128,15 @@ pub struct Users {
 // // Generated Repository fns:
 // impl Users {
 //     // Create operations
-//     async fn create(&self, new: NewUser) -> Result<User, errlanes::Fail<UserConstraintViolation>>;
-//     async fn create_all(&self, new: Vec<NewUser>) -> Result<Vec<User>, errlanes::Fail<UserConstraintViolation>>;
+//     async fn create(&self, new: NewUser) -> Result<User, errlanes::Fail<UserConstraintViolation, errlanes::RepoLanes>>;
+//     async fn create_all(&self, new: Vec<NewUser>) -> Result<Vec<User>, errlanes::Fail<UserConstraintViolation, errlanes::RepoLanes>>;
 //
 //     // Query operations
-//     async fn find_by_id(&self, id: UserId) -> Result<User, errlanes::Fault>;
-//     async fn find_by_name(&self, name: &str) -> Result<User, errlanes::Fault>;
+//     async fn find_by_id(&self, id: UserId) -> Result<User, errlanes::Fault<errlanes::RepoLanes>>;
+//     async fn find_by_name(&self, name: &str) -> Result<User, errlanes::Fault<errlanes::RepoLanes>>;
 //
 //     // Update operations
-//     async fn update(&self, entity: &mut User) -> Result<(), errlanes::Fail<UserConstraintViolation>>;
+//     async fn update(&self, entity: &mut User) -> Result<(), errlanes::Fail<UserConstraintViolation, errlanes::RepoLanes>>;
 // 
 //     // Paginated listing
 //     async fn list_by_id(&self, args: PaginatedQueryArgs, direction: ListDirection) -> PaginatedQueryRet;

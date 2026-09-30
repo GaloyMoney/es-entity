@@ -53,6 +53,7 @@ impl<'a> From<&'a RepositoryOptions> for UpdateFn<'a> {
 impl ToTokens for UpdateFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let entity = self.entity;
+        let constraint_values = self.columns.constraint_values(entity, false);
         let constraint_violation = &self.constraint_violation;
         let table_name = self.table_name;
         let events_table_name = self.events_table_name;
@@ -161,6 +162,7 @@ impl ToTokens for UpdateFn<'_> {
 
             quote! {
                 #assignments
+                    #constraint_values
                 #gather
                 #snap_gather
 
@@ -172,7 +174,7 @@ impl ToTokens for UpdateFn<'_> {
                 )
                     .fetch_all(op.as_executor())
                     .await
-                    .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)))?;
+                    .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                 #forgettable_code
 
@@ -289,7 +291,7 @@ impl ToTokens for UpdateFn<'_> {
                 pub async fn update(
                     &self,
                     entity: &mut #entity
-                ) -> Result<usize, errlanes::Fail<#constraint_violation>> {
+                ) -> Result<usize, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> {
                     let mut op = self.begin_op().await?;
                     let res = self.update_in_op(&mut op, entity).await?;
                     op.commit().await?;
@@ -316,11 +318,11 @@ impl ToTokens for UpdateFn<'_> {
                 &self,
                 op: &mut OP,
                 entity: &mut #entity
-            ) -> Result<usize, errlanes::Fail<#constraint_violation>>
+            ) -> Result<usize, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, errlanes::Fail<#constraint_violation>> = async {
+                let __result: Result<usize, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> = async {
                     #record_id
                     #(#nested)*
 
@@ -400,7 +402,7 @@ mod tests {
             pub async fn update(
                 &self,
                 entity: &mut Entity
-            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation>> {
+            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -411,17 +413,18 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entity: &mut Entity
-            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation>>
+            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation>> = async {
+                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
                     if !Self::extract_events(entity).any_new() {
                         return Ok(0);
                     }
 
                     let id = &entity.id;
                     let name = &entity.name;
+                    let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), name: Some((*name).clone()), };
                     let offset = entity.events().len_persisted();
                     let events_types = entity.events().new_event_types();
                     let serialized_events = entity.events().serialize_new_events();
@@ -437,7 +440,7 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")))?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                     let recorded_at = rows
                         .first()
@@ -502,7 +505,7 @@ mod tests {
             pub async fn update(
                 &self,
                 entity: &mut Entity
-            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation>> {
+            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -513,11 +516,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entity: &mut Entity
-            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation>>
+            ) -> Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation>> = async {
+                let __result: Result<usize, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
                     if !Self::extract_events(entity).any_new() {
                         return Ok(0);
                     }

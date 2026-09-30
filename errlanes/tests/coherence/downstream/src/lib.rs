@@ -25,7 +25,7 @@ fn from_own_fail_view() -> Result<(), CustomerError> {
 fn from_upstream_fail_view() -> Result<(), CustomerError> {
     let f: Fail<upstream::DepositRejection> =
         Fail::Rejected(upstream::DepositRejection::AccountFrozen);
-    Err(f.widen::<CustomerRejection>())?;
+    Err(f.widen::<CustomerRejection, errlanes::AllLanes>())?;
     Ok(())
 }
 

@@ -1,5 +1,5 @@
 use darling::ToTokens;
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
 use super::options::*;
@@ -20,7 +20,7 @@ fn bare_table_name(events_table_name: &str) -> &str {
 /// every write path.
 pub struct ErrorClassifier<'a> {
     constraint_violation: syn::Ident,
-    constraint_enum: syn::Ident,
+
     events_table_name: &'a str,
     table_name: &'a str,
     /// `classify_update_write` is emitted only where a write path actually
@@ -34,10 +34,7 @@ impl<'a> From<&'a RepositoryOptions> for ErrorClassifier<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
             constraint_violation: opts.constraint_violation(),
-            constraint_enum: syn::Ident::new(
-                &format!("{}Constraint", opts.entity()),
-                Span::call_site(),
-            ),
+
             events_table_name: opts.events_table_name(),
             table_name: opts.table_name(),
             needs_write_classifier: opts.columns.updates_needed() || opts.delete.is_soft(),
@@ -49,14 +46,12 @@ impl ToTokens for ErrorClassifier<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         tokens.append_all(create_write_classifier_fn(
             &self.constraint_violation,
-            &self.constraint_enum,
             self.events_table_name,
             self.table_name,
         ));
         if self.needs_write_classifier {
             tokens.append_all(update_write_classifier_fn(
                 &self.constraint_violation,
-                &self.constraint_enum,
                 self.events_table_name,
             ));
         }
@@ -70,22 +65,17 @@ impl ToTokens for ErrorClassifier<'_> {
 /// The events table name may be schema-qualified in the repo options;
 /// Postgres reports the bare table name in errors, so only the last path
 /// component is compared.
-fn index_violation_arm(
-    constraint_violation: &syn::Ident,
-    constraint_enum: &syn::Ident,
-    events_table: &str,
-) -> TokenStream {
+fn index_violation_arm(constraint_violation: &syn::Ident, events_table: &str) -> TokenStream {
     quote! {
         sqlx::Error::Database(db_err)
             if db_err.table() != Some(#events_table)
                 && es_entity::is_classified_constraint_violation(db_err.as_ref()) =>
         {
-            errlanes::Fail::Rejected(#constraint_violation::new_own(
-                db_err.constraint().and_then(#constraint_enum::from_name),
-                db_err.constraint().map(str::to_string),
-                Self::map_constraint_column(db_err.constraint()),
-                es_entity::extract_constraint_value(db_err.as_ref()),
-            ))
+            let name = db_err.constraint().unwrap_or("unknown").to_owned();
+            match #constraint_violation::from_database(e, &name) {
+                Ok(rejection) => errlanes::Fail::Rejected(rejection),
+                Err(source) => errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, source).with_context(name).into(),
+            }
         }
     }
 }
@@ -112,7 +102,6 @@ fn index_violation_arm(
 /// - anything else → the central `sqlx::Error` classifier
 fn create_write_classifier_fn(
     constraint_violation: &syn::Ident,
-    constraint_enum: &syn::Ident,
     events_table_name: &str,
     table_name: &str,
 ) -> TokenStream {
@@ -120,21 +109,19 @@ fn create_write_classifier_fn(
     // Must match the id column's constraint name in `ErrorTypes::new`, which
     // formats it from the un-shortened table name.
     let index_pkey = format!("{table_name}_pkey");
-    let index_arm = index_violation_arm(constraint_violation, constraint_enum, events_table);
+    let index_arm = index_violation_arm(constraint_violation, events_table);
     quote! {
         #[inline(always)]
-        fn classify_create_write(e: sqlx::Error) -> errlanes::Fail<#constraint_violation> {
+        fn classify_create_write(e: sqlx::Error) -> errlanes::Fail<#constraint_violation, errlanes::RepoLanes> {
             match &e {
                 sqlx::Error::Database(db_err)
                     if db_err.is_unique_violation()
                         && db_err.table() == Some(#events_table) =>
                 {
-                    errlanes::Fail::Rejected(#constraint_violation::new_own(
-                        #constraint_enum::from_name(#index_pkey),
-                        Some(#index_pkey.to_string()),
-                        Self::map_constraint_column(Some(#index_pkey)),
-                        es_entity::extract_events_pkey_id_value(db_err.as_ref()),
-                    ))
+                    match #constraint_violation::from_database(e, #index_pkey) {
+                        Ok(rejection) => errlanes::Fail::Rejected(rejection),
+                        Err(source) => errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, source).with_context(#index_pkey).into(),
+                    }
                 }
                 #index_arm
                 _ => errlanes::Fail::from(e),
@@ -158,17 +145,16 @@ fn create_write_classifier_fn(
 ///   `sqlx::Error` classifier
 fn update_write_classifier_fn(
     constraint_violation: &syn::Ident,
-    constraint_enum: &syn::Ident,
     events_table_name: &str,
 ) -> TokenStream {
     let events_table = bare_table_name(events_table_name);
-    let index_arm = index_violation_arm(constraint_violation, constraint_enum, events_table);
+    let index_arm = index_violation_arm(constraint_violation, events_table);
     quote! {
         #[inline(always)]
         fn classify_update_write(
             e: sqlx::Error,
             context: impl Into<std::borrow::Cow<'static, str>>,
-        ) -> errlanes::Fail<#constraint_violation> {
+        ) -> errlanes::Fail<#constraint_violation, errlanes::RepoLanes> {
             match &e {
                 sqlx::Error::Database(db_err)
                     if db_err.is_unique_violation()
@@ -176,7 +162,7 @@ fn update_write_classifier_fn(
                 {
                     errlanes::Fail::from(
                         errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
-                            .with_context(context)
+                            .with_source(e).with_context(context)
                     )
                 }
                 #index_arm
@@ -206,20 +192,20 @@ pub fn classify_conflict_fn() -> TokenStream {
             res: Result<T, sqlx::Error>,
             events_table: &'static str,
             context: impl FnOnce() -> String,
-        ) -> Result<T, errlanes::Fail<D>> {
+        ) -> Result<T, errlanes::Fail<D, errlanes::RepoLanes>> {
             let events_table = events_table.rsplit('.').next().unwrap_or(events_table);
             match res {
                 Ok(v) => Ok(v),
-                Err(sqlx::Error::Database(ref db_err))
-                    if db_err.is_unique_violation() && db_err.table() == Some(events_table) =>
+                Err(e) if e.as_database_error().is_some_and(|db_err|
+                    db_err.is_unique_violation() && db_err.table() == Some(events_table)) =>
                 {
                     Err(errlanes::Fail::from(
                         errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
-                            .with_context(context())
+                            .with_source(e).with_context(context())
                     ))
                 }
-                Err(sqlx::Error::Database(ref db_err)) if db_err.is_unique_violation() => {
-                    Err(errlanes::Fail::from(errlanes::Fatal::invariant(context())))
+                Err(e) if e.as_database_error().is_some_and(|db_err| db_err.is_unique_violation()) => {
+                    Err(errlanes::Fail::from(errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, e).with_context(context())))
                 }
                 Err(e) => Err(errlanes::Fail::from(e)),
             }

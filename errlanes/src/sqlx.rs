@@ -30,13 +30,15 @@ pub fn transient_sqlstate(code: &str) -> Option<TransientKind> {
 /// `Protocol(_)` lands in `Fatal(Dependency)`. A `sqlx::Error` never carries
 /// a domain rejection, so the real work happens in [`classify_sqlx_fault`];
 /// this widens that into whatever `D` the caller needs.
-pub fn classify_sqlx<D>(e: ::sqlx::Error) -> Fail<D> {
+pub fn classify_sqlx<D, L: crate::LaneProfile<Transient = Transient, Fatal = Fatal>>(
+    e: ::sqlx::Error,
+) -> Fail<D, L> {
     classify_sqlx_fault(e).into()
 }
 
 /// Same classification as [`classify_sqlx`], as a [`Fault`] rather than a
 /// `Fail<D>` — what `impl From<sqlx::Error> for Fault` delegates to.
-pub fn classify_sqlx_fault(e: ::sqlx::Error) -> Fault {
+pub fn classify_sqlx_fault(e: ::sqlx::Error) -> Fault<crate::RepoLanes> {
     match e {
         ::sqlx::Error::PoolTimedOut => Transient::new(TransientKind::PoolTimeout).into(),
         ::sqlx::Error::Io(err) => Transient::new(TransientKind::ConnectionLost)
@@ -102,15 +104,17 @@ pub fn lane_of_sqlx(e: &::sqlx::Error) -> Lane {
     }
 }
 
-impl<D> From<::sqlx::Error> for Fail<D> {
+impl<D, L: crate::LaneProfile<Transient = Transient, Fatal = Fatal>> From<::sqlx::Error>
+    for Fail<D, L>
+{
     fn from(e: ::sqlx::Error) -> Self {
         classify_sqlx(e)
     }
 }
 
-impl From<::sqlx::Error> for Fault {
+impl<L: crate::LaneProfile<Transient = Transient, Fatal = Fatal>> From<::sqlx::Error> for Fault<L> {
     fn from(e: ::sqlx::Error) -> Self {
-        classify_sqlx_fault(e)
+        classify_sqlx_fault(e).widen()
     }
 }
 

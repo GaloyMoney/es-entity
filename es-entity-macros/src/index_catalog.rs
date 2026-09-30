@@ -69,6 +69,8 @@ pub struct ConstraintEntry {
     /// auto-naming convention.
     pub name: String,
     pub kind: ConstraintKind,
+    /// Physical key columns; empty when a CHECK expression is opaque.
+    pub columns: Vec<String>,
 }
 
 /// The set of indexes that exist after applying every migration statement in
@@ -199,6 +201,7 @@ impl IndexCatalog {
     /// constraints are excluded because their runtime name is Postgres-generated
     /// (covered by the `{table}_{col}_key` / `{table}_pkey` convention the
     /// caller adds instead).
+    #[cfg(test)]
     pub fn unique_index_names(&self, table: &str, column: &str) -> Vec<String> {
         let table = table.to_lowercase();
         let column = column.to_lowercase();
@@ -246,7 +249,13 @@ fn apply_statement(
                     .clone()
                     .or_else(|| synthesized_name(&table, &columns, "idx"));
                 if let Some(constraint_name) = constraint_name {
-                    push_constraint(constraints, &table, constraint_name, ConstraintKind::Unique);
+                    push_constraint(
+                        constraints,
+                        &table,
+                        constraint_name,
+                        ConstraintKind::Unique,
+                        columns.clone(),
+                    );
                 }
             }
             push_entry(
@@ -294,7 +303,7 @@ fn apply_statement(
                         _ => None,
                     };
                     if let Some((name, kind)) = classified {
-                        push_constraint(constraints, &table, name, kind);
+                        push_constraint(constraints, &table, name, kind, vec![col.clone()]);
                     }
                     if matches!(
                         opt.option,
@@ -381,6 +390,7 @@ fn apply_table_constraint(
                 table,
                 name.clone().unwrap_or_else(|| format!("{table}_pkey")),
                 ConstraintKind::Unique,
+                columns.clone(),
             );
             push_entry(
                 entries,
@@ -400,7 +410,13 @@ fn apply_table_constraint(
                 .clone()
                 .or_else(|| synthesized_name(table, &columns, "key"));
             if let Some(constraint_name) = constraint_name {
-                push_constraint(constraints, table, constraint_name, ConstraintKind::Unique);
+                push_constraint(
+                    constraints,
+                    table,
+                    constraint_name,
+                    ConstraintKind::Unique,
+                    columns.clone(),
+                );
             }
             push_entry(
                 entries,
@@ -426,6 +442,7 @@ fn apply_table_constraint(
                     table,
                     constraint_name,
                     ConstraintKind::ForeignKey,
+                    columns.clone(),
                 );
             }
         }
@@ -436,6 +453,7 @@ fn apply_table_constraint(
                     table,
                     name.value.to_lowercase(),
                     ConstraintKind::Check,
+                    vec![],
                 );
             }
         }
@@ -460,6 +478,7 @@ fn push_constraint(
     table: &str,
     name: String,
     kind: ConstraintKind,
+    columns: Vec<String>,
 ) {
     // Postgres truncates identifiers beyond 63 bytes; skip rather than guess.
     if name.len() > 63 {
@@ -469,6 +488,7 @@ fn push_constraint(
         table: table.to_string(),
         name,
         kind,
+        columns,
     };
     if !constraints.contains(&entry) {
         constraints.push(entry);

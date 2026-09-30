@@ -111,7 +111,7 @@ impl<'a> SnapshotFns<'a> {
                 &self,
                 op: OP,
                 id: &#id_type,
-            ) -> Result<#entity, errlanes::Fault>
+            ) -> Result<#entity, errlanes::Fault::<errlanes::RepoLanes>>
             where
                 OP: es_entity::IntoOneTimeExecutor<'a>,
             {
@@ -137,7 +137,7 @@ impl<'a> SnapshotFns<'a> {
                 &self,
                 op: &mut OP,
                 entity: &mut #entity,
-            ) -> Result<bool, errlanes::Fail<#constraint_violation>>
+            ) -> Result<bool, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>>
             where
                 OP: es_entity::AtomicOperation + ?Sized,
             {

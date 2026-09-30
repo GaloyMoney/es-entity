@@ -263,7 +263,6 @@ impl ToTokens for EsRepo<'_> {
 
         let constraint_violation = self.opts.constraint_violation();
         let error_types = self.error_types.generate();
-        let map_constraint_fn = self.error_types.generate_map_constraint_fn();
 
         let scope_type = scope::ScopeType::new(self.opts);
         let scope_type = quote! { #scope_type };
@@ -420,7 +419,6 @@ impl ToTokens for EsRepo<'_> {
 
                 #scoped_fn
 
-                #map_constraint_fn
                 #error_classifier
                 #begin
                 #post_hydrate_hook
@@ -470,7 +468,7 @@ impl ToTokens for EsRepo<'_> {
                    rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
                    tag_cursor: &mut i32,
                    entities: &mut [#entity],
-               ) -> Result<(), errlanes::Fault>
+               ) -> Result<(), errlanes::Fault::<errlanes::RepoLanes>>
                {
                    #(Self::#hydrate_nested_fns(rows_by_tag, tag_cursor, entities)?;)*
                    Ok(())
@@ -567,10 +565,9 @@ mod tests {
         );
     }
 
-    /// A non-nested repo's `{Entity}ConstraintViolation` is a struct; a
-    /// nested repo's is an enum with an `Own` variant plus one per child.
+    /// Every repository exposes an enum; nested families use composition.
     #[test]
-    fn constraint_violation_is_struct_without_nesting_enum_with() {
+    fn constraint_violation_is_enum_with_nested_composition() {
         let flat: syn::DeriveInput = parse_quote! {
             #[es_repo(entity = "User", columns(name(ty = "String")))]
             struct Users {
@@ -578,7 +575,7 @@ mod tests {
             }
         };
         let out = derive(flat).unwrap().to_string();
-        assert!(out.contains("pub struct UserConstraintViolation"));
+        assert!(out.contains("pub enum UserConstraintViolation"));
 
         let nested: syn::DeriveInput = parse_quote! {
             #[es_repo(entity = "Order", columns(name(ty = "String")))]
@@ -590,81 +587,7 @@ mod tests {
         };
         let out = derive(nested).unwrap().to_string();
         assert!(out.contains("pub enum OrderConstraintViolation"));
-        assert!(out.contains("Own {"));
-    }
-
-    /// Regression (Cursor Bugbot on commit 8092f0e): a nested field whose
-    /// name camel-cases to `Unknown` must not collide with
-    /// `{Parent}Constraint`'s own `Unknown` fallback variant — previously the
-    /// nested arm was appended straight into the enum with no dedup at all,
-    /// so this pair would emit two `Unknown` variants and fail to compile
-    /// (E0428) for the generated repo.
-    #[test]
-    fn nested_variant_colliding_with_unknown_is_disambiguated() {
-        let input: syn::DeriveInput = parse_quote! {
-            #[es_repo(entity = "Order", columns(name(ty = "String")))]
-            struct Orders {
-                pool: sqlx::PgPool,
-                #[es_repo(nested)]
-                unknown: UnknownItems,
-            }
-        };
-        let out = derive(input).unwrap().to_string();
-        // Isolate just the `OrderConstraint` enum body (not e.g. `kind()`'s
-        // `ConstraintKind::Unknown` fallback, which also contains the word
-        // "Unknown" but is a different type entirely) and count its bare
-        // `Unknown ,` variant declarations directly.
-        let decl_start = out
-            .find("pub enum OrderConstraint")
-            .expect("OrderConstraint enum must be emitted");
-        let body_end = decl_start
-            + out[decl_start..]
-                .find('}')
-                .expect("enum body must be closed");
-        let body = &out[decl_start..body_end];
-        assert!(
-            body.contains("Unknown2 ("),
-            "expected the nested field to be disambiguated to `Unknown2`: {body}"
-        );
-        assert_eq!(
-            body.matches("Unknown ,").count(),
-            1,
-            "the real `Unknown` fallback arm must appear exactly once: {body}"
-        );
-    }
-
-    /// Same regression, the other collision Bugbot named: a nested field
-    /// whose name camel-cases onto an already-assigned *catalog* variant
-    /// (here `name` collides with the `name` column's own `NameKey`
-    /// constraint variant), not just the `Unknown` fallback.
-    #[test]
-    fn nested_variant_colliding_with_catalog_variant_is_disambiguated() {
-        let input: syn::DeriveInput = parse_quote! {
-            #[es_repo(entity = "Order", columns(name(ty = "String")))]
-            struct Orders {
-                pool: sqlx::PgPool,
-                #[es_repo(nested)]
-                name_key: NameKeyItems,
-            }
-        };
-        let out = derive(input).unwrap().to_string();
-        let decl_start = out
-            .find("pub enum OrderConstraint")
-            .expect("OrderConstraint enum must be emitted");
-        let body_end = decl_start
-            + out[decl_start..]
-                .find('}')
-                .expect("enum body must be closed");
-        let body = &out[decl_start..body_end];
-        assert!(
-            body.contains("NameKey2 ("),
-            "expected the nested field to be disambiguated to `NameKey2`: {body}"
-        );
-        assert_eq!(
-            body.matches("NameKey ,").count(),
-            1,
-            "the real catalog `NameKey` variant must appear exactly once: {body}"
-        );
+        assert!(out.contains(r#"flatten (prefix = "Items")"#));
     }
 
     // Guard 1 (event has Forgettable fields but the repo omits `forgettable`)

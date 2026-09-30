@@ -1,0 +1,5 @@
+error[E0271]: type mismatch resolving `<Profile<false, true, false> as LaneProfile>::Fatal == Fatal`
+  --> tests/v2/exhausted_without_fatal.rs:10:53
+   |
+10 |     let _: Fail<Child, lanes!(Transient)> = settled.into_fail();
+   |                                                     ^^^^^^^^^ expected `Fatal`, found `Infallible`

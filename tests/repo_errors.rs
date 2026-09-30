@@ -63,21 +63,27 @@ impl OrderItems {
     }
 }
 
-fn rejected(err: Fail<ProfileConstraintViolation>) -> ProfileConstraintViolation {
+fn rejected(
+    err: Fail<ProfileConstraintViolation, es_entity::errlanes::RepoLanes>,
+) -> ProfileConstraintViolation {
     match err {
         Fail::Rejected(cv) => cv,
         other => panic!("expected Rejected, got {other:?}"),
     }
 }
 
-fn rejected_user(err: Fail<UserConstraintViolation>) -> UserConstraintViolation {
+fn rejected_user(
+    err: Fail<UserConstraintViolation, es_entity::errlanes::RepoLanes>,
+) -> UserConstraintViolation {
     match err {
         Fail::Rejected(cv) => cv,
         other => panic!("expected Rejected, got {other:?}"),
     }
 }
 
-fn rejected_order_item(err: Fail<OrderItemConstraintViolation>) -> OrderItemConstraintViolation {
+fn rejected_order_item(
+    err: Fail<OrderItemConstraintViolation, es_entity::errlanes::RepoLanes>,
+) -> OrderItemConstraintViolation {
     match err {
         Fail::Rejected(cv) => cv,
         other => panic!("expected Rejected, got {other:?}"),
@@ -115,19 +121,28 @@ async fn create_duplicate_email_returns_constraint_violation_with_value() -> any
     };
     let cv = rejected(err);
 
-    assert_eq!(cv.column(), Some(ProfileColumn::Email));
-    assert_eq!(cv.value(), Some(email.as_str()));
-    assert_eq!(cv.constraint_name(), Some("idx_profiles_email"));
-    assert_eq!(cv.constraint(), Some(ProfileConstraint::IdxProfilesEmail));
-    assert_eq!(
-        ProfileConstraint::IdxProfilesEmail.kind(),
-        ConstraintKind::Unique
+    assert!(
+        matches!(&cv, ProfileConstraintViolation::IdxProfilesEmail(c) if c.attempted.as_ref() == Some(&email))
     );
+    assert!(!cv.to_string().contains(&email));
+    assert!(
+        std::error::Error::source(&cv)
+            .unwrap()
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<sqlx::Error>()
+    );
+    assert_eq!(cv.constraint_name(), "idx_profiles_email");
+    assert!(matches!(
+        &cv,
+        ProfileConstraintViolation::IdxProfilesEmail(_)
+    ));
+    assert_eq!(cv.kind(), ConstraintKind::Unique);
     assert!(cv.is_unique());
     assert!(!cv.is_foreign_key());
     assert!(!cv.is_check());
-    assert!(cv.is_duplicate_of(ProfileColumn::Email));
-    assert!(!cv.is_duplicate_of(ProfileColumn::Id));
 
     Ok(())
 }
@@ -149,11 +164,10 @@ async fn create_duplicate_id_returns_constraint_violation_with_value() -> anyhow
     };
     let cv = rejected_user(err);
 
-    assert_eq!(cv.column(), Some(UserColumn::Id));
-    assert_eq!(cv.value(), Some(id.to_string().as_str()));
-    assert_eq!(cv.constraint_name(), Some("users_pkey"));
-    assert_eq!(cv.constraint(), Some(UserConstraint::Pkey));
-    assert_eq!(UserConstraint::Pkey.kind(), ConstraintKind::Unique);
+    assert!(matches!(&cv, UserConstraintViolation::Pkey(c) if c.attempted == Some(id)));
+    assert_eq!(cv.constraint_name(), "users_pkey");
+    assert!(matches!(&cv, UserConstraintViolation::Pkey(_)));
+    assert_eq!(cv.kind(), ConstraintKind::Unique);
 
     Ok(())
 }
@@ -197,8 +211,8 @@ async fn create_all_intra_batch_duplicate_id_classifies_as_duplicate() -> anyhow
 
             assert_eq!(err.lane(), Lane::Rejected, "got {err:?}");
             let cv = rejected_user(err);
-            assert_eq!(cv.column(), Some(UserColumn::Id), "wrong column");
-            assert_eq!(cv.value(), Some(dup_id.to_string().as_str()));
+
+            assert!(matches!(&cv, UserConstraintViolation::Pkey(c) if c.attempted.is_none()));
 
             // The whole batch rolls back.
             assert!(users.find_by_id(dup_id).await.is_err());
@@ -235,8 +249,8 @@ async fn create_all_preexisting_duplicate_id_classifies_as_duplicate() -> anyhow
 
     assert_eq!(err.lane(), Lane::Rejected);
     let cv = rejected_user(err);
-    assert_eq!(cv.column(), Some(UserColumn::Id));
-    assert_eq!(cv.value(), Some(id.to_string().as_str()));
+
+    assert!(matches!(&cv, UserConstraintViolation::Pkey(c) if c.attempted.is_none()));
 
     Ok(())
 }
@@ -273,8 +287,9 @@ async fn update_to_duplicate_email_returns_constraint_violation_with_value() -> 
     };
     let cv = rejected(err);
 
-    assert_eq!(cv.column(), Some(ProfileColumn::Email));
-    assert_eq!(cv.value(), Some(email_a.as_str()));
+    assert!(
+        matches!(&cv, ProfileConstraintViolation::IdxProfilesEmail(c) if c.attempted.as_ref() == Some(&email_a))
+    );
 
     Ok(())
 }
@@ -303,18 +318,13 @@ async fn create_fk_violation_returns_constraint_violation() -> anyhow::Result<()
     };
     let cv = rejected_order_item(err);
 
-    assert_eq!(cv.constraint_name(), Some("order_items_order_id_fkey"));
-    assert_eq!(cv.constraint(), Some(OrderItemConstraint::OrderIdFkey));
-    assert_eq!(
-        OrderItemConstraint::OrderIdFkey.kind(),
-        ConstraintKind::ForeignKey
-    );
-    assert_eq!(cv.value(), None);
-    assert_eq!(cv.column(), None);
+    assert_eq!(cv.constraint_name(), "order_items_order_id_fkey");
+    assert!(matches!(&cv, OrderItemConstraintViolation::OrderIdFkey(_)));
+    assert_eq!(cv.kind(), ConstraintKind::ForeignKey);
+
     assert!(cv.is_foreign_key());
     assert!(!cv.is_unique());
     assert!(!cv.is_check());
-    assert!(!cv.is_duplicate_of(OrderItemColumn::Id));
 
     Ok(())
 }
@@ -338,9 +348,8 @@ async fn create_all_fk_violation_returns_constraint_violation() -> anyhow::Resul
     };
     let cv = rejected_order_item(err);
 
-    assert_eq!(cv.constraint_name(), Some("order_items_order_id_fkey"));
-    assert_eq!(cv.constraint(), Some(OrderItemConstraint::OrderIdFkey));
-    assert_eq!(cv.column(), None);
+    assert_eq!(cv.constraint_name(), "order_items_order_id_fkey");
+    assert!(matches!(&cv, OrderItemConstraintViolation::OrderIdFkey(_)));
 
     Ok(())
 }
@@ -363,18 +372,13 @@ async fn create_check_violation_returns_constraint_violation() -> anyhow::Result
     };
     let cv = rejected(err);
 
-    assert_eq!(cv.constraint_name(), Some("profiles_email_not_blank"));
-    assert_eq!(cv.constraint(), Some(ProfileConstraint::EmailNotBlank));
-    assert_eq!(
-        ProfileConstraint::EmailNotBlank.kind(),
-        ConstraintKind::Check
-    );
-    assert_eq!(cv.value(), None);
-    assert_eq!(cv.column(), None);
+    assert_eq!(cv.constraint_name(), "profiles_email_not_blank");
+    assert!(matches!(&cv, ProfileConstraintViolation::EmailNotBlank(_)));
+    assert_eq!(cv.kind(), ConstraintKind::Check);
+
     assert!(cv.is_check());
     assert!(!cv.is_unique());
     assert!(!cv.is_foreign_key());
-    assert!(!cv.is_duplicate_of(ProfileColumn::Email));
 
     Ok(())
 }
@@ -400,9 +404,8 @@ async fn update_check_violation_returns_constraint_violation() -> anyhow::Result
     };
     let cv = rejected(err);
 
-    assert_eq!(cv.constraint_name(), Some("profiles_email_not_blank"));
-    assert_eq!(cv.constraint(), Some(ProfileConstraint::EmailNotBlank));
-    assert_eq!(cv.column(), None);
+    assert_eq!(cv.constraint_name(), "profiles_email_not_blank");
+    assert!(matches!(&cv, ProfileConstraintViolation::EmailNotBlank(_)));
 
     Ok(())
 }
@@ -469,5 +472,99 @@ async fn find_by_name_not_found_is_fatal_invariant() -> anyhow::Result<()> {
 
     assert!(users.maybe_find_by_name(&missing_name).await?.is_none());
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn unknown_database_constraint_is_fatal_with_original_source() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool.clone());
+    let mut op = DbOp::init(&pool).await?;
+    sqlx::query("ALTER TABLE users ADD CONSTRAINT v2_unknown_constraint CHECK (name <> 'v2-unknown-constraint-trigger') NOT VALID")
+        .execute(op.as_executor()).await?;
+    let new = NewUser::builder()
+        .id(UserId::new())
+        .name("v2-unknown-constraint-trigger")
+        .build()
+        .unwrap();
+    let error = users
+        .create_in_op(&mut op, new)
+        .await
+        .err()
+        .expect("check fails");
+    let Fail::Fatal(fatal) = error else {
+        panic!("unknown constraint must be fatal")
+    };
+    assert_eq!(fatal.kind, FatalKind::Invariant);
+    assert_eq!(fatal.context.as_deref(), Some("v2_unknown_constraint"));
+    let sql = std::error::Error::source(&fatal)
+        .unwrap()
+        .downcast_ref::<sqlx::Error>()
+        .unwrap();
+    assert_eq!(
+        sql.as_database_error().unwrap().constraint(),
+        Some("v2_unknown_constraint")
+    );
+    drop(op); // Transaction rollback removes the test-only constraint.
+    Ok(())
+}
+
+mod composite {
+    use super::entities::profile::*;
+    use es_entity::*;
+    use sqlx::PgPool;
+    #[derive(EsRepo)]
+    #[es_repo(
+        entity = "Profile",
+        tbl = "v2_profiles",
+        events_tbl = "v2_profile_events",
+        columns(
+            name(ty = "String", update(accessor = "data.name")),
+            email(ty = "String")
+        )
+    )]
+    pub struct Profiles {
+        pub pool: PgPool,
+    }
+}
+
+#[tokio::test]
+async fn composite_partial_index_preserves_typed_key_and_batch_uncertainty() -> anyhow::Result<()> {
+    let profiles = composite::Profiles {
+        pool: helpers::init_pool().await?,
+    };
+    let email = format!("composite-{}", ProfileId::new());
+    let make = |name: &str| {
+        NewProfile::builder()
+            .id(ProfileId::new())
+            .name(name)
+            .email(&email)
+            .build()
+            .unwrap()
+    };
+    // Outside the predicate, duplicate key fields are allowed.
+    profiles.create(make("inactive")).await?;
+    profiles.create(make("inactive")).await?;
+    profiles.create(make("active")).await?;
+    let e = profiles
+        .create(make("active"))
+        .await
+        .err()
+        .expect("duplicate active identity");
+    let Fail::Rejected(composite::ProfileConstraintViolation::ActiveIdentity(conflict)) = e else {
+        panic!("wrong constraint")
+    };
+    assert!(!conflict.to_string().contains(&email));
+    let attempted = conflict.attempted.unwrap();
+    assert_eq!(attempted.name, "active");
+    assert_eq!(attempted.email, email);
+    let e = profiles
+        .create_all(vec![make("active"), make("other")])
+        .await
+        .err()
+        .expect("duplicate active identity");
+    assert!(
+        matches!(e, Fail::Rejected(composite::ProfileConstraintViolation::ActiveIdentity(c)) if c.attempted.is_none())
+    );
     Ok(())
 }

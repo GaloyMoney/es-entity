@@ -404,7 +404,7 @@ pub trait EsRepo: Send {
     /// `Result<T, errlanes::Fail<Self::ConstraintViolation>>`; find/list ops
     /// return `Result<T, errlanes::Fault>` — reads never reject, so there is
     /// no `NotFound` rejection, only `Fatal`.
-    type ConstraintViolation: crate::errlanes::Liftable;
+    type ConstraintViolation: crate::errlanes::Rejection;
     type EsQueryFlavor;
 
     fn nested_tree_spec() -> TreeSpec;
@@ -413,7 +413,7 @@ pub trait EsRepo: Send {
         rows_by_tag: &mut HashMap<i32, Vec<db::Row>>,
         tag_cursor: &mut i32,
         entities: &mut [Self::Entity],
-    ) -> Result<(), crate::errlanes::Fault>;
+    ) -> Result<(), crate::errlanes::Fault<crate::errlanes::RepoLanes>>;
 }
 
 pub trait RetryableInto<T>: Into<T> + Copy + std::fmt::Debug {}

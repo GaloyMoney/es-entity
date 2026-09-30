@@ -1,0 +1,12 @@
+[package]
+name = "composition-middle"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+[features]
+extra = ["renamed/extra"]
+[dependencies]
+renamed = { package = "composition-source", path = "../source" }
+lanes_runtime = { package = "errlanes", path = "../../..", features = ["derive"] }
+thiserror = "2"

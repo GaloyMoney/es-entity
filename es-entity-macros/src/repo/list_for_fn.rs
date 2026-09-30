@@ -106,7 +106,7 @@ impl<'a> ListForFn<'a> {
                         #filter_arg_name: #for_impl_expr,
                         cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                         direction: es_entity::ListDirection,
-                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault> {
+                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault::<errlanes::RepoLanes>> {
                         self.repo.#fn_name(self.scope, #filter_arg_name, cursor, direction).await
                     }
                 }
@@ -121,7 +121,7 @@ impl<'a> ListForFn<'a> {
                     #filter_arg_name: #for_impl_expr,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault>
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault::<errlanes::RepoLanes>>
                     where
                         OP: #query_fn_op_traits
                 {
@@ -354,7 +354,7 @@ impl ToTokens for ListForFn<'_> {
             let post_hydrate_check = if self.post_hydrate_error.is_some() {
                 quote! {
                     for __entity in &entities {
-                        self.execute_post_hydrate_hook(__entity).map_err(errlanes::Fault::from)?;
+                        self.execute_post_hydrate_hook(__entity).map_err(errlanes::Fault::<errlanes::RepoLanes>::from)?;
                     }
                 }
             } else {
@@ -369,7 +369,7 @@ impl ToTokens for ListForFn<'_> {
                         #filter_arg_name: #for_impl_expr,
                         cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                         direction: es_entity::ListDirection,
-                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault> {
+                    ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault::<errlanes::RepoLanes>> {
                         self.#fn_in_op(#query_fn_get_op, #scope_fn_pass #filter_arg_name, cursor, direction).await
                     }
                 }
@@ -386,11 +386,11 @@ impl ToTokens for ListForFn<'_> {
                     #filter_arg_name: #for_impl_expr,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault>
+                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault::<errlanes::RepoLanes>>
                     where
                         OP: #query_fn_op_traits
                 {
-                    let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault> = async {
+                    let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, errlanes::Fault::<errlanes::RepoLanes>> = async {
                         #scope_convert
                         #extract_has_cursor
                         let #filter_arg_name = #filter_arg_name.#for_access_expr;
@@ -463,7 +463,7 @@ mod tests {
                 filter_customer_id: impl std::borrow::Borrow<Uuid>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, errlanes::Fault> {
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, errlanes::Fault::<errlanes::RepoLanes>> {
                 self.list_for_customer_id_by_id_in_op(self.pool(), filter_customer_id, cursor, direction).await
             }
 
@@ -473,11 +473,11 @@ mod tests {
                 filter_customer_id: impl std::borrow::Borrow<Uuid>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByIdCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, errlanes::Fault>
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, errlanes::Fault::<errlanes::RepoLanes>>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, errlanes::Fault> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByIdCursor>, errlanes::Fault::<errlanes::RepoLanes>> = async {
                     let filter_customer_id = filter_customer_id.borrow();
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
                     let id = if let Some(after) = after {
@@ -558,7 +558,7 @@ mod tests {
                 filter_email: impl std::convert::AsRef<str>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByEmailCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, errlanes::Fault> {
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, errlanes::Fault::<errlanes::RepoLanes>> {
                 self.list_for_email_by_email_in_op(self.pool(), filter_email, cursor, direction).await
             }
 
@@ -568,11 +568,11 @@ mod tests {
                 filter_email: impl std::convert::AsRef<str>,
                 cursor: es_entity::PaginatedQueryArgs<cursor_mod::EntityByEmailCursor>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, errlanes::Fault>
+            ) -> Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, errlanes::Fault::<errlanes::RepoLanes>>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, errlanes::Fault> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<Entity, cursor_mod::EntityByEmailCursor>, errlanes::Fault::<errlanes::RepoLanes>> = async {
                     let filter_email = filter_email.as_ref();
                     let es_entity::PaginatedQueryArgs { first, after } = cursor;
                     let (id, email) = if let Some(after) = after {

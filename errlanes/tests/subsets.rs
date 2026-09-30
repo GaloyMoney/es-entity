@@ -1,0 +1,248 @@
+use errlanes::{
+    Fail, Fatal, FatalKind, Fault, Lane, Rejection, ResultExt, Settled, Transient, TransientKind,
+    lanes,
+};
+use std::{convert::Infallible, error::Error};
+
+#[derive(Debug, Clone, thiserror::Error, errlanes::Rejection)]
+pub enum Child {
+    #[error("taken {0}")]
+    Taken(String),
+    #[error("range {low}..{high}")]
+    Range { low: u32, high: u32 },
+    #[error("unit")]
+    Unit,
+}
+#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[lift(Child)]
+pub enum Parent {
+    #[error("taken {0}")]
+    #[lift(Child::Taken)]
+    Taken(String),
+    #[error("range {low}..{high}")]
+    #[lift(Child::Range)]
+    Range { low: u32, high: u32 },
+    #[error("unit")]
+    #[lift(Child::Unit)]
+    Unit,
+}
+#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[lift(Child, unhandled = fatal)]
+pub enum Partial {
+    #[error("taken {0}")]
+    #[lift(Child::Taken)]
+    Taken(String),
+}
+
+#[test]
+fn partial_lift_preserves_unmapped_source() {
+    fn run() -> Result<(), Fail<Partial, lanes!(Fatal)>> {
+        Err::<(), Fail<Child, lanes!()>>(Fail::Rejected(Child::Range { low: 2, high: 4 }))
+            .lift()?;
+        Ok(())
+    }
+    let Fail::Fatal(f) = run().unwrap_err() else {
+        panic!("expected fatal")
+    };
+    assert_eq!(f.kind, FatalKind::Invariant);
+    assert!(matches!(
+        f.source().unwrap().downcast_ref::<Child>(),
+        Some(Child::Range { low: 2, high: 4 })
+    ));
+}
+#[test]
+fn strict_lift_needs_no_fatal_lane() {
+    fn run() -> Result<(), Fail<Parent, lanes!()>> {
+        Err::<(), Fail<Child, lanes!()>>(Fail::Rejected(Child::Range { low: 2, high: 4 }))
+            .widen()?;
+        Ok(())
+    }
+    assert!(matches!(
+        run(),
+        Err(Fail::Rejected(Parent::Range { low: 2, high: 4 }))
+    ));
+    let source: Fail<Child, lanes!()> = Fail::Rejected(Child::Unit);
+    let lifted: Fail<Parent, lanes!()> = source.lift();
+    let restored: Fail<Parent, lanes!()> = lifted.settle(1).into_fail();
+    assert!(matches!(restored, Fail::Rejected(Parent::Unit)));
+}
+#[test]
+fn borrowed_no_transient_settlement_is_exhaustive() {
+    fn inspect(value: &Settled<Child, lanes!(Fatal)>) -> Lane {
+        match value {
+            Settled::Rejected(_) => Lane::Rejected,
+            Settled::Fatal(_) => Lane::Fatal,
+            Settled::Denied(never) | Settled::Exhausted(never) => match *never {},
+        }
+    }
+    let value: Fail<Child, lanes!(Fatal)> = Fatal::invariant("broken").into();
+    assert_eq!(inspect(&value.settle(1)), Lane::Fatal);
+}
+#[test]
+fn widening_preserves_transient_details_and_boxed_marker() {
+    let original: Fail<Child, lanes!(Transient)> = Transient::new(TransientKind::Deadlock)
+        .with_source(std::io::Error::other("source"))
+        .with_context("operation")
+        .into();
+    let widened: Fail<Parent, lanes!(Fatal, Transient)> = original.widen();
+    assert_eq!(errlanes::lane_of(&widened), Some(Lane::Transient));
+    let settled = widened.settle(3);
+    let Settled::Exhausted(ref e) = settled else {
+        panic!("expected exhaustion")
+    };
+    assert_eq!(e.attempts, 3);
+    assert_eq!(e.last.kind, TransientKind::Deadlock);
+    assert!(e.last.source().unwrap().is::<std::io::Error>());
+    let carrier: Fail<Parent, lanes!(Fatal)> = settled.into_fail();
+    let boxed: Box<dyn Error + Send + Sync> = Box::new(carrier);
+    assert_eq!(errlanes::lane_of(boxed.as_ref()), Some(Lane::Fatal));
+}
+#[test]
+fn infallible_and_boxed_conversions_are_coherent() {
+    #[allow(unreachable_code)]
+    fn convert(x: Infallible) -> Fault<lanes!()> {
+        x.into()
+    }
+    let _ = convert;
+    let boxed: Box<dyn Error + Send + Sync> = Box::new(std::io::Error::other("source"));
+    let fault: Fault<lanes!(Fatal)> = boxed.into();
+    assert_eq!(fault.lane(), Lane::Fatal);
+    assert_eq!(Into::<&'static str>::into(Child::Unit.code()), "UNIT");
+}
+
+#[cfg(feature = "tokio")]
+#[tokio::test]
+async fn retry_respects_subset_and_preserves_retry_after() {
+    use std::{cell::Cell, time::Duration};
+    let attempts = Cell::new(0);
+    let sleeps = Cell::new(0);
+    let policy = errlanes::RetryPolicy {
+        max_attempts: 3,
+        ..Default::default()
+    };
+    let result = errlanes::retry_with(
+        &policy,
+        || {
+            attempts.set(attempts.get() + 1);
+            async {
+                Err::<(), Fail<Child, lanes!(Transient)>>(
+                    Transient::new(TransientKind::Deadlock)
+                        .with_retry_after(Duration::from_millis(7))
+                        .into(),
+                )
+            }
+        },
+        |delay| {
+            assert_eq!(delay, Duration::from_millis(7));
+            sleeps.set(sleeps.get() + 1);
+            async {}
+        },
+    )
+    .await;
+    assert!(matches!(result, Err(Settled::Exhausted(e)) if e.attempts == 3));
+    assert_eq!(attempts.get(), 3);
+    assert_eq!(sleeps.get(), 2);
+    let result = errlanes::retry_with(
+        &policy,
+        || async {
+            Err::<(), Fail<Child, lanes!(Fatal)>>(Fatal::invariant("stored corruption").into())
+        },
+        |_| async { panic!("a fatal-only profile cannot retry") },
+    )
+    .await;
+    assert!(matches!(result, Err(Settled::Fatal(_))));
+}
+
+#[test]
+fn transparent_subset_wrapper_retains_lane_markers() {
+    #[derive(Debug, thiserror::Error)]
+    #[error(transparent)]
+    struct Wrapper(Fail<Child, lanes!(Denied, Fatal)>);
+    let boxed: Box<dyn Error + Send + Sync> = Box::new(Wrapper(errlanes::Denied::default().into()));
+    assert_eq!(errlanes::lane_of(boxed.as_ref()), Some(Lane::Denied));
+    let boxed: Box<dyn Error + Send + Sync> = Box::new(Wrapper(Fatal::invariant("broken").into()));
+    assert_eq!(errlanes::lane_of(boxed.as_ref()), Some(Lane::Fatal));
+}
+
+#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[lift(Child)]
+pub enum Renamed {
+    #[lift(Child::Taken)]
+    #[error("renamed {0}")]
+    RenamedTaken(String),
+    #[lift(Child::Range)]
+    #[error("range {low}..{high}")]
+    RenamedRange { low: u32, high: u32 },
+    #[lift(Child::Unit)]
+    #[error("unit")]
+    RenamedUnit,
+}
+#[test]
+fn explicit_strict_rename_preserves_leaf_code() {
+    let parent: Renamed = Child::Taken("id".into()).into();
+    assert_eq!(Into::<&'static str>::into(parent.code()), "TAKEN");
+}
+
+#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[lift(Child, strict)]
+pub enum Transformed {
+    #[error("canonical {0}")]
+    #[rejection(code = "CANONICAL")]
+    #[lift(Child::Taken, with = transform)]
+    #[lift(Child::Range, with = transform)]
+    #[lift(Child::Unit, with = transform)]
+    Canonical(String),
+}
+fn transform(source: Child) -> Transformed {
+    Transformed::Canonical(source.to_string())
+}
+#[test]
+fn mapper_consumes_all_supported_shapes() {
+    for child in [
+        Child::Taken("key".into()),
+        Child::Range { low: 1, high: 2 },
+        Child::Unit,
+    ] {
+        let expected = child.to_string();
+        let result: Transformed = child.into();
+        assert!(matches!(result, Transformed::Canonical(ref text) if *text == expected));
+        assert_eq!(Into::<&'static str>::into(result.code()), "CANONICAL");
+    }
+}
+
+#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+pub enum Other {
+    #[error("other")]
+    #[rejection(code = "OTHER", level = "warn")]
+    Unit,
+}
+#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[lift(Other)]
+#[lift(Child)]
+pub enum Combined {
+    #[error("unit")]
+    #[rejection(code = "SHARED")]
+    #[lift(Other::Unit)]
+    #[lift(Child::Unit)]
+    Unit,
+    #[error("taken {0}")]
+    #[lift(Child::Taken)]
+    Taken(String),
+    #[error("range {low}..{high}")]
+    #[lift(Child::Range)]
+    Range { low: u32, high: u32 },
+}
+#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+pub enum Delegated {
+    #[error(transparent)]
+    #[rejection(delegate)]
+    Other(#[from] Other),
+}
+#[test]
+fn multiple_sources_and_explicit_delegation() {
+    assert!(matches!(Combined::from(Other::Unit), Combined::Unit));
+    assert!(matches!(Combined::from(Child::Unit), Combined::Unit));
+    let delegated = Delegated::from(Other::Unit);
+    assert_eq!(delegated.level(), errlanes::Level::Warn);
+    assert_eq!(Into::<&'static str>::into(delegated.code()), "OTHER");
+}

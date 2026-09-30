@@ -24,9 +24,11 @@
 #![forbid(unsafe_code)]
 
 pub mod clock;
+mod constraint;
 pub mod context;
 pub mod db;
 pub mod error;
+pub use constraint::*;
 pub mod events;
 pub mod forgettable;
 pub mod idempotent;
@@ -64,6 +66,8 @@ pub use errlanes::{
 };
 #[doc(inline)]
 pub use error::*;
+#[doc(hidden)]
+pub use es_entity_macros::ConstraintRejection;
 pub use es_entity_macros::EsEntity;
 pub use es_entity_macros::EsEvent;
 pub use es_entity_macros::EsRepo;

@@ -53,6 +53,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
 impl ToTokens for CreateFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let entity = self.entity;
+        let constraint_values = self.columns.constraint_values(entity, true);
         let constraint_violation = &self.constraint_violation;
 
         let nested = self.nested_fn_names.iter().map(|f| {
@@ -163,7 +164,7 @@ impl ToTokens for CreateFn<'_> {
 
         let post_hydrate_check = if self.post_hydrate_error.is_some() {
             quote! {
-                self.execute_post_hydrate_hook(&entity).map_err(errlanes::Fault::from)?;
+                self.execute_post_hydrate_hook(&entity).map_err(errlanes::Fault::<errlanes::RepoLanes>::from)?;
             }
         } else {
             quote! {}
@@ -182,7 +183,7 @@ impl ToTokens for CreateFn<'_> {
                 pub async fn create(
                     &self,
                     new_entity: <#entity as es_entity::EsEntity>::New
-                ) -> Result<#entity, errlanes::Fail<#constraint_violation>> {
+                ) -> Result<#entity, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> {
                     let mut op = self.begin_op().await?;
                     let res = self.create_in_op(&mut op, new_entity).await?;
                     op.commit().await?;
@@ -219,14 +220,15 @@ impl ToTokens for CreateFn<'_> {
                 &self,
                 op: &mut OP,
                 new_entity: <#entity as es_entity::EsEntity>::New
-            ) -> Result<#entity, errlanes::Fail<#constraint_violation>>
+            ) -> Result<#entity, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<#entity, errlanes::Fail<#constraint_violation>> = async {
+                let __result: Result<#entity, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     #assignments
+                    #constraint_values
                     #record_id
 
                     let mut __query_args = sqlx::postgres::PgArguments::default();
@@ -242,7 +244,7 @@ impl ToTokens for CreateFn<'_> {
                     let rows = sqlx::query_with(#query, __query_args)
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_create_write)?;
+                        .map_err(|e| Self::classify_create_write(e).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                     #forgettable_code
 
@@ -327,7 +329,7 @@ mod tests {
             pub async fn create(
                 &self,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation>> {
+            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
                 let mut op = self.begin_op().await?;
                 let res = self.create_in_op(&mut op, new_entity).await?;
                 op.commit().await?;
@@ -338,14 +340,15 @@ mod tests {
                 &self,
                 op: &mut OP,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation>>
+            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<Entity, errlanes::Fail<EntityConstraintViolation>> = async {
+                let __result: Result<Entity, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     let id = &new_entity.id;
+                    let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), };
 
                     let mut __query_args = sqlx::postgres::PgArguments::default();
                     __query_args.add(id as &EntityId).map_err(sqlx::Error::Encode)?;
@@ -363,7 +366,7 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_create_write)?;
+                        .map_err(|e| Self::classify_create_write(e).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                     let recorded_at = rows
                         .first()
@@ -440,7 +443,7 @@ mod tests {
             pub async fn create(
                 &self,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation>> {
+            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
                 let mut op = self.begin_op().await?;
                 let res = self.create_in_op(&mut op, new_entity).await?;
                 op.commit().await?;
@@ -451,15 +454,16 @@ mod tests {
                 &self,
                 op: &mut OP,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation>>
+            ) -> Result<Entity, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<Entity, errlanes::Fail<EntityConstraintViolation>> = async {
+                let __result: Result<Entity, errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     let id = &new_entity.id;
                     let name = &new_entity.name();
+                    let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), name: Some((*name).clone()), };
 
                     let mut __query_args = sqlx::postgres::PgArguments::default();
                     __query_args.add(id as &EntityId).map_err(sqlx::Error::Encode)?;
@@ -478,7 +482,7 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_create_write)?;
+                        .map_err(|e| Self::classify_create_write(e).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                     let recorded_at = rows
                         .first()

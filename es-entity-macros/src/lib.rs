@@ -146,3 +146,36 @@ pub fn expand_es_query(input: TokenStream) -> TokenStream {
         Err(e) => e.write_errors().into(),
     }
 }
+
+/// Diagnostic accessors for the final, composed repository rejection enum.
+#[proc_macro_derive(ConstraintRejection, attributes(error, source))]
+pub fn constraint_rejection(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let ast = syn::parse_macro_input!(input as syn::DeriveInput);
+    let ident = ast.ident;
+    let syn::Data::Enum(data) = ast.data else {
+        return quote::quote!(compile_error!("expected constraint enum");).into();
+    };
+    let variants: Vec<_> = data.variants.iter().map(|v| &v.ident).collect();
+    quote::quote! {
+        impl std::fmt::Display for #ident {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                std::fmt::Display::fmt(self.diagnostics(), f)
+            }
+        }
+        impl std::error::Error for #ident {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                match self { #(Self::#variants(conflict) => Some(conflict)),* }
+            }
+        }
+        impl #ident {
+            pub fn diagnostics(&self) -> &es_entity::ConstraintDiagnostics {
+                match self { #(Self::#variants(conflict) => &conflict.diagnostics),* }
+            }
+            pub fn constraint_name(&self) -> &str { self.diagnostics().constraint }
+            pub fn kind(&self) -> es_entity::ConstraintKind { self.diagnostics().kind }
+            pub fn is_unique(&self) -> bool { self.kind() == es_entity::ConstraintKind::Unique }
+            pub fn is_foreign_key(&self) -> bool { self.kind() == es_entity::ConstraintKind::ForeignKey }
+            pub fn is_check(&self) -> bool { self.kind() == es_entity::ConstraintKind::Check }
+        }
+    }.into()
+}

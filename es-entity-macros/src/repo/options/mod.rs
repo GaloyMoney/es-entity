@@ -528,16 +528,12 @@ impl RepositoryOptions {
 
     /// The generated `{Entity}ConstraintViolation` ident — the one repo
     /// `Rejection`. Every generated repo op returns `Result<T,
-    /// errlanes::Fail<Self::ConstraintViolation>>`.
+    /// errlanes::Fail<Self::ConstraintViolation, errlanes::RepoLanes>>`.
     pub fn constraint_violation(&self) -> syn::Ident {
         syn::Ident::new(
             &format!("{}ConstraintViolation", self.entity_ident),
             Span::call_site(),
         )
-    }
-
-    pub fn column_enum(&self) -> syn::Ident {
-        syn::Ident::new(&format!("{}Column", self.entity_ident), Span::call_site())
     }
 
     /// The generated scope enum ident (`{Entity}Scope`), entity-named like

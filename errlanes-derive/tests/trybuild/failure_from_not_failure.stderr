@@ -10,7 +10,7 @@ help: the trait `Failure` is not implemented for `NotAFailure`
 12 | struct NotAFailure;
    | ^^^^^^^^^^^^^^^^^^
    = help: the following other types implement trait `Failure`:
-             Fail<D>
+             Fail<D, L>
              MyError
 
 error[E0277]: the trait bound `NotAFailure: Failure` is not satisfied
@@ -25,6 +25,6 @@ help: the trait `Failure` is not implemented for `NotAFailure`
 12 | struct NotAFailure;
    | ^^^^^^^^^^^^^^^^^^
    = help: the following other types implement trait `Failure`:
-             Fail<D>
+             Fail<D, L>
              MyError
    = note: this error originates in the derive macro `errlanes::Failure` (in Nightly builds, run with -Z macro-backtrace for more info)

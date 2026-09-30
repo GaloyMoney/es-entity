@@ -23,6 +23,13 @@ struct RejectionVariant {
     #[darling(default)]
     code: Option<String>,
     #[darling(default)]
+    delegate: bool,
+    #[darling(default)]
+    forward: Option<Path>,
+    #[darling(default)]
+    #[allow(dead_code)]
+    origin: Option<String>,
+    #[darling(default)]
     level: Option<String>,
     /// A pattern over the lift target's `Liftable::Key`, matched with
     /// `matches!(x.key(), Some(<pattern>))` — usually a single path
@@ -53,26 +60,11 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
 
 impl RejectionVariant {
     fn is_delegating(&self) -> bool {
-        self.fields.style == ast::Style::Tuple
-            && self.fields.fields.len() == 1
-            && self.fields.fields[0]
-                .attrs
-                .iter()
-                .any(|a| a.path().is_ident("from"))
+        self.delegate
     }
 
     fn delegate_ty(&self) -> Option<&syn::Type> {
         self.is_delegating().then(|| &self.fields.fields[0].ty)
-    }
-
-    fn pattern(&self, bind_inner: bool) -> TokenStream {
-        let ident = &self.ident;
-        match self.fields.style {
-            ast::Style::Unit => quote! { Self::#ident },
-            ast::Style::Tuple if bind_inner => quote! { Self::#ident(__inner) },
-            ast::Style::Tuple => quote! { Self::#ident(..) },
-            ast::Style::Struct => quote! { Self::#ident { .. } },
-        }
     }
 
     fn level_expr(&self) -> TokenStream {
@@ -108,6 +100,8 @@ impl RejectionVariant {
 pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
     let input = RejectionInput::from_derive_input(ast)?;
     let ident = &input.ident;
+    let schema = crate::composition::schema(ast).map_err(darling::Error::from)?;
+    let lifts = crate::lift::derive(ast).map_err(darling::Error::from)?;
     let code_ident = quote::format_ident!("{}Code", ident);
     let variants = match &input.data {
         ast::Data::Enum(v) => v,
@@ -159,38 +153,109 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
     let mut level_match_arms = Vec::new();
     let mut leaf_codes = Vec::new();
 
-    for v in variants {
-        let variant_ident = &v.ident;
-        if let Some(inner_ty) = v.delegate_ty() {
-            code_variants.push(quote! {
-                #variant_ident(<#inner_ty as errlanes::Rejection>::Code)
-            });
-            into_str_arms.push(quote! {
-                #code_ident::#variant_ident(inner) => inner.into()
-            });
-            let pat = v.pattern(true);
-            code_match_arms.push(quote! {
-                #pat => #code_ident::#variant_ident(<#inner_ty as errlanes::Rejection>::code(__inner))
-            });
-            level_match_arms.push(quote! {
-                #pat => <#inner_ty as errlanes::Rejection>::level(__inner)
-            });
-        } else {
-            code_variants.push(quote! { #variant_ident });
-            let leaf = v.leaf_code(&input.code_prefix);
-            into_str_arms.push(quote! {
-                #code_ident::#variant_ident => #leaf
-            });
-            leaf_codes.push(leaf);
-            let pat = v.pattern(false);
-            code_match_arms.push(quote! {
-                #pat => #code_ident::#variant_ident
-            });
-            let level = v.level_expr();
-            level_match_arms.push(quote! {
-                #pat => #level
-            });
+    let syn::Data::Enum(raw) = &ast.data else {
+        unreachable!()
+    };
+    let mut metadata = TokenStream::new();
+    for (v, raw) in variants.iter().zip(&raw.variants) {
+        if v.delegate
+            && (v.code.is_some()
+                || v.level.is_some()
+                || v.fields.style != ast::Style::Tuple
+                || v.fields.fields.len() != 1)
+        {
+            return Err(darling::Error::custom(
+                "delegate requires exactly one tuple field and conflicts with leaf code/level",
+            )
+            .with_span(&v.ident));
         }
+        let variant_ident = &v.ident;
+        let id = crate::composition::variant_id(&variant_ident.to_string());
+        let fields: Vec<_> = v
+            .fields
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                f.ident
+                    .clone()
+                    .unwrap_or_else(|| quote::format_ident!("field_{i}"))
+            })
+            .collect();
+        let types: Vec<_> = v.fields.fields.iter().map(|f| &f.ty).collect();
+        let pat = match v.fields.style {
+            ast::Style::Unit => quote!(Self::#variant_ident),
+            ast::Style::Tuple => quote!(Self::#variant_ident(#(#fields),*)),
+            ast::Style::Struct => quote!(Self::#variant_ident { #(#fields),* }),
+        };
+        let mut forward = v.forward.clone();
+        if forward.is_none() && v.code.is_none() && v.level.is_none() && !v.delegate {
+            let mappings: Vec<_> = raw
+                .attrs
+                .iter()
+                .filter(|a| a.path().is_ident("lift"))
+                .map(|a| a.parse_args::<crate::lift::Mapping>())
+                .collect::<syn::Result<_>>()
+                .map_err(darling::Error::from)?;
+            if mappings.len() > 1 {
+                return Err(darling::Error::custom(
+                    "multiple source variants require an explicit canonical rejection code",
+                )
+                .with_span(&v.ident));
+            }
+            if let Some(mapping) = mappings.into_iter().next() {
+                if mapping.with.is_none() {
+                    forward = Some(mapping.case);
+                } else {
+                    return Err(darling::Error::custom(
+                        "a payload mapper requires an explicit rejection code",
+                    )
+                    .with_span(&v.ident));
+                }
+            }
+        }
+        let (code, level) = if let Some(mut source) = forward {
+            let source_variant = source.segments.pop().unwrap().ident;
+            source.segments.pop_punct();
+            let source_id = crate::composition::variant_id(&source_variant.to_string());
+            code_variants.push(quote!(#variant_ident(<#source as errlanes::Rejection>::Code)));
+            into_str_arms.push(quote!(#code_ident::#variant_ident(inner) => inner.into()));
+            (
+                quote!(#code_ident::#variant_ident(<#source as errlanes::RejectionMetadata<#source_id>>::field_code((#(#fields,)*)))),
+                quote!(<#source as errlanes::RejectionMetadata<#source_id>>::field_level((#(#fields,)*))),
+            )
+        } else if let Some(inner_ty) = v.delegate_ty() {
+            let inner = &fields[0];
+            code_variants.push(quote!(#variant_ident(<#inner_ty as errlanes::Rejection>::Code)));
+            into_str_arms.push(quote!(#code_ident::#variant_ident(inner) => inner.into()));
+            (
+                quote!(#code_ident::#variant_ident(<#inner_ty as errlanes::Rejection>::code(#inner))),
+                quote!(<#inner_ty as errlanes::Rejection>::level(#inner)),
+            )
+        } else {
+            code_variants.push(quote!(#variant_ident));
+            let leaf = v.leaf_code(&input.code_prefix);
+            into_str_arms.push(quote!(#code_ident::#variant_ident => #leaf));
+            leaf_codes.push(leaf);
+            (quote!(#code_ident::#variant_ident), v.level_expr())
+        };
+        code_match_arms.push(quote!(#pat => #code));
+        level_match_arms.push(quote!(#pat => #level));
+        metadata.extend(quote! {
+            impl errlanes::RejectionMetadata<#id> for #ident {
+                type Fields<'a> = (#(&'a #types,)*);
+                #[allow(unused_variables, unused_assignments)]
+                fn field_code(fields: Self::Fields<'_>) -> Self::Code {
+                    let (#(#fields,)*) = fields;
+                    #code
+                }
+                #[allow(unused_variables, unused_assignments)]
+                fn field_level(fields: Self::Fields<'_>) -> errlanes::Level {
+                    let (#(#fields,)*) = fields;
+                    #level
+                }
+            }
+        });
     }
 
     let mut tokens = quote! {
@@ -220,12 +285,14 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
         impl errlanes::Rejection for #ident {
             type Code = #code_ident;
 
+            #[allow(unused_variables, unused_assignments)]
             fn code(&self) -> Self::Code {
                 match self {
                     #(#code_match_arms),*
                 }
             }
 
+            #[allow(unused_variables, unused_assignments)]
             fn level(&self) -> errlanes::Level {
                 match self {
                     #(#level_match_arms),*
@@ -275,6 +342,7 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
 
         tokens.extend(quote! {
             impl errlanes::Lift<#lift_ty> for #ident {
+                type Unmapped = errlanes::Fatal;
                 fn lift(x: #lift_ty) -> Result<Self, errlanes::Fatal> {
                     let key = errlanes::Liftable::key(&x);
                     #(#lift_arms)*
@@ -289,5 +357,8 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
         });
     }
 
+    tokens.extend(metadata);
+    tokens.extend(schema);
+    tokens.extend(lifts);
     Ok(tokens)
 }

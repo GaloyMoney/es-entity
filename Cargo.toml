@@ -24,7 +24,7 @@ instrument = ["es-entity-macros/instrument", "dep:tracing", "errlanes/tracing"]
 
 [dependencies]
 es-entity-macros = { workspace = true }
-errlanes = { workspace = true, features = ["sqlx"] }
+errlanes = { workspace = true, features = ["sqlx", "derive"] }
 
 async-stream = { workspace = true }
 futures-core = { workspace = true }
@@ -53,6 +53,8 @@ opentelemetry_sdk = { workspace = true, optional = true }
 anyhow = { workspace = true, optional = true }
 
 [dev-dependencies]
+repo-composition-source = { path = "tests/composition/source" }
+repo-composition-middle = { path = "tests/composition/middle" }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -60,12 +62,6 @@ futures = { workspace = true }
 tracing-subscriber = { workspace = true }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 proptest = "1"
-# `derive` (off in the main `errlanes` dependency above, to keep it out of
-# the published library) is needed by tests that write their own
-# `#[derive(errlanes::Rejection)]` domain rejections (e.g. tests/lanes.rs).
-# A per-package build (`cargo sqlx prepare`, `cargo check -p es-entity`)
-# does not unify features across the workspace the way a full `--workspace`
-# build does, so this has to be requested explicitly rather than relied on.
 errlanes = { workspace = true, features = ["sqlx", "derive"] }
 
 [[bench]]

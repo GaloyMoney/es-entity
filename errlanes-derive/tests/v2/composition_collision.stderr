@@ -1,0 +1,10 @@
+error: flattened variant name collision; use prefix or rename
+ --> tests/v2/composition_collision.rs:3:35
+  |
+3 | #[derive(Debug, thiserror::Error, errlanes::Rejection)]
+  |                                   ^^^^^^^^^^^^^^^^^^^
+...
+8 | #[errlanes::rejection]
+  | ---------------------- in this attribute macro expansion
+  |
+  = note: this error originates in the macro `errlanes::__compose_rejection` which comes from the expansion of the attribute macro `errlanes::rejection` (in Nightly builds, run with -Z macro-backtrace for more info)

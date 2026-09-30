@@ -50,6 +50,8 @@
         filter = path: type:
           (builtins.match ".*\.sqlx/.*" path != null)
           || (builtins.match ".*deny\.toml$" path != null)
+          || (builtins.match ".*/README\.md$" path != null)
+          || (builtins.match ".*/migrations/.*\.sql$" path != null)
           || (craneLib.filterCargoSources path type);
       };
       commonArgs = {

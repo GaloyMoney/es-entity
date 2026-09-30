@@ -49,6 +49,7 @@ impl ToTokens for ForgetFn<'_> {
         let entity_type = self.entity;
         let event_type = self.event;
         let constraint_violation = &self.constraint_violation;
+        let constraint_values = quote::format_ident!("{}ConstraintValues", entity_type);
         let table_name = self.table_name;
         let events_table_name = self.events_table_name;
 
@@ -144,7 +145,7 @@ impl ToTokens for ForgetFn<'_> {
                     )
                     .fetch_all(op.as_executor())
                     .await
-                    .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)))?
+                    .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)).map_rejected(|r| r.with_attempted(#constraint_values { id: Some((*id).clone()), ..Default::default() })))?
                 };
             };
 
@@ -214,7 +215,7 @@ impl ToTokens for ForgetFn<'_> {
                             .await
                         {
                             Ok(e) => e,
-                            Err(errlanes::Fault::Fatal(fatal)) if es_entity::fatal_is_not_found(&fatal) => {
+                            Err(errlanes::Fault::<errlanes::RepoLanes>::Fatal(fatal)) if es_entity::fatal_is_not_found(&fatal) => {
                                 return Err(errlanes::Fail::from(
                                     errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
                                         .with_context(format!("{} vanished during forget", #table_name))
@@ -248,7 +249,7 @@ impl ToTokens for ForgetFn<'_> {
                 pub async fn forget(
                     &self,
                     entity: #entity_type
-                ) -> Result<#entity_type, errlanes::Fail<#constraint_violation>> {
+                ) -> Result<#entity_type, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> {
                     let mut op = self.begin_op().await?;
                     let entity = self.forget_in_op(&mut op, entity).await?;
                     op.commit().await?;
@@ -296,7 +297,7 @@ impl ToTokens for ForgetFn<'_> {
                 &self,
                 op: &mut OP,
                 mut entity: #entity_type
-            ) -> Result<#entity_type, errlanes::Fail<#constraint_violation>>
+            ) -> Result<#entity_type, errlanes::Fail<#constraint_violation, errlanes::RepoLanes>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
@@ -355,7 +356,7 @@ mod tests {
         // Consume-and-return: forget takes the entity by value and returns the
         // rebuilt (forgotten) entity — no `&mut`, no in-place assignment.
         assert!(output.contains(
-            "entity : Entity) -> Result < Entity , errlanes :: Fail < EntityConstraintViolation >>"
+            "entity : Entity) -> Result < Entity , errlanes :: Fail < EntityConstraintViolation , errlanes :: RepoLanes >>"
         ));
         assert!(!output.contains("& mut Entity"));
         assert!(!output.contains("* entity ="));

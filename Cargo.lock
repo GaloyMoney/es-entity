@@ -349,6 +349,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
+name = "composition-consumer"
+version = "0.0.0"
+dependencies = [
+ "composition-middle",
+ "errlanes",
+ "thiserror",
+]
+
+[[package]]
+name = "composition-middle"
+version = "0.0.0"
+dependencies = [
+ "composition-source",
+ "errlanes",
+ "thiserror",
+]
+
+[[package]]
+name = "composition-source"
+version = "0.0.0"
+dependencies = [
+ "errlanes",
+ "thiserror",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -697,9 +723,11 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 name = "errlanes"
 version = "0.14.4-dev"
 dependencies = [
+ "composition-consumer",
  "downstream",
  "errlanes-derive",
  "sqlx",
+ "thiserror",
  "tokio",
  "tracing",
  "trybuild",
@@ -713,6 +741,7 @@ dependencies = [
  "convert_case",
  "darling 0.24.1",
  "errlanes",
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "syn 3.0.5",
@@ -753,6 +782,8 @@ dependencies = [
  "parking_lot",
  "pin-project",
  "proptest",
+ "repo-composition-middle",
+ "repo-composition-source",
  "schemars",
  "serde",
  "serde_json",
@@ -1920,6 +1951,27 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "repo-composition-middle"
+version = "0.0.0"
+dependencies = [
+ "errlanes",
+ "repo-composition-source",
+ "thiserror",
+]
+
+[[package]]
+name = "repo-composition-source"
+version = "0.0.0"
+dependencies = [
+ "derive_builder",
+ "errlanes",
+ "es-entity",
+ "serde",
+ "sqlx",
+ "tracing",
+]
 
 [[package]]
 name = "ring"

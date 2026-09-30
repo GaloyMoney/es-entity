@@ -126,7 +126,7 @@ pub struct Users {
     pool: PgPool
 }
 impl Users {
-    pub async fn find_by_name(&self, name: String) -> Result<User, Fault> {
+    pub async fn find_by_name(&self, name: String) -> Result<User, Fault<errlanes::RepoLanes>> {
         Ok(es_query!(
             "SELECT id FROM users WHERE name = $1",
             name
@@ -140,11 +140,11 @@ impl Users {
 
 The `es_query!` macro only works within `fn`s defined on structs with `EsRepo` derived.
 
-`es_query!` provides `fetch_optional` which returns `Result<Option<Entity>, errlanes::Fault>` — `Fault` because a read can never reject; it can only be denied, retried, or fatal. To return a concrete entity (not `Option`), construct a `NotFound` and propagate it with `?`: `NotFound` converts into any `Fault`/`Fail<D>` as `Fatal(Invariant)`. There is no `NotFound` rejection — a caller that tolerates absence uses `maybe_find_by_*`, returning `Option`, instead:
+`es_query!` provides `fetch_optional`, returning `Result<Option<Entity>, errlanes::Fault<errlanes::RepoLanes>>`. A repository read can fail transiently or fatally. To require an entity, construct a `NotFound` and propagate it with `?`: it converts into a carrier accepting Fatal as `Fatal(Invariant)`. A caller that tolerates absence uses `maybe_find_by_*`, returning `Option`:
 
 ```rust,ignore
-async fn fetch_optional(<executor>) -> Result<Option<Entity>, errlanes::Fault>
+async fn fetch_optional(<executor>) -> Result<Option<Entity>, errlanes::Fault<errlanes::RepoLanes>>
 
 // The `(_, bool)` signifies whether or not the query could have fetched more or the list is exhausted:
-async fn fetch_n(<executor>, n) -> Result<(Vec<Entity>, bool), errlanes::Fault>
+async fn fetch_n(<executor>, n) -> Result<(Vec<Entity>, bool), errlanes::Fault<errlanes::RepoLanes>>
 ```

@@ -1,0 +1,39 @@
+error[E0277]: the trait bound `Child: RejectionMetadata<13055771691597938983>` is not satisfied
+  --> tests/v2/unknown_variant.rs:10:38
+   |
+10 | enum Parent { #[error("one")] #[lift(Child::Missing)] One }
+   |                                      ^^^^^ unsatisfied trait bound
+   |
+help: the trait `RejectionMetadata<13055771691597938983>` is not implemented for `Child`
+  --> tests/v2/unknown_variant.rs:4:1
+   |
+ 4 | enum Child {
+   | ^^^^^^^^^^
+   = help: the following other types implement trait `RejectionMetadata<VARIANT>`:
+             `Child` implements `RejectionMetadata<3463771800360675599>`
+             `Child` implements `RejectionMetadata<7862707816953652073>`
+
+error[E0277]: the trait bound `Child: RejectionMetadata<13055771691597938983>` is not satisfied
+ --> tests/v2/unknown_variant.rs:8:35
+  |
+8 | #[derive(Debug, thiserror::Error, errlanes::Rejection)]
+  |                                   ^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `RejectionMetadata<13055771691597938983>` is not implemented for `Child`
+ --> tests/v2/unknown_variant.rs:4:1
+  |
+4 | enum Child {
+  | ^^^^^^^^^^
+  = help: the following other types implement trait `RejectionMetadata<VARIANT>`:
+            `Child` implements `RejectionMetadata<3463771800360675599>`
+            `Child` implements `RejectionMetadata<7862707816953652073>`
+  = note: this error originates in the derive macro `errlanes::Rejection` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no variant or associated item named `Missing` found for enum `Child` in the current scope
+  --> tests/v2/unknown_variant.rs:10:45
+   |
+ 4 | enum Child {
+   | ---------- variant or associated item `Missing` not found for this enum
+...
+10 | enum Parent { #[error("one")] #[lift(Child::Missing)] One }
+   |                                             ^^^^^^^ variant or associated item not found in `Child`

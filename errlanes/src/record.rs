@@ -1,4 +1,5 @@
 use crate::fail::{Fail, Fault, Level, Rejection, Settled, SettledFault};
+use crate::profile::{LaneProfile, Slot};
 
 /// Span fields a boundary span must declare as `tracing::field::Empty` for
 /// [`record`] / [`record_fail`] to fill.
@@ -42,7 +43,7 @@ fn level_str(level: Level) -> &'static str {
 /// only thing safe to key metrics, alerts, or a GraphQL error extension on.
 /// `exception.message` is written only for `Fatal`/`Exhausted`, where the
 /// message is operator-facing by construction.
-pub fn record_fail<D: Rejection>(span: &tracing::Span, f: &Fail<D>) {
+pub fn record_fail<D: Rejection, L: LaneProfile>(span: &tracing::Span, f: &Fail<D, L>) {
     span.record("error", true);
     span.record("error.lane", f.lane().as_str());
     match f {
@@ -55,20 +56,20 @@ pub fn record_fail<D: Rejection>(span: &tracing::Span, f: &Fail<D>) {
             span.record("error.level", "WARN");
         }
         Fail::Transient(t) => {
-            span.record("error.code", t.kind.as_str());
+            span.record("error.code", t.marker().kind.as_str());
             span.record("error.level", "INFO");
         }
         Fail::Fatal(x) => {
-            span.record("error.code", x.kind.as_str());
+            span.record("error.code", x.marker().kind.as_str());
             span.record("error.level", "ERROR");
             span.record("exception.message", f.to_string());
-            span.record("exception.type", x.kind.as_str());
+            span.record("exception.type", x.marker().kind.as_str());
         }
     }
 }
 
 /// [`record_fail`] for a [`Fault`] — no `Rejected` arm to key a code from.
-pub fn record_fault(span: &tracing::Span, f: &Fault) {
+pub fn record_fault<L: LaneProfile>(span: &tracing::Span, f: &Fault<L>) {
     span.record("error", true);
     span.record("error.lane", f.lane().as_str());
     match f {
@@ -77,20 +78,20 @@ pub fn record_fault(span: &tracing::Span, f: &Fault) {
             span.record("error.level", "WARN");
         }
         Fault::Transient(t) => {
-            span.record("error.code", t.kind.as_str());
+            span.record("error.code", t.marker().kind.as_str());
             span.record("error.level", "INFO");
         }
         Fault::Fatal(x) => {
-            span.record("error.code", x.kind.as_str());
+            span.record("error.code", x.marker().kind.as_str());
             span.record("error.level", "ERROR");
             span.record("exception.message", f.to_string());
-            span.record("exception.type", x.kind.as_str());
+            span.record("exception.type", x.marker().kind.as_str());
         }
     }
 }
 
 /// [`record`] for a [`SettledFault`].
-pub fn record_settled_fault(span: &tracing::Span, f: &SettledFault) {
+pub fn record_settled_fault<L: LaneProfile>(span: &tracing::Span, f: &SettledFault<L>) {
     span.record("error", true);
     span.record("error.lane", f.lane().as_str());
     match f {
@@ -105,15 +106,15 @@ pub fn record_settled_fault(span: &tracing::Span, f: &SettledFault) {
             span.record("exception.type", "EXHAUSTED");
         }
         SettledFault::Fatal(x) => {
-            span.record("error.code", x.kind.as_str());
+            span.record("error.code", x.marker().kind.as_str());
             span.record("error.level", "ERROR");
             span.record("exception.message", f.to_string());
-            span.record("exception.type", x.kind.as_str());
+            span.record("exception.type", x.marker().kind.as_str());
         }
     }
 }
 
-pub fn record<D: Rejection>(span: &tracing::Span, f: &Settled<D>) {
+pub fn record<D: Rejection, L: LaneProfile>(span: &tracing::Span, f: &Settled<D, L>) {
     span.record("error", true);
     span.record("error.lane", f.lane().as_str());
     match f {
@@ -132,10 +133,10 @@ pub fn record<D: Rejection>(span: &tracing::Span, f: &Settled<D>) {
             span.record("exception.type", "EXHAUSTED");
         }
         Settled::Fatal(x) => {
-            span.record("error.code", x.kind.as_str());
+            span.record("error.code", x.marker().kind.as_str());
             span.record("error.level", "ERROR");
             span.record("exception.message", f.to_string());
-            span.record("exception.type", x.kind.as_str());
+            span.record("exception.type", x.marker().kind.as_str());
         }
     }
 }

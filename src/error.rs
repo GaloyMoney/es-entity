@@ -101,14 +101,14 @@ fn events_pkey_id_from_value(value: String) -> Option<String> {
 
 /// The kind of database constraint behind a classified `ConstraintViolation`.
 ///
-/// Returned by the generated `{Entity}Constraint::kind()` method.
+/// Structured kind exposed by a generated constraint rejection's diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConstraintKind {
     Unique,
     ForeignKey,
     Check,
-    /// The generated `{Entity}Constraint::Unknown` variant: a violation
-    /// whose name the migrations-derived catalog does not recognize.
+    /// Legacy diagnostic category. Generated repositories classify an unknown
+    /// constraint as `Fatal(Invariant)` instead of exposing a rejection case.
     Unknown,
 }
 
@@ -158,25 +158,25 @@ impl std::fmt::Display for NotFound {
 
 impl std::error::Error for NotFound {}
 
-impl From<NotFound> for errlanes::Fault {
+impl<L: errlanes::LaneProfile<Fatal = errlanes::Fatal>> From<NotFound> for errlanes::Fault<L> {
     fn from(n: NotFound) -> Self {
         errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, n).into()
     }
 }
 
-impl<D> From<NotFound> for errlanes::Fail<D> {
+impl<D, L: errlanes::LaneProfile<Fatal = errlanes::Fatal>> From<NotFound> for errlanes::Fail<D, L> {
     fn from(n: NotFound) -> Self {
-        errlanes::Fault::from(n).into()
+        errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, n).into()
     }
 }
 
 #[doc(hidden)]
-pub fn hydration_fatal(e: EntityHydrationError) -> errlanes::Fault {
+pub fn hydration_fatal(e: EntityHydrationError) -> errlanes::Fault<errlanes::RepoLanes> {
     errlanes::Fatal::from_error(errlanes::FatalKind::CorruptState, e).into()
 }
 
 #[doc(hidden)]
-pub fn cursor_decode_fatal(e: CursorDestructureError) -> errlanes::Fault {
+pub fn cursor_decode_fatal(e: CursorDestructureError) -> errlanes::Fault<errlanes::RepoLanes> {
     errlanes::Fatal::from_error(errlanes::FatalKind::Config, e).into()
 }
 
@@ -185,7 +185,7 @@ pub fn not_found_fatal(
     entity: &'static str,
     column: Option<&'static str>,
     value: String,
-) -> errlanes::Fault {
+) -> errlanes::Fault<errlanes::RepoLanes> {
     NotFound::new(entity, column, value).into()
 }
 

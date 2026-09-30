@@ -242,7 +242,7 @@ runs:
 
 If no staged events are persisted the hook is not invoked, matching
 `update`'s no-op semantics. A hook failure widens directly into `forget`'s
-`errlanes::Fail<{Entity}ConstraintViolation>` — see [Hooks](./repo-hooks.md).
+`errlanes::Fail<{Entity}ConstraintViolation, errlanes::RepoLanes>` — see [Hooks](./repo-hooks.md).
 
 ## Custom Queries with `es_query!`
 

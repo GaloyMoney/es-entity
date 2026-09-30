@@ -85,7 +85,7 @@ impl<'a> FindByFn<'a> {
                         pub async fn #fn_name(
                             &self,
                             #column_name: #impl_expr
-                        ) -> Result<#result_type, errlanes::Fault> {
+                        ) -> Result<#result_type, errlanes::Fault::<errlanes::RepoLanes>> {
                             self.repo.#fn_name(self.scope, #column_name).await
                         }
                     }
@@ -98,7 +98,7 @@ impl<'a> FindByFn<'a> {
                         &self,
                         #query_fn_op_arg,
                         #column_name: #impl_expr
-                    ) -> Result<#result_type, errlanes::Fault>
+                    ) -> Result<#result_type, errlanes::Fault::<errlanes::RepoLanes>>
                         where
                             OP: #query_fn_op_traits
                     {
@@ -243,7 +243,7 @@ impl ToTokens for FindByFn<'_> {
                     let column_name_str = column_name.to_string();
                     let post_hydrate_check = if self.post_hydrate_error.is_some() {
                         quote! {
-                            self.execute_post_hydrate_hook(&__entity).map_err(errlanes::Fault::from)?;
+                            self.execute_post_hydrate_hook(&__entity).map_err(errlanes::Fault::<errlanes::RepoLanes>::from)?;
                         }
                     } else {
                         quote! {}
@@ -264,7 +264,7 @@ impl ToTokens for FindByFn<'_> {
                     let post_hydrate_check = if self.post_hydrate_error.is_some() {
                         quote! {
                             if let Some(ref __entity) = __result {
-                                self.execute_post_hydrate_hook(__entity).map_err(errlanes::Fault::from)?;
+                                self.execute_post_hydrate_hook(__entity).map_err(errlanes::Fault::<errlanes::RepoLanes>::from)?;
                             }
                         }
                     } else {
@@ -310,7 +310,7 @@ impl ToTokens for FindByFn<'_> {
                             &self,
                             #scope_fn_arg
                             #column_name: #impl_expr
-                        ) -> Result<#result_type, errlanes::Fault> {
+                        ) -> Result<#result_type, errlanes::Fault::<errlanes::RepoLanes>> {
                             self.#fn_in_op(#query_fn_get_op, #scope_fn_pass #column_name).await
                         }
                     }
@@ -325,11 +325,11 @@ impl ToTokens for FindByFn<'_> {
                         #query_fn_op_arg,
                         #scope_fn_arg
                         #column_name: #impl_expr
-                    ) -> Result<#result_type, errlanes::Fault>
+                    ) -> Result<#result_type, errlanes::Fault::<errlanes::RepoLanes>>
                         where
                             OP: #query_fn_op_traits
                     {
-                        let __result: Result<#result_type, errlanes::Fault> = async {
+                        let __result: Result<#result_type, errlanes::Fault::<errlanes::RepoLanes>> = async {
                             #scope_convert
                             let #column_name = #column_name.#access_expr;
                             #record_field
@@ -383,7 +383,7 @@ mod tests {
             pub async fn find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, errlanes::Fault> {
+            ) -> Result<Entity, errlanes::Fault::<errlanes::RepoLanes>> {
                 self.find_by_id_in_op(self.pool(), id).await
             }
 
@@ -391,11 +391,11 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, errlanes::Fault>
+            ) -> Result<Entity, errlanes::Fault::<errlanes::RepoLanes>>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Entity, errlanes::Fault> = async {
+                let __result: Result<Entity, errlanes::Fault::<errlanes::RepoLanes>> = async {
                     let id = id.borrow();
                     let __entity = es_entity::es_query!(
                         entity = Entity,
@@ -419,7 +419,7 @@ mod tests {
             pub async fn maybe_find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, errlanes::Fault> {
+            ) -> Result<Option<Entity>, errlanes::Fault::<errlanes::RepoLanes>> {
                 self.maybe_find_by_id_in_op(self.pool(), id).await
             }
 
@@ -427,11 +427,11 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, errlanes::Fault>
+            ) -> Result<Option<Entity>, errlanes::Fault::<errlanes::RepoLanes>>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Option<Entity>, errlanes::Fault> = async {
+                let __result: Result<Option<Entity>, errlanes::Fault::<errlanes::RepoLanes>> = async {
                     let id = id.borrow();
                     let __result = es_entity::es_query!(
                         entity = Entity,
@@ -480,7 +480,7 @@ mod tests {
             pub async fn find_by_email(
                 &self,
                 email: impl std::convert::AsRef<str>
-            ) -> Result<Entity, errlanes::Fault> {
+            ) -> Result<Entity, errlanes::Fault::<errlanes::RepoLanes>> {
                 self.find_by_email_in_op(self.pool(), email).await
             }
 
@@ -488,11 +488,11 @@ mod tests {
                 &self,
                 op: OP,
                 email: impl std::convert::AsRef<str>
-            ) -> Result<Entity, errlanes::Fault>
+            ) -> Result<Entity, errlanes::Fault::<errlanes::RepoLanes>>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Entity, errlanes::Fault> = async {
+                let __result: Result<Entity, errlanes::Fault::<errlanes::RepoLanes>> = async {
                     let email = email.as_ref();
                     let __entity = es_entity::es_query!(
                         entity = Entity,
@@ -516,7 +516,7 @@ mod tests {
             pub async fn maybe_find_by_email(
                 &self,
                 email: impl std::convert::AsRef<str>
-            ) -> Result<Option<Entity>, errlanes::Fault> {
+            ) -> Result<Option<Entity>, errlanes::Fault::<errlanes::RepoLanes>> {
                 self.maybe_find_by_email_in_op(self.pool(), email).await
             }
 
@@ -524,11 +524,11 @@ mod tests {
                 &self,
                 op: OP,
                 email: impl std::convert::AsRef<str>
-            ) -> Result<Option<Entity>, errlanes::Fault>
+            ) -> Result<Option<Entity>, errlanes::Fault::<errlanes::RepoLanes>>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Option<Entity>, errlanes::Fault> = async {
+                let __result: Result<Option<Entity>, errlanes::Fault::<errlanes::RepoLanes>> = async {
                     let email = email.as_ref();
                     let __result = es_entity::es_query!(
                         entity = Entity,
@@ -574,7 +574,7 @@ mod tests {
             pub async fn find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, errlanes::Fault> {
+            ) -> Result<Entity, errlanes::Fault::<errlanes::RepoLanes>> {
                 self.find_by_id_in_op(self.pool(), id).await
             }
 
@@ -582,11 +582,11 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, errlanes::Fault>
+            ) -> Result<Entity, errlanes::Fault::<errlanes::RepoLanes>>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Entity, errlanes::Fault> = async {
+                let __result: Result<Entity, errlanes::Fault::<errlanes::RepoLanes>> = async {
                     let id = id.borrow();
                     let __entity = es_entity::es_query!(
                         entity = Entity,
@@ -610,7 +610,7 @@ mod tests {
             pub async fn maybe_find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, errlanes::Fault> {
+            ) -> Result<Option<Entity>, errlanes::Fault::<errlanes::RepoLanes>> {
                 self.maybe_find_by_id_in_op(self.pool(), id).await
             }
 
@@ -618,11 +618,11 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, errlanes::Fault>
+            ) -> Result<Option<Entity>, errlanes::Fault::<errlanes::RepoLanes>>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Option<Entity>, errlanes::Fault> = async {
+                let __result: Result<Option<Entity>, errlanes::Fault::<errlanes::RepoLanes>> = async {
                     let id = id.borrow();
                     let __result = es_entity::es_query!(
                         entity = Entity,
@@ -728,7 +728,7 @@ mod tests {
             pub async fn find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, errlanes::Fault> {
+            ) -> Result<Entity, errlanes::Fault::<errlanes::RepoLanes>> {
                 self.find_by_id_in_op(self.pool(), id).await
             }
 
@@ -736,11 +736,11 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, errlanes::Fault>
+            ) -> Result<Entity, errlanes::Fault::<errlanes::RepoLanes>>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Entity, errlanes::Fault> = async {
+                let __result: Result<Entity, errlanes::Fault::<errlanes::RepoLanes>> = async {
                     let id = id.borrow();
                     let __entity = es_entity::es_query!(
                         entity = Entity,
@@ -764,7 +764,7 @@ mod tests {
             pub async fn maybe_find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, errlanes::Fault> {
+            ) -> Result<Option<Entity>, errlanes::Fault::<errlanes::RepoLanes>> {
                 self.maybe_find_by_id_in_op(self.pool(), id).await
             }
 
@@ -772,11 +772,11 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, errlanes::Fault>
+            ) -> Result<Option<Entity>, errlanes::Fault::<errlanes::RepoLanes>>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Option<Entity>, errlanes::Fault> = async {
+                let __result: Result<Option<Entity>, errlanes::Fault::<errlanes::RepoLanes>> = async {
                     let id = id.borrow();
                     let __result = es_entity::es_query!(
                         entity = Entity,

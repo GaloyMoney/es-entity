@@ -5,10 +5,13 @@
 //! for the adoption tiers and a worked example.
 
 #![forbid(unsafe_code)]
+#![doc = include_str!("../README.md")]
 
 mod dynamic;
 mod fail;
 mod lane;
+pub mod profile;
+pub use profile::{AllLanes, LaneProfile, RepoLanes};
 
 #[cfg(feature = "sqlx")]
 pub mod sqlx;
@@ -21,7 +24,8 @@ mod record;
 
 pub use dynamic::{Classify, lane_of, transient_of};
 pub use fail::{
-    Fail, Failure, Fault, Laned, Level, Lift, Liftable, Rejection, Settled, SettledFault,
+    ExhaustionInto, Fail, Failure, Fault, Laned, Level, Lift, Liftable, Rejection, RejectionField,
+    RejectionMetadata, ResultExt, Settled, SettledFault, UnmappedInto,
 };
 pub use lane::{Denied, Exhausted, Fatal, FatalKind, Lane, Transient, TransientKind};
 
@@ -35,4 +39,4 @@ pub use retry::{RetryPolicy, retry, retry_with};
 pub use record::{FIELDS, record, record_fail, record_fault, record_settled_fault};
 
 #[cfg(feature = "derive")]
-pub use errlanes_derive::{Classify, Failure, Rejection};
+pub use errlanes_derive::{__compose_rejection, Classify, Failure, Rejection, rejection};

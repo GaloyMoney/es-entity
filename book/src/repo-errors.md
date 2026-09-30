@@ -1,142 +1,137 @@
-# Error Types
+# Repository errors
 
-Every generated repo op returns `errlanes`' four-lane model: `Rejected(D)` (a typed domain outcome, caller-correctable), `Denied` (authorization), `Transient` (retry the same call), or `Fatal` (a broken invariant or infrastructure failure — page an operator). `EsRepo` is "born-classified": it picks the lane for you, so a caller never has to sniff a `sqlx::Error` to know whether something is worth retrying.
+Repository writes return `Fail<EntityConstraintViolation, RepoLanes>` and reads
+return `Fault<RepoLanes>`. `RepoLanes` enables Transient and Fatal, never Denied.
+A write may return a structured, caller-correctable rejection; a read cannot.
+Both carriers preserve the standard lane markers and their original sources.
 
-`Fatal` carries `kind`, `context` and a `source` for operators (traces, logs) and for tests, which may inspect the source directly to assert what happened. Production code never inspects it: the response to a `Fatal` is the same regardless of its source — stop, surface, page. If you find yourself needing the payload, the outcome was a value or a `Rejection` and the API should be changed, not the call site.
+## Typed constraint cases
 
-### `Fail` vs `Fault`
-
-A write can reject: `create`/`create_all`/`update`/`update_all`/`forget`/`delete` return `Result<T, errlanes::Fail<{Entity}ConstraintViolation>>`, where `Fail<D>` is the full four-arm view (`Rejected(D)`/`Denied`/`Transient`/`Fatal`). A read cannot: `find_by_*`/`maybe_find_by_*`/`find_all`/`list_by_*`/`list_for_*` return `Result<T, errlanes::Fault>`, where `Fault` is `Fail` minus the `Rejected` arm — the type itself says a read never hands back a domain outcome. `?` widens a `Fault` into any `Fail<D>` for free, so calling a read from inside a write path needs no `map_err`:
+An `EsRepo` derives a rejection enum with one case per recognized database
+constraint. For example:
 
 ```rust,ignore
-async fn rename(&self, id: UserId, name: String) -> Result<(), errlanes::Fail<UserConstraintViolation>> {
-    let mut user = self.find_by_id(id).await?; // Fault widens into Fail<UserConstraintViolation>
-    user.rename(name);
-    self.update(&mut user).await?;
-    Ok(())
+pub enum UserConstraintViolation {
+    Pkey(ConstraintConflict<UserId>),
+    EmailKey(ConstraintConflict<String>),
 }
 ```
 
-For an entity called `User`, the macro produces one domain rejection type and two supporting enums:
+There is no separate discriminator enum, `Own` wrapper, or `Unknown` rejection.
+Match the case directly. Constraint names strip the table prefix and are
+converted to Rust variant names; named indexes keep their exact identity.
+Primary keys, unique indexes (including partial and composite indexes), foreign
+keys, and checks come from the migration catalog. Conventional primary/unique
+names are retained for repositories without discoverable migrations.
 
-| Type | Description |
-|------|-------------|
-| `UserColumn` | Enum of indexed columns (e.g. `Id`, `Name`, `Email`) |
-| `UserConstraint` | Enum of the table's known constraints (unique / foreign key / check), plus `Unknown` |
-| `UserConstraintViolation` | The repo's one `Rejection` — returned as `errlanes::Fail::Rejected` from `create`/`create_all`/`update`/`update_all`/`forget`/`delete` |
+`ConstraintConflict<V>` contains `attempted: Option<V>` and structured diagnostics
+(table, exact constraint name, kind, and original SQLx source). Single writes
+capture typed values from the actual input when available. Composite keys use a
+generated struct with named fields for all key columns. Batch failures leave the
+attempted value absent when the failing item cannot be identified reliably.
+Opaque CHECK expressions and unknown column types also leave values absent.
+Database message text is never parsed to manufacture typed attempted values.
 
-## `UserConstraintViolation`
-
-```rust,ignore
-pub struct UserConstraintViolation {
-    constraint: Option<UserConstraint>,
-    constraint_name: Option<String>,
-    column: Option<UserColumn>,
-    value: Option<String>,
-}
-```
-
-When a `create`, `create_all`, `update`, `update_all`, or `forget` operation violates a **unique**, **foreign key**, or **check** constraint, the error comes back as `errlanes::Fail::Rejected(UserConstraintViolation { .. })`. (`NOT NULL` and exclusion violations are not classified and surface as `Fatal` instead — they indicate a programming error, not a caller-correctable domain conflict.) For unique violations, `column()` identifies which column caused the violation and `value()` contains the conflicting value extracted from the PostgreSQL error detail. For foreign key and check violations — or unique constraints not recognized as belonging to one of the entity's columns — `column()` and `value()` are `None`; use `constraint()` (or the raw `constraint_name()`) to identify the constraint instead. `is_unique()`, `is_foreign_key()`, and `is_check()` read `kind()` without the `Option`; `is_duplicate_of(column)` is `is_unique() && column() == Some(column)` in one call.
-
-`UserConstraintViolation` implements `errlanes::Rejection` (`Code = UserConstraint`) and `errlanes::Liftable` (`Key = UserConstraint`) — the trait a domain rejection's `#[rejection(lift = UserConstraintViolation)]` reads to lift a constraint into one of its own variants (see the `errlanes` crate docs).
-
-> **Security note:** `value()` contains attacker-influenced input that was rejected by a unique constraint and is frequently PII (e.g. an email address). Do not propagate it to untrusted API clients — a caller can probe which values already exist (user enumeration) — and be aware it may end up in logs via the error's `Display`/`Debug` output. `Display` never prints it; at trust boundaries, prefer matching on `is_duplicate_of()` / `constraint()` and map the error to a neutral client-facing message.
+Values may be sensitive. Default Display prints only table/constraint identity,
+not attempted values or database detail text. Deliberate consumers may inspect
+`attempted`. Generated `diagnostics()`, `constraint_name()`, `kind()`,
+`is_unique()`, `is_foreign_key()`, and `is_check()` provide diagnostic access;
+typed variant matching is the domain mapping API.
 
 ```rust,ignore
-let result = users.create(new_user).await;
-match result {
-    Ok(user) => { /* success */ }
-    Err(errlanes::Fail::Rejected(cv)) if cv.is_duplicate_of(UserColumn::Email) => {
-        println!("email already taken");
+match repo.create(new_user).await {
+    Err(Fail::Rejected(UserConstraintViolation::EmailKey(conflict))) => {
+        // conflict.attempted is Option<String>; do not replace absence with "".
     }
-    Err(e) => return Err(e.into()),
+    other => { /* normal propagation or handling */ }
 }
 ```
 
-### Typed constraints: `UserConstraint`
+Known constraints are Rejected. Unknown database constraints become
+Fatal(Invariant) at the repository boundary with their original SQLx source and
+constraint identity. NOT NULL/exclusion failures retain the central SQL
+classifier's fatal treatment. Optimistic event-sequence conflicts remain
+Transient(OptimisticConflict). Duplicate IDs during creation are Rejected even
+when PostgreSQL reports the events-table constraint first. A vanished row during
+an update is a transient race; a torn create batch is a fatal invariant.
 
-Alongside the column enum, the macro derives a `UserConstraint` enum with one variant per constraint on the entity's table known at compile time: the declared columns' unique constraints (convention names like `users_email_key` / `users_pkey`) plus every unique, foreign key, and check constraint discoverable from the migrations directory (the same catalog that drives `list_for_filters` specialization). Variant names strip the table prefix — `entries_account_not_account_set_fkey` on table `entries` becomes `EntryConstraint::AccountNotAccountSetFkey`.
+## Domain mapping and composition
 
-This makes dispatching on a hand-written foreign-key or check constraint typo-proof — no string matching at the call site, and a renamed constraint in a migration surfaces as a compile error instead of a silently dead match arm:
+Use one lifting framework for exhaustive forwarding and explicit partial domain
+mapping:
 
 ```rust,ignore
-match result {
-    Ok(entry) => { /* success */ }
-    Err(errlanes::Fail::Rejected(cv))
-        if cv.constraint() == Some(EntryConstraint::AccountNotAccountSetFkey) =>
-    {
-        return Err(AppError::EntryTargetsAccountSet);
-    }
-    Err(e) => return Err(e.into()),
+#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[lift(UserConstraintViolation, unhandled = fatal)]
+pub enum RegistrationRejection {
+    #[error("email already exists: {0}")]
+    #[rejection(code = "EMAIL_ALREADY_EXISTS")]
+    #[lift(UserConstraintViolation::EmailKey)]
+    EmailAlreadyExists(ConstraintConflict<String>),
+}
+
+use errlanes::ResultExt;
+async fn register(...) -> Result<User, Fail<RegistrationRejection, RepoLanes>> {
+    Ok(repo.create(new_user).await.lift()?)
 }
 ```
 
-Each variant knows its raw name (`constraint.name()` / `Display`) and kind (`constraint.kind()` → `ConstraintKind::{Unique, ForeignKey, Check}`). Constraints created outside discoverable migrations can't be typed and report `UserConstraint::Unknown`; fall back to `constraint_name()` for those:
+Unhandled **known** cases become Fatal(Invariant) at this domain boundary, with
+the original rejection as source. This is separate from unknown constraints at
+the repository boundary. Partial mode never creates an infallible
+`From<UserConstraintViolation>` for the domain rejection. Use it only for cases
+that truly indicate a violated domain invariant; legitimate alternatives must
+remain rejections.
+
+Omitting `unhandled = fatal` selects strict mode. Name every case with
+`#[lift(Source::Variant)]`; omitted cases fail compilation. Matching fields
+forward automatically, and a total `From<Source>` enables `.widen()?` on a
+failure result or `?` on a bare rejection. Forwarded metadata preserves the leaf
+code and severity; an explicit code denotes a domain reinterpretation.
+
+To import an entire family without repeating its cases:
 
 ```rust,ignore
-Err(errlanes::Fail::Rejected(cv)) if cv.constraint_name() == Some("added_at_runtime_fkey") => { /* ... */ }
-```
-
-The macro maps PostgreSQL constraint names to columns automatically. It uses the convention `{table}_{column}_key` for unique constraints and `{table}_pkey` for the primary key, and additionally derives the real names of any **named** single-column unique index from your migrations (the same index catalog that drives `list_for_filters` specialization — see [list_for_filters](./repo-list-for-filters.md)). So a `CREATE UNIQUE INDEX idx_unique_email ON users (email)` in a migration is mapped to the `email` column with no extra annotation — as long as the migrations directory is discoverable (crate-local `migrations/`, an ancestor `migrations/` up to the repo root, or `ES_ENTITY_MIGRATIONS_DIR`). A composite `UNIQUE (a, b)` is mapped to its **last** key column (`b`) — the discriminating column, with the leading columns acting as its scope — so a `UNIQUE (partner_id, name)` violation reports the `name` column.
-
-### Nested entity errors
-
-For aggregates with nested entities (e.g. `Order` containing `OrderItem`s), `OrderConstraintViolation` is an enum instead of a struct: an `Own { .. }` variant for the parent's own violations, plus one tuple variant per nested child wrapping that child's own `{Child}ConstraintViolation`. A child violation widens into the parent's via the generated `From` impl, so nested write paths only need `.map_err(errlanes::Fail::widen)`:
-
-```rust,ignore
-match err {
-    errlanes::Fail::Rejected(OrderConstraintViolation::OrderItems(item_cv))
-        if item_cv.column() == Some(OrderItemColumn::Sku) =>
-    {
-        let val = item_cv.value();
-    }
-    _ => return Err(err.into()),
+#[errlanes::rejection]
+#[derive(Debug, thiserror::Error)]
+pub enum RegistrationRejection {
+    #[flatten(prefix = "User")]
+    User(UserConstraintViolation),
+    #[error("registration closed")]
+    Closed,
 }
 ```
 
-`constraint_name()`, `column()`, `value()`, and the kind-sugar methods (`is_unique()`, `is_foreign_key()`, `is_check()`, `is_duplicate_of()`) on the parent only report the parent's own violations (`Own { .. }`); they return `None`/`false` for a nested variant — match the nested variant directly to inspect it, as above.
+The placeholder disappears. Nested repositories use the same schema protocol,
+with the nested field name as prefix: `OrderConstraintViolation::ItemsSkuKey`
+contains the child's typed conflict directly. There is no nested discriminator
+tree. `FamilySchema` must be reexported alongside `Family` when a composing
+consumer uses a reexport or renamed source. The three-crate fixture covers both
+ordinary families and generated nested repository writes.
 
-`constraint()` (and `Liftable::key()`) is the exception: the parent key is a **path** into the aggregate, so it reports `Some(OrderConstraint::OrderItems(child_key))` for a nested variant, letting a domain rejection hoist a specific nested constraint by naming that path — `via` disambiguates which `lift` target the pattern reads from when a rejection lifts more than one type:
+## Read semantics and faults
 
-```rust,ignore
-#[derive(Debug, Clone, thiserror::Error, errlanes::Rejection)]
-#[rejection(lift(OrderConstraintViolation))]
-enum OrderRejection {
-    #[error("duplicate SKU on an order item")]
-    #[rejection(key = OrderConstraint::OrderItems(OrderItemConstraint::SkuKey))]
-    DuplicateSku,
-}
-```
-
-An unhoisted nested constraint (no matching `key`) still demotes to `Fatal(Invariant)`, whose `context` names the *child's* constraint.
-
-## Concurrent modification
-
-When optimistic concurrency control detects a conflict (duplicate event sequence) on `update`, `update_all`, `forget`, or `delete`, that is not a domain rejection — it is `errlanes::Fail::Transient(..)`, because the correct response is "reload and retry", not "ask the caller to fix their input". Wrap the call in `errlanes::retry` to have this handled automatically, or match the lane directly:
+`maybe_find_by_*` returns `Ok(None)` for absence. A required `find_by_*` assumes
+the row exists and returns Fatal(Invariant) with `NotFound` as source when it is
+missing. For a caller-supplied key that may legitimately be absent, use an
+optional read and define the caller-facing not-found rejection at the domain
+boundary.
 
 ```rust,ignore
-match users.update(&mut user).await {
-    Err(e) if e.is_transient() => {
-        // reload and retry
-    }
-    Err(e) => return Err(e.into()),
-    Ok(()) => {}
-}
+let user = repo.maybe_find_by_id(id).await?
+    .ok_or(UserRejection::NotFound { id })?;
 ```
 
-## Not found
+Hydration/stored-data failures remain Fatal(CorruptState). Denial cannot enter
+ordinary repository signatures: custom hooks must convert into the declared
+profile, and a hook that can deny does not satisfy that bound. Default SQLx
+hooks fit `RepoLanes`.
 
-`find_by_*` returns `Result<Entity, errlanes::Fault>`: a missing row is `Fatal(Invariant)`, not a rejection — by calling `find_by_*` instead of `maybe_find_by_*`, the caller has already asserted the row must exist, so its absence is a broken invariant, not something the caller is meant to branch on. Its source is a `NotFound` carrying the entity name, the column searched, and the value that was not found (see [es_query](./es-query.md)).
+Fatal payloads are diagnostic data for operators and tests. Production code
+handles the lane uniformly: stop, surface, and alert at the owning boundary.
+Do not branch on a fatal source to recover a legitimate rejection. Retry only
+when the transaction boundary proves it is safe; a transient classification does
+not remove commit ambiguity or change batch-isolation retry policy.
 
-Use `maybe_find_by_*` to get `Ok(None)` instead of an error when the entity legitimately may not exist:
-
-```rust,ignore
-match users.maybe_find_by_id(some_id).await? {
-    Some(user) => { /* found */ }
-    None => { /* not found — an expected outcome, not an error */ }
-}
-```
-
-## Hooks
-
-`PostPersistHookError` and `PostHydrateError` surface as `Fatal` — see [Hooks](./repo-hooks.md) for how they're wrapped.
+See the [errlanes guide](https://github.com/GaloyMoney/es-entity/blob/main/errlanes/README.md)
+for subset matching, conversion inference, composition metadata, and settlement.

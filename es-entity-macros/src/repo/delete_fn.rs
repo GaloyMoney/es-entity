@@ -71,6 +71,7 @@ impl ToTokens for DeleteFn<'_> {
         let assignments = self
             .columns
             .variable_assignments_for_delete(syn::parse_quote! { entity });
+        let constraint_values = self.columns.delete_constraint_values(entity);
         let column_updates = self.columns.sql_updates_for_delete();
         let args = self.columns.update_query_args_for_delete();
 
@@ -166,7 +167,7 @@ impl ToTokens for DeleteFn<'_> {
                 pub async fn delete(
                     &self,
                     entity: #entity
-                ) -> Result<(), errlanes::Fail<#constraint_violation>> {
+                ) -> Result<(), errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> {
                     let mut op = self.begin_op().await?;
                     let res = self.delete_in_op(&mut op, entity).await?;
                     op.commit().await?;
@@ -182,13 +183,14 @@ impl ToTokens for DeleteFn<'_> {
             pub async fn delete_in_op<OP>(&self,
                 op: &mut OP,
                 mut entity: #entity
-            ) -> Result<(), errlanes::Fail<#constraint_violation>>
+            ) -> Result<(), errlanes::Fail<#constraint_violation, errlanes::RepoLanes>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), errlanes::Fail<#constraint_violation>> = async {
+                let __result: Result<(), errlanes::Fail<#constraint_violation, errlanes::RepoLanes>> = async {
                     #(#nested_deletes)*
                     #assignments
+                    #constraint_values
                     #record_id
 
                     #forget_payloads
@@ -203,7 +205,7 @@ impl ToTokens for DeleteFn<'_> {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)))?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                     #staged_payload_insert
 
@@ -273,7 +275,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), errlanes::Fail<EntityConstraintViolation>> {
+            ) -> Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -284,12 +286,13 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), errlanes::Fail<EntityConstraintViolation>>
+            ) -> Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), errlanes::Fail<EntityConstraintViolation>> = async {
+                let __result: Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
                     let id = &entity.id;
+                    let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), };
 
                     let new_events = entity.events().any_new();
                     let offset = entity.events().len_persisted();
@@ -306,7 +309,7 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")))?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                     if new_events {
                         let recorded_at = rows
@@ -369,7 +372,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), errlanes::Fail<EntityConstraintViolation>> {
+            ) -> Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -380,13 +383,14 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), errlanes::Fail<EntityConstraintViolation>>
+            ) -> Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), errlanes::Fail<EntityConstraintViolation>> = async {
+                let __result: Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
                     let id = &entity.id;
                     let name = &entity.name;
+                    let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), name: Some((*name).clone()), };
 
                     let new_events = entity.events().any_new();
                     let offset = entity.events().len_persisted();
@@ -404,7 +408,7 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")))?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                     if new_events {
                         let recorded_at = rows
@@ -461,7 +465,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), errlanes::Fail<EntityConstraintViolation>> {
+            ) -> Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -472,12 +476,13 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), errlanes::Fail<EntityConstraintViolation>>
+            ) -> Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), errlanes::Fail<EntityConstraintViolation>> = async {
+                let __result: Result<(), errlanes::Fail<EntityConstraintViolation, errlanes::RepoLanes>> = async {
                     let id = &entity.id;
+                    let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), };
 
                     sqlx::query!(
                         "DELETE FROM entities_forgettable_payloads WHERE entity_id = $1",
@@ -501,7 +506,7 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")))?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                     let mut payload_sequences: Vec<i32> = Vec::new();
                     let mut payload_values: Vec<es_entity::prelude::serde_json::Value> = Vec::new();

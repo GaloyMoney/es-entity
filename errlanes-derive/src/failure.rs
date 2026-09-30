@@ -62,6 +62,7 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
 
         impl errlanes::Failure for #ident {
             type Rejection = #d_ty;
+            type Lanes = errlanes::AllLanes;
 
             fn into_fail(self) -> errlanes::Fail<Self::Rejection> {
                 self.0
@@ -143,7 +144,7 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
         tokens.extend(quote! {
             impl From<errlanes::Fail<#lift>> for #ident {
                 fn from(f: errlanes::Fail<#lift>) -> Self {
-                    Self(f.widen_with(<#d_ty as errlanes::Lift<#lift>>::lift))
+                    Self(f.lift())
                 }
             }
 

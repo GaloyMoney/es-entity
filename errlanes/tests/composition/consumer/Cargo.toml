@@ -1,0 +1,12 @@
+[package]
+name = "composition-consumer"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+[features]
+extra = ["middle/extra"]
+[dependencies]
+middle = { package = "composition-middle", path = "../middle" }
+errlanes = { path = "../../..", features = ["derive"] }
+thiserror = "2"

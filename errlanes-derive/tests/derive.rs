@@ -1,6 +1,7 @@
 #[test]
 fn ui() {
     let t = trybuild::TestCases::new();
+    t.compile_fail("tests/v2/*.rs");
     t.pass("tests/trybuild/rejection_pass.rs");
     t.pass("tests/trybuild/rejection_multi_lift.rs");
     t.pass("tests/trybuild/failure_pass.rs");
