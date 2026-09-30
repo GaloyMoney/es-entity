@@ -629,36 +629,64 @@ impl<L: LaneProfile> Laned for Fault<L> {
     }
 }
 
-/// Target-inferred conversions for canonical failure results.
-pub trait ResultExt<T, R, L: LaneProfile>: Sized {
-    fn widen<P: From<R>, M: LaneProfile>(self) -> Result<T, Fail<P, M>>
-    where
-        L::Denied: Into<M::Denied>,
-        L::Transient: Into<M::Transient>,
-        L::Fatal: Into<M::Fatal>;
-    fn lift<P: Lift<R>, M: LaneProfile>(self) -> Result<T, Fail<P, M>>
-    where
-        L::Denied: Into<M::Denied>,
-        L::Transient: Into<M::Transient>,
-        L::Fatal: Into<M::Fatal>,
-        P::Unmapped: UnmappedInto<M::Fatal>;
+/// Target-inferred widening for results containing [`Fault`] or [`Fail`].
+///
+/// `Fault` results widen to `Fault`; `Fail` results widen to `Fail`, converting
+/// the rejection through [`From`]. Success values and fault payloads are preserved.
+/// Widening can add lanes, but cannot silently discard an enabled lane:
+///
+/// ```compile_fail
+/// use errlanes::{Fault, WidenResult, lanes};
+/// fn discard_denied(value: Result<(), Fault<lanes!(Denied, Fatal)>>)
+///     -> Result<(), Fault<lanes!(Fatal)>>
+/// {
+///     value.widen()
+/// }
+/// ```
+pub trait WidenResult<T, E>: Sized {
+    fn widen(self) -> Result<T, E>;
 }
-impl<T, R, L: LaneProfile> ResultExt<T, R, L> for Result<T, Fail<R, L>> {
-    fn widen<P: From<R>, M: LaneProfile>(self) -> Result<T, Fail<P, M>>
-    where
-        L::Denied: Into<M::Denied>,
-        L::Transient: Into<M::Transient>,
-        L::Fatal: Into<M::Fatal>,
-    {
+
+impl<T, L: LaneProfile, M: LaneProfile> WidenResult<T, Fault<M>> for Result<T, Fault<L>>
+where
+    L::Denied: Into<M::Denied>,
+    L::Transient: Into<M::Transient>,
+    L::Fatal: Into<M::Fatal>,
+{
+    fn widen(self) -> Result<T, Fault<M>> {
+        self.map_err(Fault::widen)
+    }
+}
+
+impl<T, R, P: From<R>, L: LaneProfile, M: LaneProfile> WidenResult<T, Fail<P, M>>
+    for Result<T, Fail<R, L>>
+where
+    L::Denied: Into<M::Denied>,
+    L::Transient: Into<M::Transient>,
+    L::Fatal: Into<M::Fatal>,
+{
+    fn widen(self) -> Result<T, Fail<P, M>> {
         self.map_err(Fail::widen)
     }
-    fn lift<P: Lift<R>, M: LaneProfile>(self) -> Result<T, Fail<P, M>>
-    where
-        L::Denied: Into<M::Denied>,
-        L::Transient: Into<M::Transient>,
-        L::Fatal: Into<M::Fatal>,
-        P::Unmapped: UnmappedInto<M::Fatal>,
-    {
+}
+
+/// Target-inferred rejection lifting for results containing [`Fail`].
+///
+/// Partial mappings require Fatal in the destination and preserve an unmapped
+/// rejection as the source of a fatal invariant. Strict mappings also work here.
+pub trait LiftResult<T, E>: Sized {
+    fn lift(self) -> Result<T, E>;
+}
+
+impl<T, R, P: Lift<R>, L: LaneProfile, M: LaneProfile> LiftResult<T, Fail<P, M>>
+    for Result<T, Fail<R, L>>
+where
+    L::Denied: Into<M::Denied>,
+    L::Transient: Into<M::Transient>,
+    L::Fatal: Into<M::Fatal>,
+    P::Unmapped: UnmappedInto<M::Fatal>,
+{
+    fn lift(self) -> Result<T, Fail<P, M>> {
         self.map_err(Fail::lift)
     }
 }

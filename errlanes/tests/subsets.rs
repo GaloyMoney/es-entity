@@ -1,8 +1,61 @@
 use errlanes::{
-    Fail, Fatal, FatalKind, Fault, Lane, Rejection, ResultExt, Settled, Transient, TransientKind,
-    lanes,
+    Fail, Fatal, FatalKind, Fault, Lane, LiftResult, Rejection, Settled, Transient, TransientKind,
+    WidenResult, lanes,
 };
 use std::{convert::Infallible, error::Error};
+
+#[test]
+fn fault_results_widen_at_question_mark_boundaries() {
+    fn authorize_boundary(
+        inner: Result<String, Fault<lanes!(Fatal)>>,
+    ) -> Result<String, Fault<lanes!(Denied, Fatal)>> {
+        let value = inner.widen()?;
+        Ok(value)
+    }
+
+    assert_eq!(authorize_boundary(Ok("saved".into())).unwrap(), "saved");
+    let source = Fatal::from_error(FatalKind::Config, std::io::Error::other("missing config"))
+        .with_context("startup");
+    let Fault::Fatal(error) = authorize_boundary(Err(source.into())).unwrap_err() else {
+        panic!("expected fatal");
+    };
+    assert_eq!(error.kind, FatalKind::Config);
+    assert_eq!(error.context.as_deref(), Some("startup"));
+    assert_eq!(error.source().unwrap().to_string(), "missing config");
+    assert!(error.source().unwrap().is::<std::io::Error>());
+}
+
+#[test]
+fn widening_fault_results_preserves_transient_and_denied_payloads() {
+    let transient = Transient::new(TransientKind::Deadlock)
+        .with_context("retry transaction")
+        .with_retry_after(std::time::Duration::from_millis(7))
+        .with_source(std::io::Error::other("deadlock"));
+    let original_source = transient.source_arc().unwrap().clone();
+    let result: Result<(), Fault<lanes!(Transient)>> = Err(transient.into());
+    let widened: Result<(), Fault<lanes!(Transient, Fatal, Denied)>> = result.widen();
+    let Fault::Transient(error) = widened.unwrap_err() else {
+        panic!("expected transient");
+    };
+    assert_eq!(error.kind, TransientKind::Deadlock);
+    assert_eq!(error.context.as_deref(), Some("retry transaction"));
+    assert_eq!(error.retry_after, Some(std::time::Duration::from_millis(7)));
+    assert!(std::sync::Arc::ptr_eq(
+        &original_source,
+        error.source_arc().unwrap()
+    ));
+
+    let denied = errlanes::Denied {
+        action: Some("write".into()),
+        ..Default::default()
+    };
+    let result: Result<(), Fault<lanes!(Denied)>> = Err(denied.into());
+    let widened: Result<(), Fault<lanes!(Denied, Fatal)>> = result.widen();
+    let Fault::Denied(error) = widened.unwrap_err() else {
+        panic!("expected denied");
+    };
+    assert_eq!(error.action.as_deref(), Some("write"));
+}
 
 #[derive(Debug, Clone, thiserror::Error, errlanes::Rejection)]
 pub enum Child {

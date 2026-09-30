@@ -80,7 +80,7 @@ pub enum RegistrationRejection {
     EmailAlreadyExists(ConstraintConflict<String>),
 }
 
-use errlanes::ResultExt;
+use errlanes::LiftResult;
 async fn register(...) -> Result<User, Fail<RegistrationRejection, errlanes::lanes!(Transient, Fatal)>> {
     Ok(repo.create(new_user).await.lift()?)
 }

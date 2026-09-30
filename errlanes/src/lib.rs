@@ -2,7 +2,7 @@
 //! carried in the type instead of re-derived at every layer.
 //!
 //! See the crate [README](https://github.com/GaloyMoney/es-entity/blob/main/errlanes/README.md)
-//! for the adoption tiers and a worked example.
+//! for a step-by-step introduction with runnable examples.
 
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
@@ -24,8 +24,8 @@ mod record;
 
 pub use dynamic::{Classify, lane_of, transient_of};
 pub use fail::{
-    ExhaustionInto, Fail, Failure, Fault, Laned, Level, Lift, Liftable, Rejection, RejectionField,
-    RejectionMetadata, ResultExt, Settled, SettledFault, UnmappedInto,
+    ExhaustionInto, Fail, Failure, Fault, Laned, Level, Lift, LiftResult, Liftable, Rejection,
+    RejectionField, RejectionMetadata, Settled, SettledFault, UnmappedInto, WidenResult,
 };
 pub use lane::{Denied, Exhausted, Fatal, FatalKind, Lane, Transient, TransientKind};
 

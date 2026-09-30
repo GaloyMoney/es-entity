@@ -1,4 +1,4 @@
-use errlanes::{Fail, Level, Rejection, ResultExt, lanes};
+use errlanes::{Fail, Level, LiftResult, Rejection, WidenResult, lanes};
 
 use std::error::Error;
 
