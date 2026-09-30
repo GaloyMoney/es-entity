@@ -18,7 +18,10 @@ tracing = ["dep:tracing"]
 errlanes-derive = { workspace = true, optional = true }
 
 sqlx = { workspace = true, optional = true }
-tracing = { workspace = true, optional = true }
+# "attributes" is the `#[tracing::instrument]` re-export `#[errlanes::instrument]`
+# expands into; Cargo features cannot be conditioned on both `derive` and
+# `tracing` at once, so it rides along with `tracing` itself.
+tracing = { workspace = true, optional = true, features = ["attributes"] }
 
 [dev-dependencies]
 composition-consumer = { path = "tests/composition/consumer" }

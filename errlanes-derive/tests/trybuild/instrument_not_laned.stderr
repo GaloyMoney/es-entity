@@ -1,0 +1,22 @@
+error[E0277]: the trait bound `NotLaned: errlanes::fail::sealed::Sealed` is not satisfied
+  --> tests/trybuild/instrument_not_laned.rs:14:1
+   |
+14 | #[errlanes::instrument]
+   | ^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `Failure` is not implemented for `NotLaned`
+  --> tests/trybuild/instrument_not_laned.rs:5:1
+   |
+ 5 | struct NotLaned;
+   | ^^^^^^^^^^^^^^^
+   = help: the trait `Failure` is implemented for `Fail<D, L>`
+   = note: required for `NotLaned` to implement `errlanes::fail::sealed::Sealed`
+note: required by a bound in `errlanes::Laned::record`
+  --> $WORKSPACE/errlanes/src/fail.rs
+   |
+   | pub trait Laned: sealed::Sealed + Error + Send + Sync + 'static + Sized {
+   |                  ^^^^^^^^^^^^^^ required by this bound in `Laned::record`
+...
+   |     fn record(&self, span: &tracing::Span);
+   |        ------ required by a bound in this associated function
+   = note: this error originates in the attribute macro `errlanes::instrument` (in Nightly builds, run with -Z macro-backtrace for more info)

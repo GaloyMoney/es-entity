@@ -1,8 +1,9 @@
 //! Proc macros for `errlanes`: `#[derive(Rejection)]`, `#[derive(Lift)]`, `#[derive(Failure)]`,
-//! and `#[compose]`.
+//! `#[compose]`, and `#[instrument]`.
 
 mod composition;
 mod failure;
+mod instrument;
 mod lift;
 mod rejection;
 
@@ -103,6 +104,14 @@ pub fn compose(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn __compose_rejection(input: TokenStream) -> TokenStream {
     match composition::callback(input.into()) {
+        Ok(t) => resolve_runtime(t).into(),
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_attribute]
+pub fn instrument(args: TokenStream, input: TokenStream) -> TokenStream {
+    match instrument::expand(args.into(), input.into()) {
         Ok(t) => resolve_runtime(t).into(),
         Err(e) => e.to_compile_error().into(),
     }

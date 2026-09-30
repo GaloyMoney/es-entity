@@ -7,4 +7,9 @@ fn ui() {
     t.pass("tests/trybuild/failure_pass.rs");
     t.compile_fail("tests/trybuild/failure_from_not_failure.rs");
     t.compile_fail("tests/trybuild/fault_is_not_failure.rs");
+    t.pass("tests/trybuild/instrument_async_with_fields.rs");
+    t.pass("tests/trybuild/instrument_async_without_fields.rs");
+    t.pass("tests/trybuild/instrument_sync.rs");
+    t.pass("tests/trybuild/instrument_fields_declares_error.rs");
+    t.compile_fail("tests/trybuild/instrument_not_laned.rs");
 }

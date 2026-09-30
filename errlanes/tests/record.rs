@@ -1,7 +1,7 @@
 #![cfg(feature = "tracing")]
 //! `Laned::record` is the single write path every boundary recorder (a
-//! batch dispatcher via `RecordResult`, or a future instrumented site) goes
-//! through. This exercises it directly with a capturing subscriber,
+//! `#[errlanes::instrument]`'d fn, a batch dispatcher via `RecordResult`)
+//! goes through. This exercises it directly with a capturing subscriber,
 //! asserting the exact fields `FIELDS` promises for each lane.
 use std::{
     collections::HashMap,
@@ -128,6 +128,29 @@ fn record_fills_every_field_per_lane() {
     assert_eq!(captured.get("error.level").as_deref(), Some("ERROR"));
     assert!(captured.get("exception.message").is_some());
     assert_eq!(captured.get("exception.type").as_deref(), Some("invariant"));
+}
+
+#[errlanes::instrument]
+fn boundary() -> Result<(), Fail<Small>> {
+    Err(Fatal::new(FatalKind::Invariant).into())
+}
+
+/// `#[errlanes::instrument]` generates its own span (via `#[tracing::instrument]`)
+/// and records onto it from inside the fn body, so calling it under a capturing
+/// subscriber is enough to see every field `FIELDS` promises, with no span of
+/// the caller's own to set up.
+#[test]
+fn instrumented_fn_records_every_field_on_fatal() {
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::registry().with(CaptureLayer(captured.0.clone()));
+    tracing::subscriber::with_default(subscriber, || {
+        assert!(boundary().is_err());
+    });
+    for field in errlanes::FIELDS {
+        assert!(captured.get(field).is_some(), "missing {field}");
+    }
+    assert_eq!(captured.get("error.lane").as_deref(), Some("fatal"));
+    assert_eq!(captured.get("error.code").as_deref(), Some("invariant"));
 }
 
 #[test]

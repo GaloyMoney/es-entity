@@ -19,6 +19,7 @@ darling = "0.24"
 convert_case = "0.12"
 
 [dev-dependencies]
-errlanes = { path = "../errlanes", default-features = false, features = ["derive"] }
+errlanes = { path = "../errlanes", default-features = false, features = ["derive", "tracing"] }
 thiserror = "2.0"
+tracing = { version = "0.1", features = ["std"] }
 trybuild = "1"

@@ -34,3 +34,6 @@ pub use record::{FIELDS, RecordResult, record, record_fail, record_fault};
 
 #[cfg(feature = "derive")]
 pub use errlanes_derive::{__compose_rejection, Failure, Lift, Rejection, compose};
+
+#[cfg(all(feature = "derive", feature = "tracing"))]
+pub use errlanes_derive::instrument;
