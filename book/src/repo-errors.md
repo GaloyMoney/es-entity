@@ -1,7 +1,15 @@
-# Repository errors
+# Error Types
 
-Repository writes return `es_entity::RepoWriteError<EntityConstraintViolation>`
-and reads return `es_entity::RepoReadError`. These aliases belong to es-entity:
+es-entity uses [errlanes](https://github.com/GaloyMoney/es-entity/blob/main/errlanes/README.md)
+as its error library. Every failure a repository returns sits in one of its
+lanes: a **rejection** the caller can act on (here, a typed constraint
+violation), a **transient** fault worth retrying (a deadlock, a lost
+connection), or a **fatal** one that will not succeed on retry (a bug, a
+misconfiguration, corrupt stored state). The errlanes guide covers the model
+itself — matching on lanes, lifting rejections into domain errors, recording,
+retries. This chapter covers what es-entity puts into it.
+
+## The repository error types
 
 ```rust
 # extern crate es_entity;
@@ -11,14 +19,17 @@ pub type RepoReadError = Fault<lanes!(Transient, Fatal)>;
 pub type RepoWriteError<C> = Fail<C, lanes!(Transient, Fatal)>;
 ```
 
-Both enable Transient and Fatal, never Denied.
-A write may return a structured, caller-correctable rejection; a read cannot.
-Both carriers preserve the standard lane markers and their original sources.
+Reads return `RepoReadError`. A read cannot reject — absence is `Ok(None)` from
+`maybe_find_by_*` — so its error is a plain fault. Writes return
+`RepoWriteError<C>`, where `C` is the repository's typed constraint enum
+described next. Neither enables `Denied`: authorization happens before the
+repository call.
 
-## Typed constraint cases
+## Typed constraint violations
 
-An `EsRepo` derives a rejection enum with one case per recognized database
-constraint. For example:
+`#[derive(EsRepo)]` reads the migration catalog and generates a rejection enum
+with one case per constraint on the entity's tables — primary key, unique
+indexes (partial and composite included), foreign keys and checks:
 
 ```rust,ignore
 pub enum UserConstraintViolation {
@@ -27,130 +38,64 @@ pub enum UserConstraintViolation {
 }
 ```
 
-There is no separate discriminator enum, `Own` wrapper, or `Unknown` rejection.
-Match the case directly. Constraint names strip the table prefix and are
-converted to Rust variant names; named indexes keep their exact identity.
-Primary keys, unique indexes (including partial and composite indexes), foreign
-keys, and checks come from the migration catalog. Conventional primary/unique
-names are retained for repositories without discoverable migrations.
+Variant names are the constraint names with the table prefix stripped
+(`users_email_key` → `EmailKey`). Each case carries a `ConstraintConflict<V>`,
+where `V` is the column's Rust type — for a composite key, a generated struct
+with one field per column:
 
-`ConstraintConflict<V>` contains `attempted: Option<V>` and structured diagnostics
-(table, exact constraint name, kind, and original SQLx source). Single writes
-capture typed values from the actual input when available. Composite keys use a
-generated struct with named fields for all key columns. Batch failures leave the
-attempted value absent when the failing item cannot be identified reliably.
-Opaque CHECK expressions and unknown column types also leave values absent.
-Database message text is never parsed to manufacture typed attempted values.
+- `attempted: Option<V>` — the value that collided, taken from the write's own
+  input. It is `None` when it cannot be known reliably: a batch write that
+  cannot tell which item failed, an opaque CHECK expression, a column type the
+  macro does not know. Database message text is never parsed to fill it in.
+- `diagnostics` — the table, the exact constraint name, its kind, and the
+  original `sqlx::Error`. The enum also offers `constraint_name()`, `kind()`,
+  `is_unique()`, `is_foreign_key()` and `is_check()` across all its cases.
 
-Values may be sensitive. Default Display prints only table/constraint identity,
-not attempted values or database detail text. Deliberate consumers may inspect
-`attempted`. Generated `diagnostics()`, `constraint_name()`, `kind()`,
-`is_unique()`, `is_foreign_key()`, and `is_check()` provide diagnostic access;
-typed variant matching is the domain mapping API.
+Match the case directly:
 
 ```rust,ignore
-match repo.create(new_user).await {
+match users.create(new_user).await {
     Err(Fail::Rejected(UserConstraintViolation::EmailKey(conflict))) => {
-        // conflict.attempted is Option<String>; do not replace absence with "".
+        // conflict.attempted is Option<String>
     }
-    other => { /* normal propagation or handling */ }
+    Err(other) => return Err(other.into()),
+    Ok(user) => { /* ... */ }
 }
 ```
 
-Known constraints are Rejected. Unknown database constraints become
-Fatal(Invariant) at the repository boundary with their original SQLx source and
-constraint identity. NOT NULL/exclusion failures retain the central SQL
-classifier's fatal treatment. Optimistic event-sequence conflicts remain
-Transient(OptimisticConflict). Duplicate IDs during creation are Rejected even
-when PostgreSQL reports the events-table constraint first. A vanished row during
-an update is a transient race; a torn create batch is a fatal invariant.
+`attempted` may be personal data. `Display` on a conflict prints only the table
+and constraint, never the value or the database's detail text; read `attempted`
+deliberately and keep it out of anything that reaches an untrusted client.
 
-## Domain mapping and composition
+To carry a constraint case into your own domain error, see `derive(Lift)` and
+`#[errlanes::compose]` in the errlanes guide. A nested repository's constraints
+appear on the parent's enum prefixed with the nested field's name
+(`OrderConstraintViolation::ItemsSkuKey`).
 
-Use one lifting framework for exhaustive forwarding and explicit partial domain
-mapping:
+## What becomes a fault
 
-```rust,ignore
-#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
-#[lift(UserConstraintViolation, unhandled = fatal)]
-pub enum RegistrationRejection {
-    #[error("email already exists: {0}")]
-    #[rejection(code = "EMAIL_ALREADY_EXISTS")]
-    #[lift(UserConstraintViolation::EmailKey)]
-    EmailAlreadyExists(ConstraintConflict<String>),
-}
+A few repository outcomes are faults rather than rejections, and they are easy
+to expect the other way round:
 
-use errlanes::WidenResult;
-async fn register(...) -> Result<User, Fail<RegistrationRejection, errlanes::lanes!(Transient, Fatal)>> {
-    Ok(repo.create(new_user).await.widen()?)
-}
-```
+- **A constraint the catalog does not know** — on a table the repository does
+  not own, say — is `Fatal(Invariant)`, with the constraint name as context and
+  the `sqlx::Error` as source. The generated enum names every constraint the
+  repository can reject on; anything else is a bug in the schema or the query,
+  not something the caller did.
+- **A required `find_by_*` on a missing row** is `Fatal(Invariant)` with
+  `NotFound` as its source. `find_by_*` asserts the row exists. For a key the
+  caller supplied, use `maybe_find_by_*` and name the not-found case where the
+  caller can see it:
 
-Unhandled **known** cases become Fatal(Invariant) at this domain boundary, with
-the original rejection as source. This is separate from unknown constraints at
-the repository boundary. Partial mode never creates an infallible
-`From<UserConstraintViolation>` for the domain rejection. Use it only for cases
-that truly indicate a violated domain invariant; legitimate alternatives must
-remain rejections.
+  ```rust,ignore
+  let user = users.maybe_find_by_id(id).await?
+      .ok_or(RegistrationRejection::UnknownUser { id })?;
+  ```
 
-`derive(Lift)` generates conversions; `derive(Rejection)` generates codes and
-levels. Omitting `unhandled = fatal` selects strict mode. Name every case with
-`#[lift(Source::Variant)]`; omitted cases fail compilation. Matching fields
-forward automatically, and a total `From<Source>` enables `.widen()?` on a
-failure result or `?` on a bare rejection. Forwarded metadata preserves the leaf
-code and severity by default; an explicit code denotes a domain reinterpretation.
-Neither derive implements the other's trait. `Lift` can also be used without
-`Rejection` when only conversion is needed.
-
-To import an entire family without repeating its cases:
-
-```rust,ignore
-#[errlanes::compose]
-#[derive(Debug, thiserror::Error)]
-pub enum RegistrationRejection {
-    #[compose(flatten)]
-    User(UserConstraintViolation),
-    #[error("registration closed")]
-    Closed,
-}
-```
-
-`compose` supplies both `Rejection` and `Lift`; only unrelated derives need to
-be listed. Each source case becomes `UserCase`, using the placeholder name as
-its prefix. Codes and levels stay those of the source. Explicit strict/partial
-`#[lift(...)]` mappings from other families can coexist with whole-family
-imports, and explicit lifts provide custom or unprefixed destination names.
-
-The placeholder disappears. Nested repositories use the same schema protocol,
-with the nested field name as prefix: `OrderConstraintViolation::ItemsSkuKey`
-contains the child's typed conflict directly. There is no nested discriminator
-tree. `FamilySchema` must be reexported alongside `Family` when a composing
-consumer uses a reexport or renamed source. The three-crate fixture covers both
-ordinary families and generated nested repository writes.
-
-## Read semantics and faults
-
-`maybe_find_by_*` returns `Ok(None)` for absence. A required `find_by_*` assumes
-the row exists and returns Fatal(Invariant) with `NotFound` as source when it is
-missing. For a caller-supplied key that may legitimately be absent, use an
-optional read and define the caller-facing not-found rejection at the domain
-boundary.
-
-```rust,ignore
-let user = repo.maybe_find_by_id(id).await?
-    .ok_or(UserRejection::NotFound { id })?;
-```
-
-Hydration/stored-data failures remain Fatal(CorruptState). Denial cannot enter
-ordinary repository signatures: custom hooks must convert into the declared
-profile, and a hook that can deny does not satisfy that bound. Default SQLx
-hooks convert into `RepoReadError` or `RepoWriteError<C>`.
-
-Fatal payloads are diagnostic data for operators and tests. Production code
-handles the lane uniformly: stop, surface, and alert at the owning boundary.
-Do not branch on a fatal source to recover a legitimate rejection. Retry only
-when the transaction boundary proves it is safe; a transient classification does
-not remove commit ambiguity or change batch-isolation retry policy.
-
-See the [errlanes guide](https://github.com/GaloyMoney/es-entity/blob/main/errlanes/README.md)
-for subset matching, conversion inference, composition metadata, and settlement.
+- **An event stream that fails to hydrate** — a missing field, an
+  undeserializable event — is `Fatal(CorruptState)`.
+- **An optimistic-concurrency conflict** on the events table, including a row
+  that vanished between load and `update`, is `Transient(OptimisticConflict)`.
+  Every other `sqlx::Error` classifies as errlanes' `sqlx` module describes:
+  deadlocks, serialization failures, pool timeouts and lost connections are
+  transient; the rest fatal.
