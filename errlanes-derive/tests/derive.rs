@@ -11,5 +11,6 @@ fn ui() {
     t.pass("tests/trybuild/instrument_async_without_fields.rs");
     t.pass("tests/trybuild/instrument_sync.rs");
     t.pass("tests/trybuild/instrument_fields_declares_error.rs");
+    t.pass("tests/trybuild/instrument_trailing_comma.rs");
     t.compile_fail("tests/trybuild/instrument_not_laned.rs");
 }

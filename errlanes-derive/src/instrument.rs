@@ -71,6 +71,17 @@ fn declared_names(fields_group: TokenStream) -> HashSet<String> {
         .collect()
 }
 
+/// Whether a token stream already ends in a trailing comma — rustfmt adds one
+/// to a multi-line `#[errlanes::instrument(..)]` argument list, or a
+/// multi-line `fields(..)` group, and appending another unconditionally would
+/// produce `,,` and fail to compile.
+fn ends_with_comma(stream: &TokenStream) -> bool {
+    matches!(
+        stream.clone().into_iter().last(),
+        Some(TokenTree::Punct(p)) if p.as_char() == ','
+    )
+}
+
 /// Appends the [`FIELDS`] entries the caller has not already declared to the
 /// `#[tracing::instrument]` argument list: into an existing `fields(..)`
 /// group if there is one, else as a new one. The caller's own tokens are
@@ -97,7 +108,7 @@ fn inject_fields(args: TokenStream) -> TokenStream {
                 .collect();
             let mut stream = group.stream();
             if !missing.is_empty() {
-                if !stream.is_empty() {
+                if !stream.is_empty() && !ends_with_comma(&stream) {
                     stream.extend(quote! { , });
                 }
                 stream.extend(quote! { #(#missing),* });
@@ -112,7 +123,7 @@ fn inject_fields(args: TokenStream) -> TokenStream {
         i += 1;
     }
     if !found {
-        if !output.is_empty() {
+        if !output.is_empty() && !ends_with_comma(&output) {
             output.extend(quote! { , });
         }
         let entries: Vec<_> = FIELDS.iter().map(|name| field_entry(name)).collect();
@@ -188,6 +199,22 @@ mod tests {
         let out = inject_fields(args).to_string();
         assert!(out.contains("fields"));
         assert!(out.contains("error"));
+    }
+
+    #[test]
+    fn no_fields_group_with_trailing_comma_does_not_double_comma() {
+        // rustfmt adds a trailing comma to a multi-line argument list.
+        let args: TokenStream = quote! { name = "x", skip_all, };
+        let out = inject_fields(args).to_string();
+        assert!(!out.contains(" , ,"), "double comma in {out}");
+    }
+
+    #[test]
+    fn existing_fields_group_with_trailing_comma_does_not_double_comma() {
+        // rustfmt adds a trailing comma to a multi-line `fields(..)` group too.
+        let args: TokenStream = quote! { fields(job_id = tracing::field::Empty,) };
+        let out = inject_fields(args).to_string();
+        assert!(!out.contains(" , ,"), "double comma in {out}");
     }
 
     #[test]
