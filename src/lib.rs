@@ -62,7 +62,7 @@ pub use context::*;
 pub use errlanes;
 pub use errlanes::{
     Denied, Fail, Failure, Fatal, FatalKind, Fault, Lane, Laned, Lift, Liftable, Rejection,
-    Settled, Transient, TransientKind, denied_of, fatal_of,
+    Settled, Transient, TransientKind, classify_dyn, denied_of, fatal_of, fault_of, message_chain,
 };
 #[doc(inline)]
 pub use error::*;

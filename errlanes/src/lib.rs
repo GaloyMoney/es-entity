@@ -19,7 +19,9 @@ pub mod sqlx;
 #[cfg(feature = "tracing")]
 mod record;
 
-pub use dynamic::{denied_of, fatal_of, lane_of, transient_of};
+pub use dynamic::{
+    classify_dyn, denied_of, fatal_of, fault_of, lane_of, message_chain, transient_of,
+};
 pub use fail::{
     Fail, Failure, Fault, Laned, Level, Lift, Liftable, Rejection, RejectionField,
     RejectionMetadata, UnmappedInto, WidenResult,
@@ -27,7 +29,7 @@ pub use fail::{
 pub use lane::{Denied, Exhausted, Fatal, FatalKind, Lane, Transient, TransientKind};
 
 #[cfg(feature = "sqlx")]
-pub use sqlx::{classify_sqlx, classify_sqlx_fault, transient_sqlstate};
+pub use sqlx::{classify_sqlx, classify_sqlx_fault, classify_sqlx_ref, transient_sqlstate};
 
 #[cfg(feature = "tracing")]
 pub use record::{FIELDS, RecordResult, record, record_fail, record_fault};
