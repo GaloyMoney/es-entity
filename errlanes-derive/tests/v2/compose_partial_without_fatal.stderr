@@ -9,9 +9,7 @@ help: the trait `UnmappedInto<Infallible>` is not implemented for `Source`
    |
  2 | enum Source {
    | ^^^^^^^^^^^
-   = help: the following other types implement trait `UnmappedInto<F>`:
-             `Infallible` implements `UnmappedInto<F>`
-             `errlanes::Fatal` implements `UnmappedInto<errlanes::Fatal>`
+   = help: the trait `UnmappedInto<F>` is implemented for `Infallible`
 note: required by a bound in `Fail::<D, L>::lift`
   --> $WORKSPACE/errlanes/src/fail.rs
    |
