@@ -84,13 +84,6 @@ impl Transient {
         self
     }
 
-    /// As [`Transient::with_source`], for a source that only arrives
-    /// already boxed (e.g. `sqlx`'s `BoxDynError`).
-    pub fn with_source_boxed(mut self, e: Box<dyn Error + Send + Sync>) -> Self {
-        self.source = Some(Arc::from(e));
-        self
-    }
-
     pub fn with_context(mut self, c: impl Into<Cow<'static, str>>) -> Self {
         self.context = Some(c.into());
         self
@@ -175,12 +168,17 @@ impl Fatal {
         }
     }
 
+    /// [`Fatal::new`] plus [`Fatal::with_source`], as one call — the common
+    /// shape at a classification site that has the error in hand.
     pub fn from_error(kind: FatalKind, e: impl Error + Send + Sync + 'static) -> Self {
-        Self {
-            kind,
-            context: None,
-            source: Some(Arc::new(e)),
-        }
+        Self::new(kind).with_source(e)
+    }
+
+    /// As [`Transient::with_source`]. Takes `self` so a `Fatal` built from a
+    /// lane table can be given its source afterwards.
+    pub fn with_source(mut self, e: impl Error + Send + Sync + 'static) -> Self {
+        self.source = Some(Arc::new(e));
+        self
     }
 
     /// Explicit escape hatch for a source that only arrives boxed. There is

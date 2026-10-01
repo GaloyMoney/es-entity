@@ -26,46 +26,34 @@ pub fn transient_sqlstate(code: &str) -> Option<TransientKind> {
     }
 }
 
-/// Classifies a raw `sqlx::Error`, moving it. See the module docs for why
-/// `Protocol(_)` lands in `Fatal(Dependency)`. A `sqlx::Error` never carries
-/// a domain rejection, so the real work happens in [`classify_sqlx_fault`];
-/// this widens that into whatever `D` the caller needs.
-pub fn classify_sqlx<D, L: crate::LaneProfile<Transient = Transient, Fatal = Fatal>>(
-    e: ::sqlx::Error,
-) -> Fail<D, L> {
-    classify_sqlx_fault(e).into()
-}
-
-/// Same classification as [`classify_sqlx`], as a [`Fault`] rather than a
-/// `Fail<D>` — what `impl From<sqlx::Error> for Fault` delegates to.
-pub fn classify_sqlx_fault(e: ::sqlx::Error) -> Fault<crate::lanes!(Transient, Fatal)> {
+/// Which lane each `sqlx::Error` variant belongs to — the one table both
+/// public classifiers read, so there is no second copy to drift.
+///
+/// Payloads come back bare: `kind`, plus the constraint name as a
+/// `Fatal(Invariant)`'s `context`, which is the only detail not recoverable
+/// from the error's own `Display`. Each caller then attaches whatever it can
+/// carry — the owned error as a `source`, or its message as `context`.
+fn lane_table(e: &::sqlx::Error) -> Fault<crate::lanes!(Transient, Fatal)> {
     match e {
         ::sqlx::Error::PoolTimedOut => Transient::new(TransientKind::PoolTimeout).into(),
-        ::sqlx::Error::Io(err) => Transient::new(TransientKind::ConnectionLost)
-            .with_source(err)
-            .into(),
-        ::sqlx::Error::Tls(err) => Transient::new(TransientKind::ConnectionLost)
-            .with_source_boxed(err)
-            .into(),
-        ::sqlx::Error::PoolClosed => Transient::new(TransientKind::ConnectionLost).into(),
-        ::sqlx::Error::WorkerCrashed => Transient::new(TransientKind::ConnectionLost).into(),
+        ::sqlx::Error::Io(_)
+        | ::sqlx::Error::Tls(_)
+        | ::sqlx::Error::PoolClosed
+        | ::sqlx::Error::WorkerCrashed => Transient::new(TransientKind::ConnectionLost).into(),
         ::sqlx::Error::Database(db) => {
             if let Some(kind) = db.code().and_then(|c| transient_sqlstate(&c)) {
-                return Transient::new(kind)
-                    .with_source(::sqlx::Error::Database(db))
-                    .into();
+                return Transient::new(kind).into();
             }
             if db.is_unique_violation() || db.is_foreign_key_violation() || db.is_check_violation()
             {
-                let name = db.constraint().map(str::to_string);
-                let mut fatal =
-                    Fatal::from_error(FatalKind::Invariant, ::sqlx::Error::Database(db));
-                if let Some(name) = name {
-                    fatal = fatal.with_context(name);
+                let fatal = Fatal::new(FatalKind::Invariant);
+                return match db.constraint() {
+                    Some(name) => fatal.with_context(name.to_string()),
+                    None => fatal,
                 }
-                return fatal.into();
+                .into();
             }
-            Fatal::from_error(FatalKind::Config, ::sqlx::Error::Database(db)).into()
+            Fatal::new(FatalKind::Config).into()
         }
         ::sqlx::Error::RowNotFound
         | ::sqlx::Error::ColumnNotFound(_)
@@ -73,72 +61,50 @@ pub fn classify_sqlx_fault(e: ::sqlx::Error) -> Fault<crate::lanes!(Transient, F
         | ::sqlx::Error::ColumnDecode { .. }
         | ::sqlx::Error::Decode(_)
         | ::sqlx::Error::Encode(_)
-        | ::sqlx::Error::TypeNotFound { .. } => {
-            Fatal::from_error(FatalKind::CorruptState, e).into()
-        }
+        | ::sqlx::Error::TypeNotFound { .. } => Fatal::new(FatalKind::CorruptState).into(),
         ::sqlx::Error::Configuration(_) | ::sqlx::Error::AnyDriverError(_) => {
-            Fatal::from_error(FatalKind::Config, e).into()
+            Fatal::new(FatalKind::Config).into()
         }
-        ::sqlx::Error::Protocol(_) => Fatal::from_error(FatalKind::Dependency, e).into(),
-        other => Fatal::from_error(FatalKind::Dependency, other).into(),
+        // `Protocol(_)` arrives here: see the module docs for why it is a
+        // dependency bug rather than connection loss.
+        _ => Fatal::new(FatalKind::Dependency).into(),
     }
 }
 
-/// [`classify_sqlx_fault`] for a borrowed error — the same table, with
-/// `context` carrying the message in place of the source, which cannot be
-/// moved out of a shared reference. For a boundary that only has `&(dyn
-/// Error + 'static)` — see [`crate::classify_dyn`], which calls this after
-/// finding a `sqlx::Error` in a chain it cannot otherwise classify. Prefer
-/// [`classify_sqlx_fault`] when you own the error: it keeps the source.
-///
-/// Kept in sync with [`classify_sqlx_fault`] by this module's
-/// `classify_sqlx_ref_matches_classify_sqlx_fault` test — a change to one
-/// table without the other fails that test.
+/// Classifies a raw `sqlx::Error`, moving it — the error itself becomes the
+/// lane payload's `source`, so the whole chain survives. What
+/// `impl From<sqlx::Error> for Fault`/`Fail` delegates to.
+pub fn classify_sqlx_fault(e: ::sqlx::Error) -> Fault<crate::lanes!(Transient, Fatal)> {
+    match lane_table(&e) {
+        Fault::Transient(t) => t.with_source(e).into(),
+        Fault::Fatal(f) => f.with_source(e).into(),
+    }
+}
+
+/// [`classify_sqlx_fault`] for a borrowed error — the same [`lane_table`],
+/// with the message folded into `context` in place of the source, which
+/// cannot be moved out of a shared reference. [`crate::classify_dyn`] calls
+/// this after finding a `sqlx::Error` in a chain it cannot otherwise
+/// classify. Prefer [`classify_sqlx_fault`] when you own the error: it keeps
+/// the source.
 pub fn classify_sqlx_ref(e: &::sqlx::Error) -> Fault<crate::lanes!(Transient, Fatal)> {
-    match e {
-        ::sqlx::Error::PoolTimedOut => Transient::new(TransientKind::PoolTimeout).into(),
-        ::sqlx::Error::Io(_) | ::sqlx::Error::Tls(_) => {
-            Transient::new(TransientKind::ConnectionLost)
-                .with_context(e.to_string())
-                .into()
+    /// The table's own `context` (a constraint name, when it set one) stays in
+    /// front of the message rather than being overwritten by it.
+    fn fold(context: Option<&str>, e: &::sqlx::Error) -> String {
+        match context {
+            Some(name) => format!("{name}: {e}"),
+            None => e.to_string(),
         }
-        ::sqlx::Error::PoolClosed => Transient::new(TransientKind::ConnectionLost).into(),
-        ::sqlx::Error::WorkerCrashed => Transient::new(TransientKind::ConnectionLost).into(),
-        ::sqlx::Error::Database(db) => {
-            if let Some(kind) = db.code().and_then(|c| transient_sqlstate(&c)) {
-                return Transient::new(kind).with_context(e.to_string()).into();
-            }
-            if db.is_unique_violation() || db.is_foreign_key_violation() || db.is_check_violation()
-            {
-                let context = match db.constraint() {
-                    Some(name) => format!("{name}: {e}"),
-                    None => e.to_string(),
-                };
-                return Fatal::new(FatalKind::Invariant)
-                    .with_context(context)
-                    .into();
-            }
-            Fatal::new(FatalKind::Config)
-                .with_context(e.to_string())
-                .into()
+    }
+    match lane_table(e) {
+        Fault::Transient(t) => {
+            let context = fold(t.context.as_deref(), e);
+            t.with_context(context).into()
         }
-        ::sqlx::Error::RowNotFound
-        | ::sqlx::Error::ColumnNotFound(_)
-        | ::sqlx::Error::ColumnIndexOutOfBounds { .. }
-        | ::sqlx::Error::ColumnDecode { .. }
-        | ::sqlx::Error::Decode(_)
-        | ::sqlx::Error::Encode(_)
-        | ::sqlx::Error::TypeNotFound { .. } => Fatal::new(FatalKind::CorruptState)
-            .with_context(e.to_string())
-            .into(),
-        ::sqlx::Error::Configuration(_) | ::sqlx::Error::AnyDriverError(_) => {
-            Fatal::new(FatalKind::Config)
-                .with_context(e.to_string())
-                .into()
+        Fault::Fatal(f) => {
+            let context = fold(f.context.as_deref(), e);
+            f.with_context(context).into()
         }
-        _ => Fatal::new(FatalKind::Dependency)
-            .with_context(e.to_string())
-            .into(),
     }
 }
 
@@ -146,7 +112,7 @@ impl<D, L: crate::LaneProfile<Transient = Transient, Fatal = Fatal>> From<::sqlx
     for Fail<D, L>
 {
     fn from(e: ::sqlx::Error) -> Self {
-        classify_sqlx(e)
+        classify_sqlx_fault(e).into()
     }
 }
 
@@ -204,7 +170,7 @@ mod tests {
         }
     }
 
-    /// `classify_sqlx<D>` must still widen through to any `D` — pinned
+    /// A `sqlx::Error` must still widen through to any `D` — pinned
     /// separately from the `Fault` cases above so a regression in the
     /// `Fail<D>` wrapper (not just the shared `Fault` classification) fails
     /// its own test.
@@ -212,8 +178,32 @@ mod tests {
     fn classify_sqlx_widens_into_any_rejection_type() {
         #[derive(Debug)]
         struct NeverRejects;
-        let f: Fail<NeverRejects> = classify_sqlx(::sqlx::Error::PoolTimedOut);
+        let f: Fail<NeverRejects> = ::sqlx::Error::PoolTimedOut.into();
         assert_eq!(f.lane(), Lane::Transient);
+    }
+
+    /// Every arm attaches the error it classified, including the unit
+    /// variants that used to arrive sourceless — otherwise a
+    /// `Fatal`/`Transient` born here records no `exception.message` beyond
+    /// its own kind.
+    #[test]
+    fn classify_sqlx_fault_always_keeps_the_error_as_its_source() {
+        for e in [
+            ::sqlx::Error::PoolTimedOut,
+            ::sqlx::Error::PoolClosed,
+            ::sqlx::Error::WorkerCrashed,
+            ::sqlx::Error::RowNotFound,
+            ::sqlx::Error::Protocol("synthesized".into()),
+            database_error(None, TestDbKind::Unique, Some("c")),
+        ] {
+            let display = e.to_string();
+            let fault = classify_sqlx_fault(e);
+            let payload = std::error::Error::source(&fault).expect("the lane payload");
+            assert!(
+                payload.source().is_some(),
+                "no source attached for {display}"
+            );
+        }
     }
 
     /// A minimal `DatabaseError` so tests can build `sqlx::Error::Database`
@@ -310,59 +300,28 @@ mod tests {
         }
     }
 
-    /// `classify_sqlx_ref` must classify every case `classify_sqlx_fault`
-    /// does, identically — this is the test that keeps the two tables in
-    /// sync, since `sqlx::Error` is not `Clone` and the two functions
-    /// therefore cannot share one match arm by value.
+    /// The borrowed form cannot keep a source, so the message has to land in
+    /// `context` — without displacing the constraint name the table put
+    /// there.
     #[test]
-    fn classify_sqlx_ref_matches_classify_sqlx_fault() {
-        let cases: Vec<(::sqlx::Error, ::sqlx::Error)> = vec![
-            (::sqlx::Error::PoolTimedOut, ::sqlx::Error::PoolTimedOut),
-            (
-                ::sqlx::Error::Io(std::io::Error::other("a")),
-                ::sqlx::Error::Io(std::io::Error::other("a")),
-            ),
-            (::sqlx::Error::PoolClosed, ::sqlx::Error::PoolClosed),
-            (::sqlx::Error::WorkerCrashed, ::sqlx::Error::WorkerCrashed),
-            (::sqlx::Error::RowNotFound, ::sqlx::Error::RowNotFound),
-            (
-                ::sqlx::Error::Configuration("bad".into()),
-                ::sqlx::Error::Configuration("bad".into()),
-            ),
-            (
-                ::sqlx::Error::Protocol("synthesized".into()),
-                ::sqlx::Error::Protocol("synthesized".into()),
-            ),
-            (
-                database_error(Some("40001"), TestDbKind::Other, None),
-                database_error(Some("40001"), TestDbKind::Other, None),
-            ),
-            (
-                database_error(None, TestDbKind::Unique, Some("c")),
-                database_error(None, TestDbKind::Unique, Some("c")),
-            ),
-            (
-                database_error(None, TestDbKind::Other, None),
-                database_error(None, TestDbKind::Other, None),
-            ),
-        ];
-        for (owned, borrowed) in cases {
-            let by_value = classify_sqlx_fault(owned);
-            let by_ref = classify_sqlx_ref(&borrowed);
-            assert_eq!(
-                by_value.lane(),
-                by_ref.lane(),
-                "lane mismatch for {borrowed}"
-            );
-            match (by_value, by_ref) {
-                (Fault::Transient(a), Fault::Transient(b)) => {
-                    assert_eq!(a.kind, b.kind, "kind mismatch for {borrowed}")
-                }
-                (Fault::Fatal(a), Fault::Fatal(b)) => {
-                    assert_eq!(a.kind, b.kind, "kind mismatch for {borrowed}")
-                }
-                (a, b) => panic!("shape mismatch: {a:?} vs {b:?}"),
+    fn classify_sqlx_ref_folds_the_message_behind_the_tables_context() {
+        let e = database_error(None, TestDbKind::Unique, Some("users_email_key"));
+        let message = e.to_string();
+        match classify_sqlx_ref(&e) {
+            Fault::Fatal(f) => {
+                let context = f.context.as_deref().expect("context carries the message");
+                assert!(context.starts_with("users_email_key: "), "got {context:?}");
+                assert!(context.ends_with(&message), "got {context:?}");
             }
+            other => panic!("expected Fatal(Invariant), got {other:?}"),
+        }
+
+        let e = ::sqlx::Error::PoolTimedOut;
+        match classify_sqlx_ref(&e) {
+            Fault::Transient(t) => {
+                assert_eq!(t.context.as_deref(), Some(e.to_string().as_str()));
+            }
+            other => panic!("expected Transient, got {other:?}"),
         }
     }
 
