@@ -11,19 +11,17 @@ retries. This chapter covers what es-entity puts into it.
 
 ## The repository error types
 
-```rust
-# extern crate es_entity;
+```rust,ignore
 use es_entity::errlanes::{Fail, Fault, lanes};
 
 pub type RepoReadError = Fault<lanes!(Transient, Fatal)>;
 pub type RepoWriteError<C> = Fail<C, lanes!(Transient, Fatal)>;
 ```
 
-Reads return `RepoReadError`. A read cannot reject — absence is `Ok(None)` from
-`maybe_find_by_*` — so its error is a plain fault. Writes return
-`RepoWriteError<C>`, where `C` is the repository's typed constraint enum
-described next. Neither enables `Denied`: authorization happens before the
-repository call.
+Reads return `RepoReadError`; `maybe_find_by_*` reports absence as `Ok(None)`.
+Writes return `RepoWriteError<C>`, where `C` is the repository's typed
+constraint enum described next. Authorization happens before the repository
+call.
 
 ## Typed constraint violations
 
@@ -80,8 +78,7 @@ to expect the other way round:
 - **A constraint the catalog does not know** — on a table the repository does
   not own, say — is `Fatal(Invariant)`, with the constraint name as context and
   the `sqlx::Error` as source. The generated enum names every constraint the
-  repository can reject on; anything else is a bug in the schema or the query,
-  not something the caller did.
+  repository can reject on; anything else is a bug in the schema or the query.
 - **A required `find_by_*` on a missing row** is `Fatal(Invariant)` with
   `NotFound` as its source. `find_by_*` asserts the row exists. For a key the
   caller supplied, use `maybe_find_by_*` and name the not-found case where the
