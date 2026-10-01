@@ -1,3 +1,4 @@
+use crate::dynamic::message_chain;
 use crate::fail::{Fail, Fault, Level, Rejection};
 use crate::profile::{LaneProfile, Slot};
 
@@ -44,7 +45,12 @@ fn level_str(level: Level) -> &'static str {
 /// `exception.message` is written for `Transient` and `Fatal`/`Exhausted`,
 /// where the message is operator-safe by construction (`Transient::context`
 /// is documented as a non-PII breadcrumb); `Rejected` and `Denied` stay
-/// code-only.
+/// code-only. A `Fatal`'s `exception.message` is its whole `source` chain
+/// ([`message_chain`]), not just its own `context` — the chain is usually a
+/// sqlx error or another lanes-aware payload, both operator-safe by the same
+/// contract; a `Fatal` built from an arbitrary error whose message embeds
+/// caller input should set its own operator-safe `context` instead of
+/// relying on the default.
 pub fn record_fail<D: Rejection, L: LaneProfile>(span: &tracing::Span, f: &Fail<D, L>) {
     span.record("error", true);
     span.record("error.lane", f.lane().as_str());
@@ -65,7 +71,7 @@ pub fn record_fail<D: Rejection, L: LaneProfile>(span: &tracing::Span, f: &Fail<
         Fail::Fatal(x) => {
             span.record("error.code", x.marker().kind.as_str());
             span.record("error.level", "ERROR");
-            span.record("exception.message", f.to_string());
+            span.record("exception.message", message_chain(x));
             span.record("exception.type", x.marker().kind.as_str());
         }
     }
@@ -88,7 +94,7 @@ pub fn record_fault<L: LaneProfile>(span: &tracing::Span, f: &Fault<L>) {
         Fault::Fatal(x) => {
             span.record("error.code", x.marker().kind.as_str());
             span.record("error.level", "ERROR");
-            span.record("exception.message", f.to_string());
+            span.record("exception.message", message_chain(x));
             span.record("exception.type", x.marker().kind.as_str());
         }
     }

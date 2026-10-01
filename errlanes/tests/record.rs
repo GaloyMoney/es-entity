@@ -130,6 +130,24 @@ fn record_fills_every_field_per_lane() {
     assert_eq!(captured.get("exception.type").as_deref(), Some("invariant"));
 }
 
+/// A `Fatal`'s `exception.message` carries its whole `source` chain, not
+/// just its own `context` — otherwise a `Fatal::from_error(kind, e)` with no
+/// `.with_context(..)` of its own (every `classify_sqlx_fault` arm that does
+/// not set one, say) records an opaque `fatal(kind)` with no message at all.
+#[test]
+fn fatal_exception_message_includes_the_source_chain() {
+    let fatal: Fail<Small> =
+        Fatal::from_error(FatalKind::Dependency, std::io::Error::other("disk full")).into();
+    let captured = record(fatal);
+    let message = captured
+        .get("exception.message")
+        .expect("Fatal always writes exception.message");
+    assert!(
+        message.contains("disk full"),
+        "expected the source's message in {message:?}"
+    );
+}
+
 #[errlanes::instrument]
 fn boundary() -> Result<(), Fail<Small>> {
     Err(Fatal::new(FatalKind::Invariant).into())
