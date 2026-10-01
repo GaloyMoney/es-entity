@@ -62,6 +62,22 @@ impl TransientKind {
     pub fn is_congestion(self) -> bool {
         matches!(self, TransientKind::PoolTimeout | TransientKind::Congestion)
     }
+
+    /// The one row of the sqlx lane table (`sqlx.rs`, private) a consumer
+    /// with a non-sqlx Postgres driver could still want: which
+    /// [`TransientKind`] a Postgres SQLSTATE code maps to, independent of
+    /// `sqlx::Error`. Lives here, not behind the `sqlx` feature, so it is
+    /// reachable without that dependency.
+    pub fn from_sqlstate(code: &str) -> Option<Self> {
+        match code {
+            "40001" => Some(TransientKind::SerializationFailure),
+            "40P01" => Some(TransientKind::Deadlock),
+            "57P01" | "57P02" | "57P03" | "08000" | "08003" | "08006" | "08001" | "08004" => {
+                Some(TransientKind::ConnectionLost)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for TransientKind {
@@ -183,6 +199,15 @@ pub struct Fatal {
     pub kind: FatalKind,
     pub context: Option<Cow<'static, str>>,
     source: Option<Arc<dyn Error + Send + Sync + 'static>>,
+    /// Set only by a narrowing that stores a domain value (a `Rejection`)
+    /// as `source` purely for programmatic access (`downcast_ref` in a
+    /// handler or a test) — never for display. `Rejection::Display` is
+    /// documented as allowed to embed caller-supplied input, so
+    /// [`crate::dynamic::message_chain`] must not walk past this `Fatal`
+    /// into it; `message()`/`record` would otherwise leak that text into an
+    /// operator-facing field. Not part of equality or ordering; `source()`
+    /// and `downcast_ref` are unaffected either way.
+    opaque_source: bool,
 }
 
 impl Fatal {
@@ -191,6 +216,7 @@ impl Fatal {
             kind,
             context: None,
             source: None,
+            opaque_source: false,
         }
     }
 
@@ -215,6 +241,7 @@ impl Fatal {
             kind,
             context: None,
             source: Some(Arc::from(e)),
+            opaque_source: false,
         }
     }
 
@@ -231,12 +258,27 @@ impl Fatal {
             kind: FatalKind::Invariant,
             context: Some(msg.into()),
             source: None,
+            opaque_source: false,
         }
     }
 
     pub fn with_context(mut self, c: impl Into<Cow<'static, str>>) -> Self {
         self.context = Some(c.into());
         self
+    }
+
+    /// Marks this `Fatal`'s `source` opaque to display: `source()` still
+    /// returns it (so a handler or test can still `downcast_ref` it), but
+    /// [`crate::dynamic::message_chain`] stops at this `Fatal`'s own
+    /// `Display` rather than walking into it. For a narrowing that stores a
+    /// `Rejection` as the source — see the field doc on `opaque_source`.
+    pub(crate) fn with_opaque_source(mut self) -> Self {
+        self.opaque_source = true;
+        self
+    }
+
+    pub(crate) fn has_opaque_source(&self) -> bool {
+        self.opaque_source
     }
 }
 
@@ -303,5 +345,25 @@ impl fmt::Display for Exhausted {
 impl Error for Exhausted {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.last)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: `from_sqlstate` must be reachable with no `sqlx` feature
+    /// at all -- it lives in this unconditionally-compiled module precisely
+    /// so a non-sqlx Postgres driver can classify a SQLSTATE without taking
+    /// on the `sqlx` dependency. Compiling this module (this test included)
+    /// under the default feature set, which does not enable `sqlx`, is the
+    /// proof.
+    #[test]
+    fn from_sqlstate_is_reachable_without_the_sqlx_feature() {
+        assert_eq!(
+            TransientKind::from_sqlstate("40P01"),
+            Some(TransientKind::Deadlock)
+        );
+        assert_eq!(TransientKind::from_sqlstate("not-a-code"), None);
     }
 }

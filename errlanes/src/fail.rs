@@ -83,8 +83,13 @@ impl<F> UnmappedInto<F> for core::convert::Infallible {
 }
 impl<R: Rejection> UnmappedInto<Fatal> for R {
     fn unmapped_into(self) -> Fatal {
+        // `with_opaque_source`: `self` is a `Rejection`, whose `Display` may
+        // embed caller-supplied input (see the trait's display discipline);
+        // `source()` still returns it for a handler or test to
+        // `downcast_ref`, but `message_chain` must not walk into it.
         Fatal::from_error(crate::FatalKind::Invariant, self)
             .with_context("unhandled rejection at partial lift")
+            .with_opaque_source()
     }
 }
 
@@ -472,7 +477,11 @@ impl<D, L: LaneProfile> Fail<D, L> {
     /// caller to correct it is an invariant violation, and becomes
     /// `Fatal(Invariant)` with the rejection as its source — the same rule
     /// a partial `#[lift(.., unhandled = fatal)]` applies. Nothing is left
-    /// to reject, so the result is a `Fault`.
+    /// to reject, so the result is a `Fault`. `with_opaque_source`: `d`'s
+    /// `Display` may embed caller-supplied input (the same display
+    /// discipline `Rejection` documents everywhere else), so `source()`
+    /// still returns it for a handler or test to `downcast_ref`, but
+    /// `message_chain` must not walk into it.
     pub fn narrow_rejected(self) -> Fault<L>
     where
         D: Rejection,
@@ -481,7 +490,8 @@ impl<D, L: LaneProfile> Fail<D, L> {
         match self {
             Fail::Rejected(d) => Fault::Fatal(
                 Fatal::from_error(crate::FatalKind::Invariant, d)
-                    .with_context("rejected with no caller to correct"),
+                    .with_context("rejected with no caller to correct")
+                    .with_opaque_source(),
             ),
             Fail::Denied(d) => Fault::Denied(d),
             Fail::Transient(t) => Fault::Transient(t),
@@ -873,6 +883,47 @@ mod tests {
         let f: Fail<Small> = Fail::Rejected(Small);
         let widened: Fail<Big> = f.widen_with(|s| Ok(Big(s)));
         assert_eq!(widened.lane(), Lane::Rejected);
+    }
+
+    /// Regression: `UnmappedInto<Fatal> for R: Rejection` (the partial-lift
+    /// path) must keep the unmapped rejection reachable by `downcast_ref`
+    /// for a handler or test, but never let its `Display` -- which may embed
+    /// caller-supplied input -- reach an operator-facing message.
+    #[test]
+    fn unmapped_rejection_demoted_to_fatal_does_not_leak_its_display() {
+        let fatal: Fatal = Small.unmapped_into();
+        assert_eq!(fatal.kind, FatalKind::Invariant);
+        assert!(
+            fatal.source().unwrap().downcast_ref::<Small>().is_some(),
+            "the rejection must still be reachable for a handler or test to downcast"
+        );
+        let message = crate::dynamic::message_chain(&fatal);
+        assert!(
+            !message.contains("small"),
+            "a partial lift's unmapped rejection's Display must never reach an \
+             operator-facing message; got {message:?}"
+        );
+    }
+
+    /// Same regression as `unmapped_rejection_demoted_to_fatal_does_not_leak_its_display`,
+    /// for `narrow_rejected`'s own construction site.
+    #[test]
+    fn narrow_rejected_does_not_leak_the_rejections_display() {
+        let f: Fail<Small> = Fail::Rejected(Small);
+        let narrowed = f.narrow_rejected();
+        match &narrowed {
+            Fault::Fatal(fatal) => {
+                assert_eq!(fatal.kind, FatalKind::Invariant);
+                assert!(fatal.source().unwrap().downcast_ref::<Small>().is_some());
+            }
+            other => panic!("expected Fatal(Invariant), got {other:?}"),
+        }
+        let message = narrowed.message();
+        assert!(
+            !message.contains("small"),
+            "narrow_rejected's rejection Display must never reach an operator-facing \
+             message; got {message:?}"
+        );
     }
 
     #[test]

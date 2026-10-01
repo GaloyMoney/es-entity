@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use crate::fail::Fault;
-use crate::lane::{Denied, Fatal, FatalKind, Lane, Transient};
+use crate::lane::{Denied, Exhausted, Fatal, FatalKind, Lane, Transient};
 
 impl Lane {
     /// Walks `source()` looking for a concrete lane payload, reporting only
@@ -13,16 +13,18 @@ impl Lane {
     /// in a `Rejected(D)` whose `D` is not known here — a caller that needs
     /// the rejected value must go through [`crate::Failure`] instead.
     ///
-    /// An `Exhausted` is always carried *inside* a `Fatal`
-    /// ([`crate::profile::NarrowTransient`]), so it is not looked for
-    /// separately.
+    /// A bare `Exhausted` (not wrapped in a `Fatal`, which is how
+    /// [`crate::profile::NarrowTransient`] always produces one) is still
+    /// `Fatal`: it is a terminal outcome by construction, and its own
+    /// `source()` is the last `Transient` it gave up on, which this walker
+    /// must not mistake for the chain's own classification.
     pub fn of(e: &(dyn Error + 'static)) -> Option<Lane> {
         let mut cur: Option<&(dyn Error + 'static)> = Some(e);
         while let Some(x) = cur {
             if x.is::<Transient>() {
                 return Some(Lane::Transient);
             }
-            if x.is::<Fatal>() {
+            if x.is::<Fatal>() || x.is::<Exhausted>() {
                 return Some(Lane::Fatal);
             }
             if x.is::<Denied>() {
@@ -43,7 +45,9 @@ impl Lane {
 /// payload out here, then move the clone, not the original error.
 ///
 /// `None` means either the chain is not lanes-aware, or it bottoms out in a
-/// `Rejected(D)` whose `D` is not known here, same as [`Lane::of`].
+/// `Rejected(D)` whose `D` is not known here, same as [`Lane::of`]. A bare
+/// `Exhausted` is rewrapped into the `Fatal(Exhausted)` it is always meant
+/// to travel inside, for the same reason `Lane::of` special-cases it.
 fn find_in(e: &(dyn Error + 'static)) -> Option<Fault> {
     let mut cur: Option<&(dyn Error + 'static)> = Some(e);
     while let Some(x) = cur {
@@ -52,6 +56,12 @@ fn find_in(e: &(dyn Error + 'static)) -> Option<Fault> {
         }
         if let Some(f) = x.downcast_ref::<Fatal>() {
             return Some(Fault::Fatal(f.clone()));
+        }
+        if let Some(ex) = x.downcast_ref::<Exhausted>() {
+            return Some(Fault::Fatal(Fatal::from_error(
+                FatalKind::Exhausted,
+                ex.clone(),
+            )));
         }
         if let Some(d) = x.downcast_ref::<Denied>() {
             return Some(Fault::Denied(d.clone()));
@@ -70,6 +80,16 @@ pub(crate) fn message_chain(e: &(dyn Error + 'static)) -> String {
     let mut cur: Option<&(dyn Error + 'static)> = Some(e);
     while let Some(x) = cur {
         parts.push(x.to_string());
+        // A `Fatal` built over a domain value kept only for programmatic
+        // access (`Fatal::with_opaque_source` — a partial lift's unmapped
+        // rejection, a narrowed `Rejected`) must not have that value's
+        // `Display` walked into: it may embed caller-supplied input, and
+        // this chain is the text a boundary treats as operator-safe.
+        if x.downcast_ref::<Fatal>()
+            .is_some_and(Fatal::has_opaque_source)
+        {
+            break;
+        }
         cur = x.source();
     }
     parts.join(": ")
@@ -165,10 +185,10 @@ mod tests {
         assert!(matches!(find_in(&chain), Some(Fault::Denied(_))));
     }
 
-    /// `Exhausted` is always carried *inside* a `Fatal` (`Fatal::from_error`
-    /// in [`crate::profile::NarrowTransient`]), so neither walker special-cases it:
-    /// the `Fatal` they find is the one whose own source downcasts to
-    /// `Exhausted`.
+    /// `Exhausted` is normally carried *inside* a `Fatal` (`Fatal::from_error`
+    /// in [`crate::profile::NarrowTransient`]), so this exercises the
+    /// ordinary shape: the `Fatal` they find is the one whose own source
+    /// downcasts to `Exhausted`.
     #[test]
     fn find_in_exhausted_arrives_as_the_wrapping_fatal() {
         use crate::lane::Exhausted;
@@ -188,6 +208,37 @@ mod tests {
                 assert!(f.source().unwrap().downcast_ref::<Exhausted>().is_some());
             }
             other => panic!("expected Fault::Fatal wrapping Exhausted, got {other:?}"),
+        }
+    }
+
+    /// Regression: a BARE `Exhausted` (not wrapped in a `Fatal` -- nothing
+    /// in the public API stops a caller from building or boxing one
+    /// directly) must still classify as `Fatal`, not fall through to its
+    /// own `source()`, which is the last `Transient` it gave up on. Before
+    /// the fix, neither walker special-cased `Exhausted` itself: it is not
+    /// a `Transient`/`Fatal`/`Denied`, so the loop moved on to its source
+    /// and found that `Transient` instead -- reopening retries after the
+    /// budget was already spent.
+    #[test]
+    fn bare_exhausted_classifies_as_fatal_not_its_inner_transient() {
+        use crate::lane::Exhausted;
+
+        let exhausted = Exhausted {
+            attempts: 3,
+            last: Transient::new(TransientKind::Deadlock),
+        };
+        assert_eq!(Lane::of(&exhausted), Some(Lane::Fatal));
+        match find_in(&exhausted) {
+            Some(Fault::Fatal(f)) => assert_eq!(f.kind, FatalKind::Exhausted),
+            other => panic!("expected Fault::Fatal(Exhausted), got {other:?}"),
+        }
+
+        // Same, one hop deeper in a chain.
+        let chain = Wrapped(exhausted);
+        assert_eq!(Lane::of(&chain), Some(Lane::Fatal));
+        match find_in(&chain) {
+            Some(Fault::Fatal(f)) => assert_eq!(f.kind, FatalKind::Exhausted),
+            other => panic!("expected Fault::Fatal(Exhausted), got {other:?}"),
         }
     }
 

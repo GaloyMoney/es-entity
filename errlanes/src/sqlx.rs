@@ -15,22 +15,6 @@ use crate::{
     lane::{Fatal, FatalKind, Transient, TransientKind},
 };
 
-impl TransientKind {
-    /// The one row of `lane_table` (private) a consumer with a non-sqlx
-    /// Postgres driver could still want: which [`TransientKind`] a Postgres
-    /// SQLSTATE code maps to, independent of `sqlx::Error`.
-    pub fn from_sqlstate(code: &str) -> Option<Self> {
-        match code {
-            "40001" => Some(TransientKind::SerializationFailure),
-            "40P01" => Some(TransientKind::Deadlock),
-            "57P01" | "57P02" | "57P03" | "08000" | "08003" | "08006" | "08001" | "08004" => {
-                Some(TransientKind::ConnectionLost)
-            }
-            _ => None,
-        }
-    }
-}
-
 /// Which lane each `sqlx::Error` variant belongs to — the one table both
 /// public classifiers read, so there is no second copy to drift.
 ///
