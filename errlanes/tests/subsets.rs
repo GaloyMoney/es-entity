@@ -152,6 +152,10 @@ fn widening_preserves_transient_details_and_boxed_marker() {
     let boxed: Box<dyn Error + Send + Sync> = Box::new(settled);
     assert_eq!(errlanes::lane_of(boxed.as_ref()), Some(Lane::Fatal));
 }
+/// There is deliberately no `From<Box<dyn Error + Send + Sync>>` for a lane
+/// carrier: it would silently discard whatever lane the box already holds.
+/// A boxed error is classified ([`errlanes::classify_dyn`]) or demoted out
+/// loud ([`Fatal::from_boxed`]); `Infallible` is the only free conversion.
 #[test]
 fn infallible_and_boxed_conversions_are_coherent() {
     #[allow(unreachable_code)]
@@ -159,9 +163,15 @@ fn infallible_and_boxed_conversions_are_coherent() {
         x.into()
     }
     let _ = convert;
+
     let boxed: Box<dyn Error + Send + Sync> = Box::new(std::io::Error::other("source"));
-    let fault: Fault<lanes!(Fatal)> = boxed.into();
+    let fault: Fault = errlanes::classify_dyn(boxed.as_ref());
     assert_eq!(fault.lane(), Lane::Fatal);
+
+    let boxed: Box<dyn Error + Send + Sync> = Box::new(std::io::Error::other("source"));
+    let fault: Fault<lanes!(Fatal)> = Fatal::from_boxed(FatalKind::Dependency, boxed).into();
+    assert_eq!(fault.lane(), Lane::Fatal);
+
     assert_eq!(Into::<&'static str>::into(Child::Unit.code()), "UNIT");
 }
 

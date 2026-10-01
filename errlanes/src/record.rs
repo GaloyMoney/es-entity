@@ -45,12 +45,13 @@ fn level_str(level: Level) -> &'static str {
 /// `exception.message` is written for `Transient` and `Fatal`/`Exhausted`,
 /// where the message is operator-safe by construction (`Transient::context`
 /// is documented as a non-PII breadcrumb); `Rejected` and `Denied` stay
-/// code-only. A `Fatal`'s `exception.message` is its whole `source` chain
-/// ([`message_chain`]), not just its own `context` — the chain is usually a
-/// sqlx error or another lanes-aware payload, both operator-safe by the same
-/// contract; a `Fatal` built from an arbitrary error whose message embeds
-/// caller input should set its own operator-safe `context` instead of
-/// relying on the default.
+/// code-only. Both carry their whole `source` chain ([`message_chain`]), not
+/// just their own `context` — the chain is a sqlx error or another
+/// lanes-aware payload, operator-safe by the same contract, and without it a
+/// payload that set no `context` of its own records nothing but its kind. A
+/// lane built from an arbitrary error whose message embeds caller input
+/// should set its own operator-safe `context` instead of relying on the
+/// default.
 pub fn record_fail<D: Rejection, L: LaneProfile>(span: &tracing::Span, f: &Fail<D, L>) {
     span.record("error", true);
     span.record("error.lane", f.lane().as_str());
@@ -66,7 +67,7 @@ pub fn record_fail<D: Rejection, L: LaneProfile>(span: &tracing::Span, f: &Fail<
         Fail::Transient(t) => {
             span.record("error.code", t.marker().kind.as_str());
             span.record("error.level", "INFO");
-            span.record("exception.message", f.to_string());
+            span.record("exception.message", message_chain(t));
         }
         Fail::Fatal(x) => {
             span.record("error.code", x.marker().kind.as_str());
@@ -89,7 +90,7 @@ pub fn record_fault<L: LaneProfile>(span: &tracing::Span, f: &Fault<L>) {
         Fault::Transient(t) => {
             span.record("error.code", t.marker().kind.as_str());
             span.record("error.level", "INFO");
-            span.record("exception.message", f.to_string());
+            span.record("exception.message", message_chain(t));
         }
         Fault::Fatal(x) => {
             span.record("error.code", x.marker().kind.as_str());
@@ -99,14 +100,6 @@ pub fn record_fault<L: LaneProfile>(span: &tracing::Span, f: &Fault<L>) {
         }
     }
 }
-
-/// `record` and `record_settled_fault` are gone: a settled failure *is* a
-/// `Fail`/`Fault` whose transient slot is disabled, so [`record_fail`] and
-/// [`record_fault`] cover it. An exhausted retry records through the `Fatal`
-/// arm as `error.code = "exhausted"` (`FatalKind::Exhausted`), which is also
-/// what the separate `"EXHAUSTED"` string used to mean — now spelled
-/// consistently with `invariant` / `config` / `corrupt_state`.
-pub use record_fail as record;
 
 /// Records onto the current span, then hands the result straight back — for
 /// a call site that must record and keep going rather than propagate

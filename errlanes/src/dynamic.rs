@@ -3,62 +3,27 @@ use std::error::Error;
 use crate::fail::Fault;
 use crate::lane::{Denied, Fatal, FatalKind, Lane, Transient};
 
-/// Walks `source()` looking for a concrete lane payload.
+/// Walks `source()` looking for a concrete lane payload, reporting only which
+/// lane it found. Allocation-free, so it is the one to reach for in a
+/// predicate; [`fault_of`] is the same walk when you need the payload.
 ///
 /// `None` means either the chain is not lanes-aware, or it bottoms out in a
 /// `Rejected(D)` whose `D` is not known here — a caller that needs the
-/// rejected value must go through [`crate::Failure`] instead. Never
-/// allocates.
+/// rejected value must go through [`crate::Failure`] instead.
+///
+/// An `Exhausted` is always carried *inside* a `Fatal`
+/// ([`crate::profile::Settling`]), so it is not looked for separately.
 pub fn lane_of(e: &(dyn Error + 'static)) -> Option<Lane> {
     let mut cur: Option<&(dyn Error + 'static)> = Some(e);
     while let Some(x) = cur {
         if x.is::<Transient>() {
             return Some(Lane::Transient);
         }
-        if x.is::<crate::lane::Exhausted>() || x.is::<Fatal>() {
+        if x.is::<Fatal>() {
             return Some(Lane::Fatal);
         }
         if x.is::<Denied>() {
             return Some(Lane::Denied);
-        }
-        cur = x.source();
-    }
-    None
-}
-
-/// Same walk as [`lane_of`], returning the `Transient` payload rather than
-/// just the lane.
-pub fn transient_of<'a>(e: &'a (dyn Error + 'static)) -> Option<&'a Transient> {
-    let mut cur: Option<&(dyn Error + 'static)> = Some(e);
-    while let Some(x) = cur {
-        if let Some(t) = x.downcast_ref::<Transient>() {
-            return Some(t);
-        }
-        cur = x.source();
-    }
-    None
-}
-
-/// Same walk as [`transient_of`], returning the `Fatal` payload. An
-/// `Exhausted` in the chain is always wrapped by a `Fatal`, so this finds it.
-pub fn fatal_of<'a>(e: &'a (dyn Error + 'static)) -> Option<&'a Fatal> {
-    let mut cur: Option<&(dyn Error + 'static)> = Some(e);
-    while let Some(x) = cur {
-        if let Some(f) = x.downcast_ref::<Fatal>() {
-            return Some(f);
-        }
-        cur = x.source();
-    }
-    None
-}
-
-/// Same walk as [`transient_of`] and [`fatal_of`], returning the `Denied`
-/// payload.
-pub fn denied_of<'a>(e: &'a (dyn Error + 'static)) -> Option<&'a Denied> {
-    let mut cur: Option<&(dyn Error + 'static)> = Some(e);
-    while let Some(x) = cur {
-        if let Some(d) = x.downcast_ref::<Denied>() {
-            return Some(d);
         }
         cur = x.source();
     }
@@ -74,10 +39,7 @@ pub fn denied_of<'a>(e: &'a (dyn Error + 'static)) -> Option<&'a Denied> {
 /// payload out here, then move the clone, not the original error.
 ///
 /// `None` means either the chain is not lanes-aware, or it bottoms out in a
-/// `Rejected(D)` whose `D` is not known here, same as [`lane_of`]. An
-/// `Exhausted` in the chain is always wrapped by a `Fatal`
-/// ([`crate::profile::Settling`]), so — like [`fatal_of`] — this does not
-/// special-case it.
+/// `Rejected(D)` whose `D` is not known here, same as [`lane_of`].
 pub fn fault_of(e: &(dyn Error + 'static)) -> Option<Fault> {
     let mut cur: Option<&(dyn Error + 'static)> = Some(e);
     while let Some(x) = cur {
@@ -175,31 +137,28 @@ mod tests {
         let t = Transient::new(TransientKind::Deadlock);
         let chain = Wrapped(Wrapped(Wrapped(t)));
         assert_eq!(lane_of(&chain), Some(Lane::Transient));
-        assert!(transient_of(&chain).is_some());
         assert!(matches!(fault_of(&chain), Some(Fault::Transient(_))));
     }
 
     #[test]
-    fn finds_fatal_of_three_levels_deep() {
+    fn finds_fatal_three_levels_deep() {
         let f = Fatal::new(FatalKind::CorruptState);
         let chain = Wrapped(Wrapped(Wrapped(f)));
         assert_eq!(lane_of(&chain), Some(Lane::Fatal));
-        assert!(fatal_of(&chain).is_some());
         assert!(matches!(fault_of(&chain), Some(Fault::Fatal(_))));
     }
 
     #[test]
-    fn finds_denied_of_three_levels_deep() {
+    fn finds_denied_three_levels_deep() {
         let d = Denied::default();
         let chain = Wrapped(Wrapped(Wrapped(d)));
         assert_eq!(lane_of(&chain), Some(Lane::Denied));
-        assert!(denied_of(&chain).is_some());
         assert!(matches!(fault_of(&chain), Some(Fault::Denied(_))));
     }
 
     /// `Exhausted` is always carried *inside* a `Fatal` (`Fatal::from_error`
-    /// in [`crate::profile::Settling`]), so `fault_of` must not special-case
-    /// it: the `Fatal` it finds is the one whose own source downcasts to
+    /// in [`crate::profile::Settling`]), so neither walker special-cases it:
+    /// the `Fatal` they find is the one whose own source downcasts to
     /// `Exhausted`.
     #[test]
     fn fault_of_exhausted_arrives_as_the_wrapping_fatal() {
@@ -213,6 +172,7 @@ mod tests {
             },
         );
         let chain = Wrapped(fatal);
+        assert_eq!(lane_of(&chain), Some(Lane::Fatal));
         match fault_of(&chain) {
             Some(Fault::Fatal(f)) => {
                 assert_eq!(f.kind, FatalKind::Exhausted);
@@ -298,26 +258,6 @@ mod tests {
     }
 
     #[test]
-    fn finds_fatal_three_levels_deep() {
-        let fatal = Fatal::new(FatalKind::CorruptState);
-        #[derive(Debug)]
-        struct W(Fatal);
-        impl std::fmt::Display for W {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}", self.0)
-            }
-        }
-        impl Error for W {
-            fn source(&self) -> Option<&(dyn Error + 'static)> {
-                Some(&self.0)
-            }
-        }
-        let chain = W(fatal);
-        assert_eq!(lane_of(&chain), Some(Lane::Fatal));
-        assert!(fatal_of(&chain).is_some());
-    }
-
-    #[test]
     fn bare_non_lanes_error_yields_none() {
         #[derive(Debug)]
         struct Plain;
@@ -329,5 +269,6 @@ mod tests {
         impl Error for Plain {}
 
         assert_eq!(lane_of(&Plain), None);
+        assert!(fault_of(&Plain).is_none());
     }
 }

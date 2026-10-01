@@ -130,20 +130,33 @@ fn record_fills_every_field_per_lane() {
     assert_eq!(captured.get("exception.type").as_deref(), Some("invariant"));
 }
 
-/// A `Fatal`'s `exception.message` carries its whole `source` chain, not
-/// just its own `context` — otherwise a `Fatal::from_error(kind, e)` with no
-/// `.with_context(..)` of its own (every `classify_sqlx_fault` arm that does
-/// not set one, say) records an opaque `fatal(kind)` with no message at all.
+/// `exception.message` carries the payload's whole `source` chain, not just
+/// its own `context` — otherwise a lane built by `classify_sqlx_fault`, which
+/// attaches the `sqlx::Error` as a source and usually sets no `context` of
+/// its own, records an opaque `fatal(kind)` / `transient(kind)` with no
+/// message at all. Both lanes that write the field do this; a `Transient` is
+/// the one that gets retried, so an operator reading a retry storm needs its
+/// cause just as much.
 #[test]
-fn fatal_exception_message_includes_the_source_chain() {
+fn exception_message_includes_the_source_chain() {
     let fatal: Fail<Small> =
         Fatal::from_error(FatalKind::Dependency, std::io::Error::other("disk full")).into();
-    let captured = record(fatal);
-    let message = captured
+    let message = record(fatal)
         .get("exception.message")
         .expect("Fatal always writes exception.message");
     assert!(
         message.contains("disk full"),
+        "expected the source's message in {message:?}"
+    );
+
+    let transient: Fail<Small> = Transient::new(TransientKind::ConnectionLost)
+        .with_source(std::io::Error::other("broken pipe"))
+        .into();
+    let message = record(transient)
+        .get("exception.message")
+        .expect("Transient always writes exception.message");
+    assert!(
+        message.contains("broken pipe"),
         "expected the source's message in {message:?}"
     );
 }

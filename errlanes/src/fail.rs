@@ -49,16 +49,6 @@ pub trait Rejection: Error + Send + Sync + 'static {
     }
 }
 
-/// Legacy discriminator-based rejection contract. New code maps enum variants
-/// with `#[lift(Source)]`; generated repositories do not require this trait.
-pub trait Liftable: Rejection {
-    type Key: Copy + Eq + fmt::Debug + Into<&'static str>;
-
-    /// `None` means the discriminator is unknown to the caller — always
-    /// demoted to [`Fatal`] by [`Lift::lift`].
-    fn key(&self) -> Option<Self::Key>;
-}
-
 /// Consuming mapping. `#[derive(Lift)]` with `#[lift(Source)]` generates an exhaustive
 /// mapping with `Unmapped = Infallible` and a total `From<Source>` conversion.
 /// `#[lift(Source, unhandled = fatal)]` returns the original unmapped source;
@@ -95,12 +85,6 @@ impl<R: Rejection> UnmappedInto<Fatal> for R {
     fn unmapped_into(self) -> Fatal {
         Fatal::from_error(crate::FatalKind::Invariant, self)
             .with_context("unhandled rejection at partial lift")
-    }
-}
-// Compatibility with the v1 discriminator adapter.
-impl UnmappedInto<Fatal> for Fatal {
-    fn unmapped_into(self) -> Fatal {
-        self
     }
 }
 
@@ -271,24 +255,15 @@ impl<L: LaneProfile> From<core::convert::Infallible> for Fault<L> {
     }
 }
 
-impl<L: LaneProfile> From<Box<dyn Error + Send + Sync>> for Fault<L>
-where
-    L: LaneProfile<Fatal = Fatal>,
-{
-    fn from(e: Box<dyn Error + Send + Sync>) -> Self {
-        Fault::Fatal(Fatal::from_boxed(crate::lane::FatalKind::Dependency, e))
-    }
-}
-
 /// The generic view over a domain rejection `D`, before retries have run.
 ///
 /// **Display discipline**: [`Display`](fmt::Display)'s `Rejected` arm keeps
 /// its `rejected: {d}` prefix for logs, but no boundary may build a
 /// user-facing message from `to_string()` — a rejection's message may embed
 /// caller-supplied input. Use [`as_rejected`](Fail::as_rejected) and
-/// [`Rejection::code`] instead: `record`/`record_fail` key `error.code` off
-/// the code, never the message, and a GraphQL boundary should do the same
-/// for its error extension.
+/// [`Rejection::code`] instead: `record_fail` keys `error.code` off the code,
+/// never the message, and a GraphQL boundary should do the same for its error
+/// extension.
 #[derive(Debug, Clone)]
 pub enum Fail<D, L: LaneProfile = AllLanes> {
     Rejected(D),
