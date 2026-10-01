@@ -19,8 +19,8 @@ pub struct CreateAllFn<'a> {
     columns: &'a Columns,
     constraint_violation: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
-    post_hydrate_error: Option<&'a syn::Type>,
-    post_persist_error: Option<&'a syn::Type>,
+    post_hydrate_hook: bool,
+    post_persist_hook: bool,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -42,8 +42,8 @@ impl<'a> From<&'a RepositoryOptions> for CreateAllFn<'a> {
                 .map(|f| f.create_nested_fn_name())
                 .collect(),
             columns: &opts.columns,
-            post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
-            post_persist_error: opts.post_persist_hook.as_ref().map(|h| &h.error),
+            post_hydrate_hook: opts.post_hydrate_hook.is_some(),
+            post_persist_hook: opts.post_persist_hook.is_some(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -160,17 +160,17 @@ impl ToTokens for CreateAllFn<'_> {
         #[cfg(not(feature = "instrument"))]
         let (instrument_attr, error_recording) = (quote! {}, quote! {});
 
-        let post_hydrate_check = if self.post_hydrate_error.is_some() {
+        let post_hydrate_check = if self.post_hydrate_hook {
             quote! {
-                self.execute_post_hydrate_hook(&entity).map_err(es_entity::RepoReadError::from)?;
+                self.execute_post_hydrate_hook(&entity)?;
             }
         } else {
             quote! {}
         };
 
-        let post_persist_check = if self.post_persist_error.is_some() {
+        let post_persist_check = if self.post_persist_hook {
             quote! {
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(errlanes::Fail::from)?;
+                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
             }
         } else {
             quote! {}
@@ -182,9 +182,7 @@ impl ToTokens for CreateAllFn<'_> {
         // skipped entirely when neither hook is configured: an empty loop
         // would just be dead weight (and an unused-variable warning under
         // `-D warnings`).
-        let post_checks_phase = if self.post_hydrate_error.is_some()
-            || self.post_persist_error.is_some()
-        {
+        let post_checks_phase = if self.post_hydrate_hook || self.post_persist_hook {
             quote! {
                 let mut n_events_by_entity: Vec<usize> = Vec::new();
                 for (events, n_events) in all_events.into_iter().zip(n_persisted) {
@@ -341,8 +339,8 @@ mod tests {
             constraint_violation,
             columns: &columns,
             nested_fn_names: Vec::new(),
-            post_hydrate_error: None,
-            post_persist_error: None,
+            post_hydrate_hook: false,
+            post_persist_hook: false,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

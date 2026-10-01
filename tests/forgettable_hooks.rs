@@ -51,7 +51,7 @@ pub struct HookCall {
     entity = "Customer",
     forgettable,
     columns(email(ty = "String")),
-    post_persist_hook(method = "publish", error = "errlanes::Fatal")
+    post_persist_hook = "publish"
 )]
 pub struct CustomersWithHook {
     pool: PgPool,
@@ -77,7 +77,7 @@ impl CustomersWithHook {
         op: &mut OP,
         entity: &Customer,
         new_events: es_entity::events::LastPersisted<'_, CustomerEvent>,
-    ) -> Result<(), errlanes::Fatal> {
+    ) -> Result<(), errlanes::Fault<errlanes::lanes!(Transient, Fatal)>> {
         let events: Vec<_> = new_events.collect();
         let event_types: Vec<String> = events
             .iter()
@@ -99,20 +99,15 @@ impl CustomersWithHook {
             id as CustomerId
         )
         .fetch_one(op.as_executor())
-        .await
-        .map_err(|e| {
-            errlanes::Fatal::from_error(
-                errlanes::FatalKind::Invariant,
-                CustomerPublishError(e.to_string()),
-            )
-        })?
+        .await?
         .count;
 
         if self.fail_on_forgot.load(Ordering::SeqCst) && event_types.iter().any(|t| t == "forgot") {
             return Err(errlanes::Fatal::from_error(
                 errlanes::FatalKind::Invariant,
                 CustomerPublishError(format!("publisher rejected forgot event for {id}")),
-            ));
+            )
+            .into());
         }
 
         self.calls.lock().unwrap().push(HookCall {

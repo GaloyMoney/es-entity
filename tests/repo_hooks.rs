@@ -44,7 +44,7 @@ mod users_with_hydrate_hook {
     #[es_repo(
         entity = "User",
         columns(name = "String"),
-        post_hydrate_hook(method = "validate_hydrated", error = "errlanes::Fatal")
+        post_hydrate_hook = "validate_hydrated"
     )]
     pub struct UsersWithHydrateHook {
         pool: PgPool,
@@ -83,7 +83,7 @@ mod users_with_persist_hook {
     #[es_repo(
         entity = "User",
         columns(name = "String"),
-        post_persist_hook(method = "audit_persist", error = "errlanes::Fatal")
+        post_persist_hook = "audit_persist"
     )]
     pub struct UsersWithPersistHook {
         pool: PgPool,
@@ -99,7 +99,7 @@ mod users_with_persist_hook {
             _op: &mut OP,
             entity: &User,
             _new_events: es_entity::events::LastPersisted<'_, UserEvent>,
-        ) -> Result<(), errlanes::Fatal> {
+        ) -> Result<(), errlanes::Fault<errlanes::lanes!(Transient, Fatal)>> {
             if entity.name == "BLOCKED" {
                 Err(errlanes::Fatal::from_error(
                     errlanes::FatalKind::Invariant,
@@ -107,7 +107,8 @@ mod users_with_persist_hook {
                         "cannot persist user '{}' with blocked name",
                         entity.id
                     )),
-                ))
+                )
+                .into())
             } else {
                 Ok(())
             }
@@ -218,6 +219,16 @@ async fn post_hydrate_hook_error_propagates_through_find_by_id() -> anyhow::Resu
             assert!(
                 msg.contains("banned name"),
                 "expected banned name message, got: {msg}"
+            );
+            // Nothing marks the fault as the hook's; its own error type in the
+            // source chain is how a caller tells it apart.
+            let es_entity::Fault::Fatal(fatal) = e else {
+                panic!("expected Fatal, got: {e:?}")
+            };
+            assert!(
+                std::error::Error::source(fatal)
+                    .is_some_and(|s| s.is::<UserHydrateValidationError>()),
+                "hook error must be the Fatal's direct source: {e:?}"
             );
         }
         Ok(_) => panic!("expected post_hydrate_hook to reject entity loaded with banned name"),

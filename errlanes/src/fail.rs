@@ -246,9 +246,8 @@ where
     }
 }
 
-/// The uninhabited "this hook is not configured" default error type
-/// (`post_persist_hook`/`post_hydrate_hook`'s bound is `Fault<L>: From<X>`, and
-/// the no-hook case sets `X = core::convert::Infallible`) converts trivially.
+/// `Infallible` is what a disabled lane slot is, so a value proven never to
+/// exist converts trivially — `match e {}`.
 impl<L: LaneProfile> From<core::convert::Infallible> for Fault<L> {
     fn from(e: core::convert::Infallible) -> Self {
         match e {}

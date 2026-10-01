@@ -98,7 +98,7 @@ use entities::task::*;
 #[es_repo(
     entity = "Task",
     columns(status(ty = "String", create(accessor = "status"))),
-    post_persist_hook(method = "on_persist", error = "errlanes::Fatal")
+    post_persist_hook = "on_persist"
 )]
 pub struct TasksWithHook {
     pool: PgPool,
@@ -120,7 +120,7 @@ impl TasksWithHook {
         _op: &mut OP,
         _entity: &Task,
         _new_events: es_entity::LastPersisted<'_, TaskEvent>,
-    ) -> Result<(), errlanes::Fatal> {
+    ) -> Result<(), errlanes::Fault<errlanes::lanes!(Transient, Fatal)>> {
         self.hook_calls
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let _ = DummyHookError;

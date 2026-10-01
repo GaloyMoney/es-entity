@@ -12,7 +12,7 @@ pub struct FindByFn<'a> {
     table_name: &'a str,
     delete: DeleteOption,
     any_nested: bool,
-    post_hydrate_error: Option<&'a syn::Type>,
+    post_hydrate_hook: bool,
     forgettable_table_name: Option<&'a str>,
     snapshot_table_name: Option<&'a str>,
     scope: Option<ScopeInfo<'a>>,
@@ -30,7 +30,7 @@ impl<'a> FindByFn<'a> {
             table_name: opts.table_name(),
             delete: opts.delete,
             any_nested: opts.any_nested(),
-            post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
+            post_hydrate_hook: opts.post_hydrate_hook.is_some(),
             forgettable_table_name: opts.forgettable_table_name(),
             snapshot_table_name: opts.snapshot_table_name(),
             scope: ScopeInfo::from_opts(opts),
@@ -241,9 +241,9 @@ impl ToTokens for FindByFn<'_> {
                 let fetch_and_validate = if maybe.is_empty() {
                     let entity_name_str = entity.to_string();
                     let column_name_str = column_name.to_string();
-                    let post_hydrate_check = if self.post_hydrate_error.is_some() {
+                    let post_hydrate_check = if self.post_hydrate_hook {
                         quote! {
-                            self.execute_post_hydrate_hook(&__entity).map_err(es_entity::RepoReadError::from)?;
+                            self.execute_post_hydrate_hook(&__entity)?;
                         }
                     } else {
                         quote! {}
@@ -261,10 +261,10 @@ impl ToTokens for FindByFn<'_> {
                         Ok(__entity)
                     }
                 } else {
-                    let post_hydrate_check = if self.post_hydrate_error.is_some() {
+                    let post_hydrate_check = if self.post_hydrate_hook {
                         quote! {
                             if let Some(ref __entity) = __result {
-                                self.execute_post_hydrate_hook(__entity).map_err(es_entity::RepoReadError::from)?;
+                                self.execute_post_hydrate_hook(__entity)?;
                             }
                         }
                     } else {
@@ -368,7 +368,7 @@ mod tests {
             table_name: "entities",
             delete: DeleteOption::No,
             any_nested: false,
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,
@@ -465,7 +465,7 @@ mod tests {
             table_name: "entities",
             delete: DeleteOption::No,
             any_nested: false,
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,
@@ -559,7 +559,7 @@ mod tests {
             table_name: "entities",
             delete: DeleteOption::SoftWithoutQueries,
             any_nested: false,
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,
@@ -653,7 +653,7 @@ mod tests {
             table_name: "entities",
             delete: DeleteOption::Soft,
             any_nested: false,
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,
@@ -682,7 +682,7 @@ mod tests {
             table_name: "entities",
             delete: DeleteOption::Soft,
             any_nested: true,
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,
@@ -713,7 +713,7 @@ mod tests {
             table_name: "entities",
             delete: DeleteOption::No,
             any_nested: true,
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,

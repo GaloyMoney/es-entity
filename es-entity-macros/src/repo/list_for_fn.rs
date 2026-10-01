@@ -18,7 +18,7 @@ pub struct ListForFn<'a> {
     table_name: &'a str,
     delete: DeleteOption,
     cursor_mod: syn::Ident,
-    post_hydrate_error: Option<&'a syn::Type>,
+    post_hydrate_hook: bool,
     forgettable_table_name: Option<&'a str>,
     snapshot_table_name: Option<&'a str>,
     scope: Option<ScopeInfo<'a>>,
@@ -38,7 +38,7 @@ impl<'a> ListForFn<'a> {
             table_name: opts.table_name(),
             delete: opts.delete,
             cursor_mod: opts.cursor_mod(),
-            post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
+            post_hydrate_hook: opts.post_hydrate_hook.is_some(),
             forgettable_table_name: opts.forgettable_table_name(),
             snapshot_table_name: opts.snapshot_table_name(),
             scope: ScopeInfo::from_opts(opts),
@@ -351,10 +351,10 @@ impl ToTokens for ListForFn<'_> {
                 error_recording,
             ) = (quote! {}, quote! {}, quote! {}, quote! {}, quote! {});
 
-            let post_hydrate_check = if self.post_hydrate_error.is_some() {
+            let post_hydrate_check = if self.post_hydrate_hook {
                 quote! {
                     for __entity in &entities {
-                        self.execute_post_hydrate_hook(__entity).map_err(es_entity::RepoReadError::from)?;
+                        self.execute_post_hydrate_hook(__entity)?;
                     }
                 }
             } else {
@@ -446,7 +446,7 @@ mod tests {
             table_name: "entities",
             delete: DeleteOption::No,
             cursor_mod,
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,
@@ -541,7 +541,7 @@ mod tests {
             table_name: "entities",
             delete: DeleteOption::No,
             cursor_mod,
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,

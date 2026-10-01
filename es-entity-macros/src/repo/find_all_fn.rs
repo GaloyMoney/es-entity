@@ -10,7 +10,7 @@ pub struct FindAllFn<'a> {
     id: &'a syn::Ident,
     entity: &'a syn::Ident,
     table_name: &'a str,
-    post_hydrate_error: Option<&'a syn::Type>,
+    post_hydrate_hook: bool,
     forgettable_table_name: Option<&'a str>,
     snapshot_table_name: Option<&'a str>,
     scope: Option<ScopeInfo<'a>>,
@@ -26,7 +26,7 @@ impl<'a> From<&'a RepositoryOptions> for FindAllFn<'a> {
             id: opts.id(),
             entity: opts.entity(),
             table_name: opts.table_name(),
-            post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
+            post_hydrate_hook: opts.post_hydrate_hook.is_some(),
             forgettable_table_name: opts.forgettable_table_name(),
             snapshot_table_name: opts.snapshot_table_name(),
             scope: ScopeInfo::from_opts(opts),
@@ -159,10 +159,10 @@ impl ToTokens for FindAllFn<'_> {
         #[cfg(not(feature = "instrument"))]
         let instrument_attr = quote! {};
 
-        let post_hydrate_check = if self.post_hydrate_error.is_some() {
+        let post_hydrate_check = if self.post_hydrate_hook {
             quote! {
                 for __entity in &entities {
-                    self.execute_post_hydrate_hook(__entity).map_err(es_entity::RepoReadError::from)?;
+                    self.execute_post_hydrate_hook(__entity)?;
                 }
             }
         } else {
@@ -217,7 +217,7 @@ mod tests {
             id: &id_type,
             entity: &entity,
             table_name: "entities",
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,

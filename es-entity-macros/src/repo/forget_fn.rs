@@ -19,7 +19,7 @@ pub struct ForgetFn<'a> {
     forgettable_table_name: &'a str,
     forgettable_columns: Vec<&'a syn::Ident>,
     snapshot_table_name: Option<&'a str>,
-    post_persist_error: Option<&'a syn::Type>,
+    post_persist_hook: bool,
 }
 
 impl<'a> ForgetFn<'a> {
@@ -38,7 +38,7 @@ impl<'a> ForgetFn<'a> {
                 .expect("forgettable must be enabled"),
             forgettable_columns: opts.columns.forgettable_column_names(),
             snapshot_table_name: opts.snapshot_table_name(),
-            post_persist_error: opts.post_persist_hook.as_ref().map(|h| &h.error),
+            post_persist_hook: opts.post_persist_hook.is_some(),
         }
     }
 }
@@ -77,7 +77,7 @@ impl ToTokens for ForgetFn<'_> {
         // hook exists, to keep an unused binding out of the generated code.
         // On the `persist_events` path that call reports it; on the combined
         // path it comes from marking the events, after the payload delete.
-        let wants_hook = self.post_persist_error.is_some();
+        let wants_hook = self.post_persist_hook;
         // `forget` never snapshots the events it stages: the snapshot forced
         // to `None` disables the CTE's `WHERE … IS NOT NULL` guard, so
         // nothing gets written here — the rebuild-and-re-snapshot steps
@@ -189,7 +189,7 @@ impl ToTokens for ForgetFn<'_> {
                         op,
                         &entity,
                         entity.events().last_persisted(n_events)
-                    ).await.map_err(errlanes::Fail::from)?;
+                    ).await?;
                 }
             }
         } else {
@@ -346,7 +346,7 @@ mod tests {
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: Vec::new(),
             snapshot_table_name: None,
-            post_persist_error: None,
+            post_persist_hook: false,
         };
 
         let mut tokens = TokenStream::new();
@@ -398,7 +398,7 @@ mod tests {
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: vec![&email],
             snapshot_table_name: None,
-            post_persist_error: None,
+            post_persist_hook: false,
         };
 
         let mut tokens = TokenStream::new();
@@ -430,7 +430,6 @@ mod tests {
         let id = Ident::new("EntityId", Span::call_site());
         let entity = Ident::new("Entity", Span::call_site());
         let event = Ident::new("EntityEvent", Span::call_site());
-        let hook_error: syn::Type = syn::parse_str("MyHookError").unwrap();
 
         let forget_fn = ForgetFn {
             in_op_only: false,
@@ -444,7 +443,7 @@ mod tests {
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: Vec::new(),
             snapshot_table_name: None,
-            post_persist_error: Some(&hook_error),
+            post_persist_hook: true,
         };
 
         let mut tokens = TokenStream::new();
@@ -459,7 +458,6 @@ mod tests {
             ),
             "hook must receive exactly the just-persisted events: {output}"
         );
-        assert!(output.contains("map_err (errlanes :: Fail :: from)"));
         // ...AFTER the rebuild (hook observes the forgotten representation):
         // the hook invocation must come after try_from_events.
         let rebuild_at = output.find("try_from_events").expect("rebuild present");
@@ -478,7 +476,6 @@ mod tests {
         let entity = Ident::new("Entity", Span::call_site());
         let event = Ident::new("EntityEvent", Span::call_site());
         let email = Ident::new("email", Span::call_site());
-        let hook_error: syn::Type = syn::parse_str("MyHookError").unwrap();
 
         let forget_fn = ForgetFn {
             in_op_only: false,
@@ -492,7 +489,7 @@ mod tests {
             forgettable_table_name: "entities_forgettable_payloads",
             forgettable_columns: vec![&email],
             snapshot_table_name: None,
-            post_persist_error: Some(&hook_error),
+            post_persist_hook: true,
         };
 
         let mut tokens = TokenStream::new();
@@ -508,7 +505,6 @@ mod tests {
         // Same guarantees as the `persist_events` path: hook after the rebuild,
         // and only when events were actually persisted.
         assert!(output.contains("if n_events > 0"));
-        assert!(output.contains("map_err (errlanes :: Fail :: from)"));
         let rebuild_at = output.find("try_from_events").expect("rebuild present");
         let hook_at = output
             .find("execute_post_persist_hook")
