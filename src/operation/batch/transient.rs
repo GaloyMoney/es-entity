@@ -1,49 +1,8 @@
 //! Classifying a probe failure as transient.
 
-/// The Postgres sqlstate of a failure that says nothing about the statement
-/// that hit it, or `None`.
-///
-/// Walks the whole [`source`](std::error::Error::source) chain, so a
-/// [`sqlx::Error`] wrapped several layers deep in a caller's own error type is
-/// still recognised.
-///
-/// - `40P01` — deadlock detected. This transaction was chosen as the victim;
-///   another one made progress.
-/// - `40001` — serialization failure.
-///
-/// Both are properties of the contention, not of the items being probed, so a
-/// bisect re-probes the same range unsplit.
-#[deprecated(
-    note = "use errlanes::lane_of, or errlanes::sqlx::transient_sqlstate for the raw code"
-)]
-pub fn retryable_conflict_code(err: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
-    let mut source = Some(err);
-    while let Some(err) = source {
-        if let Some(db) = err
-            .downcast_ref::<sqlx::Error>()
-            .and_then(|err| err.as_database_error())
-        {
-            match db.code().as_deref() {
-                Some("40P01") => return Some("40P01"),
-                Some("40001") => return Some("40001"),
-                _ => {}
-            }
-        }
-        source = err.source();
-    }
-    None
-}
-
-/// [`retryable_conflict_code`] as a predicate.
-#[deprecated(note = "use errlanes::lane_of(e) == Some(errlanes::Lane::Transient)")]
-#[allow(deprecated)]
-pub fn is_retryable_conflict(err: &(dyn std::error::Error + 'static)) -> bool {
-    retryable_conflict_code(err).is_some()
-}
-
 /// Which probe failures are transient, and how many re-probes they may buy.
 ///
-/// The default classification is [`is_retryable_conflict`]. Override it to add
+/// The default classification is [`sqlstate_is_transient`]. Override it to add
 /// error types of your own that describe contention — an optimistic-concurrency
 /// conflict, say — so the search re-probes their ranges too.
 #[derive(Debug, Clone, Copy)]
@@ -76,13 +35,15 @@ impl<P> TransientPolicy<P> {
 }
 
 /// The default classifier, as a plain function so it can be named in a
-/// [`TransientPolicy`] without boxing. Prefers the lane an error was born
-/// with; falls back to the raw SQLSTATE walk for an error that never went
-/// through errlanes' classifier.
+/// [`TransientPolicy`] without boxing.
+///
+/// Prefers the lane an error was born with, and otherwise walks the whole
+/// [`source`](std::error::Error::source) chain for a raw [`sqlx::Error`] to
+/// classify — so a deadlock (`40P01`), a serialization failure (`40001`), a
+/// lost connection or a pool timeout is recognised even several layers deep
+/// inside a caller's own error type. Each says nothing about the items being
+/// probed, only about the contention, so a bisect re-probes the same range
+/// unsplit.
 pub(super) fn sqlstate_is_transient<E: std::error::Error + 'static>(error: &E) -> bool {
-    match crate::errlanes::lane_of(error) {
-        Some(lane) => lane == crate::errlanes::Lane::Transient,
-        #[allow(deprecated)]
-        None => is_retryable_conflict(error),
-    }
+    crate::errlanes::classify_dyn(error).is_transient()
 }

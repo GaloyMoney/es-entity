@@ -110,14 +110,14 @@ fn events_pkey_id_from_value(value: String) -> Option<String> {
 /// The kind of database constraint behind a classified `ConstraintViolation`.
 ///
 /// Structured kind exposed by a generated constraint rejection's diagnostics.
+/// An unrecognised constraint has no variant here: a generated repository
+/// classifies one as `Fatal(Invariant)` rather than exposing a rejection case,
+/// so every value that reaches this type names a constraint the catalog knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConstraintKind {
     Unique,
     ForeignKey,
     Check,
-    /// Legacy diagnostic category. Generated repositories classify an unknown
-    /// constraint as `Fatal(Invariant)` instead of exposing a rejection case.
-    Unknown,
 }
 
 /// A repo op that requires a row (`find_by_*`) found none. There is no
