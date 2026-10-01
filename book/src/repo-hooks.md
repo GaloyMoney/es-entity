@@ -19,7 +19,7 @@ Runs after events have been written to the database but before the entity is ret
 
 ### Hook method
 
-The method is defined on the repo struct and returns `errlanes::Fault<errlanes::lanes!(Transient, Fatal)>` — the fault type described in [Error Types](./repo-errors.md). Database calls propagate with `?`: a `sqlx::Error` classifies into `Transient` or `Fatal` the same way the operation's own queries do, so a deadlock on an outbox insert is retried like any other. Wrap anything else by choosing its lane — `Fatal::from_error(kind, e)` or `Transient::new(kind).with_source(e)`.
+The method is defined on the repo struct and returns `errlanes::Fault<errlanes::lanes!(Transient, Fatal)>` — the fault type described in [Error Types](./repo-errors.md). Database calls propagate with `?`; anything else is wrapped by choosing its lane: `Fatal::from_error(kind, e)` or `Transient::from_error(kind, e)`.
 
 ```rust,ignore
 impl Users {

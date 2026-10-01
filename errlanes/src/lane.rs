@@ -79,6 +79,12 @@ impl Transient {
         }
     }
 
+    /// [`Transient::new`] plus [`Transient::with_source`], as one call — the
+    /// common shape at a classification site that has the error in hand.
+    pub fn from_error(kind: TransientKind, e: impl Error + Send + Sync + 'static) -> Self {
+        Self::new(kind).with_source(e)
+    }
+
     pub fn with_source(mut self, e: impl Error + Send + Sync + 'static) -> Self {
         self.source = Some(Arc::new(e));
         self

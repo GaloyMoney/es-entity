@@ -149,9 +149,11 @@ fn exception_message_includes_the_source_chain() {
         "expected the source's message in {message:?}"
     );
 
-    let transient: Fail<Small> = Transient::new(TransientKind::ConnectionLost)
-        .with_source(std::io::Error::other("broken pipe"))
-        .into();
+    let transient: Fail<Small> = Transient::from_error(
+        TransientKind::ConnectionLost,
+        std::io::Error::other("broken pipe"),
+    )
+    .into();
     let message = record(transient)
         .get("exception.message")
         .expect("Transient always writes exception.message");

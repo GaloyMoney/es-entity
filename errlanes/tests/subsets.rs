@@ -133,10 +133,10 @@ fn borrowed_settlement_needs_no_uninhabited_arms() {
 }
 #[test]
 fn widening_preserves_transient_details_and_boxed_marker() {
-    let original: Fail<Child, lanes!(Transient)> = Transient::new(TransientKind::Deadlock)
-        .with_source(std::io::Error::other("source"))
-        .with_context("operation")
-        .into();
+    let original: Fail<Child, lanes!(Transient)> =
+        Transient::from_error(TransientKind::Deadlock, std::io::Error::other("source"))
+            .with_context("operation")
+            .into();
     let widened: Fail<Parent, lanes!(Fatal, Transient)> = original.widen();
     assert_eq!(errlanes::lane_of(&widened), Some(Lane::Transient));
     let settled: Fail<Parent, lanes!(Fatal)> = widened.settle(3);

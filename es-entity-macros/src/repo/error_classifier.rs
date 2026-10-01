@@ -161,8 +161,8 @@ fn update_write_classifier_fn(
                         && db_err.table() == Some(#events_table) =>
                 {
                     errlanes::Fail::from(
-                        errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
-                            .with_source(e).with_context(context)
+                        errlanes::Transient::from_error(errlanes::TransientKind::OptimisticConflict, e)
+                            .with_context(context)
                     )
                 }
                 #index_arm
@@ -200,8 +200,8 @@ pub fn classify_conflict_fn() -> TokenStream {
                     db_err.is_unique_violation() && db_err.table() == Some(events_table)) =>
                 {
                     Err(errlanes::Fail::from(
-                        errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
-                            .with_source(e).with_context(context())
+                        errlanes::Transient::from_error(errlanes::TransientKind::OptimisticConflict, e)
+                            .with_context(context())
                     ))
                 }
                 Err(e) if e.as_database_error().is_some_and(|db_err| db_err.is_unique_violation()) => {
