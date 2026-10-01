@@ -120,8 +120,8 @@ source intact.
 
 The reverse situation occurs when an inner operation can return Transient,
 but its caller owns retrying the operation. After handling Transient, that
-caller only needs to expose Fatal to its own callers. `settle` turns the
-attempt count into an outcome: a transient that never succeeded becomes
+caller only needs to expose Fatal to its own callers. `narrow_transient` turns
+the attempt count into an outcome: a transient that never succeeded becomes
 `Fatal(Exhausted)`, keeping the last transient as its source.
 
 ```rust
@@ -138,7 +138,7 @@ fn execute(
         match attempt_once() {
             Ok(value) => return Ok(value),
             Err(failure) if failure.is_transient() && attempts < BUDGET => continue,
-            Err(failure) => return Err(failure.settle(attempts)),
+            Err(failure) => return Err(failure.narrow_transient(attempts)),
         }
     }
 }
@@ -163,14 +163,35 @@ assert_eq!(fatal.kind, errlanes::FatalKind::Exhausted);
 ```
 
 Here, `execute` takes the inner operation as a closure so it can call it again.
-Its return type omits Transient because the loop handles that case: settling
+Its return type omits Transient because the loop handles that case: narrowing
 consumed the lane, so `lanes!(Transient, Fatal)` went in and `lanes!(Fatal)`
 came out. Widening alone cannot remove a lane; the caller must account for the
-outcome. Because a settled profile needs somewhere to put an exhaustion,
-`lanes!(Transient)` on its own is neither settleable nor retryable.
+outcome. Because a narrowed profile needs somewhere to put an exhaustion,
+`lanes!(Transient)` on its own is neither narrowable nor retryable.
 
 The loop illustrates who handles Transient. In practice, that owner also
 decides whether repeating the operation is safe and when to stop retrying.
+Widening only ever adds lanes and keeps every value; narrowing removes one
+lane and says what its value becomes.
+
+## Narrowing a lane
+
+`widen` has a dual. Where `widen` adds lanes losslessly and never drops one,
+`narrow_<lane>` removes exactly one lane and turns its value into a `Fatal` —
+the only lane left standing once nobody can act on the removed one. There is
+one narrowing per lane that can reach a boundary with nobody left to help it:
+
+| narrowed lane | what the value is afterwards | method | `FatalKind` |
+|---|---|---|---|
+| `Transient` | a transient that ran out of retries | `narrow_transient(attempts)` | `Exhausted` |
+| `Denied` | still a denial, fatal only because nobody can be told | `narrow_denied()` | `Denied` |
+| `Rejected(D)` | a caller-correctable outcome with no caller, which is a bug | `narrow_rejected()` | `Invariant` |
+
+Each `FatalKind` names what the value truly *is* afterwards, never a guessed
+cause — the same rule `Exhausted` already followed before it had two
+siblings. A narrowing is always a method call, never a `From`: a `?` that
+silently dropped a lane is exactly what the widening rule already forbids, so
+narrowing cannot happen by accident either.
 
 ## At a `Box<dyn Error>` boundary
 
@@ -179,18 +200,18 @@ so a `Fault` or `Fail` can cross a thread or task spawn — this is load-bearing
 and not a bound to work around. A boundary that only has a plain `Box<dyn
 Error>` (a trait object with no `Send`/`Sync` bound, e.g. from a caller whose
 own trait does not require it) therefore cannot move that error into a lane
-payload's source. `classify_dyn` is the one call for that case: it only ever
-borrows the error, so no `Send`/`Sync` bound is needed to call it.
+payload's source. `Fault::classify` is the one call for that case: it only
+ever borrows the error, so no `Send`/`Sync` bound is needed to call it.
 
 ```rust
-use errlanes::{classify_dyn, Fault};
+use errlanes::Fault;
 
 let boxed: Box<dyn std::error::Error> = Box::new(std::io::Error::other("disk full"));
-let fault: Fault = classify_dyn(&*boxed);
+let fault: Fault = Fault::classify(&*boxed);
 assert!(matches!(fault, Fault::Fatal(_)));
 ```
 
-`classify_dyn` tries, in order: a lane payload anywhere in the error's
+`Fault::classify` tries, in order: a lane payload anywhere in the error's
 `source()` chain, carried through with its kind, context and (now cloned out,
 so `Send + Sync` again) its own source intact; then, with the `sqlx` feature,
 a `sqlx::Error` anywhere in the chain, classified by the same table
@@ -199,16 +220,19 @@ a `sqlx::Error` anywhere in the chain, classified by the same table
 classify still surfaces as something a boundary pages on, never silently as
 nothing.
 
-Call `classify_dyn` before the error crosses an `.await` or a spawn, not
+Call `Fault::classify` before the error crosses an `.await` or a spawn, not
 after — a `Box<dyn Error>` with no `Send` bound on its trait object cannot be
 held across either:
 
 ```rust,ignore
 // Inside a boundary whose own trait returns `Box<dyn Error>`, not
 // `Box<dyn Error + Send + Sync>`:
-let fault: errlanes::Fault = match runner.run(job).await {
+let fault: errlanes::Fault<errlanes::lanes!(Transient, Fatal)> = match runner.run(job).await {
     Ok(done) => return Ok(done),
-    Err(e) => errlanes::classify_dyn(&*e), // `e` is dropped here
+    // `e` is dropped here. A job is not an authorization boundary — nobody
+    // is on the other end of it to be told no — so a `Denied` anywhere in
+    // the chain is narrowed away into `Fatal(Denied)` on the spot.
+    Err(e) => errlanes::Fault::classify(&*e).narrow_denied(),
 };
 // `fault` is `Send + Sync` from here on, and can cross a spawn.
 persist(fault).await?;
@@ -376,6 +400,9 @@ every case:
 | a bare rejection `C` | `Fail<R, D>`, given a partial `#[lift(C)]` on `R` | `.widen()?` |
 | `Fail<C, S>` | `Fail<R, D>` | `.widen()?` |
 | `Fault<S>` | `Fault<D>` | `.widen()?` |
+| `Fault<L>` | `Fault<WithoutTransient<L>>` | `.narrow_transient(attempts)` |
+| `Fault<L>` | `Fault<WithoutDenied<L>>` | `.narrow_denied()` |
+| `Fail<D, L>` | `Fault<L>` | `.narrow_rejected()` |
 
 `?` handles anything that needs no decision. `.widen()` is for the one case that
 does, changing the rejection type, and its destination is inferred from the
@@ -383,7 +410,9 @@ return type. A total `#[lift(C)]` supplies the `R: From<C>` that lets a bare
 rejection propagate with `?`; a partial lift does not, so a bare rejection
 crosses it with `.widen()?` like any other source. Widening only ever adds
 lanes: dropping one that the source can still produce is a compile error,
-because somebody has to handle it.
+because somebody has to handle it. A narrowing goes the other way on purpose:
+each removes exactly one lane by name, never by inference, which is why it is
+always a method call and not a `From` (see "Narrowing a lane" above).
 
 ## Composing rejection families
 
