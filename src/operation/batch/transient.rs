@@ -45,5 +45,5 @@ impl<P> TransientPolicy<P> {
 /// probed, only about the contention, so a bisect re-probes the same range
 /// unsplit.
 pub(super) fn sqlstate_is_transient<E: std::error::Error + 'static>(error: &E) -> bool {
-    crate::errlanes::classify_dyn(error).is_transient()
+    crate::errlanes::Fault::classify(error).is_transient()
 }
