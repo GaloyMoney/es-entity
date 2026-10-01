@@ -25,26 +25,26 @@ macro_rules! disabled {
 }
 disabled!(Denied, Transient, Fatal, Exhausted);
 
-/// How a transient slot is consumed when retries stop: an enabled `Transient`
-/// becomes `Fatal(Exhausted)` carrying the attempt count and the last transient
-/// as its source; a disabled slot has no value to consume.
+/// How a transient slot is narrowed away when retries stop: an enabled
+/// `Transient` becomes `Fatal(Exhausted)` carrying the attempt count and the
+/// last transient as its source; a disabled slot has no value to consume.
 ///
-/// There is deliberately no `Settling<Infallible> for Transient`: a profile
-/// that admits `Transient` but not `Fatal` claims an operation can be retried
-/// but can never fail permanently, which is not true of anything worth
-/// retrying. Such a profile is therefore not settleable, and — through the
-/// [`crate::Laned`] impls — not retryable either.
+/// There is deliberately no `NarrowTransient<Infallible> for Transient`: a
+/// profile that admits `Transient` but not `Fatal` claims an operation can be
+/// retried but can never fail permanently, which is not true of anything
+/// worth retrying. Such a profile is therefore not narrowable, and — through
+/// the [`crate::Laned`] impls — not retryable either.
 #[doc(hidden)]
-pub trait Settling<F> {
-    fn settling(self, attempts: u32) -> F;
+pub trait NarrowTransient<F> {
+    fn narrow(self, attempts: u32) -> F;
 }
-impl<F> Settling<F> for Infallible {
-    fn settling(self, _: u32) -> F {
+impl<F> NarrowTransient<F> for Infallible {
+    fn narrow(self, _: u32) -> F {
         match self {}
     }
 }
-impl Settling<Fatal> for Transient {
-    fn settling(self, attempts: u32) -> Fatal {
+impl NarrowTransient<Fatal> for Transient {
+    fn narrow(self, attempts: u32) -> Fatal {
         Fatal::from_error(
             crate::FatalKind::Exhausted,
             Exhausted {
@@ -55,6 +55,26 @@ impl Settling<Fatal> for Transient {
     }
 }
 
+/// How a denied slot is narrowed away at a boundary with no subject: an
+/// enabled `Denied` becomes `Fatal(Denied)` carrying itself as the source; a
+/// disabled slot has no value to consume. As with `NarrowTransient`, there is
+/// no `NarrowDenied<Infallible> for Denied`: a profile that can deny but can
+/// never fail permanently has nowhere to put the narrowing.
+#[doc(hidden)]
+pub trait NarrowDenied<F> {
+    fn narrow(self) -> F;
+}
+impl<F> NarrowDenied<F> for Infallible {
+    fn narrow(self) -> F {
+        match self {}
+    }
+}
+impl NarrowDenied<Fatal> for Denied {
+    fn narrow(self) -> Fatal {
+        Fatal::from_error(crate::FatalKind::Denied, self)
+    }
+}
+
 /// Sealed profile: disabled slots are `Infallible`, enabled slots are the
 /// established markers. Use [`crate::lanes!`] to select a subset.
 pub trait LaneProfile: sealed::Sealed + Debug + Clone + Send + Sync + 'static {
@@ -62,9 +82,15 @@ pub trait LaneProfile: sealed::Sealed + Debug + Clone + Send + Sync + 'static {
     type Transient: Slot<Transient>;
     type Fatal: Slot<Fatal>;
 
-    /// This profile with the transient lane consumed: the projection `settle`
-    /// and `retry` return through, spelled [`crate::Settled`].
-    type Settled: LaneProfile<Denied = Self::Denied, Transient = Infallible, Fatal = Self::Fatal>;
+    /// This profile with the transient lane narrowed away: the projection
+    /// `narrow_transient` and `retry` return through, spelled
+    /// [`crate::profile::WithoutTransient`].
+    type WithoutTransient: LaneProfile<Denied = Self::Denied, Transient = Infallible, Fatal = Self::Fatal>;
+
+    /// This profile with the denied lane narrowed away: the projection
+    /// `narrow_denied` returns through, spelled
+    /// [`crate::profile::WithoutDenied`].
+    type WithoutDenied: LaneProfile<Denied = Infallible, Transient = Self::Transient, Fatal = Self::Fatal>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -76,7 +102,8 @@ macro_rules! profile {
             type Denied = $denied;
             type Transient = $transient;
             type Fatal = $fatal;
-            type Settled = Profile<$d, false, $f>;
+            type WithoutTransient = Profile<$d, false, $f>;
+            type WithoutDenied = Profile<false, $t, $f>;
         }
     };
 }
@@ -91,17 +118,24 @@ profile!(true, true, true; Denied, Transient, Fatal);
 
 pub type AllLanes = Profile<true, true, true>;
 
-/// `L` with its transient lane consumed — sugar for
-/// [`LaneProfile::Settled`], which is what `settle` and `retry` return
-/// through. Settling is a projection on the profile, not a second family of
-/// carriers: `Fault<Settled<L>>` is an ordinary `Fault` whose `Transient` slot
-/// is uninhabited, and an exhausted retry arrives as `Fatal(Exhausted)`.
+/// `L` with its transient lane narrowed away — sugar for
+/// [`LaneProfile::WithoutTransient`], which is what `narrow_transient` and
+/// `retry` return through. Narrowing is a projection on the profile, not a
+/// second family of carriers: `Fault<WithoutTransient<L>>` is an ordinary
+/// `Fault` whose `Transient` slot is uninhabited, and an exhausted retry
+/// arrives as `Fatal(Exhausted)`.
 ///
-/// Prefer naming the resulting profile directly wherever you can — settling
+/// Prefer naming the resulting profile directly wherever you can — narrowing
 /// `lanes!(Transient, Fatal)` yields `lanes!(Fatal)`, and writing that keeps a
 /// lane the caller can never see out of the signature. This alias is for code
 /// generic over `L`, where there is no concrete name to reach for.
-pub type Settled<L> = <L as LaneProfile>::Settled;
+pub type WithoutTransient<L> = <L as LaneProfile>::WithoutTransient;
+
+/// `L` with its denied lane narrowed away — sugar for
+/// [`LaneProfile::WithoutDenied`], which is what `narrow_denied` returns
+/// through. Same caveat as [`WithoutTransient`]: prefer the concrete profile
+/// name wherever one is available.
+pub type WithoutDenied<L> = <L as LaneProfile>::WithoutDenied;
 
 /// Select a subset of `Denied`, `Transient`, and `Fatal`, in any order.
 #[macro_export]

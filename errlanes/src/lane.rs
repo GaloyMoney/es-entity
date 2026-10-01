@@ -53,6 +53,15 @@ impl TransientKind {
             TransientKind::Other => "other",
         }
     }
+
+    /// A transient that carries no evidence about the operation itself, only
+    /// about shared capacity — a retry loop backs off without spending its
+    /// budget, where a conflict kind (`Deadlock`, `SerializationFailure`,
+    /// `OptimisticConflict`) is evidence the operation can be re-run at
+    /// once.
+    pub fn is_congestion(self) -> bool {
+        matches!(self, TransientKind::PoolTimeout | TransientKind::Congestion)
+    }
 }
 
 impl fmt::Display for TransientKind {
@@ -98,6 +107,10 @@ impl Transient {
     pub fn source_arc(&self) -> Option<&Arc<dyn Error + Send + Sync>> {
         self.source.as_ref()
     }
+
+    pub fn is_congestion(&self) -> bool {
+        self.kind.is_congestion()
+    }
 }
 
 impl fmt::Display for Transient {
@@ -128,6 +141,12 @@ pub enum FatalKind {
     Dependency,
     Panic,
     Exhausted,
+    /// A `Denied` narrowed at a boundary with no subject to deny — code
+    /// running as the system. The `Denied` is the source. Mirrors
+    /// `Exhausted`: just as the struct `Exhausted` is the source of a
+    /// `Fatal(Exhausted)`, the struct `Denied` is the source of a
+    /// `Fatal(Denied)`.
+    Denied,
 }
 
 impl FatalKind {
@@ -139,6 +158,7 @@ impl FatalKind {
             FatalKind::Dependency => "dependency",
             FatalKind::Panic => "panic",
             FatalKind::Exhausted => "exhausted",
+            FatalKind::Denied => "denied",
         }
     }
 }
@@ -196,6 +216,14 @@ impl Fatal {
             context: None,
             source: Some(Arc::from(e)),
         }
+    }
+
+    /// `Fatal::new(kind)` with the error's whole `Display` chain as context —
+    /// the by-reference form for a boundary holding a `&dyn Error` it cannot
+    /// keep as `source`. The same fold [`Fault::classify`](crate::Fault::classify)
+    /// makes in its rule 3, with the kind chosen by the caller.
+    pub fn from_dyn(kind: FatalKind, e: &(dyn Error + 'static)) -> Self {
+        Self::new(kind).with_context(crate::dynamic::message_chain(e))
     }
 
     pub fn invariant(msg: impl Into<Cow<'static, str>>) -> Self {

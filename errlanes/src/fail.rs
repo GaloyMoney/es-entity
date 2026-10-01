@@ -1,6 +1,6 @@
 use std::{error::Error, fmt};
 
-use crate::profile::{AllLanes, LaneProfile, Settling};
+use crate::profile::{AllLanes, LaneProfile, NarrowDenied, NarrowTransient};
 
 use crate::lane::{Denied, Exhausted, Fatal, Lane, Transient};
 
@@ -112,17 +112,52 @@ impl<L: LaneProfile> Fault<L> {
         matches!(self, Fault::Transient(_))
     }
 
+    pub fn is_fatal(&self) -> bool {
+        matches!(self, Fault::Fatal(_))
+    }
+
+    pub fn is_denied(&self) -> bool {
+        matches!(self, Fault::Denied(_))
+    }
+
+    /// The operator-safe one-line text for this failure — exactly what
+    /// `record` writes to `exception.message`, for a boundary that must
+    /// persist it rather than (or as well as) record it. `Transient`/
+    /// `Fatal`: the whole `source()` chain joined with `": "`. `Denied`: its
+    /// `Display`.
+    pub fn message(&self) -> String {
+        match self {
+            Fault::Denied(d) => d.to_string(),
+            Fault::Transient(t) => crate::dynamic::message_chain(t),
+            Fault::Fatal(x) => crate::dynamic::message_chain(x),
+        }
+    }
+
     /// Consumes the `Transient` lane, yielding the same profile with its
     /// transient slot disabled. `attempts` is what the retry loop counted; an
     /// exhausted transient becomes `Fatal(Exhausted)` with the last transient
     /// as its source.
-    pub fn settle(self, attempts: u32) -> Fault<crate::profile::Settled<L>>
+    pub fn narrow_transient(self, attempts: u32) -> Fault<crate::profile::WithoutTransient<L>>
     where
-        L::Transient: Settling<L::Fatal>,
+        L::Transient: NarrowTransient<L::Fatal>,
     {
         match self {
             Fault::Denied(d) => Fault::Denied(d),
-            Fault::Transient(last) => Fault::Fatal(last.settling(attempts)),
+            Fault::Transient(last) => Fault::Fatal(last.narrow(attempts)),
+            Fault::Fatal(f) => Fault::Fatal(f),
+        }
+    }
+
+    /// Narrows away the `Denied` lane: a denial at a boundary with no
+    /// subject (code running as the system) becomes `Fatal(Denied)` with
+    /// the `Denied` as its source.
+    pub fn narrow_denied(self) -> Fault<crate::profile::WithoutDenied<L>>
+    where
+        L::Denied: NarrowDenied<L::Fatal>,
+    {
+        match self {
+            Fault::Denied(d) => Fault::Fatal(d.narrow()),
+            Fault::Transient(t) => Fault::Transient(t),
             Fault::Fatal(f) => Fault::Fatal(f),
         }
     }
@@ -150,6 +185,10 @@ impl<L: LaneProfile<Transient = Transient>> Fault<L> {
             _ => None,
         }
     }
+
+    pub fn is_congestion(&self) -> bool {
+        self.as_transient().is_some_and(Transient::is_congestion)
+    }
 }
 
 impl<L: LaneProfile<Fatal = Fatal>> Fault<L> {
@@ -176,6 +215,10 @@ impl<D, L: LaneProfile<Transient = Transient>> Fail<D, L> {
             Fail::Transient(t) => Some(t),
             _ => None,
         }
+    }
+
+    pub fn is_congestion(&self) -> bool {
+        self.as_transient().is_some_and(Transient::is_congestion)
     }
 }
 
@@ -367,21 +410,82 @@ impl<D, L: LaneProfile> Fail<D, L> {
         matches!(self, Fail::Transient(_))
     }
 
-    /// Consumes the `Transient` lane. `attempts` is what the retry loop
-    /// counted.
+    pub fn is_fatal(&self) -> bool {
+        matches!(self, Fail::Fatal(_))
+    }
+
+    pub fn is_denied(&self) -> bool {
+        matches!(self, Fail::Denied(_))
+    }
+
+    /// The operator-safe one-line text for this failure — exactly what
+    /// `record` writes to `exception.message`, for a boundary that must
+    /// persist it rather than (or as well as) record it. `Transient`/
+    /// `Fatal`: the whole `source()` chain joined with `": "`. `Denied`: its
+    /// `Display`. `Rejected`: the rejection's `code`, never its message
+    /// (display discipline — a rejection's message may embed caller-supplied
+    /// input).
+    pub fn message(&self) -> String
+    where
+        D: Rejection,
+    {
+        match self {
+            Fail::Rejected(d) => d.code().to_string(),
+            Fail::Denied(d) => d.to_string(),
+            Fail::Transient(t) => crate::dynamic::message_chain(t),
+            Fail::Fatal(x) => crate::dynamic::message_chain(x),
+        }
+    }
+
     /// Consumes the `Transient` lane, yielding the same rejection over `L`
     /// with its transient slot disabled. An exhausted transient becomes
     /// `Fatal(Exhausted)`, carrying `attempts` and the last transient as its
     /// source.
-    pub fn settle(self, attempts: u32) -> Fail<D, crate::profile::Settled<L>>
+    pub fn narrow_transient(self, attempts: u32) -> Fail<D, crate::profile::WithoutTransient<L>>
     where
-        L::Transient: Settling<L::Fatal>,
+        L::Transient: NarrowTransient<L::Fatal>,
     {
         match self {
             Fail::Rejected(d) => Fail::Rejected(d),
             Fail::Denied(d) => Fail::Denied(d),
-            Fail::Transient(last) => Fail::Fatal(last.settling(attempts)),
+            Fail::Transient(last) => Fail::Fatal(last.narrow(attempts)),
             Fail::Fatal(f) => Fail::Fatal(f),
+        }
+    }
+
+    /// Narrows away the `Denied` lane: a denial at a boundary with no
+    /// subject (code running as the system) becomes `Fatal(Denied)` with
+    /// the `Denied` as its source.
+    pub fn narrow_denied(self) -> Fail<D, crate::profile::WithoutDenied<L>>
+    where
+        L::Denied: NarrowDenied<L::Fatal>,
+    {
+        match self {
+            Fail::Rejected(d) => Fail::Rejected(d),
+            Fail::Denied(d) => Fail::Fatal(d.narrow()),
+            Fail::Transient(t) => Fail::Transient(t),
+            Fail::Fatal(f) => Fail::Fatal(f),
+        }
+    }
+
+    /// Narrows away the `Rejected` lane: a rejection at a boundary with no
+    /// caller to correct it is an invariant violation, and becomes
+    /// `Fatal(Invariant)` with the rejection as its source — the same rule
+    /// a partial `#[lift(.., unhandled = fatal)]` applies. Nothing is left
+    /// to reject, so the result is a `Fault`.
+    pub fn narrow_rejected(self) -> Fault<L>
+    where
+        D: Rejection,
+        L: LaneProfile<Fatal = Fatal>,
+    {
+        match self {
+            Fail::Rejected(d) => Fault::Fatal(
+                Fatal::from_error(crate::FatalKind::Invariant, d)
+                    .with_context("rejected with no caller to correct"),
+            ),
+            Fail::Denied(d) => Fault::Denied(d),
+            Fail::Transient(t) => Fault::Transient(t),
+            Fail::Fatal(f) => Fault::Fatal(f),
         }
     }
 }
@@ -513,11 +617,11 @@ mod sealed {
 }
 
 /// Sealed. The thing `retry`/`record` need from any error they are handed:
-/// its lane, and how to settle it. Implemented by every [`Failure`] (which
+/// its lane, and how to narrow it. Implemented by every [`Failure`] (which
 /// covers `Fail<D, L>` itself and every carrier) and by [`Fault<L>`] — the two
 /// shapes a generated repo op can return.
 pub trait Laned: sealed::Sealed + Error + Send + Sync + 'static + Sized {
-    type Settled: Error + Send + Sync + 'static;
+    type WithoutTransient: Error + Send + Sync + 'static;
 
     fn lane(&self) -> Lane;
 
@@ -525,28 +629,49 @@ pub trait Laned: sealed::Sealed + Error + Send + Sync + 'static + Sized {
         self.lane() == Lane::Transient
     }
 
-    fn settle(self, attempts: u32) -> Self::Settled;
+    fn is_fatal(&self) -> bool {
+        self.lane() == Lane::Fatal
+    }
+
+    fn is_denied(&self) -> bool {
+        self.lane() == Lane::Denied
+    }
+
+    fn narrow_transient(self, attempts: u32) -> Self::WithoutTransient;
+
+    /// The operator-safe one-line text for this failure — exactly what
+    /// `record` writes to `exception.message`, for a boundary that must
+    /// persist it rather than (or as well as) record it. `Transient`/
+    /// `Fatal`: the whole `source()` chain joined with `": "`. `Denied`: its
+    /// `Display`. `Rejected`: the rejection's `code`, never its message
+    /// (display discipline — a rejection's message may embed caller-supplied
+    /// input).
+    fn message(&self) -> String;
 
     #[cfg(feature = "tracing")]
     fn record(&self, span: &tracing::Span);
 }
 
-/// Note the `Settling` bound: a profile that admits `Transient` but not
-/// `Fatal` is not `Laned`, so `retry` cannot be handed one. Retrying an
+/// Note the `NarrowTransient` bound: a profile that admits `Transient` but
+/// not `Fatal` is not `Laned`, so `retry` cannot be handed one. Retrying an
 /// operation that claims it can never fail permanently is exactly the
 /// contradiction the bound rules out.
 impl<F: Failure> Laned for F
 where
-    <F::Lanes as LaneProfile>::Transient: Settling<<F::Lanes as LaneProfile>::Fatal>,
+    <F::Lanes as LaneProfile>::Transient: NarrowTransient<<F::Lanes as LaneProfile>::Fatal>,
 {
-    type Settled = Fail<F::Rejection, crate::profile::Settled<F::Lanes>>;
+    type WithoutTransient = Fail<F::Rejection, crate::profile::WithoutTransient<F::Lanes>>;
 
     fn lane(&self) -> Lane {
         Failure::lane(self)
     }
 
-    fn settle(self, attempts: u32) -> Self::Settled {
-        self.into_fail().settle(attempts)
+    fn narrow_transient(self, attempts: u32) -> Self::WithoutTransient {
+        self.into_fail().narrow_transient(attempts)
+    }
+
+    fn message(&self) -> String {
+        self.as_fail().message()
     }
 
     #[cfg(feature = "tracing")]
@@ -557,16 +682,20 @@ where
 
 impl<L: LaneProfile> Laned for Fault<L>
 where
-    L::Transient: Settling<L::Fatal>,
+    L::Transient: NarrowTransient<L::Fatal>,
 {
-    type Settled = Fault<crate::profile::Settled<L>>;
+    type WithoutTransient = Fault<crate::profile::WithoutTransient<L>>;
 
     fn lane(&self) -> Lane {
         Fault::lane(self)
     }
 
-    fn settle(self, attempts: u32) -> Self::Settled {
-        Fault::settle(self, attempts)
+    fn narrow_transient(self, attempts: u32) -> Self::WithoutTransient {
+        Fault::narrow_transient(self, attempts)
+    }
+
+    fn message(&self) -> String {
+        Fault::message(self)
     }
 
     #[cfg(feature = "tracing")]
@@ -747,9 +876,9 @@ mod tests {
     }
 
     #[test]
-    fn settle_turns_transient_into_exhausted_and_leaves_everything_else_alone() {
+    fn narrow_transient_turns_transient_into_exhausted_and_leaves_everything_else_alone() {
         let t: Fail<Small> = Transient::new(TransientKind::Deadlock).into();
-        match t.settle(3) {
+        match t.narrow_transient(3) {
             Fail::Fatal(f) => {
                 assert_eq!(f.kind, FatalKind::Exhausted);
                 let e = Error::source(&f)
@@ -762,10 +891,10 @@ mod tests {
         }
 
         let r: Fail<Small> = Fail::Rejected(Small);
-        assert!(matches!(r.settle(1), Fail::Rejected(Small)));
+        assert!(matches!(r.narrow_transient(1), Fail::Rejected(Small)));
 
         let fatal: Fail<Small> = Fatal::new(FatalKind::Config).into();
-        assert!(matches!(fatal.settle(1), Fail::Fatal(_)));
+        assert!(matches!(fatal.narrow_transient(1), Fail::Fatal(_)));
     }
 
     #[test]
@@ -799,7 +928,7 @@ mod tests {
     }
 
     #[test]
-    fn laned_settle_agrees_between_fail_and_fault() {
+    fn laned_narrow_transient_agrees_between_fail_and_fault() {
         fn exhausted_attempts(e: &(dyn Error + 'static)) -> u32 {
             e.source()
                 .and_then(|s| s.downcast_ref::<Exhausted>())
@@ -808,13 +937,15 @@ mod tests {
         }
 
         let t: Fail<Small> = Transient::new(TransientKind::Deadlock).into();
-        let settled: Fail<Small, crate::profile::Settled<AllLanes>> = Laned::settle(t, 2);
-        assert_eq!(settled.lane(), Lane::Fatal);
-        assert_eq!(exhausted_attempts(settled.as_fatal().unwrap()), 2);
+        let narrowed: Fail<Small, crate::profile::WithoutTransient<AllLanes>> =
+            Laned::narrow_transient(t, 2);
+        assert_eq!(narrowed.lane(), Lane::Fatal);
+        assert_eq!(exhausted_attempts(narrowed.as_fatal().unwrap()), 2);
 
         let t: Fault = Transient::new(TransientKind::Deadlock).into();
-        let settled: Fault<crate::profile::Settled<AllLanes>> = Laned::settle(t, 2);
-        assert_eq!(settled.lane(), Lane::Fatal);
-        assert_eq!(exhausted_attempts(settled.as_fatal().unwrap()), 2);
+        let narrowed: Fault<crate::profile::WithoutTransient<AllLanes>> =
+            Laned::narrow_transient(t, 2);
+        assert_eq!(narrowed.lane(), Lane::Fatal);
+        assert_eq!(exhausted_attempts(narrowed.as_fatal().unwrap()), 2);
     }
 }

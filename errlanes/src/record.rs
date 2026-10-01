@@ -3,7 +3,7 @@ use crate::fail::{Fail, Fault, Level, Rejection};
 use crate::profile::{LaneProfile, Slot};
 
 /// Span fields a boundary span must declare as `tracing::field::Empty` for
-/// [`record`] / [`record_fail`] to fill.
+/// [`crate::Laned::record`] to fill.
 ///
 /// ```
 /// use errlanes::FIELDS;
@@ -52,7 +52,7 @@ fn level_str(level: Level) -> &'static str {
 /// lane built from an arbitrary error whose message embeds caller input
 /// should set its own operator-safe `context` instead of relying on the
 /// default.
-pub fn record_fail<D: Rejection, L: LaneProfile>(span: &tracing::Span, f: &Fail<D, L>) {
+pub(crate) fn record_fail<D: Rejection, L: LaneProfile>(span: &tracing::Span, f: &Fail<D, L>) {
     span.record("error", true);
     span.record("error.lane", f.lane().as_str());
     match f {
@@ -79,7 +79,7 @@ pub fn record_fail<D: Rejection, L: LaneProfile>(span: &tracing::Span, f: &Fail<
 }
 
 /// [`record_fail`] for a [`Fault`] — no `Rejected` arm to key a code from.
-pub fn record_fault<L: LaneProfile>(span: &tracing::Span, f: &Fault<L>) {
+pub(crate) fn record_fault<L: LaneProfile>(span: &tracing::Span, f: &Fault<L>) {
     span.record("error", true);
     span.record("error.lane", f.lane().as_str());
     match f {

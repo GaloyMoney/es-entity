@@ -15,14 +15,19 @@ use crate::{
     lane::{Fatal, FatalKind, Transient, TransientKind},
 };
 
-pub fn transient_sqlstate(code: &str) -> Option<TransientKind> {
-    match code {
-        "40001" => Some(TransientKind::SerializationFailure),
-        "40P01" => Some(TransientKind::Deadlock),
-        "57P01" | "57P02" | "57P03" | "08000" | "08003" | "08006" | "08001" | "08004" => {
-            Some(TransientKind::ConnectionLost)
+impl TransientKind {
+    /// The one row of `lane_table` (private) a consumer with a non-sqlx
+    /// Postgres driver could still want: which [`TransientKind`] a Postgres
+    /// SQLSTATE code maps to, independent of `sqlx::Error`.
+    pub fn from_sqlstate(code: &str) -> Option<Self> {
+        match code {
+            "40001" => Some(TransientKind::SerializationFailure),
+            "40P01" => Some(TransientKind::Deadlock),
+            "57P01" | "57P02" | "57P03" | "08000" | "08003" | "08006" | "08001" | "08004" => {
+                Some(TransientKind::ConnectionLost)
+            }
+            _ => None,
         }
-        _ => None,
     }
 }
 
@@ -41,7 +46,7 @@ fn lane_table(e: &::sqlx::Error) -> Fault<crate::lanes!(Transient, Fatal)> {
         | ::sqlx::Error::PoolClosed
         | ::sqlx::Error::WorkerCrashed => Transient::new(TransientKind::ConnectionLost).into(),
         ::sqlx::Error::Database(db) => {
-            if let Some(kind) = db.code().and_then(|c| transient_sqlstate(&c)) {
+            if let Some(kind) = db.code().and_then(|c| TransientKind::from_sqlstate(&c)) {
                 return Transient::new(kind).into();
             }
             if db.is_unique_violation() || db.is_foreign_key_violation() || db.is_check_violation()
@@ -74,7 +79,7 @@ fn lane_table(e: &::sqlx::Error) -> Fault<crate::lanes!(Transient, Fatal)> {
 /// Classifies a raw `sqlx::Error`, moving it — the error itself becomes the
 /// lane payload's `source`, so the whole chain survives. What
 /// `impl From<sqlx::Error> for Fault`/`Fail` delegates to.
-pub fn classify_sqlx_fault(e: ::sqlx::Error) -> Fault<crate::lanes!(Transient, Fatal)> {
+fn classify_sqlx_fault(e: ::sqlx::Error) -> Fault<crate::lanes!(Transient, Fatal)> {
     match lane_table(&e) {
         Fault::Transient(t) => t.with_source(e).into(),
         Fault::Fatal(f) => f.with_source(e).into(),
@@ -83,11 +88,11 @@ pub fn classify_sqlx_fault(e: ::sqlx::Error) -> Fault<crate::lanes!(Transient, F
 
 /// [`classify_sqlx_fault`] for a borrowed error — the same [`lane_table`],
 /// with the message folded into `context` in place of the source, which
-/// cannot be moved out of a shared reference. [`crate::classify_dyn`] calls
-/// this after finding a `sqlx::Error` in a chain it cannot otherwise
+/// cannot be moved out of a shared reference. [`crate::Fault::classify`]
+/// calls this after finding a `sqlx::Error` in a chain it cannot otherwise
 /// classify. Prefer [`classify_sqlx_fault`] when you own the error: it keeps
 /// the source.
-pub fn classify_sqlx_ref(e: &::sqlx::Error) -> Fault<crate::lanes!(Transient, Fatal)> {
+pub(crate) fn classify_sqlx_ref(e: &::sqlx::Error) -> Fault<crate::lanes!(Transient, Fatal)> {
     /// The table's own `context` (a constraint name, when it set one) stays in
     /// front of the message rather than being overwritten by it.
     fn fold(context: Option<&str>, e: &::sqlx::Error) -> String {
@@ -325,12 +330,12 @@ mod tests {
         }
     }
 
-    /// `classify_dyn` (in `crate::dynamic`) falls back to walking for a
+    /// `Fault::classify` falls back to walking for a
     /// `sqlx::Error` when nothing in the chain is already laned — exercised
     /// here, alongside the sqlx table, since it only compiles under this
     /// feature.
     #[test]
-    fn classify_dyn_finds_a_nested_sqlx_error() {
+    fn classify_finds_a_nested_sqlx_error() {
         #[derive(Debug)]
         struct Wrapper(::sqlx::Error);
         impl std::fmt::Display for Wrapper {
@@ -345,7 +350,7 @@ mod tests {
         }
 
         let chain = Wrapper(::sqlx::Error::PoolTimedOut);
-        match crate::dynamic::classify_dyn(&chain) {
+        match Fault::classify(&chain) {
             Fault::Transient(t) => assert_eq!(t.kind, TransientKind::PoolTimeout),
             other => panic!("expected Transient(PoolTimeout), got {other:?}"),
         }
@@ -367,9 +372,13 @@ mod tests {
         ];
         assert_eq!(expected.len(), 10);
         for (code, kind) in expected {
-            assert_eq!(transient_sqlstate(code), Some(*kind), "code {code}");
+            assert_eq!(
+                TransientKind::from_sqlstate(code),
+                Some(*kind),
+                "code {code}"
+            );
         }
-        assert_eq!(transient_sqlstate("22012"), None);
-        assert_eq!(transient_sqlstate("23505"), None);
+        assert_eq!(TransientKind::from_sqlstate("22012"), None);
+        assert_eq!(TransientKind::from_sqlstate("23505"), None);
     }
 }
