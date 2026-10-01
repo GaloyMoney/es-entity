@@ -83,18 +83,19 @@ fn a_by_value_match_names_only_the_selected_lanes() {
     let _: Nope = rejected_only(Fail::Rejected(Nope));
 }
 
-/// `Settled<L>` is sugar for the same projection, so the two spellings are one
+/// `WithoutTransient<L>` is sugar for the same projection, so the two spellings are one
 /// type. Concrete signatures use the concrete profile; the alias is for code
 /// generic over `L`.
 fn alias_is_the_concrete_profile(
-    failure: Fail<Nope, errlanes::Settled<lanes!(Transient, Fatal)>>,
+    failure: Fail<Nope, errlanes::WithoutTransient<lanes!(Transient, Fatal)>>,
 ) -> Fail<Nope, lanes!(Fatal)> {
     failure
 }
 
-/// Settling `lanes!(Transient, Fatal)` yields `lanes!(Fatal)`, so this names one
-/// arm fewer than its unsettled counterpart and exhaustion arrives as a fatal.
-fn settled(failure: Fail<Nope, lanes!(Fatal)>) -> &'static str {
+/// Narrowing `lanes!(Transient, Fatal)` yields `lanes!(Fatal)`, so this names
+/// one arm fewer than its unnarrowed counterpart and exhaustion arrives as a
+/// fatal.
+fn narrowed(failure: Fail<Nope, lanes!(Fatal)>) -> &'static str {
     match failure {
         Fail::Rejected(_) => "rejected",
         Fail::Fatal(fatal) if fatal.kind == FatalKind::Exhausted => "exhausted",
@@ -103,18 +104,18 @@ fn settled(failure: Fail<Nope, lanes!(Fatal)>) -> &'static str {
 }
 
 #[test]
-fn settling_removes_an_arm_rather_than_renaming_one() {
-    assert_eq!(settled(Fail::Rejected(Nope)), "rejected");
-    assert_eq!(settled(Fatal::invariant("x").into()), "fatal");
+fn narrowing_removes_an_arm_rather_than_renaming_one() {
+    assert_eq!(narrowed(Fail::Rejected(Nope)), "rejected");
+    assert_eq!(narrowed(Fatal::invariant("x").into()), "fatal");
 
     let transient: Fail<Nope, lanes!(Transient, Fatal)> =
         Transient::new(TransientKind::Deadlock).into();
-    assert_eq!(settled(transient.settle(3)), "exhausted");
+    assert_eq!(narrowed(transient.narrow_transient(3)), "exhausted");
 
     let transient: Fail<Nope, lanes!(Transient, Fatal)> =
         Transient::new(TransientKind::Deadlock).into();
     assert_eq!(
-        settled(alias_is_the_concrete_profile(transient.settle(3))),
+        narrowed(alias_is_the_concrete_profile(transient.narrow_transient(3))),
         "exhausted"
     );
 }

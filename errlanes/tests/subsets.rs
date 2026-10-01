@@ -113,23 +113,23 @@ fn strict_lift_needs_no_fatal_lane() {
     ));
     let source: Fail<Child, lanes!()> = Fail::Rejected(Child::Unit);
     let lifted: Fail<Parent, lanes!()> = source.widen();
-    // Settling a profile with no transient lane is the identity on the value,
+    // Narrowing a profile with no transient lane is the identity on the value,
     // and its type is already a `Fail` -- there is nothing to convert back.
-    let restored: Fail<Parent, lanes!()> = lifted.settle(1);
+    let restored: Fail<Parent, lanes!()> = lifted.narrow_transient(1);
     assert!(matches!(restored, Fail::Rejected(Parent::Unit)));
 }
 #[test]
-fn borrowed_settlement_needs_no_uninhabited_arms() {
+fn borrowed_narrowing_needs_no_uninhabited_arms() {
     // `lane()` and the borrowed accessors cover every borrowed inspection, so
     // no caller writes `match *never {}`.
     fn inspect(value: &Fail<Child, lanes!(Fatal)>) -> Lane {
         value.lane()
     }
     let value: Fail<Child, lanes!(Fatal)> = Fatal::invariant("broken").into();
-    let settled = value.settle(1);
-    assert_eq!(inspect(&settled), Lane::Fatal);
-    assert!(settled.as_fatal().is_some());
-    assert!(settled.as_rejected().is_none());
+    let narrowed = value.narrow_transient(1);
+    assert_eq!(inspect(&narrowed), Lane::Fatal);
+    assert!(narrowed.as_fatal().is_some());
+    assert!(narrowed.as_rejected().is_none());
 }
 #[test]
 fn widening_preserves_transient_details_and_boxed_marker() {
@@ -138,9 +138,9 @@ fn widening_preserves_transient_details_and_boxed_marker() {
             .with_context("operation")
             .into();
     let widened: Fail<Parent, lanes!(Fatal, Transient)> = original.widen();
-    assert_eq!(errlanes::lane_of(&widened), Some(Lane::Transient));
-    let settled: Fail<Parent, lanes!(Fatal)> = widened.settle(3);
-    let fatal = settled.as_fatal().expect("expected exhaustion");
+    assert_eq!(errlanes::Lane::of(&widened), Some(Lane::Transient));
+    let narrowed: Fail<Parent, lanes!(Fatal)> = widened.narrow_transient(3);
+    let fatal = narrowed.as_fatal().expect("expected exhaustion");
     assert_eq!(fatal.kind, errlanes::FatalKind::Exhausted);
     let e = fatal
         .source()
@@ -149,12 +149,12 @@ fn widening_preserves_transient_details_and_boxed_marker() {
     assert_eq!(e.attempts, 3);
     assert_eq!(e.last.kind, TransientKind::Deadlock);
     assert!(e.last.source().unwrap().is::<std::io::Error>());
-    let boxed: Box<dyn Error + Send + Sync> = Box::new(settled);
-    assert_eq!(errlanes::lane_of(boxed.as_ref()), Some(Lane::Fatal));
+    let boxed: Box<dyn Error + Send + Sync> = Box::new(narrowed);
+    assert_eq!(errlanes::Lane::of(boxed.as_ref()), Some(Lane::Fatal));
 }
 /// There is deliberately no `From<Box<dyn Error + Send + Sync>>` for a lane
 /// carrier: it would silently discard whatever lane the box already holds.
-/// A boxed error is classified ([`errlanes::classify_dyn`]) or demoted out
+/// A boxed error is classified ([`errlanes::Fault::classify`]) or demoted out
 /// loud ([`Fatal::from_boxed`]); `Infallible` is the only free conversion.
 #[test]
 fn infallible_and_boxed_conversions_are_coherent() {
@@ -165,7 +165,7 @@ fn infallible_and_boxed_conversions_are_coherent() {
     let _ = convert;
 
     let boxed: Box<dyn Error + Send + Sync> = Box::new(std::io::Error::other("source"));
-    let fault: Fault = errlanes::classify_dyn(boxed.as_ref());
+    let fault: Fault = errlanes::Fault::classify(boxed.as_ref());
     assert_eq!(fault.lane(), Lane::Fatal);
 
     let boxed: Box<dyn Error + Send + Sync> = Box::new(std::io::Error::other("source"));
@@ -177,7 +177,7 @@ fn infallible_and_boxed_conversions_are_coherent() {
 
 #[test]
 fn retry_loop_respects_subset() {
-    // `lanes!(Transient)` alone is no longer retryable: settling it would
+    // `lanes!(Transient)` alone is no longer retryable: narrowing it would
     // have nowhere to put the exhaustion. Anything worth retrying can fail
     // permanently, so it must admit Fatal.
     fn retry(
@@ -189,7 +189,7 @@ fn retry_loop_respects_subset() {
             match op() {
                 Ok(()) => return Ok(()),
                 Err(failure) if failure.is_transient() && attempts < 3 => continue,
-                Err(failure) => return Err(failure.settle(attempts)),
+                Err(failure) => return Err(failure.narrow_transient(attempts)),
             }
         }
     }
@@ -228,9 +228,9 @@ fn transparent_subset_wrapper_retains_lane_markers() {
     #[error(transparent)]
     struct Wrapper(Fail<Child, lanes!(Denied, Fatal)>);
     let boxed: Box<dyn Error + Send + Sync> = Box::new(Wrapper(errlanes::Denied::default().into()));
-    assert_eq!(errlanes::lane_of(boxed.as_ref()), Some(Lane::Denied));
+    assert_eq!(errlanes::Lane::of(boxed.as_ref()), Some(Lane::Denied));
     let boxed: Box<dyn Error + Send + Sync> = Box::new(Wrapper(Fatal::invariant("broken").into()));
-    assert_eq!(errlanes::lane_of(boxed.as_ref()), Some(Lane::Fatal));
+    assert_eq!(errlanes::Lane::of(boxed.as_ref()), Some(Lane::Fatal));
 }
 
 #[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]

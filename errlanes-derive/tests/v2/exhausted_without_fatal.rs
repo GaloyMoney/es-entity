@@ -9,9 +9,9 @@ enum Child {
 }
 fn main() {
     // A profile with Transient but no Fatal has nowhere to put an exhausted
-    // retry, so it cannot be settled (and `Laned`, hence `retry`, excludes it).
+    // retry, so it cannot be narrowed (and `Laned`, hence `retry`, excludes it).
     let _ = Fail::<Child, lanes!(Transient)>::Transient(errlanes::Transient::new(
         errlanes::TransientKind::Deadlock,
     ))
-    .settle(2);
+    .narrow_transient(2);
 }

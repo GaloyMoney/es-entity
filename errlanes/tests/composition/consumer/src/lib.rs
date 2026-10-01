@@ -51,7 +51,7 @@ pub fn check() {
         Err(Fail::Rejected(Api::PostVelocityLimit(_)))
     ));
     assert_eq!(
-        errlanes::lane_of(&fault().unwrap_err()),
+        errlanes::Lane::of(&fault().unwrap_err()),
         Some(errlanes::Lane::Fatal)
     );
     #[cfg(feature = "extra")]
