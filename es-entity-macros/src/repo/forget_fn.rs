@@ -235,7 +235,7 @@ impl ToTokens for ForgetFn<'_> {
                     let events = entity.events_mut().forget_and_take(
                         #event_type::forget_forgettable_payloads
                     );
-                    let entity: #entity_type = es_entity::TryFromEvents::try_from_events(events).map_err(es_entity::hydration_fatal)?;
+                    let entity: #entity_type = es_entity::TryFromEvents::try_from_events(events)?;
                 },
                 quote! {},
             ),

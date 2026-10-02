@@ -405,6 +405,11 @@ pub trait EsRepo: Send {
     /// return `Result<T, crate::RepoReadError>` — reads never reject, so there is
     /// no `NotFound` rejection, only `Fatal`.
     type ConstraintViolation: crate::errlanes::Rejection;
+    /// The repo's write classification made public and reusable: a consumer
+    /// hand-writing a query against the repo's own tables classifies its
+    /// `sqlx::Error` the same way a generated write op would, with
+    /// `.classify::<Self::WriteError>()?`.
+    type WriteError: crate::errlanes::Classify;
     type EsQueryFlavor;
 
     fn nested_tree_spec() -> TreeSpec;

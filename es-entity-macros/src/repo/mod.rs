@@ -262,6 +262,7 @@ impl ToTokens for EsRepo<'_> {
         let tree_child_tys: Vec<_> = self.opts.all_nested().map(|f| &f.ty).collect();
 
         let constraint_violation = self.opts.constraint_violation();
+        let write_error = self.opts.write_error();
         let error_types = self.error_types.generate();
 
         let scope_type = scope::ScopeType::new(self.opts);
@@ -446,6 +447,7 @@ impl ToTokens for EsRepo<'_> {
             impl #impl_generics es_entity::EsRepo for #repo #ty_generics #where_clause {
                 type Entity = #entity;
                 type ConstraintViolation = #constraint_violation;
+                type WriteError = #write_error;
                 type EsQueryFlavor = #es_query_flavor;
 
                #[inline(always)]

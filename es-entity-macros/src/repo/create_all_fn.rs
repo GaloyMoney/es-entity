@@ -186,7 +186,7 @@ impl ToTokens for CreateAllFn<'_> {
             quote! {
                 let mut n_events_by_entity: Vec<usize> = Vec::new();
                 for (events, n_events) in all_events.into_iter().zip(n_persisted) {
-                    let entity = Self::hydrate_entity(events).map_err(es_entity::hydration_fatal)?;
+                    let entity = Self::hydrate_entity(events)?;
                     entities.push(entity);
                     n_events_by_entity.push(n_events);
                 }
@@ -201,7 +201,7 @@ impl ToTokens for CreateAllFn<'_> {
         } else {
             quote! {
                 for (events, _n_events) in all_events.into_iter().zip(n_persisted) {
-                    let entity = Self::hydrate_entity(events).map_err(es_entity::hydration_fatal)?;
+                    let entity = Self::hydrate_entity(events)?;
                     entities.push(entity);
                 }
 
@@ -447,7 +447,7 @@ mod tests {
                     }
 
                     for (events, _n_events) in all_events.into_iter().zip(n_persisted) {
-                        let entity = Self::hydrate_entity(events).map_err(es_entity::hydration_fatal)?;
+                        let entity = Self::hydrate_entity(events)?;
                         entities.push(entity);
                     }
 

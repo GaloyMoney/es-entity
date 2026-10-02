@@ -11,7 +11,8 @@ pub type RepoReadError = errlanes::Fault<errlanes::lanes!(Transient, Fatal)>;
 pub type RepoWriteError<C> = errlanes::Fail<C, errlanes::lanes!(Transient, Fatal)>;
 
 /// Error type for entity hydration failures (reconstructing entities from events).
-#[derive(Error, Debug)]
+#[derive(Error, Debug, errlanes::Classify)]
+#[classify(fatal(CorruptState))]
 pub enum EntityHydrationError {
     #[error("EntityHydrationError - UninitializedFieldError: {0}")]
     UninitializedFieldError(#[from] derive_builder::UninitializedFieldError),
@@ -39,8 +40,9 @@ pub enum EntityHydrationError {
     NoEvents,
 }
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, errlanes::Classify)]
 #[error("CursorDestructureError: couldn't turn {0} into {1}")]
+#[classify(fatal(Config))]
 pub struct CursorDestructureError(&'static str, &'static str);
 
 impl From<(&'static str, &'static str)> for CursorDestructureError {
@@ -126,15 +128,14 @@ pub enum ConstraintKind {
 /// propagate it with `?`: it converts into any `errlanes::Fault` or
 /// `errlanes::Fail<D>` as `Fatal(Invariant)`.
 ///
-/// **Never `impl errlanes::Rejection for NotFound`** — the `From<NotFound>`
-/// impls below are only orphan-legal, and only skip errlanes' blanket
-/// `impl<D: Rejection> From<D> for Fail<D>`, because `NotFound: Rejection` is
-/// not implemented (so it can never collide with that blanket at `D =
-/// NotFound`).
+/// **Never `impl errlanes::Rejection for NotFound`** — `#[derive(Classify)]`
+/// below makes `NotFound` a fault wrapper, and a type that is both a
+/// `Rejection` and a direct `Classify` impl conflicts (`E0119`).
 ///
 /// **Security note:** `value`'s `Debug` may contain PII (e.g. an email
 /// address looked up by a caller-supplied value). `Display` omits it.
-#[derive(Debug)]
+#[derive(Debug, errlanes::Classify)]
+#[classify(fatal(Invariant))]
 pub struct NotFound {
     pub entity: &'static str,
     pub column: Option<&'static str>,
@@ -165,37 +166,6 @@ impl std::fmt::Display for NotFound {
 }
 
 impl std::error::Error for NotFound {}
-
-impl<L: errlanes::LaneProfile<Fatal = errlanes::Fatal>> From<NotFound> for errlanes::Fault<L> {
-    fn from(n: NotFound) -> Self {
-        errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, n).into()
-    }
-}
-
-impl<D, L: errlanes::LaneProfile<Fatal = errlanes::Fatal>> From<NotFound> for errlanes::Fail<D, L> {
-    fn from(n: NotFound) -> Self {
-        errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, n).into()
-    }
-}
-
-#[doc(hidden)]
-pub fn hydration_fatal(e: EntityHydrationError) -> crate::RepoReadError {
-    errlanes::Fatal::from_error(errlanes::FatalKind::CorruptState, e).into()
-}
-
-#[doc(hidden)]
-pub fn cursor_decode_fatal(e: CursorDestructureError) -> crate::RepoReadError {
-    errlanes::Fatal::from_error(errlanes::FatalKind::Config, e).into()
-}
-
-#[doc(hidden)]
-pub fn not_found_fatal(
-    entity: &'static str,
-    column: Option<&'static str>,
-    value: String,
-) -> crate::RepoReadError {
-    NotFound::new(entity, column, value).into()
-}
 
 #[doc(hidden)]
 pub fn fatal_is_not_found(fatal: &errlanes::Fatal) -> bool {

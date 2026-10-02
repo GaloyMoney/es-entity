@@ -118,6 +118,91 @@ profile!(true, true, true; Denied, Transient, Fatal);
 
 pub type AllLanes = Profile<true, true, true>;
 
+/// No lanes at all — the profile of a pure [`crate::Rejection`]: everything
+/// about it is rejected, nothing is a fault.
+pub type NoLanes = Profile<false, false, false>;
+
+/// The lane-wise union of two profiles — `derive(Classify)` infers a
+/// `delegate` variant's contribution to the enclosing `Lanes` this way, and
+/// a `delegate` enum's full `Lanes` as the union of every variant's. Sealed,
+/// closed over the eight profiles (no `generic_const_exprs`): each pair is
+/// written out by [`union_impl`](self) below.
+#[doc(hidden)]
+pub trait Union<Other: LaneProfile>: LaneProfile {
+    type Out: LaneProfile;
+}
+macro_rules! union_impl {
+    ($d1:literal,$t1:literal,$f1:literal; $d2:literal,$t2:literal,$f2:literal) => {
+        impl Union<Profile<$d2, $t2, $f2>> for Profile<$d1, $t1, $f1> {
+            type Out = Profile<{ $d1 || $d2 }, { $t1 || $t2 }, { $f1 || $f2 }>;
+        }
+    };
+}
+union_impl!(false,false,false; false,false,false);
+union_impl!(false,false,false; false,false,true);
+union_impl!(false,false,false; false,true,false);
+union_impl!(false,false,false; false,true,true);
+union_impl!(false,false,false; true,false,false);
+union_impl!(false,false,false; true,false,true);
+union_impl!(false,false,false; true,true,false);
+union_impl!(false,false,false; true,true,true);
+union_impl!(false,false,true; false,false,false);
+union_impl!(false,false,true; false,false,true);
+union_impl!(false,false,true; false,true,false);
+union_impl!(false,false,true; false,true,true);
+union_impl!(false,false,true; true,false,false);
+union_impl!(false,false,true; true,false,true);
+union_impl!(false,false,true; true,true,false);
+union_impl!(false,false,true; true,true,true);
+union_impl!(false,true,false; false,false,false);
+union_impl!(false,true,false; false,false,true);
+union_impl!(false,true,false; false,true,false);
+union_impl!(false,true,false; false,true,true);
+union_impl!(false,true,false; true,false,false);
+union_impl!(false,true,false; true,false,true);
+union_impl!(false,true,false; true,true,false);
+union_impl!(false,true,false; true,true,true);
+union_impl!(false,true,true; false,false,false);
+union_impl!(false,true,true; false,false,true);
+union_impl!(false,true,true; false,true,false);
+union_impl!(false,true,true; false,true,true);
+union_impl!(false,true,true; true,false,false);
+union_impl!(false,true,true; true,false,true);
+union_impl!(false,true,true; true,true,false);
+union_impl!(false,true,true; true,true,true);
+union_impl!(true,false,false; false,false,false);
+union_impl!(true,false,false; false,false,true);
+union_impl!(true,false,false; false,true,false);
+union_impl!(true,false,false; false,true,true);
+union_impl!(true,false,false; true,false,false);
+union_impl!(true,false,false; true,false,true);
+union_impl!(true,false,false; true,true,false);
+union_impl!(true,false,false; true,true,true);
+union_impl!(true,false,true; false,false,false);
+union_impl!(true,false,true; false,false,true);
+union_impl!(true,false,true; false,true,false);
+union_impl!(true,false,true; false,true,true);
+union_impl!(true,false,true; true,false,false);
+union_impl!(true,false,true; true,false,true);
+union_impl!(true,false,true; true,true,false);
+union_impl!(true,false,true; true,true,true);
+union_impl!(true,true,false; false,false,false);
+union_impl!(true,true,false; false,false,true);
+union_impl!(true,true,false; false,true,false);
+union_impl!(true,true,false; false,true,true);
+union_impl!(true,true,false; true,false,false);
+union_impl!(true,true,false; true,false,true);
+union_impl!(true,true,false; true,true,false);
+union_impl!(true,true,false; true,true,true);
+union_impl!(true,true,true; false,false,false);
+union_impl!(true,true,true; false,false,true);
+union_impl!(true,true,true; false,true,false);
+union_impl!(true,true,true; false,true,true);
+union_impl!(true,true,true; true,false,false);
+union_impl!(true,true,true; true,false,true);
+union_impl!(true,true,true; true,true,false);
+union_impl!(true,true,true; true,true,true);
+
 /// `L` with its transient lane narrowed away — sugar for
 /// [`LaneProfile::WithoutTransient`], which is what `narrow_transient` and
 /// `retry` return through. Narrowing is a projection on the profile, not a

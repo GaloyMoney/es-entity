@@ -436,6 +436,19 @@ impl RepositoryOptions {
         )
     }
 
+    /// The generated `{Entity}WriteError` ident: the repo's write
+    /// classification (`Self::ConstraintViolation`, an optimistic-conflict
+    /// retry, or an unclassified fault) made public, so a consumer
+    /// hand-writing a query against the repo's tables can
+    /// `.classify::<{Entity}WriteError>()?` it and get the same
+    /// classification a generated write op does.
+    pub fn write_error(&self) -> syn::Ident {
+        syn::Ident::new(
+            &format!("{}WriteError", self.entity_ident),
+            Span::call_site(),
+        )
+    }
+
     /// The generated scope enum ident (`{Entity}Scope`), entity-named like
     /// the other generated companion types (`{Entity}ConstraintViolation`,
     /// `{Entity}ByIdCursor`, ...).

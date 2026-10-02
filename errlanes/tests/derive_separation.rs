@@ -1,27 +1,5 @@
 use errlanes::{Lift, Rejection};
 
-// Conversion-only enums need neither Error nor Rejection, including their payloads.
-#[derive(Debug, PartialEq)]
-enum Input<T> {
-    Value(T),
-}
-
-#[derive(Debug, PartialEq, errlanes::Lift)]
-#[lift(Input::<T>)]
-enum Output<T> {
-    #[lift(Input::<T>::Value)]
-    Renamed(T),
-}
-
-#[test]
-fn lift_works_without_rejection_or_error() {
-    assert_eq!(
-        Output::from(Input::Value(vec![1, 2])),
-        Output::Renamed(vec![1, 2])
-    );
-    assert_eq!(Output::lift(Input::Value(42)), Ok(Output::Renamed(42)));
-}
-
 #[derive(Debug, thiserror::Error, errlanes::Rejection)]
 enum Source {
     #[error("source {0}")]
@@ -131,5 +109,34 @@ fn partial_lift_alone_retains_the_unmapped_input() {
     assert_eq!(
         PartialOutput::lift(PartialInput::Unhandled("original".into())),
         Err(PartialInput::Unhandled("original".into())),
+    );
+}
+
+// A whole-value arm: `Payload` is a struct source (not an enum variant), so
+// `#[lift(Payload)]` with no variant suffix wraps the entire value. Lift
+// sources are rejections, so `Payload` derives one.
+#[derive(Debug, PartialEq, thiserror::Error, errlanes::Rejection)]
+#[error("invalid payload")]
+#[rejection(code = "INVALID_PAYLOAD")]
+struct Payload(u32);
+
+#[derive(Debug, PartialEq, thiserror::Error, errlanes::Lift)]
+#[error("job")]
+#[lift(Payload)]
+enum JobRejection {
+    #[error("invalid payload")]
+    #[lift(Payload)]
+    InvalidPayload(Payload),
+}
+
+#[test]
+fn whole_value_lift_wraps_a_struct_source_directly() {
+    assert_eq!(
+        JobRejection::from(Payload(7)),
+        JobRejection::InvalidPayload(Payload(7))
+    );
+    assert_eq!(
+        JobRejection::lift(Payload(7)),
+        Ok(JobRejection::InvalidPayload(Payload(7)))
     );
 }

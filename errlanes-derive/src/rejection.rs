@@ -5,12 +5,33 @@ use quote::quote;
 use syn::{Field, Ident, Path};
 
 #[derive(Debug, FromDeriveInput)]
-#[darling(attributes(rejection), supports(enum_any))]
+#[darling(attributes(rejection), supports(enum_any, struct_any))]
 struct RejectionInput {
     ident: Ident,
     data: ast::Data<RejectionVariant, ()>,
     #[darling(default)]
     code_prefix: Option<String>,
+    /// Required for a struct: there is no variant to carry a leaf code.
+    #[darling(default)]
+    code: Option<String>,
+    #[darling(default)]
+    level: Option<String>,
+}
+
+fn level_expr(level: &Option<String>, span: &Ident) -> darling::Result<TokenStream> {
+    Ok(match level.as_deref() {
+        Some("trace") => quote! { errlanes::Level::Trace },
+        Some("debug") => quote! { errlanes::Level::Debug },
+        Some("info") | None => quote! { errlanes::Level::Info },
+        Some("warn") => quote! { errlanes::Level::Warn },
+        Some("error") => quote! { errlanes::Level::Error },
+        Some(other) => {
+            return Err(darling::Error::custom(format!(
+                "unknown rejection level `{other}`, expected one of trace/debug/info/warn/error"
+            ))
+            .with_span(span));
+        }
+    })
 }
 
 #[derive(Debug, FromVariant)]
@@ -73,17 +94,59 @@ impl RejectionVariant {
 pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
     let input = RejectionInput::from_derive_input(ast)?;
     let ident = &input.ident;
-    let schema = crate::composition::schema(ast).map_err(darling::Error::from)?;
     let code_ident = quote::format_ident!("{}Code", ident);
+
     let variants = match &input.data {
         ast::Data::Enum(v) => v,
         ast::Data::Struct(_) => {
-            return Err(
-                darling::Error::custom("Rejection can only be derived for enums")
-                    .with_span(&input.ident),
-            );
+            // A struct is one outcome: no variant to carry a leaf code, no
+            // composition schema (that is enum-only — a struct cannot be a
+            // diamond's source or destination).
+            let code = input.code.clone().ok_or_else(|| {
+                darling::Error::custom(
+                    "a rejection struct requires #[rejection(code = \"..\")]: there is no \
+                     variant to derive one from",
+                )
+                .with_span(&input.ident)
+            })?;
+            let level = level_expr(&input.level, ident)?;
+            return Ok(quote! {
+                #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+                pub enum #code_ident { #ident }
+
+                impl #code_ident {
+                    pub const ALL: &'static [&'static str] = &[#code];
+                }
+
+                impl std::fmt::Display for #code_ident {
+                    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.write_str((*self).into())
+                    }
+                }
+
+                impl From<#code_ident> for &'static str {
+                    fn from(code: #code_ident) -> &'static str {
+                        match code {
+                            #code_ident::#ident => #code,
+                        }
+                    }
+                }
+
+                impl errlanes::Rejection for #ident {
+                    type Code = #code_ident;
+
+                    fn code(&self) -> #code_ident {
+                        #code_ident::#ident
+                    }
+
+                    fn level(&self) -> errlanes::Level {
+                        #level
+                    }
+                }
+            });
         }
     };
+    let schema = crate::composition::schema(ast).map_err(darling::Error::from)?;
 
     let mut code_variants = Vec::new();
     let mut into_str_arms = Vec::new();
@@ -141,6 +204,12 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             ast::Style::Struct => quote!(Self::#variant_ident { #(#fields),* }),
         };
         let mut forward = v.forward.clone();
+        // A whole-value `#[lift(Payload)]` (one segment: a struct source, no
+        // variant to forward from) identifies its metadata source the same
+        // way `delegate` does — by the field's own `Rejection` impl, not by
+        // a variant's `RejectionMetadata<ID>` — since there is no variant ID
+        // to look one up by.
+        let mut whole_value_source: Option<Path> = None;
         // Lift owns conversion generation. Its mapping also identifies the
         // default metadata source; no Lift implementation is required here.
         if forward.is_none() && v.code.is_none() && v.level.is_none() && !v.delegate {
@@ -159,7 +228,11 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             }
             if let Some(mapping) = mappings.into_iter().next() {
                 if mapping.with.is_none() {
-                    forward = Some(mapping.case);
+                    if mapping.case.segments.len() >= 2 {
+                        forward = Some(mapping.case);
+                    } else {
+                        whole_value_source = Some(mapping.case);
+                    }
                 } else {
                     return Err(darling::Error::custom(
                         "a payload mapper requires an explicit rejection code",
@@ -177,6 +250,14 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             (
                 quote!(#code_ident::#variant_ident(<#source as errlanes::RejectionMetadata<#source_id>>::field_code((#(#fields,)*)))),
                 quote!(<#source as errlanes::RejectionMetadata<#source_id>>::field_level((#(#fields,)*))),
+            )
+        } else if let Some(source) = &whole_value_source {
+            let inner = &fields[0];
+            code_variants.push(quote!(#variant_ident(<#source as errlanes::Rejection>::Code)));
+            into_str_arms.push(quote!(#code_ident::#variant_ident(inner) => inner.into()));
+            (
+                quote!(#code_ident::#variant_ident(<#source as errlanes::Rejection>::code(#inner))),
+                quote!(<#source as errlanes::Rejection>::level(#inner)),
             )
         } else if let Some(inner_ty) = v.delegate_ty() {
             let inner = &fields[0];

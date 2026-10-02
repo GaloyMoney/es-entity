@@ -249,7 +249,7 @@ impl ToTokens for FindByFn<'_> {
                         quote! {}
                     };
                     quote! {
-                        let __entity = #fetch_optional_call.ok_or_else(|| es_entity::not_found_fatal(
+                        let __entity = #fetch_optional_call.ok_or_else(|| es_entity::NotFound::new(
                             #entity_name_str,
                             Some(#column_name_str),
                             {
@@ -402,7 +402,7 @@ mod tests {
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                     )
-                    .fetch_optional(op).await?.ok_or_else(|| es_entity::not_found_fatal(
+                    .fetch_optional(op).await?.ok_or_else(|| es_entity::NotFound::new(
                         "Entity",
                         Some("id"),
                         {
@@ -499,7 +499,7 @@ mod tests {
                         "SELECT id FROM entities WHERE email = $1",
                         email as &str,
                     )
-                    .fetch_optional(op).await?.ok_or_else(|| es_entity::not_found_fatal(
+                    .fetch_optional(op).await?.ok_or_else(|| es_entity::NotFound::new(
                         "Entity",
                         Some("email"),
                         {
@@ -593,7 +593,7 @@ mod tests {
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
                     )
-                    .fetch_optional(op).await?.ok_or_else(|| es_entity::not_found_fatal(
+                    .fetch_optional(op).await?.ok_or_else(|| es_entity::NotFound::new(
                         "Entity",
                         Some("id"),
                         {
@@ -747,7 +747,7 @@ mod tests {
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                     )
-                    .fetch_optional(op).await?.ok_or_else(|| es_entity::not_found_fatal(
+                    .fetch_optional(op).await?.ok_or_else(|| es_entity::NotFound::new(
                         "Entity",
                         Some("id"),
                         {

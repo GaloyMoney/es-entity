@@ -25,10 +25,15 @@ mdbook-test = ["dep:anyhow"]
 # turning on repo-span instrumentation.
 errlanes-tracing = ["errlanes/tracing"]
 instrument = ["es-entity-macros/instrument", "dep:tracing", "errlanes-tracing"]
+# Re-exports of errlanes' blessed foreign-error `Classify` impls, so a
+# consumer (job, lana) enables them through es-entity rather than taking a
+# direct errlanes dependency.
+errlanes-classify-serde-json = ["errlanes/classify-serde-json"]
+errlanes-classify-reqwest = ["errlanes/classify-reqwest"]
 
 [dependencies]
 es-entity-macros = { workspace = true }
-errlanes = { workspace = true, features = ["sqlx", "derive"] }
+errlanes = { workspace = true, features = ["classify-sqlx", "derive"] }
 
 async-stream = { workspace = true }
 futures-core = { workspace = true }
@@ -66,7 +71,7 @@ futures = { workspace = true }
 tracing-subscriber = { workspace = true }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 proptest = "1"
-errlanes = { workspace = true, features = ["sqlx", "derive"] }
+errlanes = { workspace = true, features = ["classify-sqlx", "derive"] }
 
 [[bench]]
 name = "context"
@@ -108,6 +113,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-opentelemetry = { version = "0.34.0", default-features = false }
 opentelemetry = { version = "0.33.0", default-features = false }
 opentelemetry_sdk = { version = "0.33.0", features = ["rt-tokio"] }
+reqwest = { version = "0.12", default-features = false }
 futures = "0.3"
 futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }

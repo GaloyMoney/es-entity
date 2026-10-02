@@ -118,14 +118,14 @@ impl<'a> SnapshotFns<'a> {
                 #query_call
                     .fetch_optional(op)
                     .await?
-                    .ok_or_else(|| es_entity::not_found_fatal(
+                    .ok_or_else(|| es_entity::NotFound::new(
                         #entity_name,
                         Some("id"),
                         {
                             use es_entity::ToNotFoundValueFallback;
                             es_entity::NotFoundValue(id).to_not_found_value()
                         },
-                    ))
+                    ).into())
             }
 
             /// Writes `capture()`'s result for an entity with no staged

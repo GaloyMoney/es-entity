@@ -1,0 +1,7 @@
+error[E0271]: type mismatch resolving `<Validation as Classify>::Rejected == Infallible`
+  --> tests/coherence/classify_u1_rejection_into_fault.rs:10:6
+   |
+10 |     r?;
+   |      ^ expected `Infallible`, found `Validation`
+   |
+   = note: required for `Fault<Profile<false, true, true>>` to implement `From<Validation>`

@@ -43,6 +43,40 @@ impl Users {
 }
 ```
 
+A foreign error with its own lane table — `serde_json::Error`, say, encoding
+the outbox payload — wraps in a local `#[derive(errlanes::Classify)]` type
+instead of a hand-picked kind, and enters with `.classify::<W>()?`:
+
+```rust,ignore
+#[derive(Debug, thiserror::Error, errlanes::Classify)]
+#[error("outbox payload did not encode: {0}")]
+#[classify(fatal(Invariant), from)]
+struct OutboxEncode(#[source] serde_json::Error);
+
+impl Users {
+    async fn on_persist<OP: es_entity::AtomicOperation>(
+        &self,
+        op: &mut OP,
+        entity: &User,
+        new_events: es_entity::LastPersisted<'_, UserEvent>,
+    ) -> Result<(), errlanes::Fault<errlanes::lanes!(Transient, Fatal)>> {
+        use errlanes::ClassifyResult;
+        for event in new_events {
+            let payload = serde_json::to_value(event.event).classify::<OutboxEncode>()?;
+            sqlx::query!(
+                "INSERT INTO user_outbox (user_id, event_type, payload) VALUES ($1, $2, $3)",
+                entity.id as UserId,
+                event.event.event_type(),
+                payload,
+            )
+            .execute(op.as_executor())
+            .await?;
+        }
+        Ok(())
+    }
+}
+```
+
 ### Which operations run it
 
 The hook runs on every generated operation that persists events: `create`, `create_all`, `update`, `update_all`, soft `delete`, and — for [forgettable](forgettable.md) repos — `forget`. On `forget` it runs after the payload delete and entity rebuild, so it observes the forgotten representation. An operation that persists no events skips the hook.

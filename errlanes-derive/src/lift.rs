@@ -79,9 +79,25 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                     "source variant mapped more than once",
                 ));
             }
-            let mut owner = mapping.case.clone();
-            owner.segments.pop();
-            owner.segments.pop_punct();
+            // `#[lift(Payload)]` (the registered source itself, no variant
+            // suffix) is a whole-value arm: `Payload` is a struct source,
+            // and the entire value becomes the one field of the destination
+            // variant. `#[lift(Source::Variant)]` is the per-variant
+            // forwarding arm. A bare source matching a registration wins the
+            // whole-value reading; otherwise the last segment is popped off
+            // and matched as a variant, as before.
+            let case_key = mapping.case.to_token_stream().to_string();
+            let whole_value = registrations
+                .iter()
+                .any(|r| r.source.to_token_stream().to_string() == case_key);
+            let owner = if whole_value {
+                mapping.case.clone()
+            } else {
+                let mut owner = mapping.case.clone();
+                owner.segments.pop();
+                owner.segments.pop_punct();
+                owner
+            };
             if !registrations.iter().any(|r| {
                 r.source.to_token_stream().to_string() == owner.to_token_stream().to_string()
             }) {
@@ -90,7 +106,7 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                     "source family requires enum-level #[lift(Source)] registration",
                 ));
             }
-            mappings.push((owner, variant, mapping));
+            mappings.push((owner, whole_value, variant, mapping));
         }
     }
     let mut out = TokenStream::new();
@@ -102,7 +118,7 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             return Err(syn::Error::new_spanned(source, "duplicate lift source"));
         }
         let mut arms = Vec::new();
-        for (owner, variant, mapping) in &mappings {
+        for (owner, whole_value, variant, mapping) in &mappings {
             if owner.to_token_stream().to_string() != key {
                 continue;
             }
@@ -116,6 +132,25 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             let arm = if let Some(mapper) = &mapping.with {
                 // The mapper consumes the whole selected source; supports genuine shape changes.
                 quote! { value @ #case { .. } => Ok(#mapper(value)) }
+            } else if *whole_value {
+                // `Payload` is a struct source: the whole value becomes the
+                // one field of the destination variant.
+                match &variant.fields {
+                    Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
+                        quote! { value @ #case { .. } => Ok(Self::#dest(value)) }
+                    }
+                    Fields::Named(fields) if fields.named.len() == 1 => {
+                        let field = &fields.named[0].ident;
+                        quote! { value @ #case { .. } => Ok(Self::#dest { #field: value }) }
+                    }
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            &variant.ident,
+                            "a whole-value lift (`#[lift(Source)]` with no variant) needs \
+                             exactly one destination field to hold the source value",
+                        ));
+                    }
+                }
             } else {
                 match &variant.fields {
                     Fields::Unit => quote! { #case => Ok(Self::#dest) },

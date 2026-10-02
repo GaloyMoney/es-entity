@@ -107,11 +107,12 @@ impl Fault {
     /// 1. A lane payload anywhere in the chain wins, carried through intact
     ///    — kind, context, and (now `Send`/`Sync`, having been cloned out)
     ///    its own original source.
-    /// 2. Else, with the `sqlx` feature, the first [`::sqlx::Error`] anywhere
-    ///    in the chain is classified exactly as
-    ///    `classify_sqlx_fault`(crate::sqlx) would — with the error's
-    ///    message as `context` in place of the source this function cannot
-    ///    move out of a shared reference.
+    /// 2. Else, for each blessed foreign type whose `classify-*` feature is
+    ///    enabled (`sqlx::Error`, `serde_json::Error`, `reqwest::Error`, in
+    ///    that order), the first one found anywhere in the chain is
+    ///    classified exactly as that feature's `impl Classify` would — with
+    ///    the error's message as `context` in place of the source this
+    ///    function cannot move out of a shared reference.
     /// 3. Else [`Fatal`]`(`[`FatalKind::Dependency`]`)`, with
     ///    `message_chain` (private) as `context`.
     ///
@@ -125,12 +126,32 @@ impl Fault {
         if let Some(f) = find_in(e) {
             return f;
         }
-        #[cfg(feature = "sqlx")]
+        #[cfg(feature = "classify-sqlx")]
         {
             let mut cur: Option<&(dyn Error + 'static)> = Some(e);
             while let Some(x) = cur {
                 if let Some(sql) = x.downcast_ref::<::sqlx::Error>() {
                     return crate::sqlx::classify_sqlx_ref(sql).widen();
+                }
+                cur = x.source();
+            }
+        }
+        #[cfg(feature = "classify-serde-json")]
+        {
+            let mut cur: Option<&(dyn Error + 'static)> = Some(e);
+            while let Some(x) = cur {
+                if let Some(json) = x.downcast_ref::<::serde_json::Error>() {
+                    return crate::serde_json::classify_serde_json_ref(json).widen();
+                }
+                cur = x.source();
+            }
+        }
+        #[cfg(feature = "classify-reqwest")]
+        {
+            let mut cur: Option<&(dyn Error + 'static)> = Some(e);
+            while let Some(x) = cur {
+                if let Some(req) = x.downcast_ref::<::reqwest::Error>() {
+                    return crate::reqwest::classify_reqwest_ref(req).widen();
                 }
                 cur = x.source();
             }

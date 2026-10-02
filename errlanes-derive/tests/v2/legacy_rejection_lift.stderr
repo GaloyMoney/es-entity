@@ -1,4 +1,4 @@
-error: Unknown field: `lift`. Available values: `code_prefix`
+error: Unknown field: `lift`. Available values: `code`, `code_prefix`, `level`
  --> tests/v2/legacy_rejection_lift.rs:2:13
   |
 2 | #[rejection(lift(Source))]

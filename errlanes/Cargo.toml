@@ -11,13 +11,17 @@ categories = ["data-structures"]
 [features]
 default = ["derive"]
 derive = ["dep:errlanes-derive"]
-sqlx = ["dep:sqlx"]
+classify-sqlx = ["dep:sqlx"]
+classify-serde-json = ["dep:serde_json"]
+classify-reqwest = ["dep:reqwest"]
 tracing = ["dep:tracing"]
 
 [dependencies]
 errlanes-derive = { workspace = true, optional = true }
 
 sqlx = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 # "attributes" is the `#[tracing::instrument]` re-export `#[errlanes::instrument]`
 # expands into; Cargo features cannot be conditioned on both `derive` and
 # `tracing` at once, so it rides along with `tracing` itself.

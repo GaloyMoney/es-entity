@@ -96,7 +96,7 @@ where
             return Ok(None);
         }
 
-        EntityEvents::load_first(rows.into_iter()).map_err(crate::error::hydration_fatal)
+        EntityEvents::load_first(rows.into_iter()).map_err(Into::into)
     }
 
     async fn fetch_n_inner(
@@ -106,7 +106,7 @@ where
     ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), crate::RepoReadError> {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
-        EntityEvents::load_n(rows.into_iter(), first).map_err(crate::error::hydration_fatal)
+        EntityEvents::load_n(rows.into_iter(), first).map_err(Into::into)
     }
 
     async fn fetch_tree_rows(
@@ -262,9 +262,7 @@ where
         include_deleted: bool,
     ) -> Result<Option<<Repo as EsRepo>::Entity>, crate::RepoReadError> {
         let (root, mut by_tag) = self.fetch_tree_rows(op, include_deleted).await?;
-        let Some(entity) = EntityEvents::load_first::<<Repo as EsRepo>::Entity>(root)
-            .map_err(crate::error::hydration_fatal)?
-        else {
+        let Some(entity) = EntityEvents::load_first::<<Repo as EsRepo>::Entity>(root)? else {
             return Ok(None);
         };
         let mut entities = [entity];
@@ -281,8 +279,7 @@ where
         include_deleted: bool,
     ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), crate::RepoReadError> {
         let (root, mut by_tag) = self.fetch_tree_rows(op, include_deleted).await?;
-        let (mut entities, more) = EntityEvents::load_n::<<Repo as EsRepo>::Entity>(root, first)
-            .map_err(crate::error::hydration_fatal)?;
+        let (mut entities, more) = EntityEvents::load_n::<<Repo as EsRepo>::Entity>(root, first)?;
         let mut cursor = 1i32;
         <Repo as EsRepo>::hydrate_nested_from_rows(&mut by_tag, &mut cursor, &mut entities)?;
         Ok((entities, more))

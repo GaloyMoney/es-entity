@@ -175,6 +175,7 @@ impl<'a> ErrorTypes<'a> {
         }
         let fields: Vec<_> = columns.iter().map(|c| c.name()).collect();
         let types: Vec<_> = columns.iter().map(|c| c.ty()).collect();
+        let write_error = write_error_type(opts, &cv);
         quote! {
             #(#payloads)*
             #[doc(hidden)]
@@ -191,6 +192,83 @@ impl<'a> ErrorTypes<'a> {
                 #[doc(hidden)]
                 pub fn with_attempted(self, values: #values) -> Self {
                     match self { #(#set_values,)* #[allow(unreachable_patterns)] other => other }
+                }
+            }
+            #write_error
+        }
+    }
+}
+
+/// `{Entity}WriteError`: the pattern `classify_create_write`/
+/// `classify_update_write` already apply, made public and reusable. A
+/// consumer hand-writing a query against the repo's own tables classifies
+/// its `sqlx::Error` the same way a generated write op would:
+/// `.classify::<{Entity}WriteError>()?`.
+///
+/// Unlike the create path's private classifier, an events-table unique
+/// violation here is always `Conflict` (optimistic-conflict retry) — the
+/// create-specific "duplicate id" reading of that same violation is
+/// particular to a brand-new entity's first write and stays in
+/// `classify_create_write`.
+fn write_error_type(opts: &RepositoryOptions, constraint_violation: &syn::Ident) -> TokenStream {
+    let write_error = opts.write_error();
+    let events_table = opts
+        .events_table_name()
+        .rsplit('.')
+        .next()
+        .expect("rsplit yields at least one element");
+    quote! {
+        #[derive(Debug, es_entity::errlanes::Classify)]
+        pub enum #write_error {
+            #[classify(delegate)]
+            Constraint(#constraint_violation),
+            /// The events table's `(id, sequence)` unique constraint fired —
+            /// another writer claimed the next sequence first.
+            #[classify(transient(OptimisticConflict))]
+            Conflict(sqlx::Error),
+            #[classify(delegate)]
+            Other(sqlx::Error),
+        }
+
+        impl std::fmt::Display for #write_error {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Self::Constraint(e) => std::fmt::Display::fmt(e, f),
+                    Self::Conflict(e) => write!(f, "optimistic conflict: {e}"),
+                    Self::Other(e) => std::fmt::Display::fmt(e, f),
+                }
+            }
+        }
+
+        impl std::error::Error for #write_error {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                match self {
+                    Self::Constraint(e) => Some(e),
+                    Self::Conflict(e) => Some(e),
+                    Self::Other(e) => Some(e),
+                }
+            }
+        }
+
+        impl From<sqlx::Error> for #write_error {
+            fn from(e: sqlx::Error) -> Self {
+                match &e {
+                    sqlx::Error::Database(db_err)
+                        if db_err.is_unique_violation() && db_err.table() == Some(#events_table) =>
+                    {
+                        Self::Conflict(e)
+                    }
+                    sqlx::Error::Database(db_err)
+                        if db_err.table() != Some(#events_table)
+                            && es_entity::is_classified_constraint_violation(db_err.as_ref()) =>
+                    {
+                        let name = db_err.constraint().unwrap_or("unknown").to_owned();
+                        match #constraint_violation::from_database(e, &name) {
+                            Ok(rejection) => Self::Constraint(rejection),
+                            Err(source) => Self::Other(source),
+                        }
+                    }
+                    _ => Self::Other(e),
                 }
             }
         }

@@ -62,11 +62,25 @@ pub trait Lift<X>: Sized {
 }
 
 /// A total `From` counts as a strict lift, so one call-site method can require
-/// only `Lift` and still cover both mapping modes.
-impl<X, P: From<X>> Lift<X> for P {
+/// only `Lift` and still cover both mapping modes. Bounded to `X: Rejection`
+/// (rather than any `X`) so it does not overlap the `Lift<Infallible>`
+/// blanket below — both are needed, since a [`crate::Classify`] wrapper's
+/// rejected slot is either a `Rejection` or `Infallible` (never anything
+/// else, by `RejectedSlot`'s own two impls).
+impl<X: Rejection, P: From<X>> Lift<X> for P {
     type Unmapped = core::convert::Infallible;
     fn lift(x: X) -> Result<Self, Self::Unmapped> {
         Ok(P::from(x))
+    }
+}
+
+/// Every destination lifts an `Infallible` rejected slot trivially — this is
+/// what lets a fault-only [`crate::Classify`] wrapper satisfy the `Fail`
+/// blanket for *any* `D`, with no `Lift`/`From` declared at all.
+impl<P> Lift<core::convert::Infallible> for P {
+    type Unmapped = core::convert::Infallible;
+    fn lift(x: core::convert::Infallible) -> Result<Self, Self::Unmapped> {
+        match x {}
     }
 }
 
@@ -553,12 +567,6 @@ where
     }
 }
 
-impl<C: Rejection, D: From<C>, L: LaneProfile> From<C> for Fail<D, L> {
-    fn from(d: C) -> Self {
-        Fail::Rejected(d.into())
-    }
-}
-
 impl<D: fmt::Display, L: LaneProfile> fmt::Display for Fail<D, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -763,22 +771,10 @@ where
     }
 }
 
-/// A bare rejection is a `Fail` with no fault lanes, so it widens by the same
-/// rule. A total mapping already propagates with `?` through `From`; this is
-/// what a *partial* mapping needs, since it deliberately has no `From` — the
-/// unmapped cases become `Fatal`, so the destination must admit it. `Fail` is
-/// never a `Rejection`, so this cannot overlap the carrier impls above.
-impl<T, C: Rejection, P: Lift<C>, M: LaneProfile> WidenResult<T, Fail<P, M>> for Result<T, C>
-where
-    P::Unmapped: UnmappedInto<M::Fatal>,
-{
-    fn widen(self) -> Result<T, Fail<P, M>> {
-        self.map_err(|rejection| match P::lift(rejection) {
-            Ok(mapped) => Fail::Rejected(mapped),
-            Err(unmapped) => Fail::Fatal(unmapped.unmapped_into()),
-        })
-    }
-}
+// The bare-source impl for `Result<T, C>` (a rejection, a fault wrapper, or a
+// mixed wrapper alike) lives in `classify.rs`, generalised from `C: Rejection`
+// to `C: Classify` — a bare rejection is the `Rejected = C, Lanes = NoLanes`
+// case of that.
 
 impl<L: LaneProfile> Fault<L> {
     pub fn widen<M: LaneProfile>(self) -> Fault<M>

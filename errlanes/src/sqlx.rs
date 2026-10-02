@@ -97,17 +97,18 @@ pub(crate) fn classify_sqlx_ref(e: &::sqlx::Error) -> Fault<crate::lanes!(Transi
     }
 }
 
-impl<D, L: crate::LaneProfile<Transient = Transient, Fatal = Fatal>> From<::sqlx::Error>
-    for Fail<D, L>
-{
-    fn from(e: ::sqlx::Error) -> Self {
-        classify_sqlx_fault(e).into()
-    }
-}
+/// `sqlx::Error` never rejects — it enters the lanes with bare `?` through
+/// the `Classify` blankets (`classify.rs`), replacing the hand-written
+/// `From<sqlx::Error>` impls this feature used to carry.
+impl crate::Classify for ::sqlx::Error {
+    type Rejected = core::convert::Infallible;
+    type Lanes = crate::lanes!(Transient, Fatal);
 
-impl<L: crate::LaneProfile<Transient = Transient, Fatal = Fatal>> From<::sqlx::Error> for Fault<L> {
-    fn from(e: ::sqlx::Error) -> Self {
-        classify_sqlx_fault(e).widen()
+    fn classify(self) -> Fail<Self::Rejected, Self::Lanes> {
+        match classify_sqlx_fault(self) {
+            Fault::Transient(t) => Fail::Transient(t),
+            Fault::Fatal(x) => Fail::Fatal(x),
+        }
     }
 }
 

@@ -253,7 +253,7 @@ impl ToTokens for CreateFn<'_> {
                         .ok_or(sqlx::Error::RowNotFound)
                         .and_then(|row| row.try_get("recorded_at"))?;
                     let n_events = events.mark_new_events_persisted_at(recorded_at);
-                    let #maybe_mut_entity = Self::hydrate_entity(events).map_err(es_entity::hydration_fatal)?;
+                    let #maybe_mut_entity = Self::hydrate_entity(events)?;
 
                     #(#nested)*
 
@@ -373,7 +373,7 @@ mod tests {
                         .ok_or(sqlx::Error::RowNotFound)
                         .and_then(|row| row.try_get("recorded_at"))?;
                     let n_events = events.mark_new_events_persisted_at(recorded_at);
-                    let entity = Self::hydrate_entity(events).map_err(es_entity::hydration_fatal)?;
+                    let entity = Self::hydrate_entity(events)?;
 
                     Ok(entity)
                 }.await;
@@ -489,7 +489,7 @@ mod tests {
                         .ok_or(sqlx::Error::RowNotFound)
                         .and_then(|row| row.try_get("recorded_at"))?;
                     let n_events = events.mark_new_events_persisted_at(recorded_at);
-                    let entity = Self::hydrate_entity(events).map_err(es_entity::hydration_fatal)?;
+                    let entity = Self::hydrate_entity(events)?;
 
                     Ok(entity)
                 }.await;

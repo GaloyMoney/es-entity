@@ -93,6 +93,33 @@ to expect the other way round:
   undeserializable event — is `Fatal(CorruptState)`.
 - **An optimistic-concurrency conflict** on the events table, including a row
   that vanished between load and `update`, is `Transient(OptimisticConflict)`.
-  Every other `sqlx::Error` classifies as errlanes' `sqlx` module describes:
-  deadlocks, serialization failures, pool timeouts and lost connections are
-  transient; the rest fatal.
+  Every other `sqlx::Error` classifies as errlanes' `classify-sqlx` feature
+  describes: deadlocks, serialization failures, pool timeouts and lost
+  connections are transient; the rest fatal.
+
+## Classifying a hand-written query
+
+Every generated write op classifies its `sqlx::Error` through `{Entity}WriteError`
+— a public, `#[derive(errlanes::Classify)]` type with the same shape as the
+private classifier a generated `create`/`update` uses: delegate to the typed
+constraint enum when the violation is one the catalog knows, `Transient` on an
+events-table conflict, or fall through to errlanes' `classify-sqlx` table. A
+query you hand-write against the repository's own tables classifies its error
+the same way, with `.classify::<W>()`:
+
+```rust,ignore
+use es_entity::errlanes::ClassifyResult;
+
+async fn touch_last_seen(pool: &sqlx::PgPool, id: UserId) -> Result<(), es_entity::RepoWriteError<UserConstraintViolation>> {
+    sqlx::query!("UPDATE users SET last_seen_at = now() WHERE id = $1", id as UserId)
+        .execute(pool)
+        .await
+        .classify::<UserWriteError>()?;
+    Ok(())
+}
+```
+
+`UserWriteError`'s own `Rejected`/`Lanes` are inferred from its variants, so
+`.classify::<UserWriteError>()?` widens into any `Fail<UserConstraintViolation, L>`
+that admits `Transient` and `Fatal` — the same destination a generated write
+op returns.

@@ -213,12 +213,13 @@ assert!(matches!(fault, Fault::Fatal(_)));
 
 `Fault::classify` tries, in order: a lane payload anywhere in the error's
 `source()` chain, carried through with its kind, context and (now cloned out,
-so `Send + Sync` again) its own source intact; then, with the `sqlx` feature,
-a `sqlx::Error` anywhere in the chain, classified by the same table
-`classify_sqlx_fault` uses; then `Fatal(Dependency)`, with the error's
-`Display` chain as its context, so an error this function cannot otherwise
-classify still surfaces as something a boundary pages on, never silently as
-nothing.
+so `Send + Sync` again) its own source intact; then, for each blessed foreign
+type whose `classify-*` feature is enabled (`sqlx::Error`, `serde_json::Error`,
+`reqwest::Error`, in that order), the first one found anywhere in the chain,
+classified exactly as that feature's `impl Classify` would; then
+`Fatal(Dependency)`, with the error's `Display` chain as its context, so an
+error this function cannot otherwise classify still surfaces as something a
+boundary pages on, never silently as nothing.
 
 Call `Fault::classify` before the error crosses an `.await` or a spawn, not
 after — a `Box<dyn Error>` with no `Send` bound on its trait object cannot be
@@ -238,16 +239,36 @@ let fault: errlanes::Fault<errlanes::lanes!(Transient, Fatal)> = match runner.ru
 persist(fault).await?;
 ```
 
-## Domain rejections
+## Local errors
 
-Some errors require more specific handling than retrying, denying access, or
-reporting a fatal failure. A payment amount might be invalid, or an email
-address might already be registered. The caller may need to handle the case
-directly or communicate it to an end user who can correct the request.
+Every local error type says, through one trait, how it enters the lanes:
 
-These cases belong in the Rejected lane. An application-defined enum describes
-the individual outcomes. `derive(Rejection)` gives each outcome a stable
-`code()` and a recording `level()`:
+```rust,ignore
+pub trait Classify: Error + Send + Sync + 'static {
+    type Rejected: RejectedSlot; // a `Rejection`, or `Infallible` if nothing is ever rejected
+    type Lanes: LaneProfile;     // the narrowest profile the fault part can occupy
+    fn classify(self) -> Fail<Self::Rejected, Self::Lanes>;
+}
+```
+
+A type is one of three shapes, never more than one:
+
+| type | `Rejected` | `Lanes` | how it is written |
+|---|---|---|---|
+| a domain outcome | itself | none | `#[derive(errlanes::Rejection)]` |
+| a fault wrapper | `Infallible` | the lane(s) it names | `#[derive(errlanes::Classify)] #[classify(fatal(Kind))]` |
+| a mixed wrapper | a domain outcome | the lane(s) its faulty variants name | `#[derive(errlanes::Classify)]`, variant by variant |
+
+**A type is a `Rejection` or it implements `Classify` directly, never both** —
+the blanket `impl<R: Rejection> Classify for R` makes a second, direct impl
+conflict (`E0119`). The split is principled: a rejection's `Display` may embed
+caller input and is never operator-facing; a fault's `Display` is exactly what
+an operator-facing message must show.
+
+A pure domain outcome — one that is never a fault, only ever rejected — is the
+common case and the one most code writes. `derive(Rejection)` gives each
+outcome a stable `code()` and a recording `level()`; `Classify` then comes
+from the blanket above, not from a second derive:
 
 ```rust
 use errlanes::{Level, Rejection};
@@ -275,6 +296,79 @@ The level tells the recording boundary how severely to log the rejection.
 Info is the default because rejections are expected domain outcomes. A case
 that needs different operational visibility can override it with, for example,
 `#[rejection(code = "INVALID_AMOUNT", level = "warn")]`. Its lane is still Rejected.
+
+### Fault wrappers and mixed wrappers
+
+The other two shapes are written with `#[derive(errlanes::Classify)]` instead.
+A fault wrapper names exactly one lane and never rejects — a struct wrapping a
+foreign error is the common case:
+
+```rust
+use errlanes::{Classify, ClassifyResult, Fatal, FatalKind};
+
+#[derive(Debug, thiserror::Error, errlanes::Classify)]
+#[error("stored json did not decode: {0}")]
+#[classify(fatal(CorruptState), from)]
+struct Stored(#[source] std::io::Error);
+
+fn decode() -> Result<u8, std::io::Error> { Err(std::io::Error::other("x")) }
+
+fn hydrate() -> Result<u8, errlanes::Fault<errlanes::lanes!(Fatal)>> {
+    let _ = decode().classify::<Stored>()?;
+    Ok(0)
+}
+
+assert!(matches!(hydrate(), Err(errlanes::Fault::Fatal(f)) if f.kind == FatalKind::CorruptState));
+```
+
+`#[classify(fatal(CorruptState), from)]` gives `Stored` one static lane — every
+value is `Fatal(CorruptState)`, with the whole `Stored` value as its source —
+and `from` emits `impl From<std::io::Error> for Stored` for the single tuple
+field. `.classify::<Stored>()` is how a one-off call site wraps a foreign
+error without the enclosing function itself returning `Stored` (see "Errors
+from other crates" below).
+
+A mixed wrapper combines both: some variants `delegate` to a payload that is
+itself `Classify` (a `Rejection`, a fault wrapper, or another mixed wrapper),
+others name a static lane directly. `Rejected` and `Lanes` are inferred from
+whichever variants are present — never named by hand:
+
+```rust
+use errlanes::{Classify, ClassifyResult, Fail};
+
+#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[error("constraint violated: {0}")]
+#[rejection(code = "CONSTRAINT")]
+struct Constraint(&'static str);
+
+#[derive(Debug, thiserror::Error, errlanes::Classify)]
+enum DbWrite {
+    #[error("constraint: {0}")]
+    #[classify(delegate)]                      // Rejected = Constraint, inferred
+    Constraint(Constraint),
+    #[error("conflict: {0}")]
+    #[classify(transient(OptimisticConflict))]  // Lanes include Transient, inferred
+    Conflict(std::io::Error),
+}
+
+impl From<std::io::Error> for DbWrite {
+    fn from(e: std::io::Error) -> Self {
+        match e.kind() {
+            std::io::ErrorKind::AlreadyExists => DbWrite::Constraint(Constraint("users_email_key")),
+            _ => DbWrite::Conflict(e),
+        }
+    }
+}
+
+fn insert() -> Result<u8, std::io::Error> { Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists)) }
+
+fn write() -> Result<u8, Fail<Constraint, errlanes::lanes!(Transient, Fatal)>> {
+    let _ = insert().classify::<DbWrite>()?;
+    Ok(0)
+}
+
+assert!(matches!(write(), Err(Fail::Rejected(Constraint("users_email_key")))));
+```
 
 ### Rejections alongside faults
 
@@ -313,6 +407,91 @@ returns a `Fault`, which `?` converts into the compatible `Fail` while
 retaining its lane. A function that only validates input can return
 `Result<T, Validation>` directly; it has no fault lanes to combine with its
 rejections, and the caller's `?` places it in the Rejected lane.
+
+## Errors from other crates
+
+`sqlx::Error`, `serde_json::Error`, and anything else outside this crate never
+implements `Classify` directly — errlanes cannot know what a `404` from one
+caller's upstream means versus another's. The fix is the same one always: wrap
+it in a local type, and give *that* a lane. A one-off call site does this with
+`.classify::<W>()`, which turns a `Result<T, Foreign>` into a `Result<T, W>`:
+
+```rust
+use errlanes::{ClassifyResult, FatalKind};
+
+#[derive(Debug, thiserror::Error, errlanes::Classify)]
+#[error("stored json did not decode: {0}")]
+#[classify(fatal(CorruptState), from)]
+struct Stored(#[source] std::io::Error);
+
+fn decode() -> Result<u8, std::io::Error> { Err(std::io::Error::other("x")) }
+
+let wrapped: Result<u8, Stored> = decode().classify::<Stored>();
+assert_eq!(wrapped.unwrap_err().0.to_string(), "x");
+```
+
+A function whose own error type already implements `Classify` gets this for
+free through `From`, with bare `?` — no `.classify()` needed at the call site:
+
+```rust,ignore
+mod price_feed {
+    // foreign → wrapper by `?` (the `from` flag's `From` impl)
+    pub fn spot() -> Result<Quote, PriceFeed> {
+        let response = client.get(url).send()?;
+        Ok(response.json()?)
+    }
+}
+```
+
+**Same foreign error, two crates, two meanings.** A third-party price feed's
+`404` on a known route is a domain outcome; its timeouts and 5xx retry; its
+`401`/`403` are *our* credentials, not the caller's, so they are narrowed.
+A different crate wrapping the exact same `reqwest::Error` from an in-house
+service can decide every failure there is a deployment problem instead:
+
+```rust,ignore
+#[derive(Debug, errlanes::Rejection)]
+pub enum PriceFeedRejection {
+    #[rejection(code = "PRICE_FEED_UNKNOWN_SYMBOL")]
+    UnknownSymbol(String),
+}
+
+#[derive(Debug, errlanes::Classify)]
+pub enum PriceFeed {
+    #[classify(delegate)]                 Rejected(PriceFeedRejection),
+    #[classify(delegate, narrow(Denied))]  Http(reqwest::Error),
+}
+impl From<reqwest::Error> for PriceFeed { /* 404 on /symbols/{s} -> Rejected(UnknownSymbol(s)), else Http(e) */ }
+
+#[derive(Debug, errlanes::Classify)]
+#[classify(fatal(Config), from)]
+pub struct FxRates(reqwest::Error); // our own service: any failure is ours
+
+async fn quote() -> Result<Quote, Fail<QuoteRejection, lanes!(Transient, Fatal)>> {
+    let spot = feed.get(url).send().await.classify::<PriceFeed>()?;  // lifts PriceFeedRejection
+    let rate = rates.get(url).send().await.classify::<FxRates>()?;   // always Fatal(Config)
+    Ok(spot * rate)
+}
+```
+
+`delegate` forwards to the field's own `Classify`; `narrow(Denied)` then
+removes just the denied lane (an upstream `401`/`403` becomes `Fatal(Denied)`
+instead) before the arm's contribution is folded into the enclosing type's
+`Lanes`. `Rejected` and `Lanes` are always inferred this way — never named on
+the derive.
+
+**`classify-sqlx`, `classify-serde-json`, and `classify-reqwest`** are
+`impl Classify` for the three foreign types errlanes blesses on your behalf —
+always `Rejected = Infallible`, the narrowest `Lanes` each warrants (see the
+module docs for the exact table). With the feature enabled, bare `?` works on
+the foreign type directly, and a wrapper's `delegate` arm can name it like any
+other `Classify` payload. `classify-reqwest`'s `Denied` means *the subject of
+this call* is unauthorized: an upstream `401`/`403` returned to a service
+account is usually a credential or configuration fault at *our* layer, not the
+caller's — narrow it with `#[classify(delegate, narrow(Denied))]` (→
+`Fatal(Denied)`), or match the status in a hand-written wrapper to get
+`Fatal(Config)` instead. A proxy forwarding the caller's own token to upstream
+is the case that keeps `Denied` as-is.
 
 ## Rejections across domain boundaries
 
@@ -384,6 +563,33 @@ total or partial is declared once, on the destination enum; the call site is
 the same `.widen()?` either way. A partial mapping does not generate `From`,
 because there is no infallible conversion to be had.
 
+A source need not be an enum. A struct rejection — the shape a wrapped foreign
+error naturally takes (see "Errors from other crates" above) — lifts as a
+whole value: `#[lift(Payload)]` with no variant suffix names the registered
+struct directly, and the entire value becomes the one field of the
+destination variant that also writes `#[lift(Payload)]`:
+
+```rust
+use errlanes::{Lift, Rejection};
+
+#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[error("invalid payload")]
+#[rejection(code = "INVALID_PAYLOAD")]
+struct Payload(#[source] std::num::ParseIntError);
+
+#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
+#[lift(Payload)]
+enum JobRejection {
+    #[error("invalid payload: {0}")]
+    #[lift(Payload)]
+    InvalidPayload(Payload),
+}
+
+let bad = "x".parse::<u32>().unwrap_err();
+let rejection: JobRejection = Payload(bad).into();
+assert!(matches!(rejection, JobRejection::InvalidPayload(_)));
+```
+
 ## Moving between signatures
 
 A failure changes shape as it travels: the lane set grows when a caller can
@@ -400,6 +606,12 @@ every case:
 | a bare rejection `C` | `Fail<R, D>`, given a partial `#[lift(C)]` on `R` | `.widen()?` |
 | `Fail<C, S>` | `Fail<R, D>` | `.widen()?` |
 | `Fault<S>` | `Fault<D>` | `.widen()?` |
+| `Result<T, Foreign>` | `Result<T, W>` | `.classify::<W>()`, given `W: Classify + From<Foreign>` |
+| `W: Classify` | `Fail<D, M>` | `?`, given `D` lifts `W::Rejected` totally and `W::Lanes ⊆ M` |
+| `W: Classify` | `Fail<D, M>` | `.widen()?`, if `D` only lifts `W::Rejected` partially |
+| `W: Classify<Rejected = Infallible>` | `Fault<M>` | `?`, given `W::Lanes ⊆ M` |
+| `W: Classify<Rejected = Infallible, Lanes = lanes!(Fatal)>` | bare `Fatal` | `?` (same for a lone `Transient`) |
+| anything with a rejected part | `Fault` | `.map_err(Fail::narrow_rejected)` |
 | `Fault<L>` | `Fault<WithoutTransient<L>>` | `.narrow_transient(attempts)` |
 | `Fault<L>` | `Fault<WithoutDenied<L>>` | `.narrow_denied()` |
 | `Fail<D, L>` | `Fault<L>` | `.narrow_rejected()` |

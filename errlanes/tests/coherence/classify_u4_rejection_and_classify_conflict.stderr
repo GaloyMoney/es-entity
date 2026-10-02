@@ -1,0 +1,9 @@
+error[E0119]: conflicting implementations of trait `Classify` for type `Stored`
+ --> tests/coherence/classify_u4_rejection_and_classify_conflict.rs:9:1
+  |
+9 | impl errlanes::Classify for Stored {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: conflicting implementation in crate `errlanes`:
+          - impl<R> Classify for R
+            where R: Rejection;

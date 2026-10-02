@@ -7,18 +7,26 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod classify;
 mod dynamic;
 mod fail;
 mod lane;
 pub mod profile;
-pub use profile::{AllLanes, LaneProfile, WithoutDenied, WithoutTransient};
+pub use profile::{AllLanes, LaneProfile, NoLanes, WithoutDenied, WithoutTransient};
 
-#[cfg(feature = "sqlx")]
+#[cfg(feature = "classify-sqlx")]
 pub mod sqlx;
+
+#[cfg(feature = "classify-serde-json")]
+pub mod serde_json;
+
+#[cfg(feature = "classify-reqwest")]
+pub mod reqwest;
 
 #[cfg(feature = "tracing")]
 mod record;
 
+pub use classify::{Classify, ClassifyResult, RejectedSlot};
 pub use fail::{
     Fail, Failure, Fault, Laned, Level, Lift, Rejection, RejectionField, RejectionMetadata,
     UnmappedInto, WidenResult,
@@ -29,7 +37,7 @@ pub use lane::{Denied, Exhausted, Fatal, FatalKind, Lane, Transient, TransientKi
 pub use record::{FIELDS, RecordResult};
 
 #[cfg(feature = "derive")]
-pub use errlanes_derive::{__compose_rejection, Failure, Lift, Rejection, compose};
+pub use errlanes_derive::{__compose_rejection, Classify, Failure, Lift, Rejection, compose};
 
 #[cfg(all(feature = "derive", feature = "tracing"))]
 pub use errlanes_derive::instrument;

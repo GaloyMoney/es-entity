@@ -32,7 +32,7 @@ mod tbl_prefix_param {
             )
             .fetch_optional(self.pool())
             .await?
-            .ok_or_else(|| not_found_fatal("User", Some("id"), format!("{:?}", id)))
+            .ok_or_else(|| NotFound::new("User", Some("id"), format!("{:?}", id)).into())
         }
 
         async fn query_without_args(&self) -> Result<(Vec<User>, bool), es_entity::RepoReadError> {
@@ -113,7 +113,7 @@ mod entity_param {
             )
             .fetch_optional(&mut op)
             .await?
-            .ok_or_else(|| not_found_fatal("User", Some("id"), format!("{:?}", id)))
+            .ok_or_else(|| NotFound::new("User", Some("id"), format!("{:?}", id)).into())
         }
 
         async fn query_without_args(&self) -> Result<(Vec<User>, bool), es_entity::RepoReadError> {
@@ -182,7 +182,7 @@ mod no_params {
             es_query!("SELECT * FROM users WHERE id = $1", id as UserId)
                 .fetch_optional(self.pool())
                 .await?
-                .ok_or_else(|| not_found_fatal("User", Some("id"), format!("{:?}", id)))
+                .ok_or_else(|| NotFound::new("User", Some("id"), format!("{:?}", id)).into())
         }
 
         async fn query_without_args(&self) -> Result<(Vec<User>, bool), es_entity::RepoReadError> {
