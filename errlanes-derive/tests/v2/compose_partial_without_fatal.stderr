@@ -1,0 +1,20 @@
+error[E0277]: the trait bound `Source: UnmappedInto<Infallible>` is not satisfied
+  --> tests/v2/compose_partial_without_fatal.rs:15:69
+   |
+15 |     let _: errlanes::Fail<Destination, errlanes::lanes!()> = source.lift();
+   |                                                                     ^^^^ unsatisfied trait bound
+   |
+help: the trait `UnmappedInto<Infallible>` is not implemented for `Source`
+  --> tests/v2/compose_partial_without_fatal.rs:2:1
+   |
+ 2 | enum Source {
+   | ^^^^^^^^^^^
+   = help: the trait `UnmappedInto<F>` is implemented for `Infallible`
+note: required by a bound in `Fail::<D, L>::lift`
+  --> $WORKSPACE/errlanes/src/fail.rs
+   |
+   |     pub fn lift<P: Lift<D>, M: LaneProfile>(self) -> Fail<P, M>
+   |            ---- required by a bound in this associated function
+...
+   |         P::Unmapped: UnmappedInto<M::Fatal>,
+   |                      ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Fail::<D, L>::lift`

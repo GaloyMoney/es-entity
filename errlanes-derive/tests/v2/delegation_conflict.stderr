@@ -1,0 +1,5 @@
+error: delegate requires exactly one tuple field and conflicts with leaf code/level
+ --> tests/v2/delegation_conflict.rs:9:52
+  |
+9 | enum Parent { #[rejection(delegate, code = "NEW")] Child(Child) }
+  |                                                    ^^^^^

@@ -1,0 +1,25 @@
+error[E0308]: mismatched types
+ --> tests/v2/wrong_shape.rs:8:17
+  |
+8 | #[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+  |                 ^^^^^^^^^^^^^^^^^^^ expected `&u32`, found `&String`
+  |
+  = note: expected reference `&u32`
+             found reference `&String`
+  = note: this error originates in the derive macro `errlanes::Rejection` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> tests/v2/wrong_shape.rs:8:38
+   |
+ 8 | #[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+   |                                      ^^^^^^^^^^^^^^
+   |                                      |
+   |                                      expected `String`, found `u32`
+   |                                      arguments to this enum variant are incorrect
+   |
+note: tuple variant defined here
+  --> tests/v2/wrong_shape.rs:11:25
+   |
+11 |     #[lift(Child::One)] One(String),
+   |                         ^^^
+   = note: this error originates in the derive macro `errlanes::Lift` (in Nightly builds, run with -Z macro-backtrace for more info)

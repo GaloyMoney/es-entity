@@ -2,18 +2,21 @@ use darling::ToTokens;
 use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
-use super::options::{PostHydrateHookConfig, RepositoryOptions};
+use super::options::RepositoryOptions;
 
+/// The hook is synchronous and has no `op`, so it can never see a retryable
+/// failure: it returns a bare `Fatal`, which the calling op `?`s into its own
+/// `RepoReadError`/`RepoWriteError`.
 pub struct PostHydrateHook<'a> {
     entity: &'a syn::Ident,
-    hook: &'a Option<PostHydrateHookConfig>,
+    hook: Option<&'a syn::Ident>,
 }
 
 impl<'a> From<&'a RepositoryOptions> for PostHydrateHook<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
             entity: opts.entity(),
-            hook: &opts.post_hydrate_hook,
+            hook: opts.post_hydrate_hook.as_ref(),
         }
     }
 }
@@ -22,22 +25,9 @@ impl ToTokens for PostHydrateHook<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let entity = &self.entity;
 
-        let (return_type, hook) = if let Some(config) = self.hook {
-            let method = &config.method;
-            let error_ty = &config.error;
-            (
-                quote! { #error_ty },
-                quote! {
-                    self.#method(entity)
-                },
-            )
-        } else {
-            (
-                quote! { std::convert::Infallible },
-                quote! {
-                    Ok(())
-                },
-            )
+        let hook = match self.hook {
+            Some(method) => quote! { self.#method(entity) },
+            None => quote! { Ok(()) },
         };
 
         tokens.append_all(quote! {
@@ -45,7 +35,7 @@ impl ToTokens for PostHydrateHook<'_> {
             fn execute_post_hydrate_hook(
                 &self,
                 entity: &#entity,
-            ) -> Result<(), #return_type> {
+            ) -> Result<(), errlanes::Fatal> {
                 #hook
             }
         });
@@ -59,11 +49,10 @@ mod tests {
     #[test]
     fn post_hydrate_hook_none() {
         let entity = syn::Ident::new("Entity", proc_macro2::Span::call_site());
-        let hook = None;
 
         let hook = PostHydrateHook {
             entity: &entity,
-            hook: &hook,
+            hook: None,
         };
 
         let mut tokens = TokenStream::new();
@@ -74,7 +63,7 @@ mod tests {
             fn execute_post_hydrate_hook(
                 &self,
                 entity: &Entity,
-            ) -> Result<(), std::convert::Infallible> {
+            ) -> Result<(), errlanes::Fatal> {
                 Ok(())
             }
         };
@@ -85,14 +74,11 @@ mod tests {
     #[test]
     fn post_hydrate_hook_some() {
         let entity = syn::Ident::new("Entity", proc_macro2::Span::call_site());
-        let hook = Some(PostHydrateHookConfig {
-            method: syn::Ident::new("validate_entity", proc_macro2::Span::call_site()),
-            error: syn::parse_str("EntityPostHydrateError").unwrap(),
-        });
+        let method = syn::Ident::new("validate_entity", proc_macro2::Span::call_site());
 
         let hook = PostHydrateHook {
             entity: &entity,
-            hook: &hook,
+            hook: Some(&method),
         };
 
         let mut tokens = TokenStream::new();
@@ -103,7 +89,7 @@ mod tests {
             fn execute_post_hydrate_hook(
                 &self,
                 entity: &Entity,
-            ) -> Result<(), EntityPostHydrateError> {
+            ) -> Result<(), errlanes::Fatal> {
                 self.validate_entity(entity)
             }
         };

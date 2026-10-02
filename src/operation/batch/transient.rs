@@ -1,46 +1,18 @@
-//! Classifying a probe failure as transient.
+//! Classifying a probe failure as contention.
 
-/// The Postgres sqlstate of a failure that says nothing about the statement
-/// that hit it, or `None`.
+/// Which probe failures are contention — not attributable to the range's
+/// contents — and how many re-probes they may buy.
 ///
-/// Walks the whole [`source`](std::error::Error::source) chain, so a
-/// [`sqlx::Error`] wrapped several layers deep in a caller's own error type is
-/// still recognised.
+/// The default classification is [`is_contention`]: a deadlock victim or a
+/// serialization failure, recognised anywhere in the error's source chain.
+/// Override it for error types of your own that describe the same thing: a
+/// failure that says nothing about the items, only about the interleaving.
 ///
-/// - `40P01` — deadlock detected. This transaction was chosen as the victim;
-///   another one made progress.
-/// - `40001` — serialization failure.
-///
-/// Both are properties of the contention, not of the items being probed, so a
-/// bisect re-probes the same range unsplit.
-pub fn retryable_conflict_code(err: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
-    let mut source = Some(err);
-    while let Some(err) = source {
-        if let Some(db) = err
-            .downcast_ref::<sqlx::Error>()
-            .and_then(|err| err.as_database_error())
-        {
-            match db.code().as_deref() {
-                Some("40P01") => return Some("40P01"),
-                Some("40001") => return Some("40001"),
-                _ => {}
-            }
-        }
-        source = err.source();
-    }
-    None
-}
-
-/// [`retryable_conflict_code`] as a predicate.
-pub fn is_retryable_conflict(err: &(dyn std::error::Error + 'static)) -> bool {
-    retryable_conflict_code(err).is_some()
-}
-
-/// Which probe failures are transient, and how many re-probes they may buy.
-///
-/// The default classification is [`is_retryable_conflict`]. Override it to add
-/// error types of your own that describe contention — an optimistic-concurrency
-/// conflict, say — so the search re-probes their ranges too.
+/// Other transients are left to the search on purpose. An
+/// optimistic-concurrency conflict names one stale item, so splitting
+/// isolates it where re-probing the same range would only conflict again; a
+/// lost connection cannot be re-probed at all, and surfaces as the helper's
+/// outer `Err` on the next savepoint instead.
 #[derive(Debug, Clone, Copy)]
 pub struct TransientPolicy<P> {
     /// Returns `true` when a probe failure carries no information about the
@@ -71,7 +43,48 @@ impl<P> TransientPolicy<P> {
 }
 
 /// The default classifier, as a plain function so it can be named in a
-/// [`TransientPolicy`] without boxing.
-pub(super) fn sqlstate_is_transient<E: std::error::Error + 'static>(error: &E) -> bool {
-    is_retryable_conflict(error)
+/// [`TransientPolicy`] without boxing: [`Fault::classify`] over the whole
+/// [`source`](std::error::Error::source) chain, then
+/// [`Fault::is_contention`] — so a deadlock (`40P01`) or a serialization
+/// failure (`40001`) is recognised whether it arrives as a lane payload a
+/// repo op already classified or as a raw [`sqlx::Error`] several layers
+/// deep inside a caller's own error type.
+///
+/// [`Fault::classify`]: crate::errlanes::Fault::classify
+/// [`Fault::is_contention`]: crate::errlanes::Fault::is_contention
+pub(super) fn is_contention<E: std::error::Error + 'static>(error: &E) -> bool {
+    crate::errlanes::Fault::classify(error).is_contention()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_contention;
+    use crate::errlanes::{Transient, TransientKind};
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("wrapped")]
+    struct Wrapped(#[source] Transient);
+
+    #[test]
+    fn contention_is_found_through_a_callers_wrapper() {
+        assert!(is_contention(&Wrapped(Transient::new(
+            TransientKind::Deadlock
+        ))));
+        assert!(is_contention(&Wrapped(Transient::new(
+            TransientKind::SerializationFailure
+        ))));
+    }
+
+    #[test]
+    fn other_transients_are_left_to_the_search() {
+        assert!(!is_contention(&Wrapped(Transient::new(
+            TransientKind::OptimisticConflict
+        ))));
+        assert!(!is_contention(&Wrapped(Transient::new(
+            TransientKind::ConnectionLost
+        ))));
+        assert!(!is_contention(&std::io::Error::other(
+            "not transient at all"
+        )));
+    }
 }

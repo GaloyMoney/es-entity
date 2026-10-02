@@ -1,0 +1,11 @@
+[package]
+name = "downstream"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+errlanes = { path = "../../..", default-features = false, features = ["derive"] }
+upstream = { path = "../upstream" }
+tokio = { version = "1", features = ["rt", "macros", "time"] }

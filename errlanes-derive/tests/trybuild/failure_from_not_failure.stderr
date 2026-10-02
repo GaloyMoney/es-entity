@@ -1,0 +1,30 @@
+error[E0277]: the trait bound `NotAFailure: Failure` is not satisfied
+  --> tests/trybuild/failure_from_not_failure.rs:7:16
+   |
+ 7 | #[failure(from(NotAFailure))]
+   |                ^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `Failure` is not implemented for `NotAFailure`
+  --> tests/trybuild/failure_from_not_failure.rs:11:1
+   |
+11 | struct NotAFailure;
+   | ^^^^^^^^^^^^^^^^^^
+   = help: the following other types implement trait `Failure`:
+             Fail<D, L>
+             MyError
+
+error[E0277]: the trait bound `NotAFailure: Failure` is not satisfied
+  --> tests/trybuild/failure_from_not_failure.rs:6:24
+   |
+ 6 | #[derive(Debug, Clone, errlanes::Failure)]
+   |                        ^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `Failure` is not implemented for `NotAFailure`
+  --> tests/trybuild/failure_from_not_failure.rs:11:1
+   |
+11 | struct NotAFailure;
+   | ^^^^^^^^^^^^^^^^^^
+   = help: the following other types implement trait `Failure`:
+             Fail<D, L>
+             MyError
+   = note: this error originates in the derive macro `errlanes::Failure` (in Nightly builds, run with -Z macro-backtrace for more info)

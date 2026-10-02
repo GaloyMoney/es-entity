@@ -81,8 +81,8 @@ async fn concurrent_updates_one_wins_and_the_snapshot_matches_the_winner() -> an
     for res in [&res_a, &res_b] {
         if let Err(e) = res {
             assert!(
-                e.was_concurrent_modification(),
-                "the loser must fail with ConcurrentModification, got: {e}"
+                e.is_transient(),
+                "the loser must fail with Transient(OptimisticConflict), got: {e}"
             );
         }
     }

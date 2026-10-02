@@ -1,6 +1,6 @@
 //! Handle operations for nested entities.
 
-use crate::{db, error::EntityHydrationError, operation::AtomicOperation, traits::*};
+use crate::{db, operation::AtomicOperation, traits::*};
 
 use std::collections::HashMap;
 
@@ -107,14 +107,13 @@ impl<T: EsEntity> Nested<T> {
 }
 
 pub trait HydrateNested<ID>: EsRepo {
-    fn hydrate_in_op<P, E>(
+    fn hydrate_in_op<P>(
         rows_by_tag: &mut HashMap<i32, Vec<db::Row>>,
         tag_cursor: &mut i32,
         lookup: HashMap<ID, &mut P>,
-    ) -> Result<(), E>
+    ) -> Result<(), crate::RepoReadError>
     where
-        P: Parent<<Self as EsRepo>::Entity>,
-        E: From<sqlx::Error> + From<EntityHydrationError>;
+        P: Parent<<Self as EsRepo>::Entity>;
 }
 
 /// Trait for cascade soft-deleting child entities when a parent is deleted.
@@ -122,13 +121,12 @@ pub trait HydrateNested<ID>: EsRepo {
 /// Generated automatically for nested repositories that have both a `parent` column
 /// and `delete = "soft"` configured.
 pub trait CascadeDeleteNested<ID>: EsRepo {
-    fn cascade_delete_in_op<OP, E>(
+    fn cascade_delete_in_op<OP>(
         op: &mut OP,
         parent_id: &ID,
-    ) -> impl Future<Output = Result<(), E>> + Send
+    ) -> impl Future<Output = Result<(), crate::RepoReadError>> + Send
     where
-        OP: AtomicOperation + ?Sized,
-        E: From<sqlx::Error> + Send;
+        OP: AtomicOperation + ?Sized;
 }
 
 /// Trait that entities implement for every field marked `#[es_entity(nested)]`

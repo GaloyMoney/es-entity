@@ -227,11 +227,15 @@ async fn corrupt_snapshot_blob_is_a_hard_error() -> anyhow::Result<()> {
         Ok(_) => panic!("expected a SnapshotDecode error, got Ok"),
         Err(e) => e,
     };
+    let fatal = match &err {
+        Fault::Fatal(fatal) => fatal,
+        other => panic!("expected Fatal(CorruptState), got: {other:?}"),
+    };
+    assert_eq!(fatal.kind, FatalKind::CorruptState);
     assert!(
-        matches!(
-            err,
-            MeterFindError::HydrationError(EntityHydrationError::SnapshotDecode { .. })
-        ),
+        std::error::Error::source(fatal)
+            .and_then(|s| s.downcast_ref::<EntityHydrationError>())
+            .is_some_and(|e| matches!(e, EntityHydrationError::SnapshotDecode { .. })),
         "unexpected error: {err}"
     );
 

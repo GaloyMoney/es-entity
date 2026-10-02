@@ -1,0 +1,37 @@
+error[E0277]: the trait bound `Infallible: From<errlanes::Denied>` is not satisfied
+ --> tests/v2/unsupported_widen.rs:8:115
+  |
+8 | fn main() { let source: Fail<Child> = Fail::Denied(Denied::default()); let _: Fail<Child, lanes!(Fatal)> = source.widen(); }
+  |                                                                                                                   ^^^^^ the trait `From<errlanes::Denied>` is not implemented for `Infallible`
+  |
+  = help: the trait `From<errlanes::Denied>` is not implemented for `Infallible`
+          but trait `From<!>` is implemented for it
+  = help: for that trait implementation, expected `!`, found `errlanes::Denied`
+  = note: required for `errlanes::Denied` to implement `Into<Infallible>`
+note: required by a bound in `Fail::<D, L>::widen`
+ --> $WORKSPACE/errlanes/src/fail.rs
+  |
+  |     pub fn widen<P: From<D>, M: LaneProfile>(self) -> Fail<P, M>
+  |            ----- required by a bound in this associated function
+  |     where
+  |         L::Denied: Into<M::Denied>,
+  |                    ^^^^^^^^^^^^^^^ required by this bound in `Fail::<D, L>::widen`
+
+error[E0277]: the trait bound `Infallible: From<errlanes::Transient>` is not satisfied
+ --> tests/v2/unsupported_widen.rs:8:115
+  |
+8 | fn main() { let source: Fail<Child> = Fail::Denied(Denied::default()); let _: Fail<Child, lanes!(Fatal)> = source.widen(); }
+  |                                                                                                                   ^^^^^ the trait `From<errlanes::Transient>` is not implemented for `Infallible`
+  |
+  = help: the trait `From<errlanes::Transient>` is not implemented for `Infallible`
+          but trait `From<!>` is implemented for it
+  = help: for that trait implementation, expected `!`, found `errlanes::Transient`
+  = note: required for `errlanes::Transient` to implement `Into<Infallible>`
+note: required by a bound in `Fail::<D, L>::widen`
+ --> $WORKSPACE/errlanes/src/fail.rs
+  |
+  |     pub fn widen<P: From<D>, M: LaneProfile>(self) -> Fail<P, M>
+  |            ----- required by a bound in this associated function
+...
+  |         L::Transient: Into<M::Transient>,
+  |                       ^^^^^^^^^^^^^^^^^^ required by this bound in `Fail::<D, L>::widen`

@@ -1,0 +1,25 @@
+[package]
+name = "errlanes-derive"
+description = "Derive macros for errlanes (Rejection, Lift, Failure)"
+repository = "https://github.com/GaloyMoney/es-entity"
+version = "0.14.4-dev"
+edition = "2024"
+license = "Apache-2.0"
+categories = ["data-structures"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+proc-macro-crate = "3.4"
+syn = "3.0"
+quote = "1.0"
+darling = "0.24"
+convert_case = "0.12"
+
+[dev-dependencies]
+errlanes = { path = "../errlanes", default-features = false, features = ["derive", "tracing"] }
+thiserror = "2.0"
+tracing = { version = "0.1", features = ["std"] }
+trybuild = "1"

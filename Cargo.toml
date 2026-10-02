@@ -7,6 +7,7 @@ version = "0.14.4-dev"
 edition = "2024"
 license = "Apache-2.0"
 categories = ["data-structures", "database"]
+include = ["src/**/*", "build.rs", "README.md", "LICENSE", "CHANGELOG.md"]
 
 [profile.mdbook-test]
 inherits = "dev"
@@ -20,17 +21,24 @@ event-context = ["es-entity-macros/event-context", "event-context-enabled"]
 event-context-enabled = ["es-entity-macros/event-context-enabled"]
 json-schema = ["dep:schemars"]
 mdbook-test = ["dep:anyhow"]
-instrument = ["es-entity-macros/instrument", "dep:tracing"]
+# Split out so a consumer (job) can pull in the errlanes recorder without
+# turning on repo-span instrumentation.
+errlanes-tracing = ["errlanes/tracing"]
+instrument = ["es-entity-macros/instrument", "dep:tracing", "errlanes-tracing"]
+# Re-export of errlanes' blessed `Classify` impl for reqwest, so a consumer
+# (job, lana) enables it through es-entity rather than taking a direct
+# errlanes dependency. serde_json's is always on: hydration delegates to it.
+errlanes-classify-reqwest = ["errlanes/classify-reqwest"]
 
 [dependencies]
 es-entity-macros = { workspace = true }
+errlanes = { workspace = true, features = ["classify-serde-json", "classify-sqlx", "derive"] }
 
 async-stream = { workspace = true }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
 base64 = { workspace = true, optional = true }
 sqlx = { workspace = true }
-thiserror = { workspace = true }
 chrono =  { workspace = true }
 serde =  { workspace = true }
 serde_json =  { workspace = true }
@@ -52,6 +60,8 @@ opentelemetry_sdk = { workspace = true, optional = true }
 anyhow = { workspace = true, optional = true }
 
 [dev-dependencies]
+repo-composition-source = { path = "tests/composition/source" }
+repo-composition-middle = { path = "tests/composition/middle" }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -59,6 +69,8 @@ futures = { workspace = true }
 tracing-subscriber = { workspace = true }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 proptest = "1"
+errlanes = { workspace = true, features = ["classify-serde-json", "classify-sqlx", "derive"] }
+thiserror = { workspace = true }
 
 [[bench]]
 name = "context"
@@ -67,11 +79,15 @@ harness = false
 [workspace]
 resolver = "2"
 members = [
+  "errlanes",
+  "errlanes-derive",
   "es-entity-macros",
 ]
 
 [workspace.dependencies]
 
+errlanes = { path = "errlanes", version = "0.14.4-dev", default-features = false }
+errlanes-derive = { path = "errlanes-derive", version = "0.14.4-dev" }
 es-entity-macros = { path = "es-entity-macros", version = "0.14.4-dev" }
 
 anyhow = "1.0"
@@ -96,6 +112,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-opentelemetry = { version = "0.34.0", default-features = false }
 opentelemetry = { version = "0.33.0", default-features = false }
 opentelemetry_sdk = { version = "0.33.0", features = ["rt-tokio"] }
+reqwest = { version = "0.12", default-features = false }
 futures = "0.3"
 futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }

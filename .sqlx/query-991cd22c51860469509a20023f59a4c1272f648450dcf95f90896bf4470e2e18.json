@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE lane_items SET deleted = TRUE WHERE parent_id = $1 AND deleted = FALSE",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "991cd22c51860469509a20023f59a4c1272f648450dcf95f90896bf4470e2e18"
+}

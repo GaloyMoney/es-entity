@@ -1,0 +1,5 @@
+error: source variant mapped more than once
+  --> tests/v2/duplicate_mapping.rs:12:5
+   |
+12 |     #[lift(Child::One)] Other(u32),
+   |     ^

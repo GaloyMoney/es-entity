@@ -44,7 +44,7 @@ mod users_with_hydrate_hook {
     #[es_repo(
         entity = "User",
         columns(name = "String"),
-        post_hydrate_hook(method = "validate_hydrated", error = "UserHydrateValidationError")
+        post_hydrate_hook = "validate_hydrated"
     )]
     pub struct UsersWithHydrateHook {
         pool: PgPool,
@@ -55,12 +55,12 @@ mod users_with_hydrate_hook {
             Self { pool }
         }
 
-        fn validate_hydrated(&self, entity: &User) -> Result<(), UserHydrateValidationError> {
+        fn validate_hydrated(&self, entity: &User) -> Result<(), errlanes::Fatal> {
             if entity.name == "BANNED" {
-                Err(UserHydrateValidationError(format!(
-                    "user '{}' has a banned name",
-                    entity.id
-                )))
+                Err(errlanes::Fatal::from_error(
+                    errlanes::FatalKind::Invariant,
+                    UserHydrateValidationError(format!("user '{}' has a banned name", entity.id)),
+                ))
             } else {
                 Ok(())
             }
@@ -83,7 +83,7 @@ mod users_with_persist_hook {
     #[es_repo(
         entity = "User",
         columns(name = "String"),
-        post_persist_hook(method = "audit_persist", error = "UserPersistAuditError")
+        post_persist_hook = "audit_persist"
     )]
     pub struct UsersWithPersistHook {
         pool: PgPool,
@@ -99,12 +99,16 @@ mod users_with_persist_hook {
             _op: &mut OP,
             entity: &User,
             _new_events: es_entity::events::LastPersisted<'_, UserEvent>,
-        ) -> Result<(), UserPersistAuditError> {
+        ) -> Result<(), errlanes::Fault<errlanes::lanes!(Transient, Fatal)>> {
             if entity.name == "BLOCKED" {
-                Err(UserPersistAuditError(format!(
-                    "cannot persist user '{}' with blocked name",
-                    entity.id
-                )))
+                Err(errlanes::Fatal::from_error(
+                    errlanes::FatalKind::Invariant,
+                    UserPersistAuditError(format!(
+                        "cannot persist user '{}' with blocked name",
+                        entity.id
+                    )),
+                )
+                .into())
             } else {
                 Ok(())
             }
@@ -114,6 +118,28 @@ mod users_with_persist_hook {
 
 use users_with_hydrate_hook::UsersWithHydrateHook;
 use users_with_persist_hook::UsersWithPersistHook;
+
+/// The hook's own error, as `Fatal`'s source message. Panics if `err` isn't
+/// `Fail::Fatal` at all.
+fn fatal_source_message<D: std::fmt::Debug>(err: &es_entity::RepoWriteError<D>) -> String {
+    match err {
+        es_entity::Fail::Fatal(fatal) => std::error::Error::source(fatal)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| fatal.to_string()),
+        other => panic!("expected Fatal, got: {other:?}"),
+    }
+}
+
+/// [`fatal_source_message`] for a read path's `Fault`. Panics if `err` isn't
+/// `Fault::Fatal` at all.
+fn fault_source_message(err: &es_entity::RepoReadError) -> String {
+    match err {
+        es_entity::Fault::Fatal(fatal) => std::error::Error::source(fatal)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| fatal.to_string()),
+        other => panic!("expected Fatal, got: {other:?}"),
+    }
+}
 
 // ===========================================================================
 // post_hydrate_hook tests
@@ -133,13 +159,13 @@ async fn post_hydrate_hook_error_propagates_through_create() -> anyhow::Result<(
     let result = users.create(new_user).await;
 
     match result {
-        Err(users_with_hydrate_hook::UserCreateError::PostHydrateError(inner)) => {
+        Err(ref e) => {
+            let msg = fatal_source_message(e);
             assert!(
-                inner.to_string().contains("banned name"),
-                "expected banned name message, got: {inner}"
+                msg.contains("banned name"),
+                "expected banned name message, got: {msg}"
             );
         }
-        Err(e) => panic!("expected PostHydrateError, got: {e}"),
         Ok(_) => panic!("expected post_hydrate_hook to reject entity with banned name"),
     }
 
@@ -188,13 +214,23 @@ async fn post_hydrate_hook_error_propagates_through_find_by_id() -> anyhow::Resu
     // Now find_by_id should fail with the hydration hook error
     let result = users.find_by_id(id).await;
     match result {
-        Err(users_with_hydrate_hook::UserFindError::PostHydrateError(inner)) => {
+        Err(ref e) => {
+            let msg = fault_source_message(e);
             assert!(
-                inner.to_string().contains("banned name"),
-                "expected banned name message, got: {inner}"
+                msg.contains("banned name"),
+                "expected banned name message, got: {msg}"
+            );
+            // Nothing marks the fault as the hook's; its own error type in the
+            // source chain is how a caller tells it apart.
+            let es_entity::Fault::Fatal(fatal) = e else {
+                panic!("expected Fatal, got: {e:?}")
+            };
+            assert!(
+                std::error::Error::source(fatal)
+                    .is_some_and(|s| s.is::<UserHydrateValidationError>()),
+                "hook error must be the Fatal's direct source: {e:?}"
             );
         }
-        Err(e) => panic!("expected PostHydrateError in find_by_id, got: {e}"),
         Ok(_) => panic!("expected post_hydrate_hook to reject entity loaded with banned name"),
     }
 
@@ -219,13 +255,13 @@ async fn post_persist_hook_error_propagates_through_create() -> anyhow::Result<(
     let result = users.create(new_user).await;
 
     match result {
-        Err(users_with_persist_hook::UserCreateError::PostPersistHookError(inner)) => {
+        Err(ref e) => {
+            let msg = fatal_source_message(e);
             assert!(
-                inner.to_string().contains("blocked name"),
-                "expected blocked name message, got: {inner}"
+                msg.contains("blocked name"),
+                "expected blocked name message, got: {msg}"
             );
         }
-        Err(e) => panic!("expected PostPersistHookError, got: {e}"),
         Ok(_) => panic!("expected post_persist_hook to reject entity with blocked name"),
     }
 
@@ -266,13 +302,13 @@ async fn post_persist_hook_error_propagates_through_update() -> anyhow::Result<(
     let result = users.update(&mut user).await;
 
     match result {
-        Err(users_with_persist_hook::UserModifyError::PostPersistHookError(inner)) => {
+        Err(ref e) => {
+            let msg = fatal_source_message(e);
             assert!(
-                inner.to_string().contains("blocked name"),
-                "expected blocked name message, got: {inner}"
+                msg.contains("blocked name"),
+                "expected blocked name message, got: {msg}"
             );
         }
-        Err(e) => panic!("expected PostPersistHookError in update, got: {e}"),
         Ok(_) => panic!("expected post_persist_hook to reject update to blocked name"),
     }
 

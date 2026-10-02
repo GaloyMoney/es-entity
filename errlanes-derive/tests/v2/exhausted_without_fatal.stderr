@@ -1,0 +1,17 @@
+error[E0277]: the trait bound `errlanes::Transient: NarrowTransient<Infallible>` is not satisfied
+  --> tests/v2/exhausted_without_fatal.rs:14:6
+   |
+14 |     .narrow_transient(2);
+   |      ^^^^^^^^^^^^^^^^ the trait `NarrowTransient<Infallible>` is not implemented for `errlanes::Transient`
+   |
+   = help: the trait `NarrowTransient<Infallible>` is not implemented for `errlanes::Transient`
+           but trait `NarrowTransient<errlanes::Fatal>` is implemented for it
+   = help: for that trait implementation, expected `errlanes::Fatal`, found `Infallible`
+note: required by a bound in `Fail::<D, L>::narrow_transient`
+  --> $WORKSPACE/errlanes/src/fail.rs
+   |
+   |     pub fn narrow_transient(self, attempts: u32) -> Fail<D, crate::profile::WithoutTransient<L>>
+   |            ---------------- required by a bound in this associated function
+   |     where
+   |         L::Transient: NarrowTransient<L::Fatal>,
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Fail::<D, L>::narrow_transient`

@@ -63,6 +63,33 @@ impl OrderItems {
     }
 }
 
+fn rejected(
+    err: es_entity::RepoWriteError<ProfileConstraintViolation>,
+) -> ProfileConstraintViolation {
+    match err {
+        Fail::Rejected(cv) => cv,
+        other => panic!("expected Rejected, got {other:?}"),
+    }
+}
+
+fn rejected_user(
+    err: es_entity::RepoWriteError<UserConstraintViolation>,
+) -> UserConstraintViolation {
+    match err {
+        Fail::Rejected(cv) => cv,
+        other => panic!("expected Rejected, got {other:?}"),
+    }
+}
+
+fn rejected_order_item(
+    err: es_entity::RepoWriteError<OrderItemConstraintViolation>,
+) -> OrderItemConstraintViolation {
+    match err {
+        Fail::Rejected(cv) => cv,
+        other => panic!("expected Rejected, got {other:?}"),
+    }
+}
+
 // ===========================================================================
 // Constraint violation tests
 // ===========================================================================
@@ -92,21 +119,30 @@ async fn create_duplicate_email_returns_constraint_violation_with_value() -> any
         Err(e) => e,
         Ok(_) => panic!("expected constraint violation"),
     };
+    let cv = rejected(err);
 
-    assert!(err.was_duplicate());
-    assert!(err.was_duplicate_by(ProfileColumn::Email));
-    assert_eq!(err.duplicate_value(), Some(email.as_str()));
-    assert_eq!(err.constraint_name(), Some("idx_profiles_email"));
-    assert_eq!(
-        err.violated_constraint(),
-        Some(ProfileConstraint::IdxProfilesEmail)
+    assert!(
+        matches!(&cv, ProfileConstraintViolation::IdxProfilesEmail(c) if c.attempted.as_ref() == Some(&email))
     );
-    assert_eq!(
-        ProfileConstraint::IdxProfilesEmail.kind(),
-        ConstraintKind::Unique
+    assert!(!cv.to_string().contains(&email));
+    assert!(
+        std::error::Error::source(&cv)
+            .unwrap()
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<sqlx::Error>()
     );
-    assert!(!err.was_foreign_key_violation());
-    assert!(!err.was_check_violation());
+    assert_eq!(cv.constraint_name(), "idx_profiles_email");
+    assert!(matches!(
+        &cv,
+        ProfileConstraintViolation::IdxProfilesEmail(_)
+    ));
+    assert_eq!(cv.kind(), ConstraintKind::Unique);
+    assert!(cv.is_unique());
+    assert!(!cv.is_foreign_key());
+    assert!(!cv.is_check());
 
     Ok(())
 }
@@ -126,13 +162,12 @@ async fn create_duplicate_id_returns_constraint_violation_with_value() -> anyhow
         Err(e) => e,
         Ok(_) => panic!("expected constraint violation"),
     };
+    let cv = rejected_user(err);
 
-    assert!(err.was_duplicate());
-    assert!(err.was_duplicate_by(UserColumn::Id));
-    assert_eq!(err.duplicate_value(), Some(id.to_string().as_str()));
-    assert_eq!(err.constraint_name(), Some("users_pkey"));
-    assert_eq!(err.violated_constraint(), Some(UserConstraint::Pkey));
-    assert_eq!(UserConstraint::Pkey.kind(), ConstraintKind::Unique);
+    assert!(matches!(&cv, UserConstraintViolation::Pkey(c) if c.attempted == Some(id)));
+    assert_eq!(cv.constraint_name(), "users_pkey");
+    assert!(matches!(&cv, UserConstraintViolation::Pkey(_)));
+    assert_eq!(cv.kind(), ConstraintKind::Unique);
 
     Ok(())
 }
@@ -141,7 +176,9 @@ async fn create_duplicate_id_returns_constraint_violation_with_value() -> anyhow
 /// interleaves the CTE (index insert) and main statement (events insert), so
 /// for an intra-batch duplicate id either the index-table pkey or the
 /// events-table `(id, sequence)` pkey may fire first. Both must classify as
-/// the duplicate-id `ConstraintViolation` — never `ConcurrentModification`.
+/// the duplicate-id rejection — never `Transient`: a brand-new entity's
+/// events always start at sequence 1, so this can only be a genuine
+/// duplicate id, not a race.
 #[tokio::test]
 async fn create_all_intra_batch_duplicate_id_classifies_as_duplicate() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -172,16 +209,10 @@ async fn create_all_intra_batch_duplicate_id_classifies_as_duplicate() -> anyhow
                 Ok(_) => panic!("expected constraint violation"),
             };
 
-            assert!(
-                !err.was_concurrent_modification(),
-                "duplicate id must not classify as ConcurrentModification: {err:?}"
-            );
-            assert!(err.was_duplicate(), "expected duplicate: {err:?}");
-            assert!(
-                err.was_duplicate_by(UserColumn::Id),
-                "wrong column: {err:?}"
-            );
-            assert_eq!(err.duplicate_value(), Some(dup_id.to_string().as_str()));
+            assert_eq!(err.lane(), Lane::Rejected, "got {err:?}");
+            let cv = rejected_user(err);
+
+            assert!(matches!(&cv, UserConstraintViolation::Pkey(c) if c.attempted.is_none()));
 
             // The whole batch rolls back.
             assert!(users.find_by_id(dup_id).await.is_err());
@@ -216,10 +247,10 @@ async fn create_all_preexisting_duplicate_id_classifies_as_duplicate() -> anyhow
         Ok(_) => panic!("expected constraint violation"),
     };
 
-    assert!(!err.was_concurrent_modification());
-    assert!(err.was_duplicate());
-    assert!(err.was_duplicate_by(UserColumn::Id));
-    assert_eq!(err.duplicate_value(), Some(id.to_string().as_str()));
+    assert_eq!(err.lane(), Lane::Rejected);
+    let cv = rejected_user(err);
+
+    assert!(matches!(&cv, UserConstraintViolation::Pkey(c) if c.attempted.is_none()));
 
     Ok(())
 }
@@ -254,10 +285,11 @@ async fn update_to_duplicate_email_returns_constraint_violation_with_value() -> 
         Err(e) => e,
         Ok(_) => panic!("expected constraint violation"),
     };
+    let cv = rejected(err);
 
-    assert!(err.was_duplicate());
-    assert!(err.was_duplicate_by(ProfileColumn::Email));
-    assert_eq!(err.duplicate_value(), Some(email_a.as_str()));
+    assert!(
+        matches!(&cv, ProfileConstraintViolation::IdxProfilesEmail(c) if c.attempted.as_ref() == Some(&email_a))
+    );
 
     Ok(())
 }
@@ -284,25 +316,15 @@ async fn create_fk_violation_returns_constraint_violation() -> anyhow::Result<()
         Err(e) => e,
         Ok(_) => panic!("expected constraint violation"),
     };
+    let cv = rejected_order_item(err);
 
-    // FK violations are classified but are not duplicates.
-    assert!(!err.was_duplicate());
-    assert!(err.was_foreign_key_violation());
-    assert!(!err.was_check_violation());
-    assert_eq!(err.constraint_name(), Some("order_items_order_id_fkey"));
-    assert_eq!(
-        err.violated_constraint(),
-        Some(OrderItemConstraint::OrderIdFkey)
-    );
-    assert_eq!(
-        OrderItemConstraint::OrderIdFkey.kind(),
-        ConstraintKind::ForeignKey
-    );
-    assert_eq!(err.duplicate_value(), None);
-    match &err {
-        OrderItemCreateError::ConstraintViolation { column: None, .. } => {}
-        other => panic!("expected ConstraintViolation without column, got: {other:?}"),
-    }
+    assert_eq!(cv.constraint_name(), "order_items_order_id_fkey");
+    assert!(matches!(&cv, OrderItemConstraintViolation::OrderIdFkey(_)));
+    assert_eq!(cv.kind(), ConstraintKind::ForeignKey);
+
+    assert!(cv.is_foreign_key());
+    assert!(!cv.is_unique());
+    assert!(!cv.is_check());
 
     Ok(())
 }
@@ -324,18 +346,10 @@ async fn create_all_fk_violation_returns_constraint_violation() -> anyhow::Resul
         Err(e) => e,
         Ok(_) => panic!("expected constraint violation"),
     };
+    let cv = rejected_order_item(err);
 
-    assert!(!err.was_duplicate());
-    assert!(err.was_foreign_key_violation());
-    assert_eq!(err.constraint_name(), Some("order_items_order_id_fkey"));
-    assert_eq!(
-        err.violated_constraint(),
-        Some(OrderItemConstraint::OrderIdFkey)
-    );
-    match &err {
-        OrderItemCreateError::ConstraintViolation { column: None, .. } => {}
-        other => panic!("expected ConstraintViolation without column, got: {other:?}"),
-    }
+    assert_eq!(cv.constraint_name(), "order_items_order_id_fkey");
+    assert!(matches!(&cv, OrderItemConstraintViolation::OrderIdFkey(_)));
 
     Ok(())
 }
@@ -356,24 +370,15 @@ async fn create_check_violation_returns_constraint_violation() -> anyhow::Result
         Err(e) => e,
         Ok(_) => panic!("expected constraint violation"),
     };
+    let cv = rejected(err);
 
-    assert!(!err.was_duplicate());
-    assert!(err.was_check_violation());
-    assert!(!err.was_foreign_key_violation());
-    assert_eq!(err.constraint_name(), Some("profiles_email_not_blank"));
-    assert_eq!(
-        err.violated_constraint(),
-        Some(ProfileConstraint::EmailNotBlank)
-    );
-    assert_eq!(
-        ProfileConstraint::EmailNotBlank.kind(),
-        ConstraintKind::Check
-    );
-    assert_eq!(err.duplicate_value(), None);
-    match &err {
-        ProfileCreateError::ConstraintViolation { column: None, .. } => {}
-        other => panic!("expected ConstraintViolation without column, got: {other:?}"),
-    }
+    assert_eq!(cv.constraint_name(), "profiles_email_not_blank");
+    assert!(matches!(&cv, ProfileConstraintViolation::EmailNotBlank(_)));
+    assert_eq!(cv.kind(), ConstraintKind::Check);
+
+    assert!(cv.is_check());
+    assert!(!cv.is_unique());
+    assert!(!cv.is_foreign_key());
 
     Ok(())
 }
@@ -397,96 +402,169 @@ async fn update_check_violation_returns_constraint_violation() -> anyhow::Result
         Err(e) => e,
         Ok(_) => panic!("expected constraint violation"),
     };
+    let cv = rejected(err);
 
-    assert!(!err.was_duplicate());
-    assert!(err.was_check_violation());
-    assert_eq!(err.constraint_name(), Some("profiles_email_not_blank"));
-    assert_eq!(
-        err.violated_constraint(),
-        Some(ProfileConstraint::EmailNotBlank)
-    );
-    match &err {
-        ProfileModifyError::ConstraintViolation { column: None, .. } => {}
-        other => panic!("expected ConstraintViolation without column, got: {other:?}"),
-    }
+    assert_eq!(cv.constraint_name(), "profiles_email_not_blank");
+    assert!(matches!(&cv, ProfileConstraintViolation::EmailNotBlank(_)));
 
     Ok(())
 }
 
 // ===========================================================================
-// Not-found error tests
+// Not-found error tests — D2: missing is always Fatal(Invariant), never a
+// rejection. `NotFound` (the fatal's source) carries the entity/column/value.
 // ===========================================================================
 
 #[tokio::test]
-async fn find_by_id_not_found_has_column_and_value() -> anyhow::Result<()> {
+async fn find_by_id_not_found_is_fatal_invariant() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let users = Users::new(pool);
 
     let missing_id = UserId::new();
     let err = match users.find_by_id(missing_id).await {
         Err(e) => e,
-        Ok(_) => panic!("expected NotFound error"),
+        Ok(_) => panic!("expected a Fatal(Invariant) error"),
     };
 
-    // Column-agnostic check
-    assert!(err.was_not_found());
+    let fatal = match err {
+        Fault::Fatal(fatal) => fatal,
+        other => panic!("expected Fatal, got {other:?}"),
+    };
+    assert_eq!(fatal.kind, FatalKind::Invariant);
 
-    // Column-specific check
-    assert!(err.was_not_found_by(UserColumn::Id));
-    assert!(!err.was_not_found_by(UserColumn::Name));
-
-    // Value should use Display format and be parseable back into the ID type
-    let value = err.not_found_value().expect("should have a value");
-    let parsed: UserId = value
-        .parse()
-        .expect("not_found_value should be parseable as UserId");
+    let not_found = std::error::Error::source(&fatal)
+        .and_then(|s| s.downcast_ref::<NotFound>())
+        .expect("Fatal's source should be a NotFound");
+    assert_eq!(not_found.column, Some("id"));
+    let parsed: UserId = not_found.value.parse().expect("value parses as UserId");
     assert_eq!(parsed, missing_id);
 
-    // Pattern matching on the variant
-    match &err {
-        UserFindError::NotFound {
-            column: Some(UserColumn::Id),
-            value,
-            ..
-        } => {
-            let parsed: UserId = value.parse().expect("value should be parseable as UserId");
-            assert_eq!(parsed, missing_id);
-        }
-        other => panic!("expected NotFound with column Id, got: {other:?}"),
-    }
+    // maybe_find_by_id tolerates absence instead.
+    assert!(users.maybe_find_by_id(missing_id).await?.is_none());
 
     Ok(())
 }
 
 #[tokio::test]
-async fn find_by_name_not_found_has_column_and_value() -> anyhow::Result<()> {
+async fn find_by_name_not_found_is_fatal_invariant() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let users = Users::new(pool);
 
     let missing_name = format!("nonexistent_{}", UserId::new());
     let err = match users.find_by_name(&missing_name).await {
         Err(e) => e,
-        Ok(_) => panic!("expected NotFound error"),
+        Ok(_) => panic!("expected a Fatal(Invariant) error"),
     };
 
-    assert!(err.was_not_found());
-    assert!(err.was_not_found_by(UserColumn::Name));
-    assert!(!err.was_not_found_by(UserColumn::Id));
-
-    let value = err.not_found_value().expect("should have a value");
+    let fatal = match err {
+        Fault::Fatal(fatal) => fatal,
+        other => panic!("expected Fatal, got {other:?}"),
+    };
+    let not_found = std::error::Error::source(&fatal)
+        .and_then(|s| s.downcast_ref::<NotFound>())
+        .expect("Fatal's source should be a NotFound");
+    assert_eq!(not_found.column, Some("name"));
     assert!(
-        value.contains(&missing_name),
-        "not_found_value should contain the name: got {value}"
+        not_found.value.contains(&missing_name),
+        "NotFound's value should contain the name: got {}",
+        not_found.value
     );
 
-    // Pattern matching on the variant
-    match &err {
-        UserFindError::NotFound {
-            column: Some(UserColumn::Name),
-            ..
-        } => {}
-        other => panic!("expected NotFound with column Name, got: {other:?}"),
-    }
+    assert!(users.maybe_find_by_name(&missing_name).await?.is_none());
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn unknown_database_constraint_is_fatal_with_original_source() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let users = Users::new(pool.clone());
+    let mut op = DbOp::init(&pool).await?;
+    sqlx::query("ALTER TABLE users ADD CONSTRAINT v2_unknown_constraint CHECK (name <> 'v2-unknown-constraint-trigger') NOT VALID")
+        .execute(op.as_executor()).await?;
+    let new = NewUser::builder()
+        .id(UserId::new())
+        .name("v2-unknown-constraint-trigger")
+        .build()
+        .unwrap();
+    let error = users
+        .create_in_op(&mut op, new)
+        .await
+        .err()
+        .expect("check fails");
+    let Fail::Fatal(fatal) = error else {
+        panic!("unknown constraint must be fatal")
+    };
+    assert_eq!(fatal.kind, FatalKind::Invariant);
+    assert_eq!(fatal.context.as_deref(), Some("v2_unknown_constraint"));
+    let sql = std::error::Error::source(&fatal)
+        .unwrap()
+        .downcast_ref::<sqlx::Error>()
+        .unwrap();
+    assert_eq!(
+        sql.as_database_error().unwrap().constraint(),
+        Some("v2_unknown_constraint")
+    );
+    drop(op); // Transaction rollback removes the test-only constraint.
+    Ok(())
+}
+
+mod composite {
+    use super::entities::profile::*;
+    use es_entity::*;
+    use sqlx::PgPool;
+    #[derive(EsRepo)]
+    #[es_repo(
+        entity = "Profile",
+        tbl = "v2_profiles",
+        events_tbl = "v2_profile_events",
+        columns(
+            name(ty = "String", update(accessor = "data.name")),
+            email(ty = "String")
+        )
+    )]
+    pub struct Profiles {
+        pub pool: PgPool,
+    }
+}
+
+#[tokio::test]
+async fn composite_partial_index_preserves_typed_key_and_batch_uncertainty() -> anyhow::Result<()> {
+    let profiles = composite::Profiles {
+        pool: helpers::init_pool().await?,
+    };
+    let email = format!("composite-{}", ProfileId::new());
+    let make = |name: &str| {
+        NewProfile::builder()
+            .id(ProfileId::new())
+            .name(name)
+            .email(&email)
+            .build()
+            .unwrap()
+    };
+    // Outside the predicate, duplicate key fields are allowed.
+    profiles.create(make("inactive")).await?;
+    profiles.create(make("inactive")).await?;
+    profiles.create(make("active")).await?;
+    let e = profiles
+        .create(make("active"))
+        .await
+        .err()
+        .expect("duplicate active identity");
+    let Fail::Rejected(composite::ProfileConstraintViolation::ActiveIdentity(conflict)) = e else {
+        panic!("wrong constraint")
+    };
+    assert!(!conflict.to_string().contains(&email));
+    let attempted = conflict.attempted.unwrap();
+    assert_eq!(attempted.name, "active");
+    assert_eq!(attempted.email, email);
+    let e = profiles
+        .create_all(vec![make("active"), make("other")])
+        .await
+        .err()
+        .expect("duplicate active identity");
+    assert!(
+        matches!(e, Fail::Rejected(composite::ProfileConstraintViolation::ActiveIdentity(c)) if c.attempted.is_none())
+    );
     Ok(())
 }

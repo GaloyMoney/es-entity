@@ -1,0 +1,27 @@
+error[E0277]: the trait bound `Source: Rejection` is not satisfied
+  --> tests/v2/lift_source_not_rejection.rs:19:58
+   |
+19 |     let _: Result<Destination, _> = errlanes::Lift::lift(Source::Value(1));
+   |                                     -------------------- ^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |                                     |
+   |                                     required by a bound introduced by this call
+   |
+help: the trait `Rejection` is not implemented for `Source`
+  --> tests/v2/lift_source_not_rejection.rs:7:1
+   |
+ 7 | enum Source {
+   | ^^^^^^^^^^^
+   = note: required for `Destination` to implement `Lift<Source>`
+
+error[E0277]: the trait bound `Source: Rejection` is not satisfied
+  --> tests/v2/lift_source_not_rejection.rs:19:37
+   |
+19 |     let _: Result<Destination, _> = errlanes::Lift::lift(Source::Value(1));
+   |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `Rejection` is not implemented for `Source`
+  --> tests/v2/lift_source_not_rejection.rs:7:1
+   |
+ 7 | enum Source {
+   | ^^^^^^^^^^^
+   = note: required for `Destination` to implement `Lift<Source>`

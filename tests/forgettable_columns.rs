@@ -276,10 +276,7 @@ async fn staged_erasure_event_fences_stale_writers_on_delete() -> anyhow::Result
         .update(&mut stale)
         .await
         .expect_err("stale update after fenced delete must fail");
-    assert!(
-        err.was_concurrent_modification(),
-        "expected ConcurrentModification, got: {err}"
-    );
+    assert!(err.is_transient(), "expected Transient, got: {err}");
 
     // The index column stays NULL.
     let row = sqlx::query!(
@@ -317,33 +314,6 @@ async fn soft_delete_auto_forgets_the_index_column() -> anyhow::Result<()> {
     assert!(row.deleted);
     assert_eq!(row.email, None);
     assert_eq!(row.plan, "pro");
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn verify_forgotten_reports_live_index_columns() -> anyhow::Result<()> {
-    let pool = helpers::init_pool().await?;
-    let subscribers = Subscribers::new(pool);
-
-    let (mut subscriber, _email) = new_subscriber(&subscribers).await?;
-    let id = subscriber.id;
-
-    // Live entity: both the payload row and the materialised index column
-    // still hold the value.
-    let err = subscribers
-        .verify_forgotten(id)
-        .await
-        .expect_err("live entity must not verify as forgotten");
-    let remnants = err.not_forgotten_remnants().expect("NotForgotten");
-    assert_eq!(remnants.payload_rows, 1);
-    assert_eq!(remnants.live_index_columns, vec!["email"]);
-    assert!(remnants.event_fields.is_empty());
-
-    // After a fenced forget everything is physically absent.
-    subscriber.record_erasure();
-    subscribers.forget(subscriber).await?;
-    subscribers.verify_forgotten(id).await?;
 
     Ok(())
 }

@@ -8,7 +8,9 @@ for file in $(find . -name Cargo.toml); do
     sed -i'' "s/^version.*/version = \"${VERSION}\"/" ${file}
 done
 
-sed -i'' "s/es-entity-macros\", version = .*/es-entity-macros\", version = \"${VERSION}\" }/" ./Cargo.toml
+# Only the version string is rewritten so the rest of each entry (e.g.
+# `default-features = false` on errlanes) survives.
+sed -i'' -E "s/^((errlanes|errlanes-derive|es-entity-macros) = \{ path = \"[^\"]+\", version = )\"[^\"]*\"/\1\"${VERSION}\"/" ./Cargo.toml
 
 cargo update --workspace
 

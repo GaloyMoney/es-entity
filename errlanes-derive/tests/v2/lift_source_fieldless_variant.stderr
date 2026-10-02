@@ -1,0 +1,5 @@
+error: a whole-value `#[lift(Source)]` (naming a registered source with no variant) needs exactly one field to hold the source value
+  --> tests/v2/lift_source_fieldless_variant.rs:12:5
+   |
+12 |     InvalidPayload,
+   |     ^^^^^^^^^^^^^^

@@ -206,6 +206,10 @@ existing transaction) on the repository that:
 4. Rebuilds and returns the entity with forgotten fields set to
    `Forgettable::forgotten()`
 
+`forget` is idempotent — calling it again on an already-forgotten entity is a
+no-op that persists nothing and runs no hook; that is also how a caller
+"verifies" an erasure.
+
 ```rust,ignore
 // Load the entity
 let customer = customers.find_by_id(id).await?;
@@ -237,35 +241,8 @@ runs:
   back (the forget is retryable).
 
 If no staged events are persisted the hook is not invoked, matching
-`update`'s no-op semantics. A hook failure surfaces as
-`{Entity}ForgetError::PostPersistHookError`.
-
-## Verifying Erasure at the Storage Level
-
-Auditing an erasure by reloading the entity only proves the *hydrated* state
-reads back as forgotten. The generated `verify_forgotten` (and
-`verify_forgotten_in_op`) checks the **database** directly, so callers can
-trust physical absence without hand-maintaining a list of PII fields:
-
-1. no rows remain in the `_forgettable_payloads` table,
-2. all `Forgettable<..>` index columns are `NULL`, and
-3. no forgettable field holds a non-null value in the durable event JSON
-   (defense-in-depth: the framework always writes `null` there, so a hit
-   indicates out-of-band writes).
-
-```rust,ignore
-let customer = customers.forget(customer).await?;
-
-// Fails with `CustomerForgetError::NotForgotten(remnants)` if anything
-// forgettable is still physically present.
-customers.verify_forgotten(customer.id).await?;
-```
-
-The `NotForgotten` error carries a
-[`ForgettableRemnants`](https://docs.rs/es-entity) report describing exactly
-what survived (`payload_rows`, `live_index_columns`, `event_fields`),
-accessible via `err.not_forgotten_remnants()`. An id that was never persisted
-verifies trivially.
+`update`'s no-op semantics. A hook failure widens directly into `forget`'s
+`es_entity::RepoWriteError<{Entity}ConstraintViolation>` — see [Hooks](./repo-hooks.md).
 
 ## Custom Queries with `es_query!`
 

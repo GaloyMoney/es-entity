@@ -81,7 +81,7 @@ impl Users {
     pub async fn create(
         &self,
         new_entity: NewUser
-    ) -> Result<User, UserCreateError> {
+    ) -> Result<User, es_entity::RepoWriteError<UserConstraintViolation>> {
         let id = &new_entity.id;
         // The attribute specified in the `columns` option
         let name = &new_entity.name;

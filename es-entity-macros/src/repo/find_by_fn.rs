@@ -1,4 +1,3 @@
-use convert_case::{Case, Casing};
 use darling::ToTokens;
 use proc_macro2::{Span, TokenStream};
 use quote::{TokenStreamExt, quote};
@@ -11,12 +10,9 @@ pub struct FindByFn<'a> {
     entity: &'a syn::Ident,
     column: &'a Column,
     table_name: &'a str,
-    column_enum: syn::Ident,
-    find_error: syn::Ident,
-    query_error: syn::Ident,
     delete: DeleteOption,
     any_nested: bool,
-    post_hydrate_error: Option<&'a syn::Type>,
+    post_hydrate_hook: bool,
     forgettable_table_name: Option<&'a str>,
     snapshot_table_name: Option<&'a str>,
     scope: Option<ScopeInfo<'a>>,
@@ -32,12 +28,9 @@ impl<'a> FindByFn<'a> {
             column,
             entity: opts.entity(),
             table_name: opts.table_name(),
-            column_enum: opts.column_enum(),
-            find_error: opts.find_error(),
-            query_error: opts.query_error(),
             delete: opts.delete,
             any_nested: opts.any_nested(),
-            post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
+            post_hydrate_hook: opts.post_hydrate_hook.is_some(),
             forgettable_table_name: opts.forgettable_table_name(),
             snapshot_table_name: opts.snapshot_table_name(),
             scope: ScopeInfo::from_opts(opts),
@@ -62,11 +55,6 @@ impl<'a> FindByFn<'a> {
         let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
 
         for maybe in ["", "maybe_"] {
-            let error = if maybe.is_empty() {
-                &self.find_error
-            } else {
-                &self.query_error
-            };
             let result_type = if maybe.is_empty() {
                 quote! { #entity }
             } else {
@@ -97,7 +85,7 @@ impl<'a> FindByFn<'a> {
                         pub async fn #fn_name(
                             &self,
                             #column_name: #impl_expr
-                        ) -> Result<#result_type, #error> {
+                        ) -> Result<#result_type, es_entity::RepoReadError> {
                             self.repo.#fn_name(self.scope, #column_name).await
                         }
                     }
@@ -110,7 +98,7 @@ impl<'a> FindByFn<'a> {
                         &self,
                         #query_fn_op_arg,
                         #column_name: #impl_expr
-                    ) -> Result<#result_type, #error>
+                    ) -> Result<#result_type, es_entity::RepoReadError>
                         where
                             OP: #query_fn_op_traits
                     {
@@ -143,12 +131,6 @@ impl ToTokens for FindByFn<'_> {
         };
 
         for maybe in ["", "maybe_"] {
-            let error = if maybe.is_empty() {
-                &self.find_error
-            } else {
-                &self.query_error
-            };
-
             let result_type = if maybe.is_empty() {
                 quote! { #entity }
             } else {
@@ -258,35 +240,31 @@ impl ToTokens for FindByFn<'_> {
 
                 let fetch_and_validate = if maybe.is_empty() {
                     let entity_name_str = entity.to_string();
-                    let column_enum = &self.column_enum;
-                    let column_variant = syn::Ident::new(
-                        &column_name.to_string().to_case(Case::UpperCamel),
-                        Span::call_site(),
-                    );
-                    let post_hydrate_check = if self.post_hydrate_error.is_some() {
+                    let column_name_str = column_name.to_string();
+                    let post_hydrate_check = if self.post_hydrate_hook {
                         quote! {
-                            self.execute_post_hydrate_hook(&__entity).map_err(#error::PostHydrateError)?;
+                            self.execute_post_hydrate_hook(&__entity)?;
                         }
                     } else {
                         quote! {}
                     };
                     quote! {
-                        let __entity = #fetch_optional_call.ok_or_else(|| #error::NotFound {
-                            entity: #entity_name_str,
-                            column: Some(#column_enum::#column_variant),
-                            value: {
+                        let __entity = #fetch_optional_call.ok_or_else(|| es_entity::NotFound::new(
+                            #entity_name_str,
+                            Some(#column_name_str),
+                            {
                                 use es_entity::ToNotFoundValueFallback;
                                 es_entity::NotFoundValue(#column_name).to_not_found_value()
                             },
-                        })?;
+                        ))?;
                         #post_hydrate_check
                         Ok(__entity)
                     }
                 } else {
-                    let post_hydrate_check = if self.post_hydrate_error.is_some() {
+                    let post_hydrate_check = if self.post_hydrate_hook {
                         quote! {
                             if let Some(ref __entity) = __result {
-                                self.execute_post_hydrate_hook(__entity).map_err(#error::PostHydrateError)?;
+                                self.execute_post_hydrate_hook(__entity)?;
                             }
                         }
                     } else {
@@ -332,7 +310,7 @@ impl ToTokens for FindByFn<'_> {
                             &self,
                             #scope_fn_arg
                             #column_name: #impl_expr
-                        ) -> Result<#result_type, #error> {
+                        ) -> Result<#result_type, es_entity::RepoReadError> {
                             self.#fn_in_op(#query_fn_get_op, #scope_fn_pass #column_name).await
                         }
                     }
@@ -347,11 +325,11 @@ impl ToTokens for FindByFn<'_> {
                         #query_fn_op_arg,
                         #scope_fn_arg
                         #column_name: #impl_expr
-                    ) -> Result<#result_type, #error>
+                    ) -> Result<#result_type, es_entity::RepoReadError>
                         where
                             OP: #query_fn_op_traits
                     {
-                        let __result: Result<#result_type, #error> = async {
+                        let __result: Result<#result_type, es_entity::RepoReadError> = async {
                             #scope_convert
                             let #column_name = #column_name.#access_expr;
                             #record_field
@@ -388,12 +366,9 @@ mod tests {
             column: &column,
             entity: &entity,
             table_name: "entities",
-            column_enum: syn::Ident::new("EntityColumn", Span::call_site()),
-            find_error: syn::Ident::new("EntityFindError", Span::call_site()),
-            query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::No,
             any_nested: false,
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,
@@ -408,7 +383,7 @@ mod tests {
             pub async fn find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, EntityFindError> {
+            ) -> Result<Entity, es_entity::RepoReadError> {
                 self.find_by_id_in_op(self.pool(), id).await
             }
 
@@ -416,25 +391,25 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, EntityFindError>
+            ) -> Result<Entity, es_entity::RepoReadError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Entity, EntityFindError> = async {
+                let __result: Result<Entity, es_entity::RepoReadError> = async {
                     let id = id.borrow();
                     let __entity = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                     )
-                    .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
-                        entity: "Entity",
-                        column: Some(EntityColumn::Id),
-                        value: {
+                    .fetch_optional(op).await?.ok_or_else(|| es_entity::NotFound::new(
+                        "Entity",
+                        Some("id"),
+                        {
                                 use es_entity::ToNotFoundValueFallback;
                                 es_entity::NotFoundValue(id).to_not_found_value()
                             },
-                    })?;
+                    ))?;
                     Ok(__entity)
                 }.await;
 
@@ -444,7 +419,7 @@ mod tests {
             pub async fn maybe_find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, EntityQueryError> {
+            ) -> Result<Option<Entity>, es_entity::RepoReadError> {
                 self.maybe_find_by_id_in_op(self.pool(), id).await
             }
 
@@ -452,11 +427,11 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, EntityQueryError>
+            ) -> Result<Option<Entity>, es_entity::RepoReadError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Option<Entity>, EntityQueryError> = async {
+                let __result: Result<Option<Entity>, es_entity::RepoReadError> = async {
                     let id = id.borrow();
                     let __result = es_entity::es_query!(
                         entity = Entity,
@@ -488,12 +463,9 @@ mod tests {
             column: &column,
             entity: &entity,
             table_name: "entities",
-            column_enum: syn::Ident::new("EntityColumn", Span::call_site()),
-            find_error: syn::Ident::new("EntityFindError", Span::call_site()),
-            query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::No,
             any_nested: false,
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,
@@ -508,7 +480,7 @@ mod tests {
             pub async fn find_by_email(
                 &self,
                 email: impl std::convert::AsRef<str>
-            ) -> Result<Entity, EntityFindError> {
+            ) -> Result<Entity, es_entity::RepoReadError> {
                 self.find_by_email_in_op(self.pool(), email).await
             }
 
@@ -516,25 +488,25 @@ mod tests {
                 &self,
                 op: OP,
                 email: impl std::convert::AsRef<str>
-            ) -> Result<Entity, EntityFindError>
+            ) -> Result<Entity, es_entity::RepoReadError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Entity, EntityFindError> = async {
+                let __result: Result<Entity, es_entity::RepoReadError> = async {
                     let email = email.as_ref();
                     let __entity = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE email = $1",
                         email as &str,
                     )
-                    .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
-                        entity: "Entity",
-                        column: Some(EntityColumn::Email),
-                        value: {
+                    .fetch_optional(op).await?.ok_or_else(|| es_entity::NotFound::new(
+                        "Entity",
+                        Some("email"),
+                        {
                                 use es_entity::ToNotFoundValueFallback;
                                 es_entity::NotFoundValue(email).to_not_found_value()
                             },
-                    })?;
+                    ))?;
                     Ok(__entity)
                 }.await;
 
@@ -544,7 +516,7 @@ mod tests {
             pub async fn maybe_find_by_email(
                 &self,
                 email: impl std::convert::AsRef<str>
-            ) -> Result<Option<Entity>, EntityQueryError> {
+            ) -> Result<Option<Entity>, es_entity::RepoReadError> {
                 self.maybe_find_by_email_in_op(self.pool(), email).await
             }
 
@@ -552,11 +524,11 @@ mod tests {
                 &self,
                 op: OP,
                 email: impl std::convert::AsRef<str>
-            ) -> Result<Option<Entity>, EntityQueryError>
+            ) -> Result<Option<Entity>, es_entity::RepoReadError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Option<Entity>, EntityQueryError> = async {
+                let __result: Result<Option<Entity>, es_entity::RepoReadError> = async {
                     let email = email.as_ref();
                     let __result = es_entity::es_query!(
                         entity = Entity,
@@ -585,12 +557,9 @@ mod tests {
             column: &column,
             entity: &entity,
             table_name: "entities",
-            column_enum: syn::Ident::new("EntityColumn", Span::call_site()),
-            find_error: syn::Ident::new("EntityFindError", Span::call_site()),
-            query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::SoftWithoutQueries,
             any_nested: false,
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,
@@ -605,7 +574,7 @@ mod tests {
             pub async fn find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, EntityFindError> {
+            ) -> Result<Entity, es_entity::RepoReadError> {
                 self.find_by_id_in_op(self.pool(), id).await
             }
 
@@ -613,25 +582,25 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, EntityFindError>
+            ) -> Result<Entity, es_entity::RepoReadError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Entity, EntityFindError> = async {
+                let __result: Result<Entity, es_entity::RepoReadError> = async {
                     let id = id.borrow();
                     let __entity = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1 AND deleted = FALSE",
                         id as &EntityId,
                     )
-                    .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
-                        entity: "Entity",
-                        column: Some(EntityColumn::Id),
-                        value: {
+                    .fetch_optional(op).await?.ok_or_else(|| es_entity::NotFound::new(
+                        "Entity",
+                        Some("id"),
+                        {
                                 use es_entity::ToNotFoundValueFallback;
                                 es_entity::NotFoundValue(id).to_not_found_value()
                             },
-                    })?;
+                    ))?;
                     Ok(__entity)
                 }.await;
 
@@ -641,7 +610,7 @@ mod tests {
             pub async fn maybe_find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, EntityQueryError> {
+            ) -> Result<Option<Entity>, es_entity::RepoReadError> {
                 self.maybe_find_by_id_in_op(self.pool(), id).await
             }
 
@@ -649,11 +618,11 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, EntityQueryError>
+            ) -> Result<Option<Entity>, es_entity::RepoReadError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Option<Entity>, EntityQueryError> = async {
+                let __result: Result<Option<Entity>, es_entity::RepoReadError> = async {
                     let id = id.borrow();
                     let __result = es_entity::es_query!(
                         entity = Entity,
@@ -682,12 +651,9 @@ mod tests {
             column: &column,
             entity: &entity,
             table_name: "entities",
-            column_enum: syn::Ident::new("EntityColumn", Span::call_site()),
-            find_error: syn::Ident::new("EntityFindError", Span::call_site()),
-            query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::Soft,
             any_nested: false,
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,
@@ -714,12 +680,9 @@ mod tests {
             column: &column,
             entity: &entity,
             table_name: "entities",
-            column_enum: syn::Ident::new("EntityColumn", Span::call_site()),
-            find_error: syn::Ident::new("EntityFindError", Span::call_site()),
-            query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::Soft,
             any_nested: true,
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,
@@ -748,12 +711,9 @@ mod tests {
             column: &column,
             entity: &entity,
             table_name: "entities",
-            column_enum: syn::Ident::new("EntityColumn", Span::call_site()),
-            find_error: syn::Ident::new("EntityFindError", Span::call_site()),
-            query_error: syn::Ident::new("EntityQueryError", Span::call_site()),
             delete: DeleteOption::No,
             any_nested: true,
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,
@@ -768,7 +728,7 @@ mod tests {
             pub async fn find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, EntityFindError> {
+            ) -> Result<Entity, es_entity::RepoReadError> {
                 self.find_by_id_in_op(self.pool(), id).await
             }
 
@@ -776,25 +736,25 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Entity, EntityFindError>
+            ) -> Result<Entity, es_entity::RepoReadError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Entity, EntityFindError> = async {
+                let __result: Result<Entity, es_entity::RepoReadError> = async {
                     let id = id.borrow();
                     let __entity = es_entity::es_query!(
                         entity = Entity,
                         "SELECT id FROM entities WHERE id = $1",
                         id as &EntityId,
                     )
-                    .fetch_optional(op).await?.ok_or_else(|| EntityFindError::NotFound {
-                        entity: "Entity",
-                        column: Some(EntityColumn::Id),
-                        value: {
+                    .fetch_optional(op).await?.ok_or_else(|| es_entity::NotFound::new(
+                        "Entity",
+                        Some("id"),
+                        {
                                 use es_entity::ToNotFoundValueFallback;
                                 es_entity::NotFoundValue(id).to_not_found_value()
                             },
-                    })?;
+                    ))?;
                     Ok(__entity)
                 }.await;
 
@@ -804,7 +764,7 @@ mod tests {
             pub async fn maybe_find_by_id(
                 &self,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, EntityQueryError> {
+            ) -> Result<Option<Entity>, es_entity::RepoReadError> {
                 self.maybe_find_by_id_in_op(self.pool(), id).await
             }
 
@@ -812,11 +772,11 @@ mod tests {
                 &self,
                 op: OP,
                 id: impl std::borrow::Borrow<EntityId>
-            ) -> Result<Option<Entity>, EntityQueryError>
+            ) -> Result<Option<Entity>, es_entity::RepoReadError>
                 where
                     OP: es_entity::IntoOneTimeExecutor<'a>
             {
-                let __result: Result<Option<Entity>, EntityQueryError> = async {
+                let __result: Result<Option<Entity>, es_entity::RepoReadError> = async {
                     let id = id.borrow();
                     let __result = es_entity::es_query!(
                         entity = Entity,

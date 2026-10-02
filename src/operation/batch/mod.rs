@@ -51,6 +51,7 @@ mod transient;
 use std::future::Future;
 
 use super::{SavepointOp, SavepointOperation};
+use crate::errlanes::{Fatal, FatalKind, Fault, lanes};
 
 pub use search::*;
 pub use transient::*;
@@ -69,14 +70,17 @@ pub trait BatchIsolation: SavepointOperation {
     /// batch-mates still commit. Outcomes are returned positionally: one entry
     /// per input, `f`'s own `Ok`/`Err` preserved.
     ///
-    /// The outer `Err(sqlx::Error)` means the savepoint machinery itself
-    /// failed, leaving the enclosing transaction in an indeterminate state:
-    /// abandon it.
+    /// The outer `Err` means the savepoint machinery itself failed, leaving
+    /// the enclosing transaction in an indeterminate state: abandon it. The
+    /// `sqlx::Error` is classified by errlanes' sqlx lane table, so a lost
+    /// connection or a deadlock on the savepoint statement itself arrives as
+    /// `Transient` — retry the whole transaction — and anything else as
+    /// `Fatal`.
     fn run_isolated<'a, T, V, E, F>(
         &'a mut self,
         items: &'a [T],
         f: F,
-    ) -> impl Future<Output = Result<Vec<Result<V, E>>, sqlx::Error>> + 'a
+    ) -> impl Future<Output = Result<Vec<Result<V, E>>, Fault<lanes!(Transient, Fatal)>>> + 'a
     where
         T: 'a,
         V: 'a,
@@ -109,7 +113,7 @@ pub trait BatchIsolation: SavepointOperation {
         items: &'a [T],
         budget: BisectBudget,
         f: F,
-    ) -> impl Future<Output = Result<BisectOutcomes<E>, sqlx::Error>> + 'a
+    ) -> impl Future<Output = Result<BisectOutcomes<E>, Fault<lanes!(Transient, Fatal)>>> + 'a
     where
         T: 'a,
         E: std::error::Error + 'static,
@@ -118,7 +122,7 @@ pub trait BatchIsolation: SavepointOperation {
         self.run_bisected_with(
             items,
             budget,
-            TransientPolicy::new(sqlstate_is_transient::<E> as fn(&E) -> bool),
+            TransientPolicy::new(is_contention::<E> as fn(&E) -> bool),
             f,
         )
     }
@@ -128,13 +132,20 @@ pub trait BatchIsolation: SavepointOperation {
     ///
     /// Classification being the caller's, the error bound here is just
     /// [`Display`](std::fmt::Display).
+    ///
+    /// The outer `Err` is the search's own failure, never one of `f`'s:
+    /// the savepoint machinery failed (classified as in
+    /// [`run_isolated`](Self::run_isolated)), or the transient allowance ran
+    /// out before anything could be attributed to a range —
+    /// `Fatal(Exhausted)`, since the retries have already been spent here;
+    /// the caller re-runs the whole batch later rather than automatically.
     fn run_bisected_with<'a, T, E, F, P>(
         &'a mut self,
         items: &'a [T],
         budget: BisectBudget,
         policy: TransientPolicy<P>,
         f: F,
-    ) -> impl Future<Output = Result<BisectOutcomes<E>, sqlx::Error>> + 'a
+    ) -> impl Future<Output = Result<BisectOutcomes<E>, Fault<lanes!(Transient, Fatal)>>> + 'a
     where
         T: 'a,
         E: std::fmt::Display + 'a,
@@ -159,10 +170,7 @@ pub trait BatchIsolation: SavepointOperation {
                     // The search learned nothing about the items, so there are
                     // no per-item verdicts to return — the caller re-runs the
                     // whole batch.
-                    return Err(sqlx::Error::Protocol(match search.last_error() {
-                        Some(error) => format!("{limit}; last error: {error}"),
-                        None => limit.to_string(),
-                    }));
+                    return Err(Fatal::from_error(FatalKind::Exhausted, limit).into());
                 }
             }
 

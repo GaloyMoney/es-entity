@@ -14,86 +14,18 @@ fn bare_table_name(events_table_name: &str) -> &str {
         .expect("rsplit yields at least one element")
 }
 
-/// The `extract_concurrent_modification` helper, which turns a unique
-/// violation into the caller's `ConcurrentModification` variant.
-///
-/// It is emitted separately from `persist_events` because the combined write
-/// statements classify their own errors, yet the follow-up forgettable
-/// payload inserts (which are plain statements) still need it.
-pub fn extract_concurrent_modification_fn() -> TokenStream {
-    let mut tokens = TokenStream::new();
-    tokens.append_all(quote! {
-        fn extract_concurrent_modification<T, __EsErr: From<sqlx::Error>>(
-            res: Result<T, sqlx::Error>,
-            concurrent_modification: __EsErr,
-        ) -> Result<T, __EsErr> {
-            match res {
-                Ok(v) => Ok(v),
-                Err(sqlx::Error::Database(ref db_err)) if db_err.is_unique_violation() => {
-                    Err(concurrent_modification)
-                }
-                Err(e) => Err(__EsErr::from(e)),
-            }
-        }
-    });
-    tokens
-}
-
-/// The `map_err` closure for a combined write statement whose error type has
-/// no `ConstraintViolation` variant (e.g. the generated `{Entity}ForgetError`).
-/// Only the events-table unique violation is distinguished; everything else
-/// stays `Sqlx`.
-pub fn concurrent_modification_classifier(
-    error: &syn::Ident,
-    events_table_name: &str,
-) -> TokenStream {
-    let events_table = bare_table_name(events_table_name);
-    quote! {
-        |e| match &e {
-            sqlx::Error::Database(db_err)
-                if db_err.is_unique_violation()
-                    && db_err.table() == Some(#events_table) =>
-            {
-                #error::ConcurrentModification
-            }
-            _ => #error::Sqlx(e),
-        }
-    }
-}
-
-/// The match arm shared by both combined-write classifiers: a classified
-/// violation reported against any table other than the events table is the
-/// index table's, and maps straight from the constraint Postgres named.
-///
-/// The events table name may be schema-qualified in the repo options;
-/// Postgres reports the bare table name in errors, so only the last path
-/// component is compared.
-fn index_violation_arm(error: &syn::Ident, events_table: &str) -> TokenStream {
-    quote! {
-        sqlx::Error::Database(db_err)
-            if db_err.table() != Some(#events_table)
-                && es_entity::is_classified_constraint_violation(db_err.as_ref()) =>
-        {
-            #error::ConstraintViolation {
-                column: Self::map_constraint_column(db_err.constraint()),
-                value: es_entity::extract_constraint_value(db_err.as_ref()),
-                inner: e,
-            }
-        }
-    }
-}
-
-/// The classifier helpers for the combined index+events write statements,
-/// emitted once per repo so the call sites are a bare `map_err` function
-/// reference instead of a match rendered into every write path.
+/// The classifier helpers for the combined index+events write statements and
+/// the column-less conflict paths, emitted once per repo so the call sites
+/// are a bare `map_err`/`Self::` reference instead of a match rendered into
+/// every write path.
 pub struct ErrorClassifier<'a> {
-    create_error: syn::Ident,
-    modify_error: syn::Ident,
+    constraint_violation: syn::Ident,
+
     events_table_name: &'a str,
     table_name: &'a str,
-    /// `classify_write_error` is emitted only where a write path actually
+    /// `classify_update_write` is emitted only where a write path actually
     /// calls it — an uncalled private helper is dead code, and consumers build
-    /// with `-D warnings`. `classify_create_error` needs no such gate:
+    /// with `-D warnings`. `classify_create_write` needs no such gate:
     /// `create` and `create_all` always issue the combined statement.
     needs_write_classifier: bool,
 }
@@ -101,8 +33,8 @@ pub struct ErrorClassifier<'a> {
 impl<'a> From<&'a RepositoryOptions> for ErrorClassifier<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
-            create_error: opts.create_error(),
-            modify_error: opts.modify_error(),
+            constraint_violation: opts.constraint_violation(),
+
             events_table_name: opts.events_table_name(),
             table_name: opts.table_name(),
             needs_write_classifier: opts.columns.updates_needed() || opts.delete.is_soft(),
@@ -112,16 +44,38 @@ impl<'a> From<&'a RepositoryOptions> for ErrorClassifier<'a> {
 
 impl ToTokens for ErrorClassifier<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        tokens.append_all(create_error_classifier_fn(
-            &self.create_error,
+        tokens.append_all(create_write_classifier_fn(
+            &self.constraint_violation,
             self.events_table_name,
             self.table_name,
         ));
         if self.needs_write_classifier {
-            tokens.append_all(write_error_classifier_fn(
-                &self.modify_error,
+            tokens.append_all(update_write_classifier_fn(
+                &self.constraint_violation,
                 self.events_table_name,
             ));
+        }
+    }
+}
+
+/// Shared by both combined-write classifiers: a classified violation
+/// reported against any table other than the events table is the index
+/// table's, and maps straight from the constraint Postgres named.
+///
+/// The events table name may be schema-qualified in the repo options;
+/// Postgres reports the bare table name in errors, so only the last path
+/// component is compared.
+fn index_violation_arm(constraint_violation: &syn::Ident, events_table: &str) -> TokenStream {
+    quote! {
+        sqlx::Error::Database(db_err)
+            if db_err.table() != Some(#events_table)
+                && es_entity::is_classified_constraint_violation(db_err.as_ref()) =>
+        {
+            let name = db_err.constraint().unwrap_or("unknown").to_owned();
+            match #constraint_violation::from_database(e, &name) {
+                Ok(rejection) => errlanes::Fail::Rejected(rejection),
+                Err(source) => errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, source).with_context(name).into(),
+            }
         }
     }
 }
@@ -133,22 +87,21 @@ impl ToTokens for ErrorClassifier<'_> {
 /// violation on the events-table `(id, sequence)` primary key can only mean
 /// the id already exists — a pre-existing row, a concurrent create, or an
 /// intra-batch duplicate in `create_all`. That is semantically a duplicate
-/// id, not a concurrent modification.
+/// id, not a concurrent conflict, so it is a `Rejected` constraint
+/// violation, not `Transient`.
 ///
 /// Postgres executes the data-modifying CTE (index insert) and the main
 /// statement (events insert) interleaved with no guaranteed ordering, so for
 /// a duplicate id either table's constraint may fire first depending on the
-/// chosen plan. Both are therefore classified identically as the id column's
-/// `ConstraintViolation`:
+/// chosen plan. Both are therefore classified identically:
 ///
-/// - unique violation on the events table → `ConstraintViolation` with the
-///   column resolved via the index table's pkey constraint name and the value
-///   being the id half of the `(id, sequence)` key
-/// - classified violation elsewhere (the index table) → `ConstraintViolation`
-///   mapped from the reported constraint
-/// - anything else → `Sqlx`
-fn create_error_classifier_fn(
-    error: &syn::Ident,
+/// - unique violation on the events table → `Rejected` on the id column's
+///   pkey constraint
+/// - classified violation elsewhere (the index table) → `Rejected` mapped
+///   from the reported constraint
+/// - anything else → the central `sqlx::Error` classifier
+fn create_write_classifier_fn(
+    constraint_violation: &syn::Ident,
     events_table_name: &str,
     table_name: &str,
 ) -> TokenStream {
@@ -156,23 +109,22 @@ fn create_error_classifier_fn(
     // Must match the id column's constraint name in `ErrorTypes::new`, which
     // formats it from the un-shortened table name.
     let index_pkey = format!("{table_name}_pkey");
-    let index_arm = index_violation_arm(error, events_table);
+    let index_arm = index_violation_arm(constraint_violation, events_table);
     quote! {
         #[inline(always)]
-        fn classify_create_error(e: sqlx::Error) -> #error {
+        fn classify_create_write(e: sqlx::Error) -> es_entity::RepoWriteError<#constraint_violation> {
             match &e {
                 sqlx::Error::Database(db_err)
                     if db_err.is_unique_violation()
                         && db_err.table() == Some(#events_table) =>
                 {
-                    #error::ConstraintViolation {
-                        column: Self::map_constraint_column(Some(#index_pkey)),
-                        value: es_entity::extract_events_pkey_id_value(db_err.as_ref()),
-                        inner: e,
+                    match #constraint_violation::from_database(e, #index_pkey) {
+                        Ok(rejection) => errlanes::Fail::Rejected(rejection),
+                        Err(source) => errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, source).with_context(#index_pkey).into(),
                     }
                 }
                 #index_arm
-                _ => #error::Sqlx(e),
+                _ => errlanes::Fail::from(e),
             }
         }
     }
@@ -184,29 +136,104 @@ fn create_error_classifier_fn(
 /// A single statement can fail from either table, so classification switches
 /// on `DatabaseError::table()` instead of on which statement failed:
 ///
-/// - unique violation on the events table → `ConcurrentModification`
-/// - classified violation elsewhere (the index table) → `ConstraintViolation`
-/// - anything else (including events-table FK violations) → `Sqlx`
-///
-/// Unlike the create paths, the entity here already has persisted events, so
-/// an events-table `(id, sequence)` conflict genuinely means another writer
-/// claimed the next sequence first.
-fn write_error_classifier_fn(error: &syn::Ident, events_table_name: &str) -> TokenStream {
+/// - unique violation on the events table → `Transient(OptimisticConflict)`
+///   — the entity already has persisted events, so an events-table `(id,
+///   sequence)` conflict genuinely means another writer claimed the next
+///   sequence first
+/// - classified violation elsewhere (the index table) → `Rejected`
+/// - anything else (including events-table FK violations) → the central
+///   `sqlx::Error` classifier
+fn update_write_classifier_fn(
+    constraint_violation: &syn::Ident,
+    events_table_name: &str,
+) -> TokenStream {
     let events_table = bare_table_name(events_table_name);
-    let index_arm = index_violation_arm(error, events_table);
+    let index_arm = index_violation_arm(constraint_violation, events_table);
     quote! {
         #[inline(always)]
-        fn classify_write_error(e: sqlx::Error) -> #error {
+        fn classify_update_write(
+            e: sqlx::Error,
+            context: impl Into<std::borrow::Cow<'static, str>>,
+        ) -> es_entity::RepoWriteError<#constraint_violation> {
             match &e {
                 sqlx::Error::Database(db_err)
                     if db_err.is_unique_violation()
                         && db_err.table() == Some(#events_table) =>
                 {
-                    #error::ConcurrentModification
+                    errlanes::Fail::from(
+                        errlanes::Transient::from_error(errlanes::TransientKind::OptimisticConflict, e)
+                            .with_context(context)
+                    )
                 }
                 #index_arm
-                _ => #error::Sqlx(e),
+                _ => errlanes::Fail::from(e),
             }
         }
+    }
+}
+
+/// Classifies a possible conflict from a plain (non-combined) statement:
+/// the column-less `persist_events` write paths and the forgettable-payload
+/// inserts. Both share one events-table primary key shape `(id, sequence)`,
+/// but only a conflict *on the events table* is a real race — a conflict on
+/// any other table (e.g. the forgettable payloads table, keyed
+/// `(entity_id, sequence)`) is a bug: that table's rows are only ever
+/// written once, by the same statement that advanced the sequence.
+///
+/// Every call site passes its repo's `events_table_name()` unchanged, which
+/// may be schema-qualified (`events_tbl = "schema.table"`); Postgres reports
+/// only the bare table name in `DatabaseError::table()`, so the comparison
+/// strips a schema prefix here — once, centrally — rather than requiring
+/// every call site to remember to.
+pub fn classify_conflict_fn() -> TokenStream {
+    quote! {
+        #[inline(always)]
+        fn classify_conflict<T, D>(
+            res: Result<T, sqlx::Error>,
+            events_table: &'static str,
+            context: impl FnOnce() -> String,
+        ) -> Result<T, es_entity::RepoWriteError<D>> {
+            let events_table = events_table.rsplit('.').next().unwrap_or(events_table);
+            match res {
+                Ok(v) => Ok(v),
+                Err(e) if e.as_database_error().is_some_and(|db_err|
+                    db_err.is_unique_violation() && db_err.table() == Some(events_table)) =>
+                {
+                    Err(errlanes::Fail::from(
+                        errlanes::Transient::from_error(errlanes::TransientKind::OptimisticConflict, e)
+                            .with_context(context())
+                    ))
+                }
+                Err(e) if e.as_database_error().is_some_and(|db_err| db_err.is_unique_violation()) => {
+                    Err(errlanes::Fail::from(errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, e).with_context(context())))
+                }
+                Err(e) => Err(errlanes::Fail::from(e)),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use quote::ToTokens;
+
+    use super::*;
+
+    /// Regression for a misclassified events-table conflict on a
+    /// schema-qualified `events_tbl`: `classify_conflict`'s generated body
+    /// must strip a schema prefix off its runtime `events_table` argument
+    /// before comparing it against `DatabaseError::table()`, which Postgres
+    /// only ever reports bare. Without the strip, a unique violation on
+    /// e.g. `schema.entity_events` never matches and is misclassified
+    /// `Fatal` instead of `Transient` — so update/forget/persist_events
+    /// conflicts on such a repo would never be retried.
+    #[test]
+    fn classify_conflict_strips_schema_prefix_before_comparing() {
+        let output = classify_conflict_fn().into_token_stream().to_string();
+        assert!(
+            output.contains("events_table . rsplit ('.') . next ()"),
+            "classify_conflict must strip a schema prefix off `events_table` \
+             before comparing it to `db_err.table()`: {output}"
+        );
     }
 }

@@ -16,9 +16,7 @@ pub struct SnapshotFns<'a> {
     events_table_name: &'a str,
     snapshot_table_name: &'a str,
     forgettable_table_name: Option<&'a str>,
-    column_enum: syn::Ident,
-    find_error: syn::Ident,
-    modify_error: syn::Ident,
+    constraint_violation: syn::Ident,
 }
 
 impl<'a> SnapshotFns<'a> {
@@ -31,9 +29,7 @@ impl<'a> SnapshotFns<'a> {
             events_table_name: opts.events_table_name(),
             snapshot_table_name,
             forgettable_table_name: opts.forgettable_table_name(),
-            column_enum: opts.column_enum(),
-            find_error: opts.find_error(),
-            modify_error: opts.modify_error(),
+            constraint_violation: opts.constraint_violation(),
         })
     }
 
@@ -41,9 +37,7 @@ impl<'a> SnapshotFns<'a> {
     pub fn in_impl_tokens(&self) -> TokenStream {
         let entity = self.entity;
         let id_type = self.id;
-        let modify_error = &self.modify_error;
-        let find_error = &self.find_error;
-        let column_enum = &self.column_enum;
+        let constraint_violation = &self.constraint_violation;
         let snapshot_tbl = self.snapshot_table_name;
         let table_name = self.table_name;
         let events_table_name = self.events_table_name;
@@ -117,21 +111,21 @@ impl<'a> SnapshotFns<'a> {
                 &self,
                 op: OP,
                 id: &#id_type,
-            ) -> Result<#entity, #find_error>
+            ) -> Result<#entity, es_entity::RepoReadError>
             where
                 OP: es_entity::IntoOneTimeExecutor<'a>,
             {
                 #query_call
                     .fetch_optional(op)
                     .await?
-                    .ok_or_else(|| #find_error::NotFound {
-                        entity: #entity_name,
-                        column: Some(#column_enum::Id),
-                        value: {
+                    .ok_or_else(|| es_entity::NotFound::new(
+                        #entity_name,
+                        Some("id"),
+                        {
                             use es_entity::ToNotFoundValueFallback;
                             es_entity::NotFoundValue(id).to_not_found_value()
                         },
-                    })
+                    ).into())
             }
 
             /// Writes `capture()`'s result for an entity with no staged
@@ -143,12 +137,14 @@ impl<'a> SnapshotFns<'a> {
                 &self,
                 op: &mut OP,
                 entity: &mut #entity,
-            ) -> Result<bool, #modify_error>
+            ) -> Result<bool, es_entity::RepoWriteError<#constraint_violation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized,
             {
                 if entity.events().any_new() {
-                    return Err(#modify_error::ConcurrentModification);
+                    return Err(errlanes::Fail::from(errlanes::Fatal::invariant(
+                        "snapshot with unpersisted events",
+                    )));
                 }
                 let state = match <#entity as es_entity::HeadSnapshot>::capture(&*entity) {
                     Some(state) => state,

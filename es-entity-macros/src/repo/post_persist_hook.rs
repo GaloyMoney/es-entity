@@ -3,12 +3,14 @@ use proc_macro2::TokenStream;
 use quote::{TokenStreamExt, quote};
 
 use super::RepositoryOptions;
-use super::options::PostPersistHookConfig;
 
+/// The hook runs queries through `op`, so it can fail transiently as well as
+/// fatally: it returns `Fault<lanes!(Transient, Fatal)>`, which the calling op
+/// `?`s into its own `RepoWriteError`.
 pub struct PostPersistHook<'a> {
     event: &'a syn::Ident,
     entity: &'a syn::Ident,
-    hook: &'a Option<PostPersistHookConfig>,
+    hook: Option<&'a syn::Ident>,
 }
 
 impl<'a> From<&'a RepositoryOptions> for PostPersistHook<'a> {
@@ -16,7 +18,7 @@ impl<'a> From<&'a RepositoryOptions> for PostPersistHook<'a> {
         Self {
             event: opts.event(),
             entity: opts.entity(),
-            hook: &opts.post_persist_hook,
+            hook: opts.post_persist_hook.as_ref(),
         }
     }
 }
@@ -26,11 +28,8 @@ impl ToTokens for PostPersistHook<'_> {
         let event = &self.event;
         let entity = &self.entity;
 
-        let (error_ty, hook, op_param) = if let Some(config) = self.hook {
-            let method = &config.method;
-            let error = &config.error;
-            (
-                quote! { #error },
+        let (hook, op_param) = match self.hook {
+            Some(method) => (
                 quote! {
                     // The caller's hook method (`#method`) lives in the
                     // consuming crate and, by every existing convention, is
@@ -46,21 +45,13 @@ impl ToTokens for PostPersistHook<'_> {
                     // `Sized` bound no matter what `OP` is here, letting this
                     // wrapper — and therefore every caller of it — stay
                     // `?Sized` unconditionally.
-                    self.#method(&mut op, entity, new_events).await?;
-                    Ok(())
+                    self.#method(&mut op, entity, new_events).await
                 },
                 // `mut` is only needed to take `&mut op` above; declaring it
                 // unconditionally would warn `unused_mut` on the no-hook path.
                 quote! { mut op: &mut OP },
-            )
-        } else {
-            (
-                quote! { sqlx::Error },
-                quote! {
-                    Ok(())
-                },
-                quote! { op: &mut OP },
-            )
+            ),
+            None => (quote! { Ok(()) }, quote! { op: &mut OP }),
         };
 
         tokens.append_all(quote! {
@@ -70,7 +61,7 @@ impl ToTokens for PostPersistHook<'_> {
                 #op_param,
                 entity: &#entity,
                 new_events: es_entity::LastPersisted<'_, #event>
-            ) -> Result<(), #error_ty>
+            ) -> Result<(), errlanes::Fault<errlanes::lanes!(Transient, Fatal)>>
                 where
                     OP: es_entity::AtomicOperation + ?Sized
             {
@@ -88,12 +79,11 @@ mod tests {
     fn post_persist_hook_none() {
         let event = syn::Ident::new("EntityEvent", proc_macro2::Span::call_site());
         let entity = syn::Ident::new("Entity", proc_macro2::Span::call_site());
-        let hook = None;
 
         let hook = PostPersistHook {
             event: &event,
             entity: &entity,
-            hook: &hook,
+            hook: None,
         };
 
         let mut tokens = TokenStream::new();
@@ -105,7 +95,7 @@ mod tests {
                 op: &mut OP,
                 entity: &Entity,
                 new_events: es_entity::LastPersisted<'_, EntityEvent>
-            ) -> Result<(), sqlx::Error>
+            ) -> Result<(), errlanes::Fault<errlanes::lanes!(Transient, Fatal)>>
                 where
                     OP: es_entity::AtomicOperation + ?Sized
             {
@@ -120,15 +110,12 @@ mod tests {
     fn post_persist_hook_some() {
         let event = syn::Ident::new("EntityEvent", proc_macro2::Span::call_site());
         let entity = syn::Ident::new("Entity", proc_macro2::Span::call_site());
-        let config = Some(PostPersistHookConfig {
-            method: syn::Ident::new("on_persist", proc_macro2::Span::call_site()),
-            error: syn::parse_str("MyPersistError").unwrap(),
-        });
+        let method = syn::Ident::new("on_persist", proc_macro2::Span::call_site());
 
         let hook = PostPersistHook {
             event: &event,
             entity: &entity,
-            hook: &config,
+            hook: Some(&method),
         };
 
         let mut tokens = TokenStream::new();
@@ -140,12 +127,11 @@ mod tests {
                 mut op: &mut OP,
                 entity: &Entity,
                 new_events: es_entity::LastPersisted<'_, EntityEvent>
-            ) -> Result<(), MyPersistError>
+            ) -> Result<(), errlanes::Fault<errlanes::lanes!(Transient, Fatal)>>
                 where
                     OP: es_entity::AtomicOperation + ?Sized
             {
-                self.on_persist(&mut op, entity, new_events).await?;
-                Ok(())
+                self.on_persist(&mut op, entity, new_events).await
             }
         };
 

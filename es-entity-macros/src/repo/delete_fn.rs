@@ -11,7 +11,7 @@ pub struct DeleteFn<'a> {
     in_op_only: bool,
     id: &'a syn::Ident,
     event: &'a syn::Ident,
-    modify_error: syn::Ident,
+    constraint_violation: syn::Ident,
     entity: &'a syn::Ident,
     table_name: &'a str,
     events_table_name: &'a str,
@@ -19,7 +19,7 @@ pub struct DeleteFn<'a> {
     columns: &'a Columns,
     delete_option: &'a DeleteOption,
     nested_delete_fn_names: Vec<syn::Ident>,
-    post_persist_error: Option<&'a syn::Type>,
+    post_persist_hook: bool,
     forgettable_table_name: Option<&'a str>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
@@ -32,7 +32,7 @@ impl<'a> DeleteFn<'a> {
             id: opts.id(),
             event: opts.event(),
             entity: opts.entity(),
-            modify_error: opts.modify_error(),
+            constraint_violation: opts.constraint_violation(),
             columns: &opts.columns,
             table_name: opts.table_name(),
             events_table_name: opts.events_table_name(),
@@ -42,7 +42,7 @@ impl<'a> DeleteFn<'a> {
                 .all_nested()
                 .map(|f| f.delete_nested_fn_name())
                 .collect(),
-            post_persist_error: opts.post_persist_hook.as_ref().map(|h| &h.error),
+            post_persist_hook: opts.post_persist_hook.is_some(),
             forgettable_table_name: opts.forgettable_table_name(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
@@ -57,11 +57,12 @@ impl ToTokens for DeleteFn<'_> {
         }
 
         let entity = self.entity;
-        let modify_error = &self.modify_error;
+        let constraint_violation = &self.constraint_violation;
+        let table_name = self.table_name;
 
         let nested_deletes = self.nested_delete_fn_names.iter().map(|f| {
             quote! {
-                Self::#f::<_, _, #modify_error>(op, &entity).await?;
+                Self::#f(op, &entity).await?;
             }
         });
 
@@ -70,6 +71,7 @@ impl ToTokens for DeleteFn<'_> {
         let assignments = self
             .columns
             .variable_assignments_for_delete(syn::parse_quote! { entity });
+        let constraint_values = self.columns.delete_constraint_values(entity);
         let column_updates = self.columns.sql_updates_for_delete();
         let args = self.columns.update_query_args_for_delete();
 
@@ -118,9 +120,9 @@ impl ToTokens for DeleteFn<'_> {
         #[cfg(not(feature = "instrument"))]
         let (instrument_attr, record_id, error_recording) = (quote! {}, quote! {}, quote! {});
 
-        let post_persist_check = if self.post_persist_error.is_some() {
+        let post_persist_check = if self.post_persist_hook {
             quote! {
-                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await.map_err(#modify_error::PostPersistHookError)?;
+                self.execute_post_persist_hook(op, &entity, entity.events().last_persisted(n_events)).await?;
             }
         } else {
             quote! {}
@@ -151,7 +153,12 @@ impl ToTokens for DeleteFn<'_> {
                 id_type,
                 event_type,
             }
-            .insert_per_entity(quote! { entity.events() }, modify_error, None),
+            .insert_per_entity(
+                quote! { entity.events() },
+                constraint_violation,
+                self.events_table_name,
+                None,
+            ),
             None => quote! {},
         };
 
@@ -160,7 +167,7 @@ impl ToTokens for DeleteFn<'_> {
                 pub async fn delete(
                     &self,
                     entity: #entity
-                ) -> Result<(), #modify_error> {
+                ) -> Result<(), es_entity::RepoWriteError<#constraint_violation>> {
                     let mut op = self.begin_op().await?;
                     let res = self.delete_in_op(&mut op, entity).await?;
                     op.commit().await?;
@@ -176,13 +183,14 @@ impl ToTokens for DeleteFn<'_> {
             pub async fn delete_in_op<OP>(&self,
                 op: &mut OP,
                 mut entity: #entity
-            ) -> Result<(), #modify_error>
+            ) -> Result<(), es_entity::RepoWriteError<#constraint_violation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), #modify_error> = async {
+                let __result: Result<(), es_entity::RepoWriteError<#constraint_violation>> = async {
                     #(#nested_deletes)*
                     #assignments
+                    #constraint_values
                     #record_id
 
                     #forget_payloads
@@ -197,7 +205,7 @@ impl ToTokens for DeleteFn<'_> {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_write_error)?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                     #staged_payload_insert
 
@@ -208,7 +216,10 @@ impl ToTokens for DeleteFn<'_> {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or(#modify_error::ConcurrentModification)?;
+                            .ok_or_else(|| errlanes::Fail::from(
+                                errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                    .with_context(format!("{} row vanished", #table_name))
+                            ))?;
                         let n_events = Self::extract_events(&mut entity)
                             .mark_new_events_persisted_at(recorded_at);
 
@@ -244,14 +255,14 @@ mod tests {
             id: &id,
             event: &event,
             entity: &entity,
-            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
             columns: &columns,
             delete_option: &DeleteOption::Soft,
             nested_delete_fn_names: Vec::new(),
-            post_persist_error: None,
+            post_persist_hook: false,
             forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -264,7 +275,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), EntityModifyError> {
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -275,12 +286,13 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), EntityModifyError>
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), EntityModifyError> = async {
+                let __result: Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> = async {
                     let id = &entity.id;
+                    let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), };
 
                     let new_events = entity.events().any_new();
                     let offset = entity.events().len_persisted();
@@ -297,13 +309,16 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_write_error)?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                     if new_events {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or(EntityModifyError::ConcurrentModification)?;
+                            .ok_or_else(|| errlanes::Fail::from(
+                                errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                    .with_context(format!("{} row vanished", "entities"))
+                            ))?;
                         let n_events = Self::extract_events(&mut entity)
                             .mark_new_events_persisted_at(recorded_at);
                     }
@@ -337,14 +352,14 @@ mod tests {
             id: &id,
             event: &event,
             entity: &entity,
-            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
             columns: &columns,
             delete_option: &DeleteOption::Soft,
             nested_delete_fn_names: Vec::new(),
-            post_persist_error: None,
+            post_persist_hook: false,
             forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -357,7 +372,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), EntityModifyError> {
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -368,13 +383,14 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), EntityModifyError>
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), EntityModifyError> = async {
+                let __result: Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> = async {
                     let id = &entity.id;
                     let name = &entity.name;
+                    let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), name: Some((*name).clone()), };
 
                     let new_events = entity.events().any_new();
                     let offset = entity.events().len_persisted();
@@ -392,13 +408,16 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_write_error)?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                     if new_events {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or(EntityModifyError::ConcurrentModification)?;
+                            .ok_or_else(|| errlanes::Fail::from(
+                                errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                    .with_context(format!("{} row vanished", "entities"))
+                            ))?;
                         let n_events = Self::extract_events(&mut entity)
                             .mark_new_events_persisted_at(recorded_at);
                     }
@@ -426,14 +445,14 @@ mod tests {
             id: &id,
             event: &event,
             entity: &entity,
-            modify_error: syn::Ident::new("EntityModifyError", Span::call_site()),
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
             columns: &columns,
             delete_option: &DeleteOption::Soft,
             nested_delete_fn_names: Vec::new(),
-            post_persist_error: None,
+            post_persist_hook: false,
             forgettable_table_name: Some("entities_forgettable_payloads"),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -446,7 +465,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), EntityModifyError> {
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -457,12 +476,13 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), EntityModifyError>
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), EntityModifyError> = async {
+                let __result: Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> = async {
                     let id = &entity.id;
+                    let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), };
 
                     sqlx::query!(
                         "DELETE FROM entities_forgettable_payloads WHERE entity_id = $1",
@@ -486,7 +506,7 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_write_error)?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                     let mut payload_sequences: Vec<i32> = Vec::new();
                     let mut payload_values: Vec<es_entity::prelude::serde_json::Value> = Vec::new();
@@ -497,7 +517,7 @@ mod tests {
                         }
                     }
                     if !payload_sequences.is_empty() {
-                        Self::extract_concurrent_modification(
+                        Self::classify_conflict::<_, EntityConstraintViolation>(
                             sqlx::query!(
                                 "INSERT INTO entities_forgettable_payloads (entity_id, sequence, payload) SELECT $1, unnested.sequence, unnested.payload FROM UNNEST($2::INT[], $3::JSONB[]) AS unnested(sequence, payload)",
                                 id as &EntityId,
@@ -506,7 +526,8 @@ mod tests {
                             )
                             .execute(op.as_executor())
                             .await,
-                            EntityModifyError::ConcurrentModification,
+                            "entity_events",
+                            || "forgettable payload insert conflicted on its own primary key".to_string(),
                         )?;
                     }
 
@@ -514,7 +535,10 @@ mod tests {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or(EntityModifyError::ConcurrentModification)?;
+                            .ok_or_else(|| errlanes::Fail::from(
+                                errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                    .with_context(format!("{} row vanished", "entities"))
+                            ))?;
                         let n_events = Self::extract_events(&mut entity)
                             .mark_new_events_persisted_at(recorded_at);
                     }

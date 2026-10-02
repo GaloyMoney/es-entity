@@ -1,18 +1,31 @@
 //! Types for working with errors produced by es-entity.
 
-use thiserror::Error;
+/// Repository read failures: transient infrastructure faults or fatal failures.
+/// Reads cannot reject or deny; optional reads represent absence with `None`.
+pub type RepoReadError = errlanes::Fault<errlanes::lanes!(Transient, Fatal)>;
+
+/// Repository write failures, with `C` carrying the typed constraint violation.
+/// Writes may reject, fail transiently, or fail fatally, but cannot deny.
+pub type RepoWriteError<C> = errlanes::Fail<C, errlanes::lanes!(Transient, Fatal)>;
 
 /// Error type for entity hydration failures (reconstructing entities from events).
-#[derive(Error, Debug)]
+#[derive(Debug, errlanes::Classify)]
 pub enum EntityHydrationError {
-    #[error("EntityHydrationError - UninitializedFieldError: {0}")]
-    UninitializedFieldError(#[from] derive_builder::UninitializedFieldError),
-    #[error("EntityHydrationError - Deserialization: {0}")]
-    EventDeserialization(#[from] serde_json::Error),
+    #[classify(fatal(CorruptState), from)]
+    UninitializedFieldError(derive_builder::UninitializedFieldError),
+    // Pinned explicitly, not `delegate`: a persisted event row's JSON
+    // failing to decode is corrupt *stored* data specifically, regardless
+    // of what errlanes' generic `serde_json::Error` classification defaults
+    // to elsewhere.
+    #[classify(fatal(CorruptState), from)]
+    EventDeserialization(serde_json::Error),
     /// A snapshot row matched the fingerprint bind but failed to deserialize
     /// into `S`. Never silently ignored, unlike a fingerprint mismatch — the
     /// operator fix is `DELETE FROM <tbl>_snapshots WHERE id = …`.
+    ///
+    /// Pinned explicitly for the same reason as `EventDeserialization`.
     #[error("EntityHydrationError - SnapshotDecode at sequence {sequence}: {source}")]
+    #[classify(fatal(CorruptState))]
     SnapshotDecode {
         sequence: i32,
         #[source]
@@ -22,17 +35,19 @@ pub enum EntityHydrationError {
     #[error(
         "EntityHydrationError - SnapshotGap: snapshot at sequence {snapshot_sequence}, next event at {next_event_sequence}"
     )]
+    #[classify(fatal(CorruptState))]
     SnapshotGap {
         snapshot_sequence: i32,
         next_event_sequence: i32,
     },
     /// A hydration row carried neither an event nor a usable snapshot.
-    #[error("EntityHydrationError - NoEvents")]
+    #[classify(fatal(CorruptState))]
     NoEvents,
 }
 
-#[derive(Error, Debug)]
+#[derive(Debug, errlanes::Classify)]
 #[error("CursorDestructureError: couldn't turn {0} into {1}")]
+#[classify(fatal(Config))]
 pub struct CursorDestructureError(&'static str, &'static str);
 
 impl From<(&'static str, &'static str)> for CursorDestructureError {
@@ -101,12 +116,65 @@ fn events_pkey_id_from_value(value: String) -> Option<String> {
 
 /// The kind of database constraint behind a classified `ConstraintViolation`.
 ///
-/// Returned by the generated `{Entity}Constraint::kind()` method.
+/// Structured kind exposed by a generated constraint rejection's diagnostics.
+/// An unrecognised constraint has no variant here: a generated repository
+/// classifies one as `Fatal(Invariant)` rather than exposing a rejection case,
+/// so every value that reaches this type names a constraint the catalog knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConstraintKind {
     Unique,
     ForeignKey,
     Check,
+}
+
+/// A repo op that requires a row (`find_by_*`) found none. There is no
+/// `NotFound` rejection — callers that tolerate absence use
+/// `maybe_find_by_*`, which returns `Option` instead. Construct one and
+/// propagate it with `?`: it converts into any `errlanes::Fault` or
+/// `errlanes::Fail<D>` as `Fatal(Invariant)`.
+///
+/// **Never `impl errlanes::Rejection for NotFound`** — `#[derive(Classify)]`
+/// below makes `NotFound` a fault wrapper, and a type that is both a
+/// `Rejection` and a direct `Classify` impl conflicts (`E0119`).
+///
+/// **Security note:** `value`'s `Debug` may contain PII (e.g. an email
+/// address looked up by a caller-supplied value). `Display` omits it.
+#[derive(Debug, errlanes::Classify)]
+#[classify(fatal(Invariant), error = manual)]
+pub struct NotFound {
+    pub entity: &'static str,
+    pub column: Option<&'static str>,
+    pub value: String,
+}
+
+impl NotFound {
+    pub fn new(
+        entity: &'static str,
+        column: Option<&'static str>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self {
+            entity,
+            column,
+            value: value.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for NotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.column {
+            Some(column) => write!(f, "{} not found by {column}", self.entity),
+            None => write!(f, "{} not found", self.entity),
+        }
+    }
+}
+
+impl std::error::Error for NotFound {}
+
+#[doc(hidden)]
+pub fn fatal_is_not_found(fatal: &errlanes::Fatal) -> bool {
+    std::error::Error::source(fatal).is_some_and(|s| s.is::<NotFound>())
 }
 
 #[doc(hidden)]

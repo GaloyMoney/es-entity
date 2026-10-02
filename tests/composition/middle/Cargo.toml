@@ -1,0 +1,9 @@
+[package]
+name = "repo-composition-middle"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+[dependencies]
+foreign = { package = "repo-composition-source", path = "../source" }
+errlanes = { path = "../../../errlanes", features = ["derive"] }

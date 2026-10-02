@@ -1,0 +1,29 @@
+error[E0271]: type mismatch resolving `<DbWrite as Classify>::Rejected == Infallible`
+  --> tests/coherence/classify_n_mixed_wrapper_into_bare_fatal.rs:19:6
+   |
+19 |     r?;
+   |      ^ type mismatch resolving `<DbWrite as Classify>::Rejected == Infallible`
+   |
+note: expected this to be `Infallible`
+  --> tests/coherence/classify_n_mixed_wrapper_into_bare_fatal.rs:9:17
+   |
+ 9 | #[derive(Debug, errlanes::Classify)]
+   |                 ^^^^^^^^^^^^^^^^^^
+   = note: required for `errlanes::Fatal` to implement `From<DbWrite>`
+   = note: this error originates in the derive macro `errlanes::Classify` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0271]: type mismatch resolving `<DbWrite as Classify>::Lanes == Profile<false, false, true>`
+  --> tests/coherence/classify_n_mixed_wrapper_into_bare_fatal.rs:19:6
+   |
+19 |     r?;
+   |      ^ type mismatch resolving `<DbWrite as Classify>::Lanes == Profile<false, false, true>`
+   |
+note: expected this to be `Profile<false, false, true>`
+  --> tests/coherence/classify_n_mixed_wrapper_into_bare_fatal.rs:9:17
+   |
+ 9 | #[derive(Debug, errlanes::Classify)]
+   |                 ^^^^^^^^^^^^^^^^^^
+   = note: expected struct `Profile<false, false, true>`
+              found struct `Profile<false, true, false>`
+   = note: required for `errlanes::Fatal` to implement `From<DbWrite>`
+   = note: this error originates in the derive macro `errlanes::Classify` (in Nightly builds, run with -Z macro-backtrace for more info)

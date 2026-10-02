@@ -1,0 +1,5 @@
+error: Rejection composition supports monomorphic enums; use concrete payload types or a concrete enum facade
+ --> tests/v2/generic_schema.rs:3:13
+  |
+3 | enum Generic<T: std::fmt::Debug + std::fmt::Display> { Value(T) }
+  |             ^

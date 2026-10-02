@@ -6,21 +6,16 @@ use super::options::{RepoField, RepositoryOptions};
 
 pub struct Nested<'a> {
     field: &'a RepoField,
-    parent_modify_error: syn::Ident,
 }
 
 impl<'a> Nested<'a> {
-    pub fn new(field: &'a RepoField, opts: &'a RepositoryOptions) -> Nested<'a> {
-        Nested {
-            field,
-            parent_modify_error: opts.modify_error(),
-        }
+    pub fn new(field: &'a RepoField, _opts: &'a RepositoryOptions) -> Nested<'a> {
+        Nested { field }
     }
 }
 
 impl ToTokens for Nested<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let parent_modify_error = &self.parent_modify_error;
         let repo_field = self.field.ident();
 
         let nested_repo_ty = &self.field.ty;
@@ -34,12 +29,15 @@ impl ToTokens for Nested<'_> {
             // `create_all_in_op` call on the child repo — one statement for
             // the whole parent batch, not one per parent — then redistributes
             // the hydrated children back to their owning parent by count.
+            // Returns the child repo's own `ConstraintViolation`, unwidened —
+            // the caller (one level up the nesting) widens it into its own via
+            // `errlanes::Fail::widen`.
             //
             // Takes `&mut [&mut P]` rather than `&mut [P]` so a caller that
             // already holds scattered `&mut P` borrows (this same fn one
             // level up the nesting, recursing into grandchildren) can pass
             // them straight through without needing contiguous storage.
-            async fn #create_fn_name<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), <#nested_repo_ty as es_entity::EsRepo>::CreateError>
+            async fn #create_fn_name<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), es_entity::RepoWriteError<<#nested_repo_ty as es_entity::EsRepo>::ConstraintViolation>>
                 where
                     P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation + ?Sized
@@ -73,8 +71,9 @@ impl ToTokens for Nested<'_> {
             // Gathers every parent's already-persisted children into a single
             // `update_all_mut_in_op` call on the child repo — one statement
             // for the whole parent batch, not one per child per parent — then
-            // batches new children via `#create_fn_name`.
-            async fn #update_fn_name<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), #parent_modify_error>
+            // batches new children via `#create_fn_name`. Returns the child
+            // repo's own `ConstraintViolation`, unwidened.
+            async fn #update_fn_name<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), es_entity::RepoWriteError<<#nested_repo_ty as es_entity::EsRepo>::ConstraintViolation>>
                 where
                     P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation + ?Sized
@@ -91,28 +90,26 @@ impl ToTokens for Nested<'_> {
                 Ok(())
             }
 
-            fn #hydrate_fn_name<P, __EsErr>(
+            fn #hydrate_fn_name<P>(
                 rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
                 tag_cursor: &mut i32,
                 entities: &mut [P],
-            ) -> Result<(), __EsErr>
+            ) -> Result<(), es_entity::RepoReadError>
                 where
                     P: es_entity::Parent<<#nested_repo_ty as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
                     #nested_repo_ty: es_entity::HydrateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
-                    __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError>,
             {
                 let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
-                <#nested_repo_ty>::hydrate_in_op::<_, __EsErr>(rows_by_tag, tag_cursor, lookup)
+                <#nested_repo_ty>::hydrate_in_op(rows_by_tag, tag_cursor, lookup)
             }
 
-            async fn #delete_fn_name<OP, P, __EsErr>(op: &mut OP, entity: &P) -> Result<(), __EsErr>
+            async fn #delete_fn_name<OP, P>(op: &mut OP, entity: &P) -> Result<(), es_entity::RepoReadError>
                 where
                     OP: es_entity::AtomicOperation + ?Sized,
                     P: es_entity::EsEntity,
                     #nested_repo_ty: es_entity::CascadeDeleteNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
-                    __EsErr: From<sqlx::Error> + Send,
             {
-                <#nested_repo_ty>::cascade_delete_in_op::<_, __EsErr>(op, &entity.events().entity_id).await?;
+                <#nested_repo_ty>::cascade_delete_in_op(op, &entity.events().entity_id).await?;
                 Ok(())
             }
         });
@@ -136,19 +133,13 @@ mod tests {
             entity: None,
         };
 
-        let cursor = Nested {
-            field: &field,
-            parent_modify_error: syn::Ident::new(
-                "ParentModifyError",
-                proc_macro2::Span::call_site(),
-            ),
-        };
+        let cursor = Nested { field: &field };
 
         let mut tokens = TokenStream::new();
         cursor.to_tokens(&mut tokens);
 
         let expected = quote! {
-            async fn create_nested_users_in_op<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), <UserRepo as es_entity::EsRepo>::CreateError>
+            async fn create_nested_users_in_op<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), es_entity::RepoWriteError<<UserRepo as es_entity::EsRepo>::ConstraintViolation>>
                 where
                     P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation + ?Sized
@@ -173,7 +164,7 @@ mod tests {
                 Ok(())
             }
 
-            async fn update_nested_users_in_op<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), ParentModifyError>
+            async fn update_nested_users_in_op<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), es_entity::RepoWriteError<<UserRepo as es_entity::EsRepo>::ConstraintViolation>>
                 where
                     P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation + ?Sized
@@ -189,28 +180,26 @@ mod tests {
                 Ok(())
             }
 
-            fn hydrate_nested_users<P, __EsErr>(
+            fn hydrate_nested_users<P>(
                 rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
                 tag_cursor: &mut i32,
                 entities: &mut [P],
-            ) -> Result<(), __EsErr>
+            ) -> Result<(), es_entity::RepoReadError>
                 where
                     P: es_entity::Parent<<UserRepo as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
                     UserRepo: es_entity::HydrateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
-                    __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError>,
             {
                 let lookup = entities.iter_mut().map(|e| (e.events().entity_id.clone(), e)).collect();
-                <UserRepo>::hydrate_in_op::<_, __EsErr>(rows_by_tag, tag_cursor, lookup)
+                <UserRepo>::hydrate_in_op(rows_by_tag, tag_cursor, lookup)
             }
 
-            async fn delete_nested_users_in_op<OP, P, __EsErr>(op: &mut OP, entity: &P) -> Result<(), __EsErr>
+            async fn delete_nested_users_in_op<OP, P>(op: &mut OP, entity: &P) -> Result<(), es_entity::RepoReadError>
                 where
                     OP: es_entity::AtomicOperation + ?Sized,
                     P: es_entity::EsEntity,
                     UserRepo: es_entity::CascadeDeleteNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
-                    __EsErr: From<sqlx::Error> + Send,
             {
-                <UserRepo>::cascade_delete_in_op::<_, __EsErr>(op, &entity.events().entity_id).await?;
+                <UserRepo>::cascade_delete_in_op(op, &entity.events().entity_id).await?;
                 Ok(())
             }
         };

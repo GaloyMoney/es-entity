@@ -414,7 +414,7 @@ async fn update_concurrent_modification() -> anyhow::Result<()> {
 
     let _ = second.update_name("second_writer");
     match users.update(&mut second).await {
-        Err(UserModifyError::ConcurrentModification) => {}
+        Err(Fail::Transient(_)) => {}
         other => panic!("expected ConcurrentModification, got: {other:?}"),
     }
 
@@ -447,7 +447,7 @@ async fn update_all_concurrent_modification() -> anyhow::Result<()> {
 
     let _ = second[0].update_name("bulk_second");
     match users.update_all(&mut second).await {
-        Err(UserModifyError::ConcurrentModification) => {}
+        Err(Fail::Transient(_)) => {}
         other => panic!("expected ConcurrentModification, got: {other:?}"),
     }
 
@@ -489,7 +489,7 @@ async fn update_of_vanished_row_is_concurrent_modification() -> anyhow::Result<(
 
     let _ = user.update_name("never_lands");
     match users.update(&mut user).await {
-        Err(UserModifyError::ConcurrentModification) => {}
+        Err(Fail::Transient(_)) => {}
         other => panic!("expected ConcurrentModification, got: {other:?}"),
     }
 
@@ -515,7 +515,7 @@ async fn update_all_of_vanished_row_is_concurrent_modification() -> anyhow::Resu
 
     let _ = batch[0].update_name("never_lands");
     match users.update_all(&mut batch).await {
-        Err(UserModifyError::ConcurrentModification) => {}
+        Err(Fail::Transient(_)) => {}
         other => panic!("expected ConcurrentModification, got: {other:?}"),
     }
 

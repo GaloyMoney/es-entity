@@ -24,9 +24,11 @@
 #![forbid(unsafe_code)]
 
 pub mod clock;
+mod constraint;
 pub mod context;
 pub mod db;
 pub mod error;
+pub use constraint::*;
 pub mod events;
 pub mod forgettable;
 pub mod idempotent;
@@ -57,19 +59,25 @@ pub mod prelude {
 
 #[doc(inline)]
 pub use context::*;
+pub use errlanes;
+pub use errlanes::{
+    Denied, Fail, Failure, Fatal, FatalKind, Fault, Lane, Laned, Lift, Rejection, Transient,
+    TransientKind, WithoutTransient,
+};
 #[doc(inline)]
 pub use error::*;
+#[doc(hidden)]
+pub use es_entity_macros::ConstraintRejection;
 pub use es_entity_macros::EsEntity;
 pub use es_entity_macros::EsEvent;
 pub use es_entity_macros::EsRepo;
 pub use es_entity_macros::EsSnapshot;
 pub use es_entity_macros::es_event_context;
 pub use es_entity_macros::expand_es_query;
-pub use es_entity_macros::retry_on_concurrent_modification;
 #[doc(inline)]
 pub use events::*;
 #[doc(inline)]
-pub use forgettable::{Forgettable, ForgettableRef, ForgettableRemnants};
+pub use forgettable::{Forgettable, ForgettableRef};
 #[doc(inline)]
 pub use idempotent::*;
 #[doc(inline)]

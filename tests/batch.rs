@@ -15,10 +15,13 @@ mod helpers;
 
 use std::sync::{Arc, Mutex};
 
-use es_entity::operation::{
-    AtomicOperation, BatchIsolation, BisectBudget, BisectSearch, DbOp, ItemOutcome, ProbeVerdict,
-    SavepointOp,
-    hooks::{CommitHook, HookOperation, PreCommitRet},
+use es_entity::{
+    errlanes::{Fault, lanes},
+    operation::{
+        AtomicOperation, BatchIsolation, BisectBudget, BisectSearch, DbOp, ItemOutcome,
+        ProbeVerdict, SavepointOp,
+        hooks::{CommitHook, HookOperation, PreCommitRet},
+    },
 };
 
 async fn insert(op: &mut impl AtomicOperation, v: i32) -> Result<(), sqlx::Error> {
@@ -374,12 +377,20 @@ impl Runner {
 
 #[async_trait::async_trait]
 trait BatchRunner: Send + Sync {
-    async fn run(&self, op: &mut DbOp<'static>, items: &[i32]) -> Result<usize, sqlx::Error>;
+    async fn run(
+        &self,
+        op: &mut DbOp<'static>,
+        items: &[i32],
+    ) -> Result<usize, Fault<lanes!(Transient, Fatal)>>;
 }
 
 #[async_trait::async_trait]
 impl BatchRunner for Runner {
-    async fn run(&self, op: &mut DbOp<'static>, items: &[i32]) -> Result<usize, sqlx::Error> {
+    async fn run(
+        &self,
+        op: &mut DbOp<'static>,
+        items: &[i32],
+    ) -> Result<usize, Fault<lanes!(Transient, Fatal)>> {
         // Borrows `&self` directly, with no owned clone, and builds a wrapper
         // context per probe.
         let isolated = op
@@ -402,7 +413,7 @@ impl BatchRunner for Runner {
                     Ok::<_, sqlx::Error>(*item)
                 })
                 .await?;
-                Ok::<_, sqlx::Error>(())
+                Ok::<_, Fault<lanes!(Transient, Fatal)>>(())
             })
             .await?;
 
@@ -424,7 +435,7 @@ async fn a_closure_borrowing_self_composes_inside_an_async_trait_runner() -> any
         let mut op = DbOp::init(&pool).await?;
         let n = runner.run(&mut op, &items).await?;
         op.commit().await?;
-        Ok::<_, sqlx::Error>((n, pool))
+        anyhow::Ok((n, pool))
     });
 
     let (n, pool) = handle.await??;

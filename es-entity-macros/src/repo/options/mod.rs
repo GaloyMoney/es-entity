@@ -2,112 +2,12 @@ mod columns;
 mod delete;
 
 use convert_case::{Case, Casing};
-use darling::{FromDeriveInput, FromField, FromMeta};
+use darling::{FromDeriveInput, FromField};
 use proc_macro2::Span;
 use quote::quote;
 
 pub use columns::*;
 pub use delete::*;
-
-#[derive(Debug, Clone)]
-pub struct PostPersistHookConfig {
-    pub method: syn::Ident,
-    pub error: syn::Type,
-}
-
-impl FromMeta for PostPersistHookConfig {
-    /// Old syntax: `post_persist_hook = "method_name"` → defaults error to `sqlx::Error`
-    fn from_string(value: &str) -> darling::Result<Self> {
-        Ok(PostPersistHookConfig {
-            method: syn::Ident::new(value, Span::call_site()),
-            error: syn::parse_str("sqlx::Error")
-                .map_err(|e| darling::Error::custom(format!("invalid error type: {e}")))?,
-        })
-    }
-
-    /// New syntax: `post_persist_hook(method = "...", error = "...")`
-    /// `error` defaults to `sqlx::Error` if omitted
-    fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
-        let mut method: Option<syn::Ident> = None;
-        let mut error: Option<syn::Type> = None;
-
-        for item in items {
-            if let darling::ast::NestedMeta::Meta(syn::Meta::NameValue(nv)) = item {
-                if nv.path.is_ident("method")
-                    && let syn::Expr::Lit(syn::ExprLit {
-                        lit: syn::Lit::Str(s),
-                        ..
-                    }) = &nv.value
-                {
-                    method = Some(syn::Ident::new(&s.value(), s.span()));
-                } else if nv.path.is_ident("error")
-                    && let syn::Expr::Lit(syn::ExprLit {
-                        lit: syn::Lit::Str(s),
-                        ..
-                    }) = &nv.value
-                {
-                    error =
-                        Some(syn::parse_str(&s.value()).map_err(|e| {
-                            darling::Error::custom(format!("invalid error type: {e}"))
-                        })?);
-                }
-            }
-        }
-
-        let error = error
-            .unwrap_or_else(|| syn::parse_str("sqlx::Error").expect("sqlx::Error is a valid type"));
-
-        Ok(PostPersistHookConfig {
-            method: method
-                .ok_or_else(|| darling::Error::custom("missing `method` in post_persist_hook"))?,
-            error,
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct PostHydrateHookConfig {
-    pub method: syn::Ident,
-    pub error: syn::Type,
-}
-
-impl FromMeta for PostHydrateHookConfig {
-    fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
-        let mut method: Option<syn::Ident> = None;
-        let mut error: Option<syn::Type> = None;
-
-        for item in items {
-            if let darling::ast::NestedMeta::Meta(syn::Meta::NameValue(nv)) = item {
-                if nv.path.is_ident("method") {
-                    if let syn::Expr::Lit(syn::ExprLit {
-                        lit: syn::Lit::Str(s),
-                        ..
-                    }) = &nv.value
-                    {
-                        method = Some(syn::Ident::new(&s.value(), s.span()));
-                    }
-                } else if nv.path.is_ident("error")
-                    && let syn::Expr::Lit(syn::ExprLit {
-                        lit: syn::Lit::Str(s),
-                        ..
-                    }) = &nv.value
-                {
-                    error =
-                        Some(syn::parse_str(&s.value()).map_err(|e| {
-                            darling::Error::custom(format!("invalid error type: {e}"))
-                        })?);
-                }
-            }
-        }
-
-        Ok(PostHydrateHookConfig {
-            method: method
-                .ok_or_else(|| darling::Error::custom("missing `method` in post_hydrate_hook"))?,
-            error: error
-                .ok_or_else(|| darling::Error::custom("missing `error` in post_hydrate_hook"))?,
-        })
-    }
-}
 
 /// Information about the clock field in a repository
 #[derive(Debug, Clone)]
@@ -132,9 +32,9 @@ pub struct RepoField {
     #[darling(default)]
     pub nested: bool,
     /// For nested fields whose repo type is generic, specify the child entity name
-    /// so error types can be referenced concretely (e.g., `entity = "InterestAccrualCycle"`
-    /// generates `InterestAccrualCycleCreateError` instead of
-    /// `<InterestAccrualRepo<Evt> as EsRepo>::CreateError`).
+    /// so the constraint-violation type can be referenced concretely (e.g.,
+    /// `entity = "InterestAccrualCycle"` generates `InterestAccrualCycleConstraintViolation`
+    /// instead of `<InterestAccrualRepo<Evt> as EsRepo>::ConstraintViolation`).
     #[darling(default)]
     pub entity: Option<syn::Ident>,
 }
@@ -207,9 +107,9 @@ pub struct RepositoryOptions {
     #[darling(default)]
     pub columns: Columns,
     #[darling(default)]
-    pub post_persist_hook: Option<PostPersistHookConfig>,
+    pub post_persist_hook: Option<syn::Ident>,
     #[darling(default)]
-    pub post_hydrate_hook: Option<PostHydrateHookConfig>,
+    pub post_hydrate_hook: Option<syn::Ident>,
     #[darling(default)]
     pub delete: DeleteOption,
 
@@ -526,47 +426,31 @@ impl RepositoryOptions {
         }
     }
 
-    pub fn create_error(&self) -> syn::Ident {
+    /// The generated `{Entity}ConstraintViolation` ident — the one repo
+    /// `Rejection`. Every generated repo op returns `Result<T,
+    /// es_entity::RepoWriteError<Self::ConstraintViolation>>`.
+    pub fn constraint_violation(&self) -> syn::Ident {
         syn::Ident::new(
-            &format!("{}CreateError", self.entity_ident),
+            &format!("{}ConstraintViolation", self.entity_ident),
             Span::call_site(),
         )
     }
 
-    pub fn modify_error(&self) -> syn::Ident {
+    /// The generated `{Entity}WriteError` ident: the repo's write
+    /// classification (`Self::ConstraintViolation`, an optimistic-conflict
+    /// retry, or an unclassified fault) made public, so a consumer
+    /// hand-writing a query against the repo's tables can
+    /// `.classify::<{Entity}WriteError>()?` it and get the same
+    /// classification a generated write op does.
+    pub fn write_error(&self) -> syn::Ident {
         syn::Ident::new(
-            &format!("{}ModifyError", self.entity_ident),
+            &format!("{}WriteError", self.entity_ident),
             Span::call_site(),
         )
-    }
-
-    pub fn find_error(&self) -> syn::Ident {
-        syn::Ident::new(
-            &format!("{}FindError", self.entity_ident),
-            Span::call_site(),
-        )
-    }
-
-    pub fn query_error(&self) -> syn::Ident {
-        syn::Ident::new(
-            &format!("{}QueryError", self.entity_ident),
-            Span::call_site(),
-        )
-    }
-
-    pub fn forget_error(&self) -> syn::Ident {
-        syn::Ident::new(
-            &format!("{}ForgetError", self.entity_ident),
-            Span::call_site(),
-        )
-    }
-
-    pub fn column_enum(&self) -> syn::Ident {
-        syn::Ident::new(&format!("{}Column", self.entity_ident), Span::call_site())
     }
 
     /// The generated scope enum ident (`{Entity}Scope`), entity-named like
-    /// the other generated companion types (`{Entity}FindError`,
+    /// the other generated companion types (`{Entity}ConstraintViolation`,
     /// `{Entity}ByIdCursor`, ...).
     pub fn scope_type_ident(&self) -> syn::Ident {
         syn::Ident::new(&format!("{}Scope", self.entity_ident), Span::call_site())

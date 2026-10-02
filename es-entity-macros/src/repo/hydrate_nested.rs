@@ -54,14 +54,13 @@ impl ToTokens for HydrateNested<'_> {
 
         tokens.append_all(quote! {
             impl #impl_generics es_entity::HydrateNested<#ty> for #ident #ty_generics #where_clause {
-                fn hydrate_in_op<P, __EsErr>(
+                fn hydrate_in_op<P>(
                     rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
                     tag_cursor: &mut i32,
                     mut lookup: std::collections::HashMap<#ty, &mut P>,
-                ) -> Result<(), __EsErr>
+                ) -> Result<(), es_entity::RepoReadError>
                 where
                     P: Parent<<Self as EsRepo>::Entity>,
-                    __EsErr: From<sqlx::Error> + From<es_entity::EntityHydrationError>,
                 {
                     let my_tag = *tag_cursor;
                     *tag_cursor += 1;
@@ -71,8 +70,9 @@ impl ToTokens for HydrateNested<'_> {
                         .iter()
                         .map(#decode_fn)
                         .collect::<Result<Vec<_>, _>>()?;
-                    let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(generic.into_iter(), n)?;
-                    <Self as es_entity::EsRepo>::hydrate_nested_from_rows::<__EsErr>(rows_by_tag, tag_cursor, &mut res)?;
+                    let (mut res, _) = es_entity::EntityEvents::load_n::<<Self as EsRepo>::Entity>(generic.into_iter(), n)
+                        ?;
+                    <Self as es_entity::EsRepo>::hydrate_nested_from_rows(rows_by_tag, tag_cursor, &mut res)?;
                     for entity in res.into_iter() {
                         if let Some(parent) = lookup.get_mut(&entity.#accessor) {
                             parent.inject_children(std::iter::once(entity));
@@ -136,13 +136,12 @@ impl ToTokens for HydrateNested<'_> {
 
             tokens.append_all(quote! {
                 impl #impl_generics es_entity::CascadeDeleteNested<#ty> for #ident #ty_generics #where_clause {
-                    async fn cascade_delete_in_op<OP, __EsErr>(
+                    async fn cascade_delete_in_op<OP>(
                         op: &mut OP,
                         parent_id: &#ty,
-                    ) -> Result<(), __EsErr>
+                    ) -> Result<(), es_entity::RepoReadError>
                     where
                         OP: es_entity::AtomicOperation + ?Sized,
-                        __EsErr: From<sqlx::Error> + Send,
                     {
                         #cascade
                         Ok(())

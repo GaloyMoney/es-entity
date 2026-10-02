@@ -8,7 +8,6 @@ mod event;
 mod index_catalog;
 mod query;
 mod repo;
-mod retry_on_concurrent_modification;
 mod snapshot;
 mod type_utils;
 
@@ -19,28 +18,6 @@ use syn::parse_macro_input;
 pub fn es_event_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as syn::DeriveInput);
     match event::derive(ast) {
-        Ok(tokens) => tokens.into(),
-        Err(e) => e.write_errors().into(),
-    }
-}
-
-/// Retries the annotated async function when it fails with a concurrent
-/// modification error (or with any error when `any_error = true`).
-///
-/// Attempts are spaced with exponential backoff (25ms, 50ms, 100ms, ...
-/// capped at 1s) so a contended entity is not hammered in a hot loop while
-/// the conflicting writer finishes its transaction.
-///
-/// # Arguments
-///
-/// - `max_retries = N` — maximum attempts (default: 3)
-/// - `any_error = true|false` — retry on any error, not just concurrent
-///   modifications (default: false). Only enable this when the annotated
-///   function is fully idempotent.
-#[proc_macro_attribute]
-pub fn retry_on_concurrent_modification(args: TokenStream, input: TokenStream) -> TokenStream {
-    let ast = parse_macro_input!(input as syn::ItemFn);
-    match retry_on_concurrent_modification::make(args, ast) {
         Ok(tokens) => tokens.into(),
         Err(e) => e.write_errors().into(),
     }
@@ -168,4 +145,29 @@ pub fn expand_es_query(input: TokenStream) -> TokenStream {
         Ok(tokens) => tokens.into(),
         Err(e) => e.write_errors().into(),
     }
+}
+
+/// Diagnostic accessors for the final, composed repository rejection enum.
+/// `Display`/`Error` come from the composed enum's own `errlanes::Rejection`
+/// derive (via each variant's `#[error("{0}")]`/`#[source]`), not from here.
+#[proc_macro_derive(ConstraintRejection)]
+pub fn constraint_rejection(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let ast = syn::parse_macro_input!(input as syn::DeriveInput);
+    let ident = ast.ident;
+    let syn::Data::Enum(data) = ast.data else {
+        return quote::quote!(compile_error!("expected constraint enum");).into();
+    };
+    let variants: Vec<_> = data.variants.iter().map(|v| &v.ident).collect();
+    quote::quote! {
+        impl #ident {
+            pub fn diagnostics(&self) -> &es_entity::ConstraintDiagnostics {
+                match self { #(Self::#variants(conflict) => &conflict.diagnostics),* }
+            }
+            pub fn constraint_name(&self) -> &str { self.diagnostics().constraint }
+            pub fn kind(&self) -> es_entity::ConstraintKind { self.diagnostics().kind }
+            pub fn is_unique(&self) -> bool { self.kind() == es_entity::ConstraintKind::Unique }
+            pub fn is_foreign_key(&self) -> bool { self.kind() == es_entity::ConstraintKind::ForeignKey }
+            pub fn is_check(&self) -> bool { self.kind() == es_entity::ConstraintKind::Check }
+        }
+    }.into()
 }

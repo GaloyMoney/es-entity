@@ -10,8 +10,7 @@ pub struct FindAllFn<'a> {
     id: &'a syn::Ident,
     entity: &'a syn::Ident,
     table_name: &'a str,
-    query_error: syn::Ident,
-    post_hydrate_error: Option<&'a syn::Type>,
+    post_hydrate_hook: bool,
     forgettable_table_name: Option<&'a str>,
     snapshot_table_name: Option<&'a str>,
     scope: Option<ScopeInfo<'a>>,
@@ -27,8 +26,7 @@ impl<'a> From<&'a RepositoryOptions> for FindAllFn<'a> {
             id: opts.id(),
             entity: opts.entity(),
             table_name: opts.table_name(),
-            query_error: opts.query_error(),
-            post_hydrate_error: opts.post_hydrate_hook.as_ref().map(|h| &h.error),
+            post_hydrate_hook: opts.post_hydrate_hook.is_some(),
             forgettable_table_name: opts.forgettable_table_name(),
             snapshot_table_name: opts.snapshot_table_name(),
             scope: ScopeInfo::from_opts(opts),
@@ -47,7 +45,6 @@ impl FindAllFn<'_> {
         }
         let id = self.id;
         let entity = self.entity;
-        let query_error = &self.query_error;
         let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
 
         let generics = quote! { <'a, Out: From<#entity>> };
@@ -58,7 +55,7 @@ impl FindAllFn<'_> {
                 pub async fn find_all<Out: From<#entity>>(
                     &self,
                     ids: &[#id]
-                ) -> Result<std::collections::HashMap<#id, Out>, #query_error> {
+                ) -> Result<std::collections::HashMap<#id, Out>, es_entity::RepoReadError> {
                     self.repo.find_all(self.scope, ids).await
                 }
             }
@@ -71,7 +68,7 @@ impl FindAllFn<'_> {
                 &self,
                 #op_param,
                 ids: &[#id]
-            ) -> Result<std::collections::HashMap<#id, Out>, #query_error> {
+            ) -> Result<std::collections::HashMap<#id, Out>, es_entity::RepoReadError> {
                 self.repo.find_all_in_op(op, self.scope, ids).await
             }
         }
@@ -82,7 +79,6 @@ impl ToTokens for FindAllFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let id = self.id;
         let entity = self.entity;
-        let query_error = &self.query_error;
         let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
         let query_fn_get_op = RepositoryOptions::query_fn_get_op();
 
@@ -163,10 +159,10 @@ impl ToTokens for FindAllFn<'_> {
         #[cfg(not(feature = "instrument"))]
         let instrument_attr = quote! {};
 
-        let post_hydrate_check = if self.post_hydrate_error.is_some() {
+        let post_hydrate_check = if self.post_hydrate_hook {
             quote! {
                 for __entity in &entities {
-                    self.execute_post_hydrate_hook(__entity).map_err(#query_error::PostHydrateError)?;
+                    self.execute_post_hydrate_hook(__entity)?;
                 }
             }
         } else {
@@ -179,7 +175,7 @@ impl ToTokens for FindAllFn<'_> {
                     &self,
                     #scope_fn_arg
                     ids: &[#id]
-                ) -> Result<std::collections::HashMap<#id, Out>, #query_error> {
+                ) -> Result<std::collections::HashMap<#id, Out>, es_entity::RepoReadError> {
                     self.find_all_in_op(#query_fn_get_op, #scope_fn_pass ids).await
                 }
             }
@@ -194,7 +190,7 @@ impl ToTokens for FindAllFn<'_> {
                 #op_param,
                 #scope_fn_arg
                 ids: &[#id]
-            ) -> Result<std::collections::HashMap<#id, Out>, #query_error> {
+            ) -> Result<std::collections::HashMap<#id, Out>, es_entity::RepoReadError> {
                  #scope_convert
                  let (entities, _) = #fetch_call;
                  #post_hydrate_check
@@ -214,7 +210,6 @@ mod tests {
     fn find_all_fn() {
         let id_type = Ident::new("EntityId", Span::call_site());
         let entity = Ident::new("Entity", Span::call_site());
-        let query_error = syn::Ident::new("EntityQueryError", Span::call_site());
 
         let persist_fn = FindAllFn {
             in_op_only: false,
@@ -222,8 +217,7 @@ mod tests {
             id: &id_type,
             entity: &entity,
             table_name: "entities",
-            query_error,
-            post_hydrate_error: None,
+            post_hydrate_hook: false,
             forgettable_table_name: None,
             snapshot_table_name: None,
             scope: None,
@@ -238,7 +232,7 @@ mod tests {
             pub async fn find_all<Out: From<Entity>>(
                 &self,
                 ids: &[EntityId]
-            ) -> Result<std::collections::HashMap<EntityId, Out>, EntityQueryError> {
+            ) -> Result<std::collections::HashMap<EntityId, Out>, es_entity::RepoReadError> {
                 self.find_all_in_op(self.pool(), ids).await
             }
 
@@ -246,7 +240,7 @@ mod tests {
                 &self,
                 op: impl es_entity::IntoOneTimeExecutor<'a>,
                 ids: &[EntityId]
-            ) -> Result<std::collections::HashMap<EntityId, Out>, EntityQueryError> {
+            ) -> Result<std::collections::HashMap<EntityId, Out>, es_entity::RepoReadError> {
                 let (entities, _) = es_entity::es_query!(
                     entity = Entity,
                     "SELECT id FROM entities WHERE id = ANY($1)",

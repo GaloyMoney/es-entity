@@ -299,6 +299,42 @@ impl Columns {
         self.all.iter().filter(|c| *c.name() != "created_at")
     }
 
+    pub fn constraint_values(&self, entity: &syn::Ident, create: bool) -> proc_macro2::TokenStream {
+        let values = quote::format_ident!("{}ConstraintValues", entity);
+        let fields: Vec<_> = self
+            .column_enum_columns()
+            .filter(|c| {
+                if create {
+                    c.opts.persist_on_create()
+                } else {
+                    c.opts.persist_on_update() || c.opts.is_id
+                }
+            })
+            .map(|c| {
+                let name = c.name();
+                quote!(#name: Some((*#name).clone()))
+            })
+            .collect();
+        let remaining = (fields.len() != self.column_enum_columns().count())
+            .then(|| quote!(..Default::default()));
+        quote!(let __constraint_values = #values { #(#fields,)* #remaining };)
+    }
+
+    pub fn delete_constraint_values(&self, entity: &syn::Ident) -> proc_macro2::TokenStream {
+        let values = quote::format_ident!("{}ConstraintValues", entity);
+        let fields: Vec<_> = self
+            .column_enum_columns()
+            .filter(|c| (c.opts.persist_on_update() && !c.opts.forgettable) || c.opts.is_id)
+            .map(|c| {
+                let name = c.name();
+                quote!(#name: Some((*#name).clone()))
+            })
+            .collect();
+        let remaining = (fields.len() != self.column_enum_columns().count())
+            .then(|| quote!(..Default::default()));
+        quote!(let __constraint_values = #values { #(#fields,)* #remaining };)
+    }
+
     pub fn parent(&self) -> Option<&Column> {
         self.all.iter().find(|c| c.opts.parent_opts.is_some())
     }

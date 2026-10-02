@@ -1,0 +1,7 @@
+error: unknown lane `Retryable`: expected `Denied`, `Transient`, or `Fatal`
+ --> tests/v2/unknown_lane.rs:3:25
+  |
+3 |     let _: Option<Fault<lanes!(Transient, Retryable)>> = None;
+  |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `$crate::lanes` which comes from the expansion of the macro `lanes` (in Nightly builds, run with -Z macro-backtrace for more info)

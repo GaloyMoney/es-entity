@@ -284,7 +284,8 @@ impl ForgettablePayloads<'_> {
     pub fn insert_per_entity(
         &self,
         events: TokenStream,
-        error: &syn::Ident,
+        constraint_violation: &syn::Ident,
+        events_table: &str,
         snapshot: Option<TokenStream>,
     ) -> TokenStream {
         let Self {
@@ -305,7 +306,7 @@ impl ForgettablePayloads<'_> {
                 }
             }
             if !payload_sequences.is_empty() {
-                Self::extract_concurrent_modification(
+                Self::classify_conflict::<_, #constraint_violation>(
                     sqlx::query!(
                         #query,
                         id as &#id_type,
@@ -314,7 +315,8 @@ impl ForgettablePayloads<'_> {
                     )
                     .execute(op.as_executor())
                     .await,
-                    #error::ConcurrentModification,
+                    #events_table,
+                    || "forgettable payload insert conflicted on its own primary key".to_string(),
                 )?;
             }
             #snap_delete
@@ -392,21 +394,26 @@ impl ForgettablePayloads<'_> {
     }
 
     /// The batch payload insert.
-    pub fn insert_batch(&self, error: &syn::Ident) -> TokenStream {
+    pub fn insert_batch(
+        &self,
+        constraint_violation: &syn::Ident,
+        events_table: &str,
+    ) -> TokenStream {
         let query = format!(
             "INSERT INTO {} (entity_id, sequence, payload) SELECT unnested.entity_id, unnested.sequence, unnested.payload FROM UNNEST($1, $2::INT[], $3::JSONB[]) AS unnested(entity_id, sequence, payload)",
             self.table
         );
         quote! {
             if !payload_sequences.is_empty() {
-                Self::extract_concurrent_modification(
+                Self::classify_conflict::<_, #constraint_violation>(
                     sqlx::query(#query)
                         .bind(&payload_ids)
                         .bind(&payload_sequences)
                         .bind(&payload_values)
                         .execute(op.as_executor())
                         .await,
-                    #error::ConcurrentModification,
+                    #events_table,
+                    || "forgettable payload insert conflicted on its own primary key".to_string(),
                 )?;
             }
         }

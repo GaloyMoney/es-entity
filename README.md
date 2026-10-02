@@ -128,15 +128,15 @@ pub struct Users {
 // // Generated Repository fns:
 // impl Users {
 //     // Create operations
-//     async fn create(&self, new: NewUser) -> Result<User, UserCreateError>;
-//     async fn create_all(&self, new: Vec<NewUser>) -> Result<Vec<User>, UserCreateError>;
+//     async fn create(&self, new: NewUser) -> Result<User, es_entity::RepoWriteError<UserConstraintViolation>>;
+//     async fn create_all(&self, new: Vec<NewUser>) -> Result<Vec<User>, es_entity::RepoWriteError<UserConstraintViolation>>;
 //
 //     // Query operations
-//     async fn find_by_id(&self, id: UserId) -> Result<User, UserFindError>;
-//     async fn find_by_name(&self, name: &str) -> Result<User, UserFindError>;
+//     async fn find_by_id(&self, id: UserId) -> Result<User, es_entity::RepoReadError>;
+//     async fn find_by_name(&self, name: &str) -> Result<User, es_entity::RepoReadError>;
 //
 //     // Update operations
-//     async fn update(&self, entity: &mut User) -> Result<(), UserModifyError>;
+//     async fn update(&self, entity: &mut User) -> Result<(), es_entity::RepoWriteError<UserConstraintViolation>>;
 // 
 //     // Paginated listing
 //     async fn list_by_id(&self, args: PaginatedQueryArgs, direction: ListDirection) -> PaginatedQueryRet;
@@ -260,8 +260,9 @@ pub enum CustomerEvent {
 let customer = customers.forget(customer).await?;
 assert!(customer.name.is_forgotten());
 
-// And a storage-level check that the data is physically absent
-customers.verify_forgotten(customer.id).await?;
+// forget() guarantees its result — to confirm an erasure, call it again
+// (an idempotent no-op that persists nothing and runs no hook).
+customers.forget(customer).await?;
 ```
 
 See the [Forgettable Data](https://galoymoney.github.io/es-entity/forgettable.html) chapter in the book for details.

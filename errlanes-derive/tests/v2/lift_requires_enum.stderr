@@ -1,0 +1,5 @@
+error: Lift can only be derived for enums
+ --> tests/v2/lift_requires_enum.rs:2:1
+  |
+2 | struct Destination;
+  | ^^^^^^
