@@ -144,7 +144,7 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
         tokens.extend(quote! {
             impl From<errlanes::Fail<#lift>> for #ident {
                 fn from(f: errlanes::Fail<#lift>) -> Self {
-                    Self(f.lift())
+                    Self(f.widen())
                 }
             }
 

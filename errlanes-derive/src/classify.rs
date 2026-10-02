@@ -590,7 +590,7 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
             };
             let expr = match r.meta.narrow {
                 Some(Narrow::Rejected) => quote! { errlanes::Fail::from(#narrowed) },
-                _ => quote! { errlanes::Fail::lift(#narrowed) },
+                _ => quote! { errlanes::Fail::widen(#narrowed) },
             };
             arms.push(quote! { Self::#variant_ident #pattern => #expr });
         }

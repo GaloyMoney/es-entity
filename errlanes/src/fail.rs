@@ -54,7 +54,7 @@ pub trait Rejection: Error + Send + Sync + 'static {
 /// Consuming mapping. `#[derive(Lift)]` with `#[lift(Source)]` generates an exhaustive
 /// mapping with `Unmapped = Infallible` and a total `From<Source>` conversion.
 /// `#[lift(Source, unhandled = fatal)]` returns the original unmapped source;
-/// [`Fail::lift`] wraps it as a fatal invariant with its source intact.
+/// [`Fail::widen`] wraps it as a fatal invariant with its source intact.
 /// The derive does not require or implement [`Rejection`]. Derive `Rejection`
 /// separately to provide codes and levels; simple lift mappings forward that
 /// metadata by default unless the destination declares its own.
@@ -355,23 +355,16 @@ impl<D, L: LaneProfile> Fail<D, L> {
         }
     }
 
-    /// Widen rejection and lane profile without changing any classification.
-    pub fn widen<P: From<D>, M: LaneProfile>(self) -> Fail<P, M>
-    where
-        L::Denied: Into<M::Denied>,
-        L::Transient: Into<M::Transient>,
-        L::Fatal: Into<M::Fatal>,
-    {
-        match self {
-            Self::Rejected(d) => Fail::Rejected(d.into()),
-            Self::Denied(d) => Fail::Denied(d.into()),
-            Self::Transient(t) => Fail::Transient(t.into()),
-            Self::Fatal(f) => Fail::Fatal(f.into()),
-        }
-    }
-
-    /// Explicit partial mapping. Unmapped values retain their source as invariants.
-    pub fn lift<P: Lift<D>, M: LaneProfile>(self) -> Fail<P, M>
+    /// Widen the rejection and the lane profile without changing any
+    /// classification. The value-level form of [`WidenResult::widen`], with
+    /// the same single rule: `P: Lift<D>` is satisfied by a total `From<D>`
+    /// (through errlanes' blanket, `Unmapped = Infallible`) and by a partial
+    /// `#[lift(Source, unhandled = fatal)]` mapping (`Unmapped = Source`),
+    /// whose unmapped cases demote to `Fatal(Invariant)` with the rejection
+    /// as their source — which is why a partial mapping requires the
+    /// destination to admit `Fatal`. The strict/partial choice is declared
+    /// once on the destination enum; the call site does not repeat it.
+    pub fn widen<P: Lift<D>, M: LaneProfile>(self) -> Fail<P, M>
     where
         L::Denied: Into<M::Denied>,
         L::Transient: Into<M::Transient>,
@@ -779,7 +772,7 @@ where
     P::Unmapped: UnmappedInto<M::Fatal>,
 {
     fn widen(self) -> Result<T, Fail<P, M>> {
-        self.map_err(Fail::lift)
+        self.map_err(Fail::widen)
     }
 }
 

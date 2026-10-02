@@ -1,8 +1,8 @@
 error[E0277]: the trait bound `Child: UnmappedInto<Infallible>` is not satisfied
   --> tests/v2/partial_without_fatal.rs:11:116
    |
-11 | fn main() { let source: Fail<Child, lanes!()> = Fail::Rejected(Child::Two); let _: Fail<Parent, lanes!()> = source.lift(); }
-   |                                                                                                                    ^^^^ unsatisfied trait bound
+11 | fn main() { let source: Fail<Child, lanes!()> = Fail::Rejected(Child::Two); let _: Fail<Parent, lanes!()> = source.widen(); }
+   |                                                                                                                    ^^^^^ unsatisfied trait bound
    |
 help: the trait `UnmappedInto<Infallible>` is not implemented for `Child`
   --> tests/v2/partial_without_fatal.rs:4:1
@@ -10,11 +10,11 @@ help: the trait `UnmappedInto<Infallible>` is not implemented for `Child`
  4 | enum Child {
    | ^^^^^^^^^^
    = help: the trait `UnmappedInto<F>` is implemented for `Infallible`
-note: required by a bound in `Fail::<D, L>::lift`
+note: required by a bound in `Fail::<D, L>::widen`
   --> $WORKSPACE/errlanes/src/fail.rs
    |
-   |     pub fn lift<P: Lift<D>, M: LaneProfile>(self) -> Fail<P, M>
-   |            ---- required by a bound in this associated function
+   |     pub fn widen<P: Lift<D>, M: LaneProfile>(self) -> Fail<P, M>
+   |            ----- required by a bound in this associated function
 ...
    |         P::Unmapped: UnmappedInto<M::Fatal>,
-   |                      ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Fail::<D, L>::lift`
+   |                      ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Fail::<D, L>::widen`

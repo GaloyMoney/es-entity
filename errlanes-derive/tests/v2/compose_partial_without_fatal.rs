@@ -12,5 +12,5 @@ enum Destination {
 }
 fn main() {
     let source: errlanes::Fail<Source, errlanes::lanes!()> = errlanes::Fail::Rejected(Source::Two);
-    let _: errlanes::Fail<Destination, errlanes::lanes!()> = source.lift();
+    let _: errlanes::Fail<Destination, errlanes::lanes!()> = source.widen();
 }
