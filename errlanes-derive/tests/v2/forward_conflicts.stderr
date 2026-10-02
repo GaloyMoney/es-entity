@@ -1,17 +1,17 @@
 error: forward conflicts with code, level, and delegate; choose source metadata or local metadata
-  --> tests/v2/forward_conflicts.rs:11:5
+ --> tests/v2/forward_conflicts.rs:9:5
+  |
+9 |     Value,
+  |     ^^^^^
+
+error: forward conflicts with code, level, and delegate; choose source metadata or local metadata
+  --> tests/v2/forward_conflicts.rs:15:5
    |
-11 |     Value,
+15 |     Value,
    |     ^^^^^
 
 error: forward conflicts with code, level, and delegate; choose source metadata or local metadata
-  --> tests/v2/forward_conflicts.rs:18:5
+  --> tests/v2/forward_conflicts.rs:21:5
    |
-18 |     Value,
-   |     ^^^^^
-
-error: forward conflicts with code, level, and delegate; choose source metadata or local metadata
-  --> tests/v2/forward_conflicts.rs:25:5
-   |
-25 |     Value(Source),
+21 |     Value(Source),
    |     ^^^^^

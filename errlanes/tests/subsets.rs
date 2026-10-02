@@ -54,32 +54,25 @@ fn widening_fault_results_preserves_transient_and_denied_payloads() {
     assert_eq!(error.action.as_deref(), Some("write"));
 }
 
-#[derive(Debug, Clone, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, Clone, errlanes::Rejection)]
 pub enum Child {
-    #[error("taken {0}")]
     Taken(String),
-    #[error("range {low}..{high}")]
     Range { low: u32, high: u32 },
-    #[error("unit")]
     Unit,
 }
-#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
 #[lift(Child)]
 pub enum Parent {
-    #[error("taken {0}")]
     #[lift(Child::Taken)]
     Taken(String),
-    #[error("range {low}..{high}")]
     #[lift(Child::Range)]
     Range { low: u32, high: u32 },
-    #[error("unit")]
     #[lift(Child::Unit)]
     Unit,
 }
-#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
 #[lift(Child, unhandled = fatal)]
 pub enum Partial {
-    #[error("taken {0}")]
     #[lift(Child::Taken)]
     Taken(String),
 }
@@ -233,17 +226,14 @@ fn transparent_subset_wrapper_retains_lane_markers() {
     assert_eq!(errlanes::Lane::of(boxed.as_ref()), Some(Lane::Fatal));
 }
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
 #[lift(Child)]
 pub enum Renamed {
     #[lift(Child::Taken)]
-    #[error("renamed {0}")]
     RenamedTaken(String),
     #[lift(Child::Range)]
-    #[error("range {low}..{high}")]
     RenamedRange { low: u32, high: u32 },
     #[lift(Child::Unit)]
-    #[error("unit")]
     RenamedUnit,
 }
 #[test]
@@ -252,10 +242,9 @@ fn explicit_strict_rename_preserves_leaf_code() {
     assert_eq!(Into::<&'static str>::into(parent.code()), "TAKEN");
 }
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
 #[lift(Child, strict)]
 pub enum Transformed {
-    #[error("canonical {0}")]
     #[rejection(code = "CANONICAL")]
     #[lift(Child::Taken, with = transform)]
     #[lift(Child::Range, with = transform)]
@@ -279,33 +268,28 @@ fn mapper_consumes_all_supported_shapes() {
     }
 }
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 pub enum Other {
-    #[error("other")]
     #[rejection(code = "OTHER", level = "warn")]
     Unit,
 }
-#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
 #[lift(Other)]
 #[lift(Child)]
 pub enum Combined {
-    #[error("unit")]
     #[rejection(code = "SHARED")]
     #[lift(Other::Unit)]
     #[lift(Child::Unit)]
     Unit,
-    #[error("taken {0}")]
     #[lift(Child::Taken)]
     Taken(String),
-    #[error("range {low}..{high}")]
     #[lift(Child::Range)]
     Range { low: u32, high: u32 },
 }
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 pub enum Delegated {
-    #[error(transparent)]
-    #[rejection(delegate)]
-    Other(#[from] Other),
+    #[rejection(delegate, from)]
+    Other(Other),
 }
 #[test]
 fn multiple_sources_and_explicit_delegation() {

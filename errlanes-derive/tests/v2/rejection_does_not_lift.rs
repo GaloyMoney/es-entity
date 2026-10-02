@@ -1,13 +1,11 @@
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum Source {
-    #[error("value")]
     Value,
 }
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 #[lift(Source)]
 enum Destination {
-    #[error("value")]
     #[lift(Source::Value)]
     Value,
 }

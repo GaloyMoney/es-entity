@@ -224,30 +224,11 @@ fn write_error_type(opts: &RepositoryOptions, constraint_violation: &syn::Ident)
             Constraint(#constraint_violation),
             /// The events table's `(id, sequence)` unique constraint fired —
             /// another writer claimed the next sequence first.
+            #[error("optimistic conflict")]
             #[classify(transient(OptimisticConflict))]
-            Conflict(sqlx::Error),
+            Conflict(#[source] sqlx::Error),
             #[classify(delegate)]
             Other(sqlx::Error),
-        }
-
-        impl std::fmt::Display for #write_error {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                match self {
-                    Self::Constraint(e) => std::fmt::Display::fmt(e, f),
-                    Self::Conflict(e) => write!(f, "optimistic conflict: {e}"),
-                    Self::Other(e) => std::fmt::Display::fmt(e, f),
-                }
-            }
-        }
-
-        impl std::error::Error for #write_error {
-            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                match self {
-                    Self::Constraint(e) => Some(e),
-                    Self::Conflict(e) => Some(e),
-                    Self::Other(e) => Some(e),
-                }
-            }
         }
 
         impl From<sqlx::Error> for #write_error {

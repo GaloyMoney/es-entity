@@ -4,6 +4,9 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Field, Ident, Path};
 
+use crate::classify;
+use crate::std_error::{self, DisplayDefault, Unit};
+
 #[derive(Debug, FromDeriveInput)]
 #[darling(attributes(rejection), supports(enum_any, struct_any))]
 struct RejectionInput {
@@ -16,6 +19,26 @@ struct RejectionInput {
     code: Option<String>,
     #[darling(default)]
     level: Option<String>,
+    /// Emits `From<Payload>`, with the payload also `source()`'s default.
+    #[darling(default)]
+    from: bool,
+    /// `error = manual`: this type's `Display`/`Error` come from elsewhere
+    /// (`thiserror`, or by hand); errlanes emits neither.
+    #[darling(default)]
+    error: Option<Path>,
+}
+
+impl RejectionInput {
+    fn error_manual(&self) -> darling::Result<bool> {
+        match &self.error {
+            None => Ok(false),
+            Some(p) if p.is_ident("manual") => Ok(true),
+            Some(p) => Err(darling::Error::custom(
+                "unknown `error` value, expected `error = manual`",
+            )
+            .with_span(p)),
+        }
+    }
 }
 
 fn level_expr(level: &Option<String>, span: &Ident) -> darling::Result<TokenStream> {
@@ -50,6 +73,9 @@ struct RejectionVariant {
     origin: Option<String>,
     #[darling(default)]
     level: Option<String>,
+    /// Emits `From<Payload>`, with the payload also `source()`'s default.
+    #[darling(default)]
+    from: bool,
 }
 
 impl RejectionVariant {
@@ -110,7 +136,26 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                 .with_span(&input.ident)
             })?;
             let level = level_expr(&input.level, ident)?;
-            return Ok(quote! {
+            let error_manual = input.error_manual()?;
+            let syn::Data::Struct(raw) = &ast.data else {
+                unreachable!()
+            };
+
+            let mut out = TokenStream::new();
+            let from_payload = if input.from {
+                let payload =
+                    classify::payload_field(&raw.fields, ident, "`#[rejection(from)]` on a struct")
+                        .map_err(darling::Error::from)?;
+                out.extend(
+                    classify::from_impl(ident, &ast.generics, None, &payload, ident)
+                        .map_err(darling::Error::from)?,
+                );
+                Some(payload)
+            } else {
+                None
+            };
+
+            out.extend(quote! {
                 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
                 pub enum #code_ident { #ident }
 
@@ -144,15 +189,50 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                     }
                 }
             });
+
+            if !error_manual {
+                std_error::reject_from_field_attr(&raw.fields).map_err(darling::Error::from)?;
+                let source = match &from_payload {
+                    Some(p) => {
+                        let name = std_error::field_binding(&raw.fields, p.index);
+                        Some(quote! { #name })
+                    }
+                    None => std_error::marked_source(&raw.fields, ident)
+                        .map_err(darling::Error::from)?,
+                };
+                let pat = std_error::bind_pattern(quote! { Self }, &raw.fields);
+                let error =
+                    std_error::take_error_lit(&ast.attrs).map_err(darling::Error::from)?;
+                out.extend(
+                    std_error::emit(
+                        ident,
+                        &ast.generics,
+                        DisplayDefault::Code,
+                        &[Unit {
+                            pat,
+                            fields: &raw.fields,
+                            error,
+                            name: ident.clone(),
+                            source,
+                        }],
+                    )
+                    .map_err(darling::Error::from)?,
+                );
+            }
+
+            return Ok(out);
         }
     };
     let schema = crate::composition::schema(ast).map_err(darling::Error::from)?;
+    let error_manual = input.error_manual()?;
 
     let mut code_variants = Vec::new();
     let mut into_str_arms = Vec::new();
     let mut code_match_arms = Vec::new();
     let mut level_match_arms = Vec::new();
     let mut leaf_codes = Vec::new();
+    let mut from_impls = TokenStream::new();
+    let mut display_units = Vec::new();
 
     let syn::Data::Enum(raw) = &ast.data else {
         unreachable!()
@@ -203,6 +283,58 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             ast::Style::Tuple => quote!(Self::#variant_ident(#(#fields),*)),
             ast::Style::Struct => quote!(Self::#variant_ident { #(#fields),* }),
         };
+
+        let payload = if v.delegate || v.from {
+            Some(
+                classify::payload_field(
+                    &raw.fields,
+                    variant_ident,
+                    if v.delegate {
+                        "`delegate`"
+                    } else {
+                        "`#[rejection(from)]` on a variant"
+                    },
+                )
+                .map_err(darling::Error::from)?,
+            )
+        } else {
+            None
+        };
+        if v.from {
+            from_impls.extend(
+                classify::from_impl(
+                    ident,
+                    &ast.generics,
+                    Some(variant_ident),
+                    payload.as_ref().unwrap(),
+                    variant_ident,
+                )
+                .map_err(darling::Error::from)?,
+            );
+        }
+        if !error_manual {
+            std_error::reject_from_field_attr(&raw.fields).map_err(darling::Error::from)?;
+            let source = match &payload {
+                Some(p) => {
+                    let name = std_error::field_binding(&raw.fields, p.index);
+                    Some(quote! { #name })
+                }
+                None => {
+                    std_error::marked_source(&raw.fields, variant_ident)
+                        .map_err(darling::Error::from)?
+                }
+            };
+            let error =
+                std_error::take_error_lit(&raw.attrs).map_err(darling::Error::from)?;
+            display_units.push(Unit {
+                pat: pat.clone(),
+                fields: &raw.fields,
+                error,
+                name: variant_ident.clone(),
+                source,
+            });
+        }
+
         let mut forward = v.forward.clone();
         // A whole-value `#[lift(Payload)]` (one segment: a struct source, no
         // variant to forward from) identifies its metadata source the same
@@ -344,5 +476,12 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
 
     tokens.extend(metadata);
     tokens.extend(schema);
+    tokens.extend(from_impls);
+    if !error_manual {
+        tokens.extend(
+            std_error::emit(ident, &ast.generics, DisplayDefault::Code, &display_units)
+                .map_err(darling::Error::from)?,
+        );
+    }
     Ok(tokens)
 }

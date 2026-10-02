@@ -1,8 +1,8 @@
 error: composed variant name collision; change the placeholder name or use explicit lifts
- --> tests/v2/composition_collision.rs:3:35
+ --> tests/v2/composition_collision.rs:3:17
   |
-3 | #[derive(Debug, thiserror::Error, errlanes::Rejection)]
-  |                                   ^^^^^^^^^^^^^^^^^^^
+3 | #[derive(Debug, errlanes::Rejection)]
+  |                 ^^^^^^^^^^^^^^^^^^^
 ...
 8 | #[errlanes::compose]
   | -------------------- in this attribute macro expansion

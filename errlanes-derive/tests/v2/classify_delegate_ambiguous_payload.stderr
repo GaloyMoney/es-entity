@@ -1,5 +1,5 @@
-error: `delegate` with several fields needs the payload singled out: mark it `#[source]`/`#[from]` or name it `source`
-  --> tests/v2/classify_delegate_ambiguous_payload.rs:13:5
+error: `delegate` with several fields needs the payload singled out: mark it `#[source]` or name it `source`
+  --> tests/v2/classify_delegate_ambiguous_payload.rs:10:5
    |
-13 |     Delegated { first: Inner, second: Inner },
+10 |     Delegated { first: Inner, second: Inner },
    |     ^^^^^^^^^

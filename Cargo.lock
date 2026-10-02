@@ -360,7 +360,6 @@ version = "0.0.0"
 dependencies = [
  "composition-middle",
  "errlanes",
- "thiserror",
 ]
 
 [[package]]
@@ -369,7 +368,6 @@ version = "0.0.0"
 dependencies = [
  "composition-source",
  "errlanes",
- "thiserror",
 ]
 
 [[package]]
@@ -690,7 +688,6 @@ name = "downstream"
 version = "0.0.0"
 dependencies = [
  "errlanes",
- "thiserror",
  "tokio",
  "upstream",
 ]
@@ -2040,7 +2037,6 @@ version = "0.0.0"
 dependencies = [
  "errlanes",
  "repo-composition-source",
- "thiserror",
 ]
 
 [[package]]

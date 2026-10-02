@@ -1,7 +1,5 @@
 //! Types for working with errors produced by es-entity.
 
-use thiserror::Error;
-
 /// Repository read failures: transient infrastructure faults or fatal failures.
 /// Reads cannot reject or deny; optional reads represent absence with `None`.
 pub type RepoReadError = errlanes::Fault<errlanes::lanes!(Transient, Fatal)>;
@@ -11,14 +9,12 @@ pub type RepoReadError = errlanes::Fault<errlanes::lanes!(Transient, Fatal)>;
 pub type RepoWriteError<C> = errlanes::Fail<C, errlanes::lanes!(Transient, Fatal)>;
 
 /// Error type for entity hydration failures (reconstructing entities from events).
-#[derive(Error, Debug, errlanes::Classify)]
+#[derive(Debug, errlanes::Classify)]
 pub enum EntityHydrationError {
-    #[error("EntityHydrationError - UninitializedFieldError: {0}")]
-    #[classify(fatal(CorruptState))]
-    UninitializedFieldError(#[from] derive_builder::UninitializedFieldError),
-    #[error("EntityHydrationError - Deserialization: {0}")]
-    #[classify(delegate)]
-    EventDeserialization(#[from] serde_json::Error),
+    #[classify(fatal(CorruptState), from)]
+    UninitializedFieldError(derive_builder::UninitializedFieldError),
+    #[classify(delegate, from)]
+    EventDeserialization(serde_json::Error),
     /// A snapshot row matched the fingerprint bind but failed to deserialize
     /// into `S`. Never silently ignored, unlike a fingerprint mismatch — the
     /// operator fix is `DELETE FROM <tbl>_snapshots WHERE id = …`.
@@ -39,12 +35,11 @@ pub enum EntityHydrationError {
         next_event_sequence: i32,
     },
     /// A hydration row carried neither an event nor a usable snapshot.
-    #[error("EntityHydrationError - NoEvents")]
     #[classify(fatal(CorruptState))]
     NoEvents,
 }
 
-#[derive(Error, Debug, errlanes::Classify)]
+#[derive(Debug, errlanes::Classify)]
 #[error("CursorDestructureError: couldn't turn {0} into {1}")]
 #[classify(fatal(Config))]
 pub struct CursorDestructureError(&'static str, &'static str);
@@ -139,7 +134,7 @@ pub enum ConstraintKind {
 /// **Security note:** `value`'s `Debug` may contain PII (e.g. an email
 /// address looked up by a caller-supplied value). `Display` omits it.
 #[derive(Debug, errlanes::Classify)]
-#[classify(fatal(Invariant))]
+#[classify(fatal(Invariant), error = manual)]
 pub struct NotFound {
     pub entity: &'static str,
     pub column: Option<&'static str>,

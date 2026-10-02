@@ -1,14 +1,13 @@
 use errlanes::{Lift, Rejection};
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum Source {
-    #[error("source {0}")]
     #[rejection(code = "SOURCE_VALUE", level = "warn")]
     Value(String),
 }
 
 // Rejection may read the mapping for metadata, but must not implement Lift/From.
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 #[lift(Source)]
 enum MetadataOnly {
     #[error("destination {0}")]
@@ -31,28 +30,25 @@ fn rejection_does_not_generate_conversions() {
     assert_eq!(rejection.to_string(), "destination payload");
 }
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
 #[lift(Source)]
 enum Forwarded {
-    #[error("forwarded {0}")]
     #[lift(Source::Value)]
     Renamed(String),
 }
 
 // Both derive orderings work: neither relies on the other's expansion.
-#[derive(Debug, thiserror::Error, errlanes::Lift, errlanes::Rejection)]
+#[derive(Debug, errlanes::Lift, errlanes::Rejection)]
 #[lift(Source)]
 enum Reinterpreted {
-    #[error("local {0}")]
     #[lift(Source::Value)]
     #[rejection(code = "LOCAL_VALUE", level = "debug")]
     Renamed(String),
 }
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
 #[lift(Source)]
 enum CodeOverride {
-    #[error("local {0}")]
     #[lift(Source::Value)]
     #[rejection(code = "LOCAL_VALUE")]
     Renamed(String),
@@ -73,9 +69,8 @@ fn simple_lift_forwards_metadata_unless_overridden() {
     assert_eq!(rejection.level(), errlanes::Level::Info);
 }
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum ExplicitForward {
-    #[error("explicit {0}")]
     #[rejection(forward = Source::Value)]
     Renamed(String),
 }
@@ -115,16 +110,13 @@ fn partial_lift_alone_retains_the_unmapped_input() {
 // A whole-value arm: `Payload` is a struct source (not an enum variant), so
 // `#[lift(Payload)]` with no variant suffix wraps the entire value. Lift
 // sources are rejections, so `Payload` derives one.
-#[derive(Debug, PartialEq, thiserror::Error, errlanes::Rejection)]
-#[error("invalid payload")]
+#[derive(Debug, PartialEq, errlanes::Rejection)]
 #[rejection(code = "INVALID_PAYLOAD")]
 struct Payload(u32);
 
-#[derive(Debug, PartialEq, thiserror::Error, errlanes::Lift)]
-#[error("job")]
+#[derive(Debug, PartialEq, errlanes::Lift)]
 #[lift(Payload)]
 enum JobRejection {
-    #[error("invalid payload")]
     #[lift(Payload)]
     InvalidPayload(Payload),
 }

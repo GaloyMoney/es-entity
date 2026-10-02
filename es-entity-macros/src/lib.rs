@@ -148,7 +148,9 @@ pub fn expand_es_query(input: TokenStream) -> TokenStream {
 }
 
 /// Diagnostic accessors for the final, composed repository rejection enum.
-#[proc_macro_derive(ConstraintRejection, attributes(error, source))]
+/// `Display`/`Error` come from the composed enum's own `errlanes::Rejection`
+/// derive (via each variant's `#[error("{0}")]`/`#[source]`), not from here.
+#[proc_macro_derive(ConstraintRejection)]
 pub fn constraint_rejection(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let ast = syn::parse_macro_input!(input as syn::DeriveInput);
     let ident = ast.ident;
@@ -157,16 +159,6 @@ pub fn constraint_rejection(input: proc_macro::TokenStream) -> proc_macro::Token
     };
     let variants: Vec<_> = data.variants.iter().map(|v| &v.ident).collect();
     quote::quote! {
-        impl std::fmt::Display for #ident {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                std::fmt::Display::fmt(self.diagnostics(), f)
-            }
-        }
-        impl std::error::Error for #ident {
-            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                match self { #(Self::#variants(conflict) => Some(conflict)),* }
-            }
-        }
         impl #ident {
             pub fn diagnostics(&self) -> &es_entity::ConstraintDiagnostics {
                 match self { #(Self::#variants(conflict) => &conflict.diagnostics),* }

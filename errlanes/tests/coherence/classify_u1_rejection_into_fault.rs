@@ -1,7 +1,6 @@
 // Appendix B, U1: a rejection never enters a `Fault` by `?` — nothing about
 // it is a fault, so there is nothing for `Fault` to lift it into.
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
-#[error("invalid amount")]
+#[derive(Debug, errlanes::Rejection)]
 #[rejection(code = "INVALID_AMOUNT")]
 struct Validation;
 

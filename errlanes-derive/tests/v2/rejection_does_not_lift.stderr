@@ -1,12 +1,12 @@
 error[E0277]: the trait bound `Destination: From<Source>` is not satisfied
-  --> tests/v2/rejection_does_not_lift.rs:16:40
+  --> tests/v2/rejection_does_not_lift.rs:14:40
    |
-16 |     let _: Destination = Source::Value.into();
+14 |     let _: Destination = Source::Value.into();
    |                                        ^^^^ unsatisfied trait bound
    |
 help: the trait `From<Source>` is not implemented for `Destination`
-  --> tests/v2/rejection_does_not_lift.rs:9:1
+  --> tests/v2/rejection_does_not_lift.rs:8:1
    |
- 9 | enum Destination {
+ 8 | enum Destination {
    | ^^^^^^^^^^^^^^^^
    = note: required for `Source` to implement `Into<Destination>`

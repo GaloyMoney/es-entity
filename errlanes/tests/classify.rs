@@ -9,33 +9,27 @@ use errlanes::{Classify, ClassifyResult, Fail, Fault, Rejection, WidenResult, la
 
 type Tf = lanes!(Transient, Fatal);
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum Validation {
-    #[error("invalid amount")]
     #[rejection(code = "INVALID_AMOUNT")]
     InvalidAmount,
 }
 
-#[derive(Debug, thiserror::Error, errlanes::Classify)]
-#[error("stored json did not decode: {0}")]
+#[derive(Debug, errlanes::Classify)]
 #[classify(fatal(CorruptState), from)]
 struct Stored(#[source] std::io::Error);
 
 // `#[derive(Rejection)]` needs a `code = ".."` on a struct.
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
-#[error("constraint violated: {0}")]
+#[derive(Debug, errlanes::Rejection)]
 #[rejection(code = "CONSTRAINT")]
 struct ConstraintViolation(&'static str);
 
-#[derive(Debug, thiserror::Error, errlanes::Classify)]
+#[derive(Debug, errlanes::Classify)]
 enum DbWrite {
-    #[error("constraint: {0}")]
     #[classify(delegate)]
     Constraint(ConstraintViolation),
-    #[error("conflict: {0}")]
     #[classify(transient(OptimisticConflict))]
     Conflict(std::io::Error),
-    #[error("other: {0}")]
     #[classify(delegate)]
     Other(Stored),
 }
@@ -52,9 +46,8 @@ impl From<std::io::Error> for DbWrite {
     }
 }
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum JobRejection {
-    #[error("duplicate: {0}")]
     Dup(ConstraintViolation),
 }
 
@@ -152,9 +145,8 @@ fn infallible_rejected_slot_is_a_rejected_slot() {
 // Pure mode: no lane/delegate anywhere, so `derive(Classify)` must emit
 // exactly what `derive(Rejection)` emits (byte-identical grammar, same
 // engine) and `Classify` comes from the blanket, not a direct impl.
-#[derive(Debug, thiserror::Error, errlanes::Classify)]
+#[derive(Debug, errlanes::Classify)]
 enum PureViaClassify {
-    #[error("too small")]
     #[classify(code = "TOO_SMALL")]
     TooSmall,
 }
@@ -171,19 +163,16 @@ fn pure_mode_delegates_to_the_rejection_engine() {
 
 // A mixed wrapper with both a `Denied` and a `Fatal` lane (so `narrow_denied`
 // has somewhere to land), narrowed away over a `delegate`.
-#[derive(Debug, thiserror::Error, errlanes::Classify)]
+#[derive(Debug, errlanes::Classify)]
 enum Unauthorized {
-    #[error("upstream call failed")]
     #[classify(denied)]
     NotOurs,
-    #[error("upstream misconfigured")]
     #[classify(fatal(Config))]
     Misconfigured,
 }
 
-#[derive(Debug, thiserror::Error, errlanes::Classify)]
+#[derive(Debug, errlanes::Classify)]
 enum Proxy {
-    #[error(transparent)]
     #[classify(delegate, narrow(Denied))]
     Upstream(Unauthorized),
 }
@@ -208,10 +197,10 @@ fn a_fatal_variant_alongside_a_denied_one_stays_fatal() {
 
 // Composition across layers: each layer declares one lift against the type
 // it actually receives.
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum Api {
-    #[error("job: {0}")]
-    Job(#[from] JobRejection),
+    #[rejection(from)]
+    Job(JobRejection),
 }
 
 #[test]
@@ -238,12 +227,10 @@ fn composition_across_layers_widens_through_each_hop() {
 // `delegate`, not read off whichever variant happens to be declared first.
 // `Other` (never rejects) is declared *before* `Constraint` (the one
 // genuine rejection) here — the reverse of `DbWrite` above.
-#[derive(Debug, thiserror::Error, errlanes::Classify)]
+#[derive(Debug, errlanes::Classify)]
 enum DbWriteReordered {
-    #[error("other: {0}")]
     #[classify(delegate)]
     Other(Stored),
-    #[error("constraint: {0}")]
     #[classify(delegate)]
     Constraint(ConstraintViolation),
 }
@@ -267,25 +254,22 @@ fn rejected_is_folded_order_independently_across_delegates() {
     }
 }
 
-// Named fields: a `#[source]` field among siblings (the shape thiserror
-// already treats as the cause) and a lone named field both `delegate`; `from`
-// on the lone one builds `Self::Wrapped { inner: value }`.
-#[derive(Debug, thiserror::Error, errlanes::Classify)]
+// Named fields: a `#[source]` field among siblings (the shape errlanes also
+// treats as the cause) and a lone named field both `delegate`; `from` on the
+// lone one builds `Self::Wrapped { inner: value }`.
+#[derive(Debug, errlanes::Classify)]
 enum NamedPayloads {
-    #[error("decode at {sequence}: {source}")]
     #[classify(delegate)]
     Decode {
         sequence: i32,
         #[source]
         source: Stored,
     },
-    #[error("wrapped: {inner}")]
     #[classify(delegate, from)]
     Wrapped { inner: ConstraintViolation },
 }
 
-#[derive(Debug, thiserror::Error, errlanes::Classify)]
-#[error("config: {source}")]
+#[derive(Debug, errlanes::Classify)]
 #[classify(fatal(Config), from)]
 struct NamedStruct {
     #[source]

@@ -1,22 +1,20 @@
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum Source {
-    #[error("one")]
     One,
 }
 
 #[errlanes::compose]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[lift(Source)]
 enum Mixed {
     #[compose(flatten)]
     Whole(Source),
     #[lift(Source::One)]
-    #[error("one")]
     One,
 }
 
 #[errlanes::compose]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 enum Twice {
     #[compose(flatten)]
     First(Source),

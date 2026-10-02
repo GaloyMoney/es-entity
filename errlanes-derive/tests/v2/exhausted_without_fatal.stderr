@@ -1,7 +1,7 @@
 error[E0277]: the trait bound `errlanes::Transient: NarrowTransient<Infallible>` is not satisfied
-  --> tests/v2/exhausted_without_fatal.rs:16:6
+  --> tests/v2/exhausted_without_fatal.rs:14:6
    |
-16 |     .narrow_transient(2);
+14 |     .narrow_transient(2);
    |      ^^^^^^^^^^^^^^^^ the trait `NarrowTransient<Infallible>` is not implemented for `errlanes::Transient`
    |
    = help: the trait `NarrowTransient<Infallible>` is not implemented for `errlanes::Transient`

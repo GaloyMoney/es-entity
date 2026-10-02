@@ -1,8 +1,7 @@
 // Appendix B, U4: a type is a `Rejection` or it implements `Classify`
 // directly, never both — a direct impl conflicts with the blanket
 // `impl<R: Rejection> Classify for R` (E0119).
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
-#[error("stored json did not decode")]
+#[derive(Debug, errlanes::Rejection)]
 #[rejection(code = "CORRUPT")]
 struct Stored;
 

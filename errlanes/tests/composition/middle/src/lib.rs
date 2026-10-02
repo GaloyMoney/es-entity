@@ -1,5 +1,5 @@
 #[lanes_runtime::compose]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum Posting {
     #[compose(flatten)]
     Velocity(renamed::Enforcement),

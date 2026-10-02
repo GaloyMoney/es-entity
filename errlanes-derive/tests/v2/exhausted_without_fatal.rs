@@ -1,10 +1,8 @@
 #![allow(unused_imports)]
 use errlanes::{Denied, Fail, Fatal, lanes};
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum Child {
-    #[error("one {0}")]
     One(u32),
-    #[error("two")]
     Two,
 }
 fn main() {

@@ -1,16 +1,13 @@
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum Source {
-    #[error("one")]
     One,
-    #[error("added case")]
     Added,
 }
 #[errlanes::compose]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[lift(Source)]
 enum Destination {
     #[lift(Source::One)]
-    #[error("one")]
     One,
 }
 fn main() {}

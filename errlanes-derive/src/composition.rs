@@ -33,11 +33,17 @@ pub fn schema(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
     for variant in &mut variants {
         let id = variant_id(&variant.ident.to_string());
         let mut origin = format!("{}::{}", helper, variant.ident);
+        let mut delegate = false;
+        let mut from = false;
         for attr in &variant.attrs {
             if attr.path().is_ident("rejection") {
                 attr.parse_nested_meta(|m| {
                     if m.path.is_ident("origin") {
                         origin = m.value()?.parse::<syn::LitStr>()?.value();
+                    } else if m.path.is_ident("delegate") {
+                        delegate = true;
+                    } else if m.path.is_ident("from") {
+                        from = true;
                     } else if m.input.peek(Token![=]) {
                         let _: syn::Expr = m.value()?.parse()?;
                     }
@@ -45,6 +51,18 @@ pub fn schema(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 })?;
             }
         }
+        // The `retain` below strips `#[rejection(..)]`, which would
+        // silently drop a `delegate`/`from` variant's `source()` along with
+        // it — mark the payload field directly first so the imported
+        // variant keeps the same source after import.
+        let payload_index = if delegate || from {
+            Some(
+                crate::classify::payload_field(&variant.fields, &variant.ident, "this variant")?
+                    .index,
+            )
+        } else {
+            None
+        };
         variant
             .attrs
             .retain(|a| !a.path().is_ident("lift") && !a.path().is_ident("rejection"));
@@ -56,15 +74,15 @@ pub fn schema(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             fields.extend(quote! {
                 impl errlanes::RejectionField<#id, #index> for #name { type Type = #ty; }
             });
+            if payload_index == Some(index)
+                && !field.attrs.iter().any(|a| a.path().is_ident("source"))
+            {
+                field.attrs.push(parse_quote!(#[source]));
+            }
             // The caller-supplied source type is hygienic across renamed dependencies.
             field.ty = syn::parse2(
                 quote!(<__ErrlanesSource as errlanes::RejectionField<#id, #index>>::Type),
             )?;
-            for attr in &mut field.attrs {
-                if attr.path().is_ident("from") {
-                    *attr = parse_quote!(#[source]);
-                }
-            }
         }
     }
     let schema = quote!(#variants).to_string();

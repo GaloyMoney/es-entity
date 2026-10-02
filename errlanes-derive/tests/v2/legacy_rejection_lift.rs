@@ -1,7 +1,6 @@
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 #[rejection(lift(Source))]
 enum Destination {
-    #[error("value")]
     #[rejection(key = Key::Value, via = Source)]
     Value,
 }

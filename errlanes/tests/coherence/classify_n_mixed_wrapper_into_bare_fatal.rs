@@ -2,19 +2,16 @@
 // lane — a wrapper with more than one lane (here, `Transient` and `Fatal`)
 // cannot narrow itself on the way in; that is an explicit decision, not an
 // implicit one `?` should make.
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
-#[error("constraint violated: {0}")]
+#[derive(Debug, errlanes::Rejection)]
 #[rejection(code = "CONSTRAINT")]
 struct Constraint(&'static str);
 
-#[derive(Debug, thiserror::Error, errlanes::Classify)]
+#[derive(Debug, errlanes::Classify)]
 enum DbWrite {
-    #[error("constraint: {0}")]
     #[classify(delegate)]
     Constraint(Constraint),
-    #[error("conflict: {0}")]
     #[classify(transient(OptimisticConflict))]
-    Conflict(std::io::Error),
+    Conflict(#[source] std::io::Error),
 }
 
 fn n() -> Result<u8, errlanes::Fatal> {

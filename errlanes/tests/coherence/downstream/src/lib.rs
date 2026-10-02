@@ -1,11 +1,10 @@
 use errlanes::Fail;
 
-#[derive(Debug, Clone, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, Clone, errlanes::Rejection)]
 pub enum CustomerRejection {
-    #[error("customer is closed")]
     CustomerIsClosed,
-    #[error(transparent)]
-    Deposit(#[from] upstream::DepositRejection),
+    #[rejection(from)]
+    Deposit(upstream::DepositRejection),
 }
 
 #[derive(Debug, Clone, errlanes::Failure)]

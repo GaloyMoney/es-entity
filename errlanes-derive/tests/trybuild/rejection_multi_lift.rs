@@ -4,15 +4,13 @@ enum A { Frozen, Other }
 #[derive(Debug)]
 enum B { Blocked }
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
 #[lift(A, unhandled = fatal)]
 #[lift(B)]
 enum MultiRejection {
-    #[error("a frozen")]
     #[rejection(code = "FROZEN")]
     #[lift(A::Frozen)]
     AFrozen,
-    #[error("b blocked")]
     #[rejection(code = "BLOCKED")]
     #[lift(B::Blocked)]
     BBlocked,

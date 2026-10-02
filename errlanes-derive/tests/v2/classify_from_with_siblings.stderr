@@ -1,5 +1,5 @@
 error: `#[classify(from)]` needs the payload to be the only field: `From` has nothing to fill its siblings with
-  --> tests/v2/classify_from_with_siblings.rs:13:5
+  --> tests/v2/classify_from_with_siblings.rs:11:5
    |
-13 |     Decode {
+11 |     Decode {
    |     ^^^^^^

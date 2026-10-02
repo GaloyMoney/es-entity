@@ -1,6 +1,5 @@
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum MyRejection {
-    #[error("closed")]
     Closed,
 }
 

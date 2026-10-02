@@ -2,34 +2,29 @@ use errlanes::{Fail, Level, Rejection, WidenResult, lanes};
 
 use std::error::Error;
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum Enforcement {
     #[error("limit {0}")]
     #[rejection(code = "ENFORCEMENT", level = "warn")]
     Limit(u64),
-    #[error("disabled")]
     Disabled,
-    #[error("range {min}..{max}")]
     Range { min: u64, max: u64 },
 }
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum Constraint {
-    #[error("code {0}")]
     Code(String),
-    #[error("primary key conflict")]
     Pkey,
 }
 
 #[errlanes::compose]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[lift(Constraint, unhandled = fatal)]
 enum Operation {
     #[compose(flatten)]
     Velocity(Enforcement),
     #[lift(Constraint::Code)]
     #[rejection(code = "ACCOUNT_CODE_ALREADY_EXISTS")]
-    #[error("account code {0} already exists")]
     CodeAlreadyExists(String),
     #[error("local")]
     Local,
@@ -119,19 +114,16 @@ fn bare_rejection_widens_through_a_partial_mapping() {
 
 // Explicit strict lifts preserve custom or previously unprefixed names.
 #[errlanes::compose]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[lift(Enforcement)]
 enum CustomNames {
     #[compose(flatten)]
     Repo(Constraint),
     #[lift(Enforcement::Limit)]
-    #[error("custom limit {0}")]
     Limit(u64),
     #[lift(Enforcement::Disabled)]
-    #[error("unavailable")]
     Unavailable,
     #[lift(Enforcement::Range)]
-    #[error("custom range {min}..{max}")]
     Range { min: u64, max: u64 },
 }
 
@@ -154,14 +146,12 @@ fn whole_family_and_explicit_strict_mapping_preserve_custom_names() {
 // compose supports explicit-only mappings and deduplicates ordinary derive lists,
 // both qualified and imported spellings, without removing unrelated derives.
 #[errlanes::compose]
-#[derive(Debug, thiserror::Error, Rejection, errlanes::Lift, errlanes::Rejection, Clone)]
+#[derive(Debug, Rejection, errlanes::Lift, errlanes::Rejection, Clone)]
 #[lift(Constraint)]
 enum ExplicitOnly {
     #[lift(Constraint::Code)]
-    #[error("code {0}")]
     Code(String),
     #[lift(Constraint::Pkey)]
-    #[error("key")]
     Key,
 }
 

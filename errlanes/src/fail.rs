@@ -28,7 +28,9 @@ impl From<Level> for tracing::Level {
 }
 
 /// A pure, caller-correctable domain outcome. Implemented by hand or via
-/// `#[derive(errlanes::Rejection)]` on a `thiserror` enum.
+/// `#[derive(errlanes::Rejection)]`, which emits `Display`/`Error` itself
+/// (defaulting `Display` to the code) unless `#[rejection(error = manual)]`
+/// hands that to `thiserror` or a hand-written impl.
 pub trait Rejection: Error + Send + Sync + 'static {
     /// A stable, typed, wire-safe identity for this outcome.
     type Code: Copy

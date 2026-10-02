@@ -48,10 +48,9 @@ the outbox payload — wraps in a local `#[derive(errlanes::Classify)]` type
 instead of a hand-picked kind, and enters with `.classify::<W>()?`:
 
 ```rust,ignore
-#[derive(Debug, thiserror::Error, errlanes::Classify)]
-#[error("outbox payload did not encode: {0}")]
+#[derive(Debug, errlanes::Classify)]
 #[classify(fatal(Invariant), from)]
-struct OutboxEncode(#[source] serde_json::Error);
+struct OutboxEncode(serde_json::Error);
 
 impl Users {
     async fn on_persist<OP: es_entity::AtomicOperation>(

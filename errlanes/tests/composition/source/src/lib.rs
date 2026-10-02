@@ -3,12 +3,12 @@ pub mod domain {
     #[error("limit {0}")]
     pub struct Limit(pub u64);
 
-    #[derive(Debug, thiserror::Error, errlanes::Rejection)]
+    #[derive(Debug, errlanes::Rejection)]
     #[rejection(code_prefix = "VELOCITY_")]
     pub enum Enforcement {
         #[error("limit: {0}")]
-        #[rejection(level = "warn")]
-        Limit(#[from] Limit),
+        #[rejection(level = "warn", from)]
+        Limit(Limit),
         #[error("disabled")]
         Disabled,
         #[error("range {min}..{max}")]

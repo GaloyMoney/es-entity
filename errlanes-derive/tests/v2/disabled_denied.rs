@@ -1,8 +1,8 @@
 #![allow(unused_imports)]
 use errlanes::{Fail, Fatal, Denied, lanes};
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum Child {
-    #[error("one {0}")] One(u32),
-    #[error("two")] Two,
+    One(u32),
+    Two,
 }
 fn main() { let _: Fail<Child, lanes!(Fatal)> = Denied::default().into(); }

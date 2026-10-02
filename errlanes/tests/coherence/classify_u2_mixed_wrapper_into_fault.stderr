@@ -1,13 +1,13 @@
 error[E0271]: type mismatch resolving `<DbWrite as Classify>::Rejected == Infallible`
-  --> tests/coherence/classify_u2_mixed_wrapper_into_fault.rs:22:6
+  --> tests/coherence/classify_u2_mixed_wrapper_into_fault.rs:19:6
    |
-22 |     r?;
+19 |     r?;
    |      ^ type mismatch resolving `<DbWrite as Classify>::Rejected == Infallible`
    |
 note: expected this to be `Infallible`
-  --> tests/coherence/classify_u2_mixed_wrapper_into_fault.rs:10:35
+  --> tests/coherence/classify_u2_mixed_wrapper_into_fault.rs:9:17
    |
-10 | #[derive(Debug, thiserror::Error, errlanes::Classify)]
-   |                                   ^^^^^^^^^^^^^^^^^^
+ 9 | #[derive(Debug, errlanes::Classify)]
+   |                 ^^^^^^^^^^^^^^^^^^
    = note: required for `Fault<Profile<false, true, true>>` to implement `From<DbWrite>`
    = note: this error originates in the derive macro `errlanes::Classify` (in Nightly builds, run with -Z macro-backtrace for more info)

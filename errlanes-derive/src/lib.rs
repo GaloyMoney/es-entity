@@ -7,6 +7,7 @@ mod failure;
 mod instrument;
 mod lift;
 mod rejection;
+mod std_error;
 
 use proc_macro::TokenStream;
 use syn::{DeriveInput, parse_macro_input};
@@ -70,12 +71,12 @@ fn expand(
     }
 }
 
-#[proc_macro_derive(Rejection, attributes(rejection, lift))]
+#[proc_macro_derive(Rejection, attributes(rejection, lift, error, source, from))]
 pub fn derive_rejection(input: TokenStream) -> TokenStream {
     expand(input, rejection::derive)
 }
 
-#[proc_macro_derive(Classify, attributes(classify, rejection, lift))]
+#[proc_macro_derive(Classify, attributes(classify, rejection, lift, error, source, from))]
 pub fn derive_classify(input: TokenStream) -> TokenStream {
     expand(input, classify::derive)
 }

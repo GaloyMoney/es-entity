@@ -1,16 +1,13 @@
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum Source {
-    #[error("one")]
     One,
-    #[error("two")]
     Two,
 }
 #[errlanes::compose]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[lift(Source, unhandled = fatal)]
 enum Partial {
     #[lift(Source::One)]
-    #[error("one")]
     One,
 }
 fn main() {

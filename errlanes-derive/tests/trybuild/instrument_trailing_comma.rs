@@ -2,9 +2,8 @@
 // `fields(..)` group) onto multiple lines with a trailing comma. Appending
 // another comma unconditionally before the injected `FIELDS` entries would
 // expand to `,,` and fail to compile — this fixture is that exact shape.
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum MyRejection {
-    #[error("closed")]
     Closed,
 }
 

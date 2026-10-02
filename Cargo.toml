@@ -39,7 +39,6 @@ futures-core = { workspace = true }
 futures-util = { workspace = true }
 base64 = { workspace = true, optional = true }
 sqlx = { workspace = true }
-thiserror = { workspace = true }
 chrono =  { workspace = true }
 serde =  { workspace = true }
 serde_json =  { workspace = true }
@@ -71,6 +70,7 @@ tracing-subscriber = { workspace = true }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 proptest = "1"
 errlanes = { workspace = true, features = ["classify-serde-json", "classify-sqlx", "derive"] }
+thiserror = { workspace = true }
 
 [[bench]]
 name = "context"

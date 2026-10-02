@@ -7,4 +7,3 @@ publish = false
 [dependencies]
 foreign = { package = "repo-composition-source", path = "../source" }
 errlanes = { path = "../../../errlanes", features = ["derive"] }
-thiserror = { workspace = true }

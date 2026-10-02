@@ -1,6 +1,7 @@
 use errlanes::Fail;
 
 #[derive(Debug, Clone, thiserror::Error, errlanes::Rejection)]
+#[rejection(error = manual)]
 pub enum DepositRejection {
     #[error("deposit account is frozen")]
     AccountFrozen,

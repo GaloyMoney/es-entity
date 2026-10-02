@@ -9,4 +9,3 @@ extra = ["middle/extra"]
 [dependencies]
 middle = { package = "composition-middle", path = "../middle" }
 errlanes = { path = "../../..", features = ["derive"] }
-thiserror = "2"

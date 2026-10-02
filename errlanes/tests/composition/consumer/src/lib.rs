@@ -1,7 +1,7 @@
 use errlanes::{Fail, Fault, Rejection, WidenResult, lanes};
 
 #[errlanes::compose]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum Api {
     #[compose(flatten)]
     Post(middle::Posting),

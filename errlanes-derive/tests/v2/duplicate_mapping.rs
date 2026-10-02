@@ -1,14 +1,14 @@
 #![allow(unused_imports)]
 use errlanes::{Fail, Fatal, Denied, lanes};
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum Child {
-    #[error("one {0}")] One(u32),
-    #[error("two")] Two,
+    One(u32),
+    Two,
 }
-#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
 #[lift(Child)]
 enum Parent {
-    #[error("one {0}")] #[lift(Child::One)] One(u32),
-    #[error("other {0}")] #[lift(Child::One)] Other(u32),
+    #[lift(Child::One)] One(u32),
+    #[lift(Child::One)] Other(u32),
 }
 fn main() {}

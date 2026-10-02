@@ -1,7 +1,7 @@
 error[E0277]: the trait bound `Source: UnmappedInto<Infallible>` is not satisfied
-  --> tests/v2/compose_partial_without_fatal.rs:18:69
+  --> tests/v2/compose_partial_without_fatal.rs:15:69
    |
-18 |     let _: errlanes::Fail<Destination, errlanes::lanes!()> = source.lift();
+15 |     let _: errlanes::Fail<Destination, errlanes::lanes!()> = source.lift();
    |                                                                     ^^^^ unsatisfied trait bound
    |
 help: the trait `UnmappedInto<Infallible>` is not implemented for `Source`

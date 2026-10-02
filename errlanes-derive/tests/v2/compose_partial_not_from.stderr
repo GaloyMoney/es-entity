@@ -1,12 +1,12 @@
 error[E0277]: the trait bound `Partial: From<Source>` is not satisfied
-  --> tests/v2/compose_partial_not_from.rs:17:34
+  --> tests/v2/compose_partial_not_from.rs:14:34
    |
-17 |     let _: Partial = Source::Two.into();
+14 |     let _: Partial = Source::Two.into();
    |                                  ^^^^ unsatisfied trait bound
    |
 help: the trait `From<Source>` is not implemented for `Partial`
-  --> tests/v2/compose_partial_not_from.rs:11:1
+  --> tests/v2/compose_partial_not_from.rs:9:1
    |
-11 | enum Partial {
+ 9 | enum Partial {
    | ^^^^^^^^^^^^
    = note: required for `Source` to implement `Into<Partial>`

@@ -12,9 +12,8 @@ use errlanes::{Denied, Fail, Fatal, FatalKind, Laned, RecordResult, Transient, T
 use tracing::field::{Field, Visit};
 use tracing_subscriber::{Layer, layer::SubscriberExt};
 
-#[derive(Debug, Clone, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, Clone, errlanes::Rejection)]
 enum Small {
-    #[error("small")]
     #[rejection(code = "SMALL")]
     Unit,
 }

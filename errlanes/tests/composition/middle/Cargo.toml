@@ -9,4 +9,3 @@ extra = ["renamed/extra"]
 [dependencies]
 renamed = { package = "composition-source", path = "../source" }
 lanes_runtime = { package = "errlanes", path = "../../..", features = ["derive"] }
-thiserror = "2"

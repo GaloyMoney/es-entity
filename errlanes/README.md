@@ -291,9 +291,8 @@ from the blanket above, not from a second derive:
 ```rust
 use errlanes::{Level, Rejection};
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum Validation {
-    #[error("amount must be positive")]
     #[rejection(code = "INVALID_AMOUNT")]
     InvalidAmount,
 }
@@ -315,6 +314,48 @@ Info is the default because rejections are expected domain outcomes. A case
 that needs different operational visibility can override it with, for example,
 `#[rejection(code = "INVALID_AMOUNT", level = "warn")]`. Its lane is still Rejected.
 
+### Display and Error
+
+`#[derive(errlanes::Rejection)]` and `#[derive(errlanes::Classify)]` emit
+`std::fmt::Display` and `std::error::Error` themselves — no `thiserror`, no
+second derive. A rejection's `Display` defaults to its code (the one thing
+above that is never caller-supplied input); a laned wrapper's `Display`
+defaults to its type or variant name in `snake_case`. `source()` is the
+`#[source]`-marked field, a field named `source`, or a `delegate`/`from`
+payload — never a bare field, since that would need guessing.
+
+```rust
+use errlanes::Rejection;
+
+#[derive(Debug, errlanes::Rejection)]
+enum Validation {
+    // No #[error(..)]: Display is the code, "INVALID_AMOUNT".
+    #[rejection(code = "INVALID_AMOUNT")]
+    InvalidAmount,
+    // An explicit override, same grammar as thiserror's: positional `{0}`,
+    // named `{field}`, both with `:?`.
+    #[rejection(code = "RANGE")]
+    #[error("amount {min}..{max}")]
+    Range { min: u64, max: u64 },
+}
+
+assert_eq!(Validation::InvalidAmount.to_string(), "INVALID_AMOUNT");
+assert_eq!(Validation::Range { min: 1, max: 9 }.to_string(), "amount 1..9");
+```
+
+A type that already has `Display`/`Error` from elsewhere — `thiserror`, or a
+hand-written impl — keeps them with `error = manual`: errlanes then emits
+neither, and ignores any `#[error]`/`#[source]` it finds.
+
+```rust
+#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[rejection(code = "INVALID_AMOUNT", error = manual)]
+#[error("amount must be positive")]
+struct Legacy;
+
+assert_eq!(Legacy.to_string(), "amount must be positive");
+```
+
 ### Fault wrappers and mixed wrappers
 
 The other two shapes are written with `#[derive(errlanes::Classify)]` instead.
@@ -324,10 +365,9 @@ foreign error is the common case:
 ```rust
 use errlanes::{Classify, ClassifyResult, Fatal, FatalKind};
 
-#[derive(Debug, thiserror::Error, errlanes::Classify)]
-#[error("stored json did not decode: {0}")]
+#[derive(Debug, errlanes::Classify)]
 #[classify(fatal(CorruptState), from)]
-struct Stored(#[source] std::io::Error);
+struct Stored(std::io::Error);
 
 fn decode() -> Result<u8, std::io::Error> { Err(std::io::Error::other("x")) }
 
@@ -354,17 +394,14 @@ whichever variants are present — never named by hand:
 ```rust
 use errlanes::{Classify, ClassifyResult, Fail};
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
-#[error("constraint violated: {0}")]
+#[derive(Debug, errlanes::Rejection)]
 #[rejection(code = "CONSTRAINT")]
 struct Constraint(&'static str);
 
-#[derive(Debug, thiserror::Error, errlanes::Classify)]
+#[derive(Debug, errlanes::Classify)]
 enum DbWrite {
-    #[error("constraint: {0}")]
     #[classify(delegate)]                      // Rejected = Constraint, inferred
     Constraint(Constraint),
-    #[error("conflict: {0}")]
     #[classify(transient(OptimisticConflict))]  // Lanes include Transient, inferred
     Conflict(std::io::Error),
 }
@@ -400,9 +437,8 @@ while storage can fail fatally:
 ```rust
 use errlanes::{Fail, Fault, lanes};
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum Validation {
-    #[error("amount must be positive")]
     InvalidAmount,
 }
 
@@ -437,10 +473,9 @@ it in a local type, and give *that* a lane. A one-off call site does this with
 ```rust
 use errlanes::{ClassifyResult, FatalKind};
 
-#[derive(Debug, thiserror::Error, errlanes::Classify)]
-#[error("stored json did not decode: {0}")]
+#[derive(Debug, errlanes::Classify)]
 #[classify(fatal(CorruptState), from)]
-struct Stored(#[source] std::io::Error);
+struct Stored(std::io::Error);
 
 fn decode() -> Result<u8, std::io::Error> { Err(std::io::Error::other("x")) }
 
@@ -497,9 +532,9 @@ removes just the denied lane (an upstream `401`/`403` becomes `Fatal(Denied)`
 instead) before the arm's contribution is folded into the enclosing type's
 `Lanes`. `Rejected` and `Lanes` are always inferred this way — never named on
 the derive. The payload is the variant's only field, or — among several named
-fields — the one `thiserror` would also treat as the cause: marked
-`#[source]`/`#[from]`, or named `source`. `from` additionally needs the
-payload to be the only field, since `From` has nothing to fill siblings with.
+fields — the one marked `#[source]`, or named `source`. `from` additionally
+needs the payload to be the only field, since `From` has nothing to fill
+siblings with.
 
 **`classify-sqlx`, `classify-serde-json`, and `classify-reqwest`** are
 `impl Classify` for the three foreign types errlanes blesses on your behalf —
@@ -528,17 +563,15 @@ source case it represents:
 ```rust
 use errlanes::{Fail, Rejection, WidenResult, lanes};
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 enum Validation {
-    #[error("amount must be positive")]
     #[rejection(code = "INVALID_AMOUNT")]
     InvalidAmount,
 }
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
 #[lift(Validation)]
 enum Payment {
-    #[error("payment amount must be positive")]
     #[lift(Validation::InvalidAmount)]
     AmountNotPositive,
 }
@@ -593,15 +626,13 @@ destination variant that also writes `#[lift(Payload)]`:
 ```rust
 use errlanes::{Lift, Rejection};
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
-#[error("invalid payload")]
+#[derive(Debug, errlanes::Rejection)]
 #[rejection(code = "INVALID_PAYLOAD")]
-struct Payload(#[source] std::num::ParseIntError);
+struct Payload(std::num::ParseIntError);
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection, errlanes::Lift)]
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
 #[lift(Payload)]
 enum JobRejection {
-    #[error("invalid payload: {0}")]
     #[lift(Payload)]
     InvalidPayload(Payload),
 }
@@ -657,19 +688,17 @@ individual mapping decision to make for each case.
 ```rust
 use errlanes::Rejection;
 
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
+#[derive(Debug, errlanes::Rejection)]
 pub enum Validation {
-    #[error("amount must be positive")]
     #[rejection(code = "INVALID_AMOUNT")]
     InvalidAmount,
 }
 
 #[errlanes::compose]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum Payment {
     #[compose(flatten)]
     Amount(Validation),
-    #[error("payment window is closed")]
     WindowClosed,
 }
 
