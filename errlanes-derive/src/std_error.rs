@@ -133,10 +133,7 @@ type FieldRef = (Ident, Type, bool);
 /// resolves natively and is only validated here. Returns the rewritten
 /// literal text plus, for each referenced field, its bound name, type, and
 /// whether its format spec requested `Debug` (contains `?`).
-fn rewrite_literal(
-    lit: &LitStr,
-    fields: &Fields,
-) -> syn::Result<(String, Vec<FieldRef>)> {
+fn rewrite_literal(lit: &LitStr, fields: &Fields) -> syn::Result<(String, Vec<FieldRef>)> {
     let names = bound_fields(fields);
     let types: Vec<Type> = field_list(fields).iter().map(|f| f.ty.clone()).collect();
     let src = lit.value();

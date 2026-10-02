@@ -8,7 +8,10 @@ enum Enforcement {
     #[rejection(code = "ENFORCEMENT", level = "warn")]
     Limit(u64),
     Disabled,
-    Range { min: u64, max: u64 },
+    Range {
+        min: u64,
+        max: u64,
+    },
 }
 
 #[derive(Debug, errlanes::Rejection)]

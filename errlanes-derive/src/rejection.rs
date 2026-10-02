@@ -201,8 +201,7 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                         .map_err(darling::Error::from)?,
                 };
                 let pat = std_error::bind_pattern(quote! { Self }, &raw.fields);
-                let error =
-                    std_error::take_error_lit(&ast.attrs).map_err(darling::Error::from)?;
+                let error = std_error::take_error_lit(&ast.attrs).map_err(darling::Error::from)?;
                 out.extend(
                     std_error::emit(
                         ident,
@@ -319,13 +318,10 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                     let name = std_error::field_binding(&raw.fields, p.index);
                     Some(quote! { #name })
                 }
-                None => {
-                    std_error::marked_source(&raw.fields, variant_ident)
-                        .map_err(darling::Error::from)?
-                }
+                None => std_error::marked_source(&raw.fields, variant_ident)
+                    .map_err(darling::Error::from)?,
             };
-            let error =
-                std_error::take_error_lit(&raw.attrs).map_err(darling::Error::from)?;
+            let error = std_error::take_error_lit(&raw.attrs).map_err(darling::Error::from)?;
             display_units.push(Unit {
                 pat: pat.clone(),
                 fields: &raw.fields,
