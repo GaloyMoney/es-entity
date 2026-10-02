@@ -1,3 +1,11 @@
+# [cala release v0.15.1](https://github.com/GaloyMoney/cala/releases/tag/0.15.1)
+
+
+
+### Bug Fixes
+
+- Fail::widen covers partial lifts; drop Fail::lift (#249)
+
 # [cala release v0.15.0](https://github.com/GaloyMoney/cala/releases/tag/0.15.0)
 
 
