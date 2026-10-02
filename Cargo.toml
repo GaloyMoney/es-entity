@@ -25,15 +25,14 @@ mdbook-test = ["dep:anyhow"]
 # turning on repo-span instrumentation.
 errlanes-tracing = ["errlanes/tracing"]
 instrument = ["es-entity-macros/instrument", "dep:tracing", "errlanes-tracing"]
-# Re-exports of errlanes' blessed foreign-error `Classify` impls, so a
-# consumer (job, lana) enables them through es-entity rather than taking a
-# direct errlanes dependency.
-errlanes-classify-serde-json = ["errlanes/classify-serde-json"]
+# Re-export of errlanes' blessed `Classify` impl for reqwest, so a consumer
+# (job, lana) enables it through es-entity rather than taking a direct
+# errlanes dependency. serde_json's is always on: hydration delegates to it.
 errlanes-classify-reqwest = ["errlanes/classify-reqwest"]
 
 [dependencies]
 es-entity-macros = { workspace = true }
-errlanes = { workspace = true, features = ["classify-sqlx", "derive"] }
+errlanes = { workspace = true, features = ["classify-serde-json", "classify-sqlx", "derive"] }
 
 async-stream = { workspace = true }
 futures-core = { workspace = true }
@@ -71,7 +70,7 @@ futures = { workspace = true }
 tracing-subscriber = { workspace = true }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 proptest = "1"
-errlanes = { workspace = true, features = ["classify-sqlx", "derive"] }
+errlanes = { workspace = true, features = ["classify-serde-json", "classify-sqlx", "derive"] }
 
 [[bench]]
 name = "context"

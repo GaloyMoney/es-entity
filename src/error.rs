@@ -12,16 +12,18 @@ pub type RepoWriteError<C> = errlanes::Fail<C, errlanes::lanes!(Transient, Fatal
 
 /// Error type for entity hydration failures (reconstructing entities from events).
 #[derive(Error, Debug, errlanes::Classify)]
-#[classify(fatal(CorruptState))]
 pub enum EntityHydrationError {
     #[error("EntityHydrationError - UninitializedFieldError: {0}")]
+    #[classify(fatal(CorruptState))]
     UninitializedFieldError(#[from] derive_builder::UninitializedFieldError),
     #[error("EntityHydrationError - Deserialization: {0}")]
+    #[classify(delegate)]
     EventDeserialization(#[from] serde_json::Error),
     /// A snapshot row matched the fingerprint bind but failed to deserialize
     /// into `S`. Never silently ignored, unlike a fingerprint mismatch — the
     /// operator fix is `DELETE FROM <tbl>_snapshots WHERE id = …`.
     #[error("EntityHydrationError - SnapshotDecode at sequence {sequence}: {source}")]
+    #[classify(delegate)]
     SnapshotDecode {
         sequence: i32,
         #[source]
@@ -31,12 +33,14 @@ pub enum EntityHydrationError {
     #[error(
         "EntityHydrationError - SnapshotGap: snapshot at sequence {snapshot_sequence}, next event at {next_event_sequence}"
     )]
+    #[classify(fatal(CorruptState))]
     SnapshotGap {
         snapshot_sequence: i32,
         next_event_sequence: i32,
     },
     /// A hydration row carried neither an event nor a usable snapshot.
     #[error("EntityHydrationError - NoEvents")]
+    #[classify(fatal(CorruptState))]
     NoEvents,
 }
 
