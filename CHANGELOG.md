@@ -1,3 +1,11 @@
+# [cala release v0.15.0](https://github.com/GaloyMoney/cala/releases/tag/0.15.0)
+
+
+
+### Features
+
+- [**breaking**] Composable rejections and typed lane subsets (v2) (#246)
+
 # [cala release v0.14.3](https://github.com/GaloyMoney/cala/releases/tag/0.14.3)
 
 
