@@ -11,7 +11,7 @@ error[E0277]: the trait bound `Infallible: From<errlanes::Denied>` is not satisf
 note: required by a bound in `Fail::<D, L>::widen`
  --> $WORKSPACE/errlanes/src/fail.rs
   |
-  |     pub fn widen<P: From<D>, M: LaneProfile>(self) -> Fail<P, M>
+  |     pub fn widen<P: Lift<D>, M: LaneProfile>(self) -> Fail<P, M>
   |            ----- required by a bound in this associated function
   |     where
   |         L::Denied: Into<M::Denied>,
@@ -30,7 +30,7 @@ error[E0277]: the trait bound `Infallible: From<errlanes::Transient>` is not sat
 note: required by a bound in `Fail::<D, L>::widen`
  --> $WORKSPACE/errlanes/src/fail.rs
   |
-  |     pub fn widen<P: From<D>, M: LaneProfile>(self) -> Fail<P, M>
+  |     pub fn widen<P: Lift<D>, M: LaneProfile>(self) -> Fail<P, M>
   |            ----- required by a bound in this associated function
 ...
   |         L::Transient: Into<M::Transient>,

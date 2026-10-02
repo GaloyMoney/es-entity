@@ -98,7 +98,7 @@ async fn duplicate_nested_sku_hoists_through_the_parent_path() -> anyhow::Result
     // An unmapped leaf becomes Fatal(Invariant), retaining the original
     // rejection and its child constraint diagnostics in the source chain.
     let failure: Fail<NothingHoisted, errlanes::lanes!(Transient, Fatal)> =
-        es_entity::RepoWriteError::<_>::Rejected(cv).lift();
+        es_entity::RepoWriteError::<_>::Rejected(cv).widen();
     let Fail::Fatal(fatal) = failure else {
         panic!("expected invariant")
     };
