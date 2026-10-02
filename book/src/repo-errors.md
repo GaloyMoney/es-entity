@@ -30,15 +30,28 @@ indexes (partial and composite included), foreign keys and checks:
 
 ```rust,ignore
 pub enum UserConstraintViolation {
-    Pkey(ConstraintConflict<UserId>),
+    Pkey(IdConflict<UserId>),
     EmailKey(ConstraintConflict<String>),
 }
 ```
 
 Variant names are the constraint names with the table prefix stripped
-(`users_email_key` → `EmailKey`). Each case carries a `ConstraintConflict<V>`,
-where `V` is the column's Rust type — for a composite key, a generated struct
-with one field per column:
+(`users_email_key` → `EmailKey`), except the primary key, which is always
+named `Pkey` regardless of what the migration itself calls the constraint.
+
+The primary key is the one case that carries `IdConflict<Id>` instead of
+`ConstraintConflict<V>`: `attempted: Id` is never optional, because the id is
+always known — from the write's own input for a single `create`, or (for
+`create_all`) by matching the database's reported key against the batch's own
+ids. A reported key that matches none of them is `Fatal(Invariant)`, never a
+guess: the database message is used only to *select* which of the batch's own
+ids collided, it never becomes the value. A primary key on more than one
+column, or on anything but the id column, is not attributed this way and
+keeps `ConstraintConflict` like any other composite key.
+
+Every other case carries a `ConstraintConflict<V>`, where `V` is the column's
+Rust type — for a composite key, a generated struct with one field per
+column:
 
 - `attempted: Option<V>` — the value that collided, taken from the write's own
   input. It is `None` when it cannot be known reliably: a batch write that
@@ -46,7 +59,8 @@ with one field per column:
   macro does not know. Database message text is never parsed to fill it in.
 - `diagnostics` — the table, the exact constraint name, its kind, and the
   original `sqlx::Error`. The enum also offers `constraint_name()`, `kind()`,
-  `is_unique()`, `is_foreign_key()` and `is_check()` across all its cases.
+  `is_unique()`, `is_foreign_key()` and `is_check()` across all its cases —
+  `Pkey`/`IdConflict` included.
 
 Match the case directly:
 

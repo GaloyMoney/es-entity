@@ -164,7 +164,7 @@ async fn create_duplicate_id_returns_constraint_violation_with_value() -> anyhow
     };
     let cv = rejected_user(err);
 
-    assert!(matches!(&cv, UserConstraintViolation::Pkey(c) if c.attempted == Some(id)));
+    assert!(matches!(&cv, UserConstraintViolation::Pkey(c) if c.attempted == id));
     assert_eq!(cv.constraint_name(), "users_pkey");
     assert!(matches!(&cv, UserConstraintViolation::Pkey(_)));
     assert_eq!(cv.kind(), ConstraintKind::Unique);
@@ -212,7 +212,7 @@ async fn create_all_intra_batch_duplicate_id_classifies_as_duplicate() -> anyhow
             assert_eq!(err.lane(), Lane::Rejected, "got {err:?}");
             let cv = rejected_user(err);
 
-            assert!(matches!(&cv, UserConstraintViolation::Pkey(c) if c.attempted.is_none()));
+            assert!(matches!(&cv, UserConstraintViolation::Pkey(c) if c.attempted == dup_id));
 
             // The whole batch rolls back.
             assert!(users.find_by_id(dup_id).await.is_err());
@@ -250,7 +250,7 @@ async fn create_all_preexisting_duplicate_id_classifies_as_duplicate() -> anyhow
     assert_eq!(err.lane(), Lane::Rejected);
     let cv = rejected_user(err);
 
-    assert!(matches!(&cv, UserConstraintViolation::Pkey(c) if c.attempted.is_none()));
+    assert!(matches!(&cv, UserConstraintViolation::Pkey(c) if c.attempted == id));
 
     Ok(())
 }
@@ -566,5 +566,78 @@ async fn composite_partial_index_preserves_typed_key_and_batch_uncertainty() -> 
     assert!(
         matches!(e, Fail::Rejected(composite::ProfileConstraintViolation::ActiveIdentity(c)) if c.attempted.is_none())
     );
+    Ok(())
+}
+
+// ===========================================================================
+// Explicitly-named primary key (robustness point 5: the catalog's own pkey
+// name, not the `{table}_pkey` convention, must be threaded through both the
+// generated enum and the create-path classifier).
+// ===========================================================================
+
+mod custom_pkey {
+    use super::entities::user::*;
+    use es_entity::*;
+    use sqlx::PgPool;
+    #[derive(EsRepo, Debug)]
+    #[es_repo(
+        entity = "User",
+        tbl = "v2_widgets",
+        events_tbl = "v2_widget_events",
+        columns(name(ty = "String"))
+    )]
+    pub struct Widgets {
+        pub pool: PgPool,
+    }
+}
+
+#[tokio::test]
+async fn custom_named_pkey_attributes_the_id_under_its_own_constraint_name() -> anyhow::Result<()> {
+    let widgets = custom_pkey::Widgets {
+        pool: helpers::init_pool().await?,
+    };
+
+    let id = UserId::new();
+    widgets
+        .create(NewUser::builder().id(id).name("First").build().unwrap())
+        .await?;
+
+    let err = match widgets
+        .create(NewUser::builder().id(id).name("Second").build().unwrap())
+        .await
+    {
+        Err(e) => e,
+        Ok(_) => panic!("expected constraint violation"),
+    };
+    let Fail::Rejected(cv) = err else {
+        panic!("expected Rejected, got {err:?}")
+    };
+
+    // The variant is still the stable `Pkey`, but its diagnostics carry the
+    // migration's own constraint name, not the `v2_widgets_pkey` convention.
+    assert!(matches!(&cv, custom_pkey::UserConstraintViolation::Pkey(c) if c.attempted == id));
+    assert_eq!(cv.constraint_name(), "v2_widgets_id_pk");
+
+    // The same attribution must also work through `create_all`'s
+    // detail-text lookup, which depends on the identical resolved name.
+    let dup_id = UserId::new();
+    let new_users = vec![
+        NewUser::builder()
+            .id(UserId::new())
+            .name("Fresh")
+            .build()
+            .unwrap(),
+        NewUser::builder().id(dup_id).name("Dup").build().unwrap(),
+        NewUser::builder().id(dup_id).name("Dup2").build().unwrap(),
+    ];
+    let err = match widgets.create_all(new_users).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected constraint violation"),
+    };
+    let Fail::Rejected(cv) = err else {
+        panic!("expected Rejected, got {err:?}")
+    };
+    assert!(matches!(&cv, custom_pkey::UserConstraintViolation::Pkey(c) if c.attempted == dup_id));
+
     Ok(())
 }

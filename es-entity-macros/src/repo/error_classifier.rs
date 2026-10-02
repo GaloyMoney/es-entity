@@ -20,9 +20,18 @@ fn bare_table_name(events_table_name: &str) -> &str {
 /// every write path.
 pub struct ErrorClassifier<'a> {
     constraint_violation: syn::Ident,
+    id_type: &'a syn::Ident,
+    /// The index table's actual pkey constraint name — the catalog's own
+    /// name when a migration names the primary key explicitly, the
+    /// `{table}_pkey` convention otherwise. Resolved once here via
+    /// [`crate::index_catalog::IndexCatalog::pkey_constraint_name`], the
+    /// same lookup `ErrorTypes` uses to name the `Pkey` variant, so an
+    /// events-table duplicate-id conflict (classified here) and an
+    /// index-table one (classified via `#constraint_violation::from_database`)
+    /// attribute to the same variant.
+    index_pkey: String,
 
     events_table_name: &'a str,
-    table_name: &'a str,
     /// `classify_update_write` is emitted only where a write path actually
     /// calls it — an uncalled private helper is dead code, and consumers build
     /// with `-D warnings`. `classify_create_write` needs no such gate:
@@ -32,11 +41,23 @@ pub struct ErrorClassifier<'a> {
 
 impl<'a> From<&'a RepositoryOptions> for ErrorClassifier<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
+        let table_name = opts.table_name();
+        let id_column_name = opts
+            .columns
+            .column_enum_columns()
+            .find(|c| c.is_id())
+            .expect("an EsRepo entity always has exactly one id column")
+            .name()
+            .to_string();
+        let index_pkey = opts
+            .index_catalog()
+            .pkey_constraint_name(table_name, &id_column_name);
         Self {
             constraint_violation: opts.constraint_violation(),
+            id_type: opts.id(),
+            index_pkey,
 
             events_table_name: opts.events_table_name(),
-            table_name: opts.table_name(),
             needs_write_classifier: opts.columns.updates_needed() || opts.delete.is_soft(),
         }
     }
@@ -46,8 +67,9 @@ impl ToTokens for ErrorClassifier<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         tokens.append_all(create_write_classifier_fn(
             &self.constraint_violation,
+            self.id_type,
+            &self.index_pkey,
             self.events_table_name,
-            self.table_name,
         ));
         if self.needs_write_classifier {
             tokens.append_all(update_write_classifier_fn(
@@ -93,34 +115,62 @@ fn index_violation_arm(constraint_violation: &syn::Ident, events_table: &str) ->
 /// Postgres executes the data-modifying CTE (index insert) and the main
 /// statement (events insert) interleaved with no guaranteed ordering, so for
 /// a duplicate id either table's constraint may fire first depending on the
-/// chosen plan. Both are therefore classified identically:
+/// chosen plan. Both are therefore classified identically, and both
+/// attribute the id via `attempted_id` rather than trusting the database
+/// message as a value — see `IdConflict`'s doc and the "robustness" section
+/// of the handoff this implements:
 ///
-/// - unique violation on the events table → `Rejected` on the id column's
-///   pkey constraint
-/// - classified violation elsewhere (the index table) → `Rejected` mapped
-///   from the reported constraint
+/// - unique violation on the events table → attribute via `attempted_id`,
+///   `Rejected(Pkey(IdConflict))` on a match, `Fatal(Invariant)` otherwise
+/// - unique violation on the index table's own pkey constraint → the same
+/// - any other classified violation on the index table → `Rejected` mapped
+///   from the reported constraint (unchanged, via `from_database`)
 /// - anything else → the central `sqlx::Error` classifier
+///
+/// `attempted_id` is a caller-supplied closure (not a value) because the
+/// single-create and batch call sites recover the id completely differently:
+/// a single create already knows it from its own input, while `create_all`
+/// must parse the database's reported key and match it against the batch's
+/// own ids — the closure defers that work until it is known to be needed at
+/// all (and only invoked where a violation that could be a duplicate id
+/// actually fired).
 fn create_write_classifier_fn(
     constraint_violation: &syn::Ident,
+    id_type: &syn::Ident,
+    index_pkey: &str,
     events_table_name: &str,
-    table_name: &str,
 ) -> TokenStream {
     let events_table = bare_table_name(events_table_name);
-    // Must match the id column's constraint name in `ErrorTypes::new`, which
-    // formats it from the un-shortened table name.
-    let index_pkey = format!("{table_name}_pkey");
     let index_arm = index_violation_arm(constraint_violation, events_table);
+    let not_attributable_context = format!("{index_pkey}: conflicting id not attributable");
     quote! {
         #[inline(always)]
-        fn classify_create_write(e: sqlx::Error) -> es_entity::RepoWriteError<#constraint_violation> {
+        fn classify_create_write(
+            e: sqlx::Error,
+            attempted_id: impl FnOnce(&dyn sqlx::error::DatabaseError) -> Option<#id_type>,
+        ) -> es_entity::RepoWriteError<#constraint_violation> {
             match &e {
                 sqlx::Error::Database(db_err)
                     if db_err.is_unique_violation()
                         && db_err.table() == Some(#events_table) =>
                 {
-                    match #constraint_violation::from_database(e, #index_pkey) {
-                        Ok(rejection) => errlanes::Fail::Rejected(rejection),
-                        Err(source) => errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, source).with_context(#index_pkey).into(),
+                    match attempted_id(db_err.as_ref()) {
+                        Some(id) => errlanes::Fail::Rejected(#constraint_violation::pkey_from_database(e, id)),
+                        None => errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, e)
+                            .with_context(#not_attributable_context)
+                            .into(),
+                    }
+                }
+                sqlx::Error::Database(db_err)
+                    if db_err.is_unique_violation()
+                        && db_err.table() != Some(#events_table)
+                        && db_err.constraint() == Some(#index_pkey) =>
+                {
+                    match attempted_id(db_err.as_ref()) {
+                        Some(id) => errlanes::Fail::Rejected(#constraint_violation::pkey_from_database(e, id)),
+                        None => errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, e)
+                            .with_context(#not_attributable_context)
+                            .into(),
                     }
                 }
                 #index_arm

@@ -69,17 +69,26 @@ impl<'a> ErrorTypes<'a> {
         let catalog = opts.index_catalog();
         let columns: Vec<_> = opts.columns.column_enum_columns().collect();
         let mut constraints = catalog.table_constraints(table);
-        // Keep conventional names where migrations are unavailable.
+        // Keep conventional names where migrations are unavailable. The id
+        // column gets exactly one synthesized entry: the pkey's actual name
+        // (the catalog's own, when a migration names the primary key
+        // explicitly, the `{table}_pkey` convention otherwise), never *also*
+        // the generic `{table}_{col}_key` form — its uniqueness comes from
+        // being the primary key, not from a separate same-column unique
+        // constraint, so adding both would fabricate a second, phantom
+        // "pkey" variant for a constraint name Postgres will never report
+        // (and, now that the id-only case gets one fixed `Pkey` variant
+        // name regardless of which of the two it came from, a name
+        // collision between them).
         for col in &columns {
             let name = col.name().to_string();
-            let mut names = vec![format!("{table}_{name}_key")];
-            if col.is_id() {
-                names.push(format!("{table}_pkey"));
-            }
-            for name in names {
-                if !constraints.iter().any(|(n, _)| *n == name) {
-                    constraints.push((name, ConstraintKind::Unique));
-                }
+            let name = if col.is_id() {
+                catalog.pkey_constraint_name(table, &name)
+            } else {
+                format!("{table}_{name}_key")
+            };
+            if !constraints.iter().any(|(n, _)| *n == name) {
+                constraints.push((name, ConstraintKind::Unique));
             }
         }
         let mut taken = HashSet::new();
@@ -87,8 +96,11 @@ impl<'a> ErrorTypes<'a> {
         let mut classifiers = Vec::new();
         let mut set_values = Vec::new();
         let mut payloads = Vec::new();
+        // `pkey_from_database`, once the id-only pkey constraint is found
+        // below. A composite or non-id primary key leaves this `None` and
+        // that constraint keeps `ConstraintConflict` like any other.
+        let mut pkey_from_database: Option<TokenStream> = None;
         for (name, kind) in constraints {
-            let variant = constraint_variant_ident(table, &name, &mut taken);
             let col_names = catalog
                 .constraints
                 .iter()
@@ -112,6 +124,44 @@ impl<'a> ErrorTypes<'a> {
                     .map(|n| columns.iter().find(|c| c.name() == n).copied())
                     .collect()
             };
+            // The primary key on nothing but the id column: the id is always
+            // known for a create (the write's own input, or — for a batch —
+            // matched against the batch's own ids), so this gets the
+            // non-optional `IdConflict<IdTy>` instead of `ConstraintConflict`.
+            // A composite or non-id primary key falls through to the general
+            // case below and keeps `ConstraintConflict` as before.
+            if let Some(cols) = &matched
+                && cols.len() == 1
+                && cols[0].is_id()
+            {
+                let ty = cols[0].ty();
+                taken.insert("Pkey".to_string());
+                variants.push(quote! {
+                    #[error("{0}")]
+                    #[rejection(code = #name)]
+                    Pkey(#[source] es_entity::IdConflict<#ty>)
+                });
+                // `kind` is always `Unique` here: both sources that feed
+                // `constraints` (the catalog's own `PRIMARY KEY` handling,
+                // and the gap-filling synthesis above) record a primary key
+                // as `ConstraintKind::Unique` — there is no other kind a
+                // primary key constraint could be.
+                pkey_from_database = Some(quote! {
+                    #[doc(hidden)]
+                    pub fn pkey_from_database(source: sqlx::Error, attempted: #ty) -> Self {
+                        Self::Pkey(es_entity::IdConflict::new(attempted, #table, #name, es_entity::ConstraintKind::Unique, source))
+                    }
+                });
+                // No `classifiers` arm: `from_database` falls through to
+                // `Err(source)` for this name, which is correct outside a
+                // create (an UPDATE/DELETE pkey violation has no id to
+                // attribute and becomes `Fatal(Invariant)`). No
+                // `set_values` arm either: the id is already always
+                // present, so `with_attempted` is the identity on `Pkey`
+                // via the catch-all below.
+                continue;
+            }
+            let variant = constraint_variant_ident(table, &name, &mut taken);
             let (ty, attempted) = match matched {
                 Some(cols) if cols.len() == 1 => {
                     let col = cols[0];
@@ -193,6 +243,7 @@ impl<'a> ErrorTypes<'a> {
                 pub fn with_attempted(self, values: #values) -> Self {
                     match self { #(#set_values,)* #[allow(unreachable_patterns)] other => other }
                 }
+                #pkey_from_database
             }
             #write_error
         }
