@@ -174,6 +174,24 @@ decides whether repeating the operation is safe and when to stop retrying.
 Widening only ever adds lanes and keeps every value; narrowing removes one
 lane and says what its value becomes.
 
+### Transient, and the narrower question
+
+`is_transient()` answers "is this unit of work safe to re-run, later, from the
+outside?" — every `TransientKind` says yes, a lost connection or a pool
+timeout as much as a deadlock. `is_contention()` answers a narrower one: "did
+Postgres confirm this attempt lost a race?" — `Deadlock` (`40P01`) or
+`SerializationFailure` (`40001`), and nothing else. Both predicates exist on
+`TransientKind`, `Transient`, `Fault` and `Fail`.
+
+The narrow one is for the two places the broad one is wrong. Retrying at
+`COMMIT`: only a server-confirmed abort guarantees the transaction rolled
+back; any other error there is ambiguous, since the server may have committed
+before the client saw it. And a batch search deciding whether to split a
+failing range: contention says nothing about the data, only about the
+interleaving, so splitting cannot isolate anything and may provoke the same
+cycle again — whereas an `OptimisticConflict` names one stale row and *is*
+worth splitting for, which is why it is transient but not contention.
+
 ## Narrowing a lane
 
 `widen` has a dual. Where `widen` adds lanes losslessly and never drops one,

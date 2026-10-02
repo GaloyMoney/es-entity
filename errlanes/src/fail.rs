@@ -208,6 +208,11 @@ impl<L: LaneProfile<Transient = Transient>> Fault<L> {
     pub fn is_congestion(&self) -> bool {
         self.as_transient().is_some_and(Transient::is_congestion)
     }
+
+    /// See [`TransientKind::is_contention`].
+    pub fn is_contention(&self) -> bool {
+        self.as_transient().is_some_and(Transient::is_contention)
+    }
 }
 
 impl<L: LaneProfile<Fatal = Fatal>> Fault<L> {
@@ -238,6 +243,11 @@ impl<D, L: LaneProfile<Transient = Transient>> Fail<D, L> {
 
     pub fn is_congestion(&self) -> bool {
         self.as_transient().is_some_and(Transient::is_congestion)
+    }
+
+    /// See [`TransientKind::is_contention`].
+    pub fn is_contention(&self) -> bool {
+        self.as_transient().is_some_and(Transient::is_contention)
     }
 }
 

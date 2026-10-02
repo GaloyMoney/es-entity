@@ -63,6 +63,26 @@ impl TransientKind {
         matches!(self, TransientKind::PoolTimeout | TransientKind::Congestion)
     }
 
+    /// Postgres aborted the attempt because it lost a race with a concurrent
+    /// transaction: a deadlock victim (`40P01`) or a serialization failure
+    /// (`40001`). Two things follow that no other transient guarantees. The
+    /// server confirmed the rollback, so the attempt is safe to re-run even
+    /// when the failure surfaced at `COMMIT`, where any other error is
+    /// ambiguous. And the failure says nothing about the data involved, only
+    /// about the interleaving, so there is nothing in it to attribute to one
+    /// row or to bisect for.
+    ///
+    /// `OptimisticConflict` is deliberately not contention: it is raised
+    /// above Postgres by a version check and names one stale row, so a batch
+    /// search *can* isolate it, and a plain re-run with the same stale state
+    /// would only conflict again.
+    pub fn is_contention(self) -> bool {
+        matches!(
+            self,
+            TransientKind::Deadlock | TransientKind::SerializationFailure
+        )
+    }
+
     /// The one row of the sqlx lane table (`sqlx.rs`, private) a consumer
     /// with a non-sqlx Postgres driver could still want: which
     /// [`TransientKind`] a Postgres SQLSTATE code maps to, independent of
@@ -126,6 +146,10 @@ impl Transient {
 
     pub fn is_congestion(&self) -> bool {
         self.kind.is_congestion()
+    }
+
+    pub fn is_contention(&self) -> bool {
+        self.kind.is_contention()
     }
 }
 
@@ -365,5 +389,37 @@ mod tests {
             Some(TransientKind::Deadlock)
         );
         assert_eq!(TransientKind::from_sqlstate("not-a-code"), None);
+    }
+
+    #[test]
+    fn contention_is_the_server_confirmed_abort_subset_of_transient() {
+        assert!(TransientKind::Deadlock.is_contention());
+        assert!(TransientKind::SerializationFailure.is_contention());
+        assert!(!TransientKind::OptimisticConflict.is_contention());
+        assert!(!TransientKind::ConnectionLost.is_contention());
+        assert!(!TransientKind::PoolTimeout.is_contention());
+        assert!(!TransientKind::Congestion.is_contention());
+        assert!(!TransientKind::Other.is_contention());
+        // Exactly the two SQLSTATEs a commit-time retry may trust.
+        assert!(
+            TransientKind::from_sqlstate("40P01")
+                .unwrap()
+                .is_contention()
+        );
+        assert!(
+            TransientKind::from_sqlstate("40001")
+                .unwrap()
+                .is_contention()
+        );
+        assert!(
+            !TransientKind::from_sqlstate("08006")
+                .unwrap()
+                .is_contention()
+        );
+        assert!(
+            !TransientKind::from_sqlstate("57P01")
+                .unwrap()
+                .is_contention()
+        );
     }
 }
