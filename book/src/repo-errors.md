@@ -18,10 +18,9 @@ pub type RepoReadError = Fault<lanes!(Transient, Fatal)>;
 pub type RepoWriteError<C> = Fail<C, lanes!(Transient, Fatal)>;
 ```
 
-Reads return `RepoReadError`; `maybe_find_by_*` reports absence as `Ok(None)`.
+Reads return `RepoReadError`.
 Writes return `RepoWriteError<C>`, where `C` is the repository's typed
-constraint enum described next. Authorization happens before the repository
-call.
+constraint enum described next.
 
 ## Typed constraint violations
 
