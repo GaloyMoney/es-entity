@@ -13,13 +13,19 @@ pub type RepoWriteError<C> = errlanes::Fail<C, errlanes::lanes!(Transient, Fatal
 pub enum EntityHydrationError {
     #[classify(fatal(CorruptState), from)]
     UninitializedFieldError(derive_builder::UninitializedFieldError),
-    #[classify(delegate, from)]
+    // Pinned explicitly, not `delegate`: a persisted event row's JSON
+    // failing to decode is corrupt *stored* data specifically, regardless
+    // of what errlanes' generic `serde_json::Error` classification defaults
+    // to elsewhere.
+    #[classify(fatal(CorruptState), from)]
     EventDeserialization(serde_json::Error),
     /// A snapshot row matched the fingerprint bind but failed to deserialize
     /// into `S`. Never silently ignored, unlike a fingerprint mismatch — the
     /// operator fix is `DELETE FROM <tbl>_snapshots WHERE id = …`.
+    ///
+    /// Pinned explicitly for the same reason as `EventDeserialization`.
     #[error("EntityHydrationError - SnapshotDecode at sequence {sequence}: {source}")]
-    #[classify(delegate)]
+    #[classify(fatal(CorruptState))]
     SnapshotDecode {
         sequence: i32,
         #[source]

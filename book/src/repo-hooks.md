@@ -49,7 +49,7 @@ instead of a hand-picked kind, and enters with `.classify::<W>()?`:
 
 ```rust,ignore
 #[derive(Debug, errlanes::Classify)]
-#[classify(fatal(Invariant), from)]
+#[classify(delegate, from)]
 struct OutboxEncode(serde_json::Error);
 
 impl Users {
