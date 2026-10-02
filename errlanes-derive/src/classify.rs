@@ -202,16 +202,71 @@ fn static_lane_expr(lane: &Lane, value: TokenStream) -> TokenStream {
     }
 }
 
-/// `delegate` and `from` both build a tuple constructor/pattern
-/// (`Self(value)`/`Self::Variant(p)`), so the one field they require must
-/// itself be a tuple field — a named single field would need `Self { field:
-/// value }`/`Self::Variant { field: p }` instead, which this does not emit.
-fn single_field<'a>(fields: &'a Fields, span: &Ident, what: &str) -> syn::Result<&'a syn::Type> {
+/// The field a `delegate`/`from` acts on, and how to spell it.
+struct Payload<'a> {
+    ty: &'a syn::Type,
+    /// Binds the payload to `p`: `(p)`, `{ name: p }` or `{ name: p, .. }`.
+    pattern: TokenStream,
+    /// Wraps `value`: `(value)` or `{ name: value }`. `None` when sibling
+    /// fields exist — `delegate` can ignore them, `from` cannot invent them.
+    constructor: Option<TokenStream>,
+}
+
+/// The only field, or — among several named fields — the one `thiserror`
+/// would also treat as the cause: marked `#[source]`/`#[from]`, or named
+/// `source`. Tuple fields cannot be singled out among siblings.
+fn payload_field<'a>(fields: &'a Fields, span: &Ident, what: &str) -> syn::Result<Payload<'a>> {
     match fields {
-        Fields::Unnamed(f) if f.unnamed.len() == 1 => Ok(&f.unnamed[0].ty),
+        Fields::Unnamed(f) if f.unnamed.len() == 1 => Ok(Payload {
+            ty: &f.unnamed[0].ty,
+            pattern: quote! { (p) },
+            constructor: Some(quote! { (value) }),
+        }),
+        Fields::Named(f) if f.named.len() == 1 => {
+            let name = f.named[0].ident.as_ref().expect("named field");
+            Ok(Payload {
+                ty: &f.named[0].ty,
+                pattern: quote! { { #name: p } },
+                constructor: Some(quote! { { #name: value } }),
+            })
+        }
+        Fields::Named(f) => {
+            let is_cause = |field: &syn::Field| {
+                field
+                    .attrs
+                    .iter()
+                    .any(|a| a.path().is_ident("source") || a.path().is_ident("from"))
+                    || field.ident.as_ref().is_some_and(|i| i == "source")
+            };
+            let mut causes = f.named.iter().filter(|field| is_cause(field));
+            match (causes.next(), causes.next()) {
+                (Some(field), None) => {
+                    let name = field.ident.as_ref().expect("named field");
+                    Ok(Payload {
+                        ty: &field.ty,
+                        pattern: quote! { { #name: p, .. } },
+                        constructor: None,
+                    })
+                }
+                (None, _) => Err(syn::Error::new_spanned(
+                    span,
+                    format!(
+                        "{what} with several fields needs the payload singled out: mark it \
+                         `#[source]`/`#[from]` or name it `source`"
+                    ),
+                )),
+                (Some(_), Some(_)) => Err(syn::Error::new_spanned(
+                    span,
+                    format!("{what} found more than one `#[source]`/`#[from]`/`source` field"),
+                )),
+            }
+        }
         _ => Err(syn::Error::new_spanned(
             span,
-            format!("{what} requires exactly one tuple field, e.g. `Variant(Inner)`"),
+            format!(
+                "{what} needs a field to hold the payload, e.g. `Variant(Inner)` or \
+                 `Variant {{ source: Inner }}`"
+            ),
         )),
     }
 }
@@ -220,20 +275,29 @@ fn from_impl(
     target: &Ident,
     generics: &syn::Generics,
     variant: Option<&Ident>,
-    field_ty: &syn::Type,
-) -> TokenStream {
+    payload: &Payload<'_>,
+    span: &Ident,
+) -> syn::Result<TokenStream> {
+    let Some(constructor) = &payload.constructor else {
+        return Err(syn::Error::new_spanned(
+            span,
+            "`#[classify(from)]` needs the payload to be the only field: `From` has nothing to \
+             fill its siblings with",
+        ));
+    };
+    let field_ty = payload.ty;
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let build = match variant {
-        Some(v) => quote! { Self::#v(value) },
-        None => quote! { Self(value) },
+        Some(v) => quote! { Self::#v #constructor },
+        None => quote! { Self #constructor },
     };
-    quote! {
+    Ok(quote! {
         impl #impl_generics From<#field_ty> for #target #ty_generics #where_clause {
             fn from(value: #field_ty) -> Self {
                 #build
             }
         }
-    }
+    })
 }
 
 fn with_impl(
@@ -267,8 +331,8 @@ fn derive_laned_struct(ast: &syn::DeriveInput, data: &syn::DataStruct) -> syn::R
     let mut out = TokenStream::new();
 
     if meta.from {
-        let field_ty = single_field(&data.fields, ident, "`#[classify(from)]` on a struct")?;
-        out.extend(from_impl(ident, &ast.generics, None, field_ty));
+        let payload = payload_field(&data.fields, ident, "`#[classify(from)]` on a struct")?;
+        out.extend(from_impl(ident, &ast.generics, None, &payload, ident)?);
     }
 
     if let Some(with) = &meta.with {
@@ -331,7 +395,7 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
     struct Resolved<'a> {
         variant: &'a syn::Variant,
         meta: ClassifyMeta,
-        field_ty: Option<&'a syn::Type>,
+        payload: Option<Payload<'a>>,
     }
     let mut resolved = Vec::new();
     for variant in &data.variants {
@@ -343,8 +407,8 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
                  `delegate`, or put one lane on the enum itself",
             ));
         }
-        let field_ty = if meta.delegate || meta.from {
-            Some(single_field(
+        let payload = if meta.delegate || meta.from {
+            Some(payload_field(
                 &variant.fields,
                 &variant.ident,
                 if meta.delegate {
@@ -365,13 +429,13 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
         resolved.push(Resolved {
             variant,
             meta,
-            field_ty,
+            payload,
         });
     }
 
     let mut lanes_ty = quote! { errlanes::profile::NoLanes };
     for r in &resolved {
-        let contribution = lane_profile_ty(&r.meta, r.field_ty)?;
+        let contribution = lane_profile_ty(&r.meta, r.payload.as_ref().map(|p| p.ty))?;
         lanes_ty = quote! { <#lanes_ty as errlanes::profile::Union<#contribution>>::Out };
     }
 
@@ -386,7 +450,7 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
     let mut rejected_ty = quote! { core::convert::Infallible };
     for r in &resolved {
         if r.meta.delegate && r.meta.narrow != Some(Narrow::Rejected) {
-            let field_ty = r.field_ty.unwrap();
+            let field_ty = r.payload.as_ref().unwrap().ty;
             let contribution = quote! { <#field_ty as errlanes::Classify>::Rejected };
             rejected_ty = quote! { <#rejected_ty as errlanes::RejectedUnion<#contribution>>::Out };
         }
@@ -406,7 +470,9 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
             let expr = static_lane_expr(lane, value);
             arms.push(quote! { v @ #pat => #expr });
         } else if r.meta.delegate {
-            let field_ty = r.field_ty.unwrap();
+            let payload = r.payload.as_ref().unwrap();
+            let field_ty = payload.ty;
+            let pattern = &payload.pattern;
             let classify_call = quote! {
                 <#field_ty as errlanes::Classify>::classify(p)
             };
@@ -419,15 +485,16 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
                 Some(Narrow::Rejected) => quote! { errlanes::Fail::from(#narrowed) },
                 _ => quote! { errlanes::Fail::lift(#narrowed) },
             };
-            arms.push(quote! { Self::#variant_ident(p) => #expr });
+            arms.push(quote! { Self::#variant_ident #pattern => #expr });
         }
         if r.meta.from {
             from_impls.extend(from_impl(
                 ident,
                 &ast.generics,
                 Some(variant_ident),
-                r.field_ty.unwrap(),
-            ));
+                r.payload.as_ref().unwrap(),
+                variant_ident,
+            )?);
         }
     }
 

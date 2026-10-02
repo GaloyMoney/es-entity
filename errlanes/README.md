@@ -496,7 +496,10 @@ async fn quote() -> Result<Quote, Fail<QuoteRejection, lanes!(Transient, Fatal)>
 removes just the denied lane (an upstream `401`/`403` becomes `Fatal(Denied)`
 instead) before the arm's contribution is folded into the enclosing type's
 `Lanes`. `Rejected` and `Lanes` are always inferred this way — never named on
-the derive.
+the derive. The payload is the variant's only field, or — among several named
+fields — the one `thiserror` would also treat as the cause: marked
+`#[source]`/`#[from]`, or named `source`. `from` additionally needs the
+payload to be the only field, since `From` has nothing to fill siblings with.
 
 **`classify-sqlx`, `classify-serde-json`, and `classify-reqwest`** are
 `impl Classify` for the three foreign types errlanes blesses on your behalf —

@@ -266,3 +266,58 @@ fn rejected_is_folded_order_independently_across_delegates() {
         other => panic!("expected Fatal(CorruptState), got {other:?}"),
     }
 }
+
+// Named fields: a `#[source]` field among siblings (the shape thiserror
+// already treats as the cause) and a lone named field both `delegate`; `from`
+// on the lone one builds `Self::Wrapped { inner: value }`.
+#[derive(Debug, thiserror::Error, errlanes::Classify)]
+enum NamedPayloads {
+    #[error("decode at {sequence}: {source}")]
+    #[classify(delegate)]
+    Decode {
+        sequence: i32,
+        #[source]
+        source: Stored,
+    },
+    #[error("wrapped: {inner}")]
+    #[classify(delegate, from)]
+    Wrapped { inner: ConstraintViolation },
+}
+
+#[derive(Debug, thiserror::Error, errlanes::Classify)]
+#[error("config: {source}")]
+#[classify(fatal(Config), from)]
+struct NamedStruct {
+    #[source]
+    source: std::io::Error,
+}
+
+#[test]
+fn a_source_field_among_siblings_delegates() {
+    let wrapped = NamedPayloads::Decode {
+        sequence: 7,
+        source: Stored(std::io::Error::other("x")),
+    };
+    match wrapped.classify() {
+        Fail::Fatal(f) => assert_eq!(f.kind, errlanes::FatalKind::CorruptState),
+        other => panic!("expected Fatal(CorruptState), got {other:?}"),
+    }
+}
+
+#[test]
+fn a_lone_named_field_delegates_and_converts_with_from() {
+    let wrapped: NamedPayloads = ConstraintViolation("users_email_key").into();
+    match wrapped.classify() {
+        Fail::Rejected(ConstraintViolation(v)) => assert_eq!(v, "users_email_key"),
+        other => panic!("expected Rejected, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_named_struct_field_converts_with_from() {
+    let wrapped: NamedStruct = std::io::Error::other("x").into();
+    match wrapped.classify() {
+        Fail::Fatal(f) => assert_eq!(f.kind, errlanes::FatalKind::Config),
+        other => panic!("expected Fatal(Config), got {other:?}"),
+    }
+}

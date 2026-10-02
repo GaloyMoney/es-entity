@@ -1,5 +1,0 @@
-error: `delegate` requires exactly one tuple field, e.g. `Variant(Inner)`
-  --> tests/v2/classify_named_field_delegate.rs:14:5
-   |
-14 |     Delegated { source: Inner },
-   |     ^^^^^^^^^
