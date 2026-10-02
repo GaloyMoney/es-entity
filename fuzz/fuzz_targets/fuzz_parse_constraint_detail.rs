@@ -19,7 +19,7 @@ fuzz_target!(|data: &str| {
         // The markers that drove the index arithmetic must really be present,
         // and the slice must equal the returned value exactly.
         let start = data.find("=(").expect("start marker") + 2;
-        let end = data.rfind(") already").expect("end marker");
+        let end = data.rfind(')').expect("end marker");
         assert!(start <= end);
         assert_eq!(&data[start..end], v.as_str());
     }
