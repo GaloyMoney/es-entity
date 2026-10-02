@@ -176,17 +176,3 @@ where
         })
     }
 }
-
-/// `.classify::<W>()` — the verb that turns a foreign error into a local
-/// [`Classify`] wrapper at a one-off call site, so a function that does not
-/// itself return `W` can still enter the lanes through it:
-/// `conn.query(..).await.classify::<DbWrite>()?`.
-pub trait ClassifyResult<T, E> {
-    fn classify<W: Classify + From<E>>(self) -> Result<T, W>;
-}
-
-impl<T, E> ClassifyResult<T, E> for Result<T, E> {
-    fn classify<W: Classify + From<E>>(self) -> Result<T, W> {
-        self.map_err(W::from)
-    }
-}

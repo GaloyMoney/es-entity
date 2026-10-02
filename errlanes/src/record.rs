@@ -100,20 +100,3 @@ pub(crate) fn record_fault<L: LaneProfile>(span: &tracing::Span, f: &Fault<L>) {
         }
     }
 }
-
-/// Records onto the current span, then hands the result straight back — for
-/// a call site that must record and keep going rather than propagate
-/// (`?`), such as a batch dispatcher writing its own `conclusion` after the
-/// fact.
-pub trait RecordResult {
-    fn record(self) -> Self;
-}
-
-impl<T, E: crate::fail::Laned> RecordResult for Result<T, E> {
-    fn record(self) -> Self {
-        if let Err(e) = &self {
-            e.record(&tracing::Span::current());
-        }
-        self
-    }
-}

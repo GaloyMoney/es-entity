@@ -355,7 +355,15 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                 .with_span(&v.ident));
             }
             if let Some(mapping) = mappings.into_iter().next() {
-                if mapping.with.is_none() {
+                // A `field =` projection, like a `with =` mapper, breaks the
+                // assumption metadata forwarding relies on: that the
+                // destination's own fields mirror the source variant's
+                // fields exactly, so they can stand in for them when asking
+                // the source `RejectionMetadata` for its code/level. A
+                // projection keeps only the one named field, not the whole
+                // source payload, so there is nothing of the right shape to
+                // forward with — same restriction, same message family.
+                if mapping.with.is_none() && mapping.field.is_none() {
                     if mapping.case.segments.len() >= 2 {
                         forward = Some(mapping.case);
                     } else {
@@ -363,7 +371,8 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                     }
                 } else {
                     return Err(darling::Error::custom(
-                        "a payload mapper requires an explicit rejection code",
+                        "a payload mapper or a `field` projection requires an explicit \
+                         rejection code",
                     )
                     .with_span(&v.ident));
                 }

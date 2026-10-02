@@ -1,14 +1,15 @@
 #![cfg(feature = "tracing")]
 //! `Laned::record` is the single write path every boundary recorder (a
-//! `#[errlanes::instrument]`'d fn, a batch dispatcher via `RecordResult`)
-//! goes through. This exercises it directly with a capturing subscriber,
-//! asserting the exact fields `FIELDS` promises for each lane.
+//! `#[errlanes::instrument]`'d fn, a batch dispatcher via
+//! `ResultExt::record`) goes through. This exercises it directly with a
+//! capturing subscriber, asserting the exact fields `FIELDS` promises for
+//! each lane.
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
 
-use errlanes::{Denied, Fail, Fatal, FatalKind, Laned, RecordResult, Transient, TransientKind};
+use errlanes::{Denied, Fail, Fatal, FatalKind, Laned, ResultExt, Transient, TransientKind};
 use tracing::field::{Field, Visit};
 use tracing_subscriber::{Layer, layer::SubscriberExt};
 

@@ -1,5 +1,5 @@
 use errlanes::{
-    Fail, Fatal, FatalKind, Fault, Lane, Rejection, Transient, TransientKind, WidenResult, lanes,
+    Fail, Fatal, FatalKind, Fault, Lane, Rejection, ResultExt, Transient, TransientKind, lanes,
 };
 use std::{convert::Infallible, error::Error};
 
@@ -298,4 +298,61 @@ fn multiple_sources_and_explicit_delegation() {
     let delegated = Delegated::from(Other::Unit);
     assert_eq!(delegated.level(), errlanes::Level::Warn);
     assert_eq!(Into::<&'static str>::into(delegated.code()), "OTHER");
+}
+
+// `#[lift(.., field = name)]` projects one field out of a source variant's
+// payload, rather than forwarding the whole thing. A sibling source (not an
+// extra variant on `Child`) keeps every existing `Child`-strict destination
+// above exhaustive without needing a matching arm for it.
+#[derive(Debug, Clone)]
+pub struct ConflictPayload {
+    pub attempted: u32,
+    pub note: String,
+}
+#[derive(Debug, Clone, errlanes::Rejection)]
+pub enum FieldSource {
+    Conflict(ConflictPayload),
+}
+
+// A `field` projection, like a `with` mapper, cannot forward the source
+// variant's code/level automatically: the destination only keeps the one
+// named field, not the whole source payload, so there is no value of the
+// right shape to hand the source's `RejectionMetadata`. An explicit
+// `#[rejection(code = ..)]` is therefore required on every `field`-lift
+// destination variant (enforced by `lift_field_requires_an_explicit_code`
+// in `errlanes-derive/tests/v2/`).
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+#[lift(FieldSource)]
+pub enum Projected {
+    #[rejection(code = "ATTEMPTED")]
+    #[lift(FieldSource::Conflict, field = attempted)]
+    Attempted(u32),
+}
+#[test]
+fn field_lift_projects_one_field() {
+    let payload = ConflictPayload {
+        attempted: 7,
+        note: "dup".into(),
+    };
+    let projected: Projected = FieldSource::Conflict(payload).into();
+    assert!(matches!(projected, Projected::Attempted(7)));
+    assert_eq!(Into::<&'static str>::into(projected.code()), "ATTEMPTED");
+}
+
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+#[lift(FieldSource)]
+pub enum ProjectedNamed {
+    #[rejection(code = "CAPTURED")]
+    #[lift(FieldSource::Conflict, field = attempted)]
+    Captured { value: u32 },
+}
+#[test]
+fn field_lift_supports_a_named_destination_field() {
+    let payload = ConflictPayload {
+        attempted: 11,
+        note: "dup".into(),
+    };
+    let projected: ProjectedNamed = FieldSource::Conflict(payload).into();
+    assert!(matches!(projected, ProjectedNamed::Captured { value: 11 }));
+    assert_eq!(Into::<&'static str>::into(projected.code()), "CAPTURED");
 }

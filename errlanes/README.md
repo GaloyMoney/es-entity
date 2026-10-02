@@ -90,7 +90,7 @@ checks whether the subject is allowed to perform it before calling it. The
 outer function can therefore return Denied as well as Fatal:
 
 ```rust
-use errlanes::{Denied, Fault, WidenResult, lanes};
+use errlanes::{Denied, Fault, ResultExt, lanes};
 
 fn authorize(subject: &str) -> Result<(), Denied> {
     if subject == "admin" { Ok(()) } else { Err(Denied::default()) }
@@ -112,7 +112,7 @@ assert!(matches!(outer("guest"), Err(Fault::Denied(_))));
 
 The authorization failure enters the Denied lane through `?`. The inner
 operation's result uses `.widen()?` to fit the outer function's larger set of
-lanes. This method comes from `WidenResult`, and its destination is inferred
+lanes. This method comes from `ResultExt`, and its destination is inferred
 from the return type. An inner Fatal remains Fatal, with its kind, context and
 source intact.
 
@@ -209,7 +209,9 @@ Each `FatalKind` names what the value truly *is* afterwards, never a guessed
 cause — the same rule `Exhausted` already followed before it had two
 siblings. A narrowing is always a method call, never a `From`: a `?` that
 silently dropped a lane is exactly what the widening rule already forbids, so
-narrowing cannot happen by accident either.
+narrowing cannot happen by accident either. The same three verbs are also
+available directly on a `Result` through `ResultExt`, so a call site that is
+already holding one does not have to `.map_err()` into the value-level form.
 
 ## At a `Box<dyn Error>` boundary
 
@@ -363,7 +365,7 @@ A fault wrapper names exactly one lane and never rejects — a struct wrapping a
 foreign error is the common case:
 
 ```rust
-use errlanes::{Classify, ClassifyResult, Fatal, FatalKind};
+use errlanes::{Classify, Fatal, FatalKind, ResultExt};
 
 #[derive(Debug, errlanes::Classify)]
 #[classify(fatal(CorruptState), from)]
@@ -392,7 +394,7 @@ others name a static lane directly. `Rejected` and `Lanes` are inferred from
 whichever variants are present — never named by hand:
 
 ```rust
-use errlanes::{Classify, ClassifyResult, Fail};
+use errlanes::{Classify, Fail, ResultExt};
 
 #[derive(Debug, errlanes::Rejection)]
 #[rejection(code = "CONSTRAINT")]
@@ -471,7 +473,7 @@ it in a local type, and give *that* a lane. A one-off call site does this with
 `.classify::<W>()`, which turns a `Result<T, Foreign>` into a `Result<T, W>`:
 
 ```rust
-use errlanes::{ClassifyResult, FatalKind};
+use errlanes::{FatalKind, ResultExt};
 
 #[derive(Debug, errlanes::Classify)]
 #[classify(fatal(CorruptState), from)]
@@ -561,7 +563,7 @@ names the source, and an annotation on each destination variant says which
 source case it represents:
 
 ```rust
-use errlanes::{Fail, Rejection, WidenResult, lanes};
+use errlanes::{Fail, Rejection, ResultExt, lanes};
 
 #[derive(Debug, errlanes::Rejection)]
 enum Validation {
@@ -591,7 +593,7 @@ assert_eq!(Into::<&'static str>::into(rejection.code()), "INVALID_AMOUNT");
 ```
 
 `.widen()?` converts the validation rejection into the payment rejection and
-places it in the Rejected lane of the outer result. `WidenResult` accepts a
+places it in the Rejected lane of the outer result. `ResultExt::widen` accepts a
 bare rejection, as here, or a `Fail` or `Fault` result; faults retain their
 payloads, and successful values pass through unchanged.
 
@@ -600,6 +602,19 @@ an exhaustive mapping and a `From` implementation. If Validation gains another
 case, this mapping must be updated before it compiles. Unit, tuple and named
 payloads forward automatically; `#[lift(Source::Variant, with = mapper)]`
 handles a genuine payload transformation.
+
+`#[lift(Source::Variant, field = name)]` is the narrower case in between:
+the source variant is a single-field tuple variant, and the destination keeps
+only one named field out of its payload rather than the whole thing —
+`Case(payload) => Ok(Self::Dest(payload.name))`. Prefer it over `with` when
+the destination is a straight projection of one field (an attributed id out
+of a constraint-violation payload is the motivating case); reach for `with`
+once the mapping needs to inspect more than one field, change shape, or
+compute something the source didn't carry directly. `field` and `with` are
+mutually exclusive on the same arm. Because the destination no longer mirrors
+the source variant's fields, there is nothing of the right shape to forward
+code/level from automatically — same as `with` — so a `field` lift always
+needs its own `#[rejection(code = "...")]`.
 
 Conversion and metadata are separate concerns. `Lift` generates the conversion;
 `Rejection` generates the code and level. Either derive can be used alone.
@@ -663,10 +678,12 @@ every case:
 | `W: Classify` | `Fail<D, M>` | `.widen()?`, if `D` only lifts `W::Rejected` partially |
 | `W: Classify<Rejected = Infallible>` | `Fault<M>` | `?`, given `W::Lanes ⊆ M` |
 | `W: Classify<Rejected = Infallible, Lanes = lanes!(Fatal)>` | bare `Fatal` | `?` (same for a lone `Transient`) |
-| anything with a rejected part | `Fault` | `.map_err(Fail::narrow_rejected)` |
-| `Fault<L>` | `Fault<WithoutTransient<L>>` | `.narrow_transient(attempts)` |
-| `Fault<L>` | `Fault<WithoutDenied<L>>` | `.narrow_denied()` |
-| `Fail<D, L>` | `Fault<L>` | `.narrow_rejected()` |
+| `Result<T, Fail<D, L>>` | `Result<T, Fault<L>>` | `.narrow_rejected()` |
+| `Result<T, Fault<L>>` or `Result<T, Fail<D, L>>` | lanes narrowed, `WithoutTransient<L>` | `.narrow_transient(attempts)` |
+| `Result<T, Fault<L>>` or `Result<T, Fail<D, L>>` | lanes narrowed, `WithoutDenied<L>` | `.narrow_denied()` |
+| `Fault<L>` | `Fault<WithoutTransient<L>>` | `.narrow_transient(attempts)` (on the value itself, e.g. a retry loop's match arm) |
+| `Fault<L>` | `Fault<WithoutDenied<L>>` | `.narrow_denied()` (on the value itself) |
+| `Fail<D, L>` | `Fault<L>` | `.narrow_rejected()` (on the value itself) |
 
 `?` handles anything that needs no decision. `.widen()` is for the one case that
 does, changing the rejection type, and its destination is inferred from the

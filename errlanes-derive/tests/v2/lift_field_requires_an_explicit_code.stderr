@@ -1,0 +1,5 @@
+error: a payload mapper or a `field` projection requires an explicit rejection code
+  --> tests/v2/lift_field_requires_an_explicit_code.rs:15:5
+   |
+15 |     Attempted(u32),
+   |     ^^^^^^^^^
