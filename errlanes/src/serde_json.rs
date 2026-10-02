@@ -1,13 +1,16 @@
 //! Classifies a raw `serde_json::Error`, exactly once, at the point it is
 //! born.
 //!
-//! Always `Fatal(CorruptState)` for a syntax/data/EOF failure — decoding
-//! persisted bytes is the common case (bare `?` on a hydration path). A
-//! serde message quotes the input it failed on, which is correct for stored
-//! data (an operator needs to see it) but wrong for caller-supplied bytes:
-//! wrap those in a local `Rejection` wrapper instead (see the crate README's
-//! "Errors from other crates" section) so the message discipline still
-//! holds.
+//! Always `Fatal(Invariant)` for a syntax/data/EOF failure — a syntax/data/EOF
+//! failure means the bytes serde was handed don't decode at all, which is a
+//! violated invariant (whoever produced them didn't produce valid JSON for
+//! this type), not necessarily corrupt storage; a caller wrapping a
+//! genuinely storage-specific decode failure (e.g. a persisted event row)
+//! pins its own kind instead of delegating. A serde message quotes the
+//! input it failed on, which is correct for stored data (an operator needs
+//! to see it) but wrong for caller-supplied bytes: wrap those in a local
+//! `Rejection` wrapper instead (see the crate README's "Errors from other
+//! crates" section) so the message discipline still holds.
 
 use ::serde_json::error::Category;
 
@@ -22,7 +25,7 @@ fn lane_table(e: &::serde_json::Error) -> Fault<crate::lanes!(Fatal)> {
     match e.classify() {
         Category::Io => Fatal::new(FatalKind::Dependency).into(),
         Category::Syntax | Category::Data | Category::Eof => {
-            Fatal::new(FatalKind::CorruptState).into()
+            Fatal::new(FatalKind::Invariant).into()
         }
     }
 }
@@ -71,11 +74,11 @@ mod tests {
     }
 
     #[test]
-    fn syntax_error_is_fatal_corrupt_state() {
+    fn syntax_error_is_fatal_invariant() {
         let f = classify_serde_json_fault(parse_error());
         match f {
-            Fault::Fatal(fatal) => assert_eq!(fatal.kind, FatalKind::CorruptState),
-            other => panic!("expected Fatal(CorruptState), got {other:?}"),
+            Fault::Fatal(fatal) => assert_eq!(fatal.kind, FatalKind::Invariant),
+            other => panic!("expected Fatal(Invariant), got {other:?}"),
         }
     }
 
