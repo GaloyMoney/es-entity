@@ -122,7 +122,7 @@ impl Users {
 
 ### Error propagation
 
-The `Fatal` is the calling operation's result — `RepoWriteError<C>` on `create`/`create_all`, `RepoReadError` on the read operations. To recognise it, look for the hook's own error type in the source chain:
+The `Fatal` is the calling operation's result — `RepoWriteError<C>` on `create`/`create_all`, `RepoFault` on the read operations. To recognise it, look for the hook's own error type in the source chain:
 
 ```rust,ignore
 use std::error::Error as _;

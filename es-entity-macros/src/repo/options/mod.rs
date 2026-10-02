@@ -408,6 +408,45 @@ impl RepositoryOptions {
         }
     }
 
+    /// Whether the generated `update`/`update_all` can ever reject: `true`
+    /// unless both of the following hold, in which case the generated
+    /// signatures narrow to `es_entity::RepoFault` instead of
+    /// `RepoWriteError<CV>` — there is nothing left in the `Rejected` lane
+    /// for them to ever construct.
+    ///
+    /// 1. No constraint on the entity's table has a column that persists on
+    ///    update — reusing [`crate::repo::error_types::enumerate_constraints`],
+    ///    the same enumeration `ErrorTypes` builds the violation enum from,
+    ///    so this sees exactly the same constraint set (id-only pkey
+    ///    resolution via the catalog included). When the catalog has no
+    ///    entry at all for the table, every constraint here is synthesized
+    ///    from convention rather than read from a real migration, so which
+    ///    persisted columns are genuinely constrained can't be known —
+    ///    conservatively, this degrades to [`Columns::updates_needed`].
+    /// 2. The repo has no nested children — a nested create batched during
+    ///    an update can reject on the child's own constraints, so a parent
+    ///    with nested repos always keeps `RepoWriteError`, independent of
+    ///    its own columns.
+    pub fn update_can_reject(&self) -> bool {
+        if self.any_nested() {
+            return true;
+        }
+        let table = self.table_name();
+        if self.index_catalog().table_constraints(table).is_empty() {
+            return self.columns.updates_needed();
+        }
+        crate::repo::error_types::enumerate_constraints(self)
+            .iter()
+            .any(|(_, _, col_names)| {
+                col_names.iter().any(|name| {
+                    self.columns
+                        .column_enum_columns()
+                        .find(|c| c.name() == name)
+                        .is_some_and(Column::persist_on_update)
+                })
+            })
+    }
+
     pub fn query_fn_generics() -> proc_macro2::TokenStream {
         quote! {
             <'a, OP>
@@ -596,5 +635,52 @@ mod tests {
         };
         let opts = RepositoryOptions::from_derive_input(&input).unwrap();
         assert_eq!(opts.snapshot_table_name(), Some("custom_meter_snaps"));
+    }
+
+    // No migrations directory resolves for these synthetic entities (there
+    // is no real `migrations/` matching them), so `index_catalog()` is
+    // empty and `update_can_reject` takes its degenerate, catalog-free
+    // path: every persisted column is conservatively treated as
+    // constrained, which collapses to `Columns::updates_needed()`.
+
+    #[test]
+    fn update_can_reject_when_a_column_persists_on_update() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Widget", columns(name(ty = "String")))]
+            struct Widgets {
+                pool: sqlx::PgPool,
+            }
+        };
+        let opts = RepositoryOptions::from_derive_input(&input).unwrap();
+        assert!(opts.update_can_reject());
+    }
+
+    #[test]
+    fn update_cannot_reject_when_every_column_skips_update_persist() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Widget", columns(name(ty = "String", update(persist = false))))]
+            struct Widgets {
+                pool: sqlx::PgPool,
+            }
+        };
+        let opts = RepositoryOptions::from_derive_input(&input).unwrap();
+        assert!(!opts.update_can_reject());
+    }
+
+    #[test]
+    fn update_can_reject_when_the_repo_has_nested_children_regardless_of_columns() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Widget", columns(name(ty = "String", update(persist = false))))]
+            struct Widgets {
+                pool: sqlx::PgPool,
+                #[es_repo(nested)]
+                parts: WidgetParts,
+            }
+        };
+        let opts = RepositoryOptions::from_derive_input(&input).unwrap();
+        assert!(
+            opts.update_can_reject(),
+            "a nested child can reject on its own constraints even if the parent cannot"
+        );
     }
 }

@@ -132,8 +132,8 @@ pub struct Users {
 //     async fn create_all(&self, new: Vec<NewUser>) -> Result<Vec<User>, es_entity::RepoWriteError<UserConstraintViolation>>;
 //
 //     // Query operations
-//     async fn find_by_id(&self, id: UserId) -> Result<User, es_entity::RepoReadError>;
-//     async fn find_by_name(&self, name: &str) -> Result<User, es_entity::RepoReadError>;
+//     async fn find_by_id(&self, id: UserId) -> Result<User, es_entity::RepoFault>;
+//     async fn find_by_name(&self, name: &str) -> Result<User, es_entity::RepoFault>;
 //
 //     // Update operations
 //     async fn update(&self, entity: &mut User) -> Result<(), es_entity::RepoWriteError<UserConstraintViolation>>;

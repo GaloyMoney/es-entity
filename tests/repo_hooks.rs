@@ -132,7 +132,7 @@ fn fatal_source_message<D: std::fmt::Debug>(err: &es_entity::RepoWriteError<D>) 
 
 /// [`fatal_source_message`] for a read path's `Fault`. Panics if `err` isn't
 /// `Fault::Fatal` at all.
-fn fault_source_message(err: &es_entity::RepoReadError) -> String {
+fn fault_source_message(err: &es_entity::RepoFault) -> String {
     match err {
         es_entity::Fault::Fatal(fatal) => std::error::Error::source(fatal)
             .map(|s| s.to_string())

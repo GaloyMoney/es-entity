@@ -46,7 +46,7 @@ use es_entity::*;
     // new = "NewUser",                // The type of the `NewEntity`
     // event = "UserEvent",            // The type of the `Event` enum
     // Every generated write op returns es_entity::RepoWriteError<UserConstraintViolation>;
-    // find/list ops return es_entity::RepoReadError — reads never reject.
+    // find/list ops return es_entity::RepoFault — reads never reject.
     // tbl = "users",                  // The name of the index table
     // events_tbl = "user_events",     // The name of the events table
     // tbl_prefix = "",                // A table prefix that should be added to the derived table names

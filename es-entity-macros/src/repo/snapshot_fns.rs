@@ -16,7 +16,6 @@ pub struct SnapshotFns<'a> {
     events_table_name: &'a str,
     snapshot_table_name: &'a str,
     forgettable_table_name: Option<&'a str>,
-    constraint_violation: syn::Ident,
 }
 
 impl<'a> SnapshotFns<'a> {
@@ -29,7 +28,6 @@ impl<'a> SnapshotFns<'a> {
             events_table_name: opts.events_table_name(),
             snapshot_table_name,
             forgettable_table_name: opts.forgettable_table_name(),
-            constraint_violation: opts.constraint_violation(),
         })
     }
 
@@ -37,7 +35,6 @@ impl<'a> SnapshotFns<'a> {
     pub fn in_impl_tokens(&self) -> TokenStream {
         let entity = self.entity;
         let id_type = self.id;
-        let constraint_violation = &self.constraint_violation;
         let snapshot_tbl = self.snapshot_table_name;
         let table_name = self.table_name;
         let events_table_name = self.events_table_name;
@@ -111,7 +108,7 @@ impl<'a> SnapshotFns<'a> {
                 &self,
                 op: OP,
                 id: &#id_type,
-            ) -> Result<#entity, es_entity::RepoReadError>
+            ) -> Result<#entity, es_entity::RepoFault>
             where
                 OP: es_entity::IntoOneTimeExecutor<'a>,
             {
@@ -133,16 +130,21 @@ impl<'a> SnapshotFns<'a> {
             /// that staged its own erasure event) makes this a no-op rather
             /// than an error. Errors if `entity` has unpersisted staged
             /// events — persist them first.
+            ///
+            /// Always `RepoFault`, never `RepoWriteError<CV>`: this upserts
+            /// the snapshot table by its own `id` primary key, classifying
+            /// nothing — there is no constraint here for a caller's own
+            /// `ConstraintViolation` to ever carry.
             async fn __persist_snapshot_in_op<OP>(
                 &self,
                 op: &mut OP,
                 entity: &mut #entity,
-            ) -> Result<bool, es_entity::RepoWriteError<#constraint_violation>>
+            ) -> Result<bool, es_entity::RepoFault>
             where
                 OP: es_entity::AtomicOperation + ?Sized,
             {
                 if entity.events().any_new() {
-                    return Err(errlanes::Fail::from(errlanes::Fatal::invariant(
+                    return Err(errlanes::Fault::from(errlanes::Fatal::invariant(
                         "snapshot with unpersisted events",
                     )));
                 }

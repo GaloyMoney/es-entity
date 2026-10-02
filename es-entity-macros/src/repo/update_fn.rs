@@ -21,6 +21,11 @@ pub struct UpdateFn<'a> {
     constraint_violation: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
     post_persist_hook: bool,
+    /// Whether the generated `update`/`update_in_op` can ever reject — see
+    /// `RepositoryOptions::update_can_reject`. `false` narrows every
+    /// generated signature (and the inner `__result` annotation) from
+    /// `RepoWriteError<CV>` to the plain `es_entity::RepoFault`.
+    update_can_reject: bool,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -44,6 +49,7 @@ impl<'a> From<&'a RepositoryOptions> for UpdateFn<'a> {
                 .map(|f| f.update_nested_fn_name())
                 .collect(),
             post_persist_hook: opts.post_persist_hook.is_some(),
+            update_can_reject: opts.update_can_reject(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -57,6 +63,11 @@ impl ToTokens for UpdateFn<'_> {
         let constraint_violation = &self.constraint_violation;
         let table_name = self.table_name;
         let events_table_name = self.events_table_name;
+        let write_error_ty = if self.update_can_reject {
+            quote! { es_entity::RepoWriteError<#constraint_violation> }
+        } else {
+            quote! { es_entity::RepoFault }
+        };
 
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
@@ -153,7 +164,6 @@ impl ToTokens for UpdateFn<'_> {
                 }
                 .insert_per_entity(
                     quote! { entity.events() },
-                    constraint_violation,
                     self.events_table_name,
                     snapshot_expr,
                 ),
@@ -186,10 +196,9 @@ impl ToTokens for UpdateFn<'_> {
                 let recorded_at = rows
                     .first()
                     .map(|row| row.recorded_at)
-                    .ok_or_else(|| errlanes::Fail::from(
-                        errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                    .ok_or_else(|| errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
                             .with_context(format!("{} row vanished", #table_name))
-                    ))?;
+                    )?;
                 let n_events = Self::extract_events(entity).mark_new_events_persisted_at(recorded_at);
             }
         } else if snapshot_upsert.is_some() {
@@ -201,7 +210,7 @@ impl ToTokens for UpdateFn<'_> {
                 let __snapshot_first = Self::extract_events(entity).entity_first_persisted_at();
                 let n_events = {
                     let events = Self::extract_events(entity);
-                    Self::classify_conflict::<_, #constraint_violation>(
+                    Self::classify_conflict(
                         self.persist_events(op, events, __snapshot.as_ref()).await,
                         #events_table_name,
                         || format!("{} seq conflict", #table_name),
@@ -212,16 +221,15 @@ impl ToTokens for UpdateFn<'_> {
                 // the entity itself for `compact_to_snapshot` below.
                 let recorded_at = Self::extract_events(entity)
                     .entity_last_modified_at()
-                    .ok_or_else(|| errlanes::Fail::from(
-                        errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                    .ok_or_else(|| errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
                             .with_context(format!("{} row vanished", #table_name))
-                    ))?;
+                    )?;
             }
         } else {
             quote! {
                 let n_events = {
                     let events = Self::extract_events(entity);
-                    Self::classify_conflict::<_, #constraint_violation>(
+                    Self::classify_conflict(
                         self.persist_events(op, events).await,
                         #events_table_name,
                         || format!("{} seq conflict", #table_name),
@@ -291,7 +299,7 @@ impl ToTokens for UpdateFn<'_> {
                 pub async fn update(
                     &self,
                     entity: &mut #entity
-                ) -> Result<usize, es_entity::RepoWriteError<#constraint_violation>> {
+                ) -> Result<usize, #write_error_ty> {
                     let mut op = self.begin_op().await?;
                     let res = self.update_in_op(&mut op, entity).await?;
                     op.commit().await?;
@@ -318,11 +326,11 @@ impl ToTokens for UpdateFn<'_> {
                 &self,
                 op: &mut OP,
                 entity: &mut #entity
-            ) -> Result<usize, es_entity::RepoWriteError<#constraint_violation>>
+            ) -> Result<usize, #write_error_ty>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, es_entity::RepoWriteError<#constraint_violation>> = async {
+                let __result: Result<usize, #write_error_ty> = async {
                     #record_id
                     #(#nested)*
 
@@ -381,6 +389,7 @@ mod tests {
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_persist_hook: false,
+            update_can_reject: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -388,6 +397,7 @@ mod tests {
         let mut tokens = TokenStream::new();
         update_fn.to_tokens(&mut tokens);
 
+        let write_error_ty = quote! { es_entity::RepoWriteError<EntityConstraintViolation> };
         let expected = quote! {
             #[inline(always)]
             fn extract_events<Entity, Event, Snapshot>(entity: &mut Entity) -> &mut es_entity::EntityEvents<Event, Snapshot>
@@ -402,7 +412,7 @@ mod tests {
             pub async fn update(
                 &self,
                 entity: &mut Entity
-            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> {
+            ) -> Result<usize, #write_error_ty> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -413,11 +423,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entity: &mut Entity
-            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>>
+            ) -> Result<usize, #write_error_ty>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                let __result: Result<usize, #write_error_ty> = async {
                     if !Self::extract_events(entity).any_new() {
                         return Ok(0);
                     }
@@ -445,10 +455,9 @@ mod tests {
                     let recorded_at = rows
                         .first()
                         .map(|row| row.recorded_at)
-                        .ok_or_else(|| errlanes::Fail::from(
-                            errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                        .ok_or_else(|| errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
                                 .with_context(format!("{} row vanished", "entities"))
-                        ))?;
+                        )?;
                     let n_events = Self::extract_events(entity).mark_new_events_persisted_at(recorded_at);
 
                     Ok(n_events)
@@ -459,6 +468,52 @@ mod tests {
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    /// `update_can_reject: false` (the shape `RepositoryOptions::update_can_reject`
+    /// computes for a repo with no constrained persisted column and no
+    /// nested children) narrows every signature to the plain `RepoFault`
+    /// instead of `RepoWriteError<CV>`.
+    #[test]
+    fn update_fn_cannot_reject_returns_repo_fault() {
+        let id = syn::parse_str("EntityId").unwrap();
+        let entity = Ident::new("Entity", Span::call_site());
+
+        let mut columns = Columns::default();
+        columns.set_id_column(&id);
+
+        let event = Ident::new("EntityEvent", Span::call_site());
+        let update_fn = UpdateFn {
+            in_op_only: false,
+            entity: &entity,
+            id: &id,
+            event: &event,
+            table_name: "entities",
+            events_table_name: "entity_events",
+            event_ctx: false,
+            forgettable_table_name: None,
+            snapshot_table_name: None,
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
+            columns: &columns,
+            nested_fn_names: Vec::new(),
+            post_persist_hook: false,
+            update_can_reject: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        update_fn.to_tokens(&mut tokens);
+        let out = tokens.to_string();
+
+        assert!(
+            out.contains("-> Result < usize , es_entity :: RepoFault >"),
+            "expected every update signature to narrow to RepoFault, got: {out}"
+        );
+        assert!(
+            !out.contains("RepoWriteError"),
+            "RepoWriteError must not appear when update_can_reject is false: {out}"
+        );
     }
 
     #[test]
@@ -484,6 +539,7 @@ mod tests {
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_persist_hook: false,
+            update_can_reject: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -491,6 +547,7 @@ mod tests {
         let mut tokens = TokenStream::new();
         update_fn.to_tokens(&mut tokens);
 
+        let write_error_ty = quote! { es_entity::RepoWriteError<EntityConstraintViolation> };
         let expected = quote! {
             #[inline(always)]
             fn extract_events<Entity, Event, Snapshot>(entity: &mut Entity) -> &mut es_entity::EntityEvents<Event, Snapshot>
@@ -505,7 +562,7 @@ mod tests {
             pub async fn update(
                 &self,
                 entity: &mut Entity
-            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> {
+            ) -> Result<usize, #write_error_ty> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -516,18 +573,18 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entity: &mut Entity
-            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>>
+            ) -> Result<usize, #write_error_ty>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                let __result: Result<usize, #write_error_ty> = async {
                     if !Self::extract_events(entity).any_new() {
                         return Ok(0);
                     }
 
                     let n_events = {
                         let events = Self::extract_events(entity);
-                        Self::classify_conflict::<_, EntityConstraintViolation>(
+                        Self::classify_conflict(
                             self.persist_events(op, events).await,
                             "entity_events",
                             || format!("{} seq conflict", "entities"),
@@ -576,6 +633,7 @@ mod tests {
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_persist_hook: false,
+            update_can_reject: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -628,6 +686,7 @@ mod tests {
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_persist_hook: false,
+            update_can_reject: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

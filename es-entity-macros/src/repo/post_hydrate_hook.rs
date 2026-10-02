@@ -6,7 +6,7 @@ use super::options::RepositoryOptions;
 
 /// The hook is synchronous and has no `op`, so it can never see a retryable
 /// failure: it returns a bare `Fatal`, which the calling op `?`s into its own
-/// `RepoReadError`/`RepoWriteError`.
+/// `RepoFault`/`RepoWriteError`.
 pub struct PostHydrateHook<'a> {
     entity: &'a syn::Ident,
     hook: Option<&'a syn::Ident>,

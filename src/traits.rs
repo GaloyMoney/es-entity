@@ -401,9 +401,15 @@ pub trait EsRepo: Send {
     type Entity: EsEntity;
     /// The one repo `Rejection`: a violated database constraint the domain
     /// did not otherwise account for. Every generated write op returns
-    /// `Result<T, crate::RepoWriteError<Self::ConstraintViolation>>`; find/list ops
-    /// return `Result<T, crate::RepoReadError>` — reads never reject, so there is
-    /// no `NotFound` rejection, only `Fatal`.
+    /// `Result<T, crate::RepoWriteError<Self::ConstraintViolation>>`, unless
+    /// its statement can hit no constraint and the repo has no nested
+    /// children, in which case it returns the plain `Result<T,
+    /// crate::RepoFault>` instead — there is nothing left in the `Rejected`
+    /// lane for it to ever construct. `update`/`update_all` narrow this way
+    /// when every persisted column is unconstrained and nothing is nested;
+    /// `delete`/`forget` keep `RepoWriteError` unconditionally. Find/list ops
+    /// always return `Result<T, crate::RepoFault>` — reads never reject, so
+    /// there is no `NotFound` rejection, only `Fatal`.
     type ConstraintViolation: crate::errlanes::Rejection;
     /// The repo's write classification made public and reusable: a consumer
     /// hand-writing a query against the repo's own tables classifies its
@@ -418,7 +424,7 @@ pub trait EsRepo: Send {
         rows_by_tag: &mut HashMap<i32, Vec<db::Row>>,
         tag_cursor: &mut i32,
         entities: &mut [Self::Entity],
-    ) -> Result<(), crate::RepoReadError>;
+    ) -> Result<(), crate::RepoFault>;
 }
 
 pub trait RetryableInto<T>: Into<T> + Copy + std::fmt::Debug {}
