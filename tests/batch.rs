@@ -15,10 +15,13 @@ mod helpers;
 
 use std::sync::{Arc, Mutex};
 
-use es_entity::operation::{
-    AtomicOperation, BatchIsolation, BisectBudget, BisectSearch, DbOp, ItemOutcome, ProbeVerdict,
-    SavepointOp,
-    hooks::{CommitHook, HookOperation, PreCommitRet},
+use es_entity::{
+    errlanes::{Fault, lanes},
+    operation::{
+        AtomicOperation, BatchIsolation, BisectBudget, BisectSearch, DbOp, ItemOutcome,
+        ProbeVerdict, SavepointOp,
+        hooks::{CommitHook, HookOperation, PreCommitRet},
+    },
 };
 
 async fn insert(op: &mut impl AtomicOperation, v: i32) -> Result<(), sqlx::Error> {
@@ -108,7 +111,7 @@ async fn a_clean_bisect_probes_exactly_once() -> anyhow::Result<()> {
             for item in slice {
                 insert(sp, *item).await?;
             }
-            Ok::<_, es_entity::RepoReadError>(())
+            Ok::<_, sqlx::Error>(())
         })
         .await?;
 
@@ -141,7 +144,7 @@ async fn a_bisect_isolates_its_culprit_and_salvages_the_siblings() -> anyhow::Re
             for item in slice {
                 insert(sp, *item).await?;
             }
-            Ok::<_, es_entity::RepoReadError>(())
+            Ok::<_, sqlx::Error>(())
         })
         .await?;
 
@@ -186,7 +189,7 @@ async fn budget_exhaustion_leaves_unprobed_items_unresolved() -> anyhow::Result<
             for item in slice {
                 insert(sp, *item).await?;
             }
-            Ok::<_, es_entity::RepoReadError>(())
+            Ok::<_, sqlx::Error>(())
         })
         .await?;
 
@@ -378,7 +381,7 @@ trait BatchRunner: Send + Sync {
         &self,
         op: &mut DbOp<'static>,
         items: &[i32],
-    ) -> Result<usize, es_entity::RepoReadError>;
+    ) -> Result<usize, Fault<lanes!(Transient, Fatal)>>;
 }
 
 #[async_trait::async_trait]
@@ -387,7 +390,7 @@ impl BatchRunner for Runner {
         &self,
         op: &mut DbOp<'static>,
         items: &[i32],
-    ) -> Result<usize, es_entity::RepoReadError> {
+    ) -> Result<usize, Fault<lanes!(Transient, Fatal)>> {
         // Borrows `&self` directly, with no owned clone, and builds a wrapper
         // context per probe.
         let isolated = op
@@ -410,7 +413,7 @@ impl BatchRunner for Runner {
                     Ok::<_, sqlx::Error>(*item)
                 })
                 .await?;
-                Ok::<_, es_entity::RepoReadError>(())
+                Ok::<_, Fault<lanes!(Transient, Fatal)>>(())
             })
             .await?;
 
@@ -432,7 +435,7 @@ async fn a_closure_borrowing_self_composes_inside_an_async_trait_runner() -> any
         let mut op = DbOp::init(&pool).await?;
         let n = runner.run(&mut op, &items).await?;
         op.commit().await?;
-        Ok::<_, es_entity::RepoReadError>((n, pool))
+        anyhow::Ok((n, pool))
     });
 
     let (n, pool) = handle.await??;
