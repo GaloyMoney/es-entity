@@ -233,3 +233,36 @@ fn composition_across_layers_widens_through_each_hop() {
         other => panic!("expected Rejected(Job(Dup)), got {other:?}"),
     }
 }
+
+// Regression: `Rejected` is folded via `RejectedUnion` across every
+// `delegate`, not read off whichever variant happens to be declared first.
+// `Other` (never rejects) is declared *before* `Constraint` (the one
+// genuine rejection) here — the reverse of `DbWrite` above.
+#[derive(Debug, thiserror::Error, errlanes::Classify)]
+enum DbWriteReordered {
+    #[error("other: {0}")]
+    #[classify(delegate)]
+    Other(Stored),
+    #[error("constraint: {0}")]
+    #[classify(delegate)]
+    Constraint(ConstraintViolation),
+}
+
+#[test]
+fn rejected_is_folded_order_independently_across_delegates() {
+    fn assert_rejected_is<R: errlanes::RejectedSlot>() {}
+    assert_rejected_is::<<DbWriteReordered as Classify>::Rejected>();
+    let _: <DbWriteReordered as Classify>::Rejected = ConstraintViolation("users_email_key");
+
+    let wrapped = DbWriteReordered::Constraint(ConstraintViolation("users_email_key"));
+    match wrapped.classify() {
+        Fail::Rejected(ConstraintViolation(v)) => assert_eq!(v, "users_email_key"),
+        other => panic!("expected Rejected, got {other:?}"),
+    }
+
+    let wrapped = DbWriteReordered::Other(Stored(std::io::Error::other("x")));
+    match wrapped.classify() {
+        Fail::Fatal(f) => assert_eq!(f.kind, errlanes::FatalKind::CorruptState),
+        other => panic!("expected Fatal(CorruptState), got {other:?}"),
+    }
+}

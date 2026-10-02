@@ -202,13 +202,16 @@ fn static_lane_expr(lane: &Lane, value: TokenStream) -> TokenStream {
     }
 }
 
+/// `delegate` and `from` both build a tuple constructor/pattern
+/// (`Self(value)`/`Self::Variant(p)`), so the one field they require must
+/// itself be a tuple field — a named single field would need `Self { field:
+/// value }`/`Self::Variant { field: p }` instead, which this does not emit.
 fn single_field<'a>(fields: &'a Fields, span: &Ident, what: &str) -> syn::Result<&'a syn::Type> {
     match fields {
         Fields::Unnamed(f) if f.unnamed.len() == 1 => Ok(&f.unnamed[0].ty),
-        Fields::Named(f) if f.named.len() == 1 => Ok(&f.named[0].ty),
         _ => Err(syn::Error::new_spanned(
             span,
-            format!("{what} requires exactly one field"),
+            format!("{what} requires exactly one tuple field, e.g. `Variant(Inner)`"),
         )),
     }
 }
@@ -372,13 +375,22 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
         lanes_ty = quote! { <#lanes_ty as errlanes::profile::Union<#contribution>>::Out };
     }
 
-    let rejected_source = resolved.iter().find_map(|r| {
-        (r.meta.delegate && r.meta.narrow != Some(Narrow::Rejected)).then(|| r.field_ty.unwrap())
-    });
-    let rejected_ty = match rejected_source {
-        Some(ty) => quote! { <#ty as errlanes::Classify>::Rejected },
-        None => quote! { core::convert::Infallible },
-    };
+    // Folded via `RejectedUnion`, not "the first delegate": at most one
+    // delegate may carry a genuine rejection, but which one is first is an
+    // accident of declaration order, and a never-rejecting source (a
+    // `classify-sqlx`-blessed `sqlx::Error`, say) is just as likely to lead.
+    // Folding order-independently means whichever delegate turns out to
+    // reject, `Self::Rejected` resolves to its type — and two delegates
+    // that both genuinely (and differently) reject become a compile error
+    // from `RejectedUnion` itself, not a silent wrong answer.
+    let mut rejected_ty = quote! { core::convert::Infallible };
+    for r in &resolved {
+        if r.meta.delegate && r.meta.narrow != Some(Narrow::Rejected) {
+            let field_ty = r.field_ty.unwrap();
+            let contribution = quote! { <#field_ty as errlanes::Classify>::Rejected };
+            rejected_ty = quote! { <#rejected_ty as errlanes::RejectedUnion<#contribution>>::Out };
+        }
+    }
 
     let mut arms = Vec::new();
     let mut from_impls = TokenStream::new();

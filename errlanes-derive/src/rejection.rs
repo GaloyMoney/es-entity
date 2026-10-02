@@ -252,7 +252,13 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                 quote!(<#source as errlanes::RejectionMetadata<#source_id>>::field_level((#(#fields,)*))),
             )
         } else if let Some(source) = &whole_value_source {
-            let inner = &fields[0];
+            let Some(inner) = fields.first() else {
+                return Err(darling::Error::custom(
+                    "a whole-value `#[lift(Source)]` (naming a registered source with no \
+                     variant) needs exactly one field to hold the source value",
+                )
+                .with_span(&v.ident));
+            };
             code_variants.push(quote!(#variant_ident(<#source as errlanes::Rejection>::Code)));
             into_str_arms.push(quote!(#code_ident::#variant_ident(inner) => inner.into()));
             (

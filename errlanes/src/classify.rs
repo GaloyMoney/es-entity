@@ -23,6 +23,31 @@ pub trait RejectedSlot: Send + Sync + 'static {}
 impl RejectedSlot for Infallible {}
 impl<R: Rejection> RejectedSlot for R {}
 
+/// The pairwise union of two rejected slots — `derive(Classify)` folds a
+/// mixed wrapper's `Rejected` this way across its `delegate` variants,
+/// order-independent: at most one of the two may be a genuine `Rejection`
+/// (the other `Infallible`), so there is always exactly one sensible `Out`.
+/// Two genuine, *different* `Rejection`s have no impl here at all — that is
+/// the "a mixed wrapper rejects through one type; compose them" rule,
+/// enforced by the type system rather than by the derive trying to read
+/// ahead across fields it cannot resolve the types of.
+#[doc(hidden)]
+pub trait RejectedUnion<Other: RejectedSlot>: RejectedSlot {
+    type Out: RejectedSlot;
+}
+impl RejectedUnion<Infallible> for Infallible {
+    type Out = Infallible;
+}
+impl<R: Rejection> RejectedUnion<Infallible> for R {
+    type Out = R;
+}
+impl<R: Rejection> RejectedUnion<R> for Infallible {
+    type Out = R;
+}
+impl<R: Rejection> RejectedUnion<R> for R {
+    type Out = R;
+}
+
 /// How a local error enters the lanes: which part is a typed domain outcome
 /// that a caller can correct, and which fault lanes the rest can take.
 ///

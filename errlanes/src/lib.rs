@@ -26,7 +26,7 @@ pub mod reqwest;
 #[cfg(feature = "tracing")]
 mod record;
 
-pub use classify::{Classify, ClassifyResult, RejectedSlot};
+pub use classify::{Classify, ClassifyResult, RejectedSlot, RejectedUnion};
 pub use fail::{
     Fail, Failure, Fault, Laned, Level, Lift, Rejection, RejectionField, RejectionMetadata,
     UnmappedInto, WidenResult,
