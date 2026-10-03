@@ -112,6 +112,7 @@ pub mod graphql {
             Self(uuid)
         }
     }
+
     impl From<&UUID> for crate::prelude::uuid::Uuid {
         fn from(id: &UUID) -> Self {
             id.0
