@@ -592,6 +592,36 @@ mod tests {
         assert!(out.contains("compose (flatten)"));
     }
 
+    /// The id-only primary key gets the non-optional `Pkey(IdConflict<IdTy>)`
+    /// variant, a `pkey_from_database` constructor to attribute it from a
+    /// create path, and no `from_database` match arm of its own — a pkey
+    /// violation reported outside a create (no attributable id) falls
+    /// through to the catch-all `Err(source)`, which the surrounding
+    /// classifier turns into `Fatal(Invariant)`.
+    #[test]
+    fn pkey_constraint_gets_id_conflict_variant_and_no_from_database_arm() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", columns(name(ty = "String")))]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = derive(input).unwrap().to_string();
+        assert!(
+            out.contains("Pkey (# [source] es_entity :: IdConflict < UserId >)"),
+            "expected a Pkey(IdConflict<UserId>) variant, got: {out}"
+        );
+        assert!(
+            out.contains("pub fn pkey_from_database"),
+            "expected a pkey_from_database constructor, got: {out}"
+        );
+        assert!(
+            !out.contains("\"users_pkey\" => Ok"),
+            "the pkey name must have no from_database match arm of its own \
+             -- it falls through to the catch-all Err(source), got: {out}"
+        );
+    }
+
     // Guard 1 (event has Forgettable fields but the repo omits `forgettable`)
     // fires only once the event type resolves, so it is a const assert on the
     // event's inherent `HAS_FORGETTABLE_FIELDS`; its end-to-end behavior is

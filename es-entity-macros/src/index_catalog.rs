@@ -227,6 +227,29 @@ impl IndexCatalog {
         }
         seen
     }
+
+    /// The actual pkey constraint name Postgres will report for `table`'s
+    /// `id_column`: the catalog's own name when the migrations name the
+    /// primary key explicitly, the `{table}_pkey` convention otherwise (which
+    /// is also what Postgres itself falls back to for an unnamed inline
+    /// `PRIMARY KEY`, so an unnamed pkey's catalog entry already carries this
+    /// same name).
+    ///
+    /// The catalog does not distinguish "primary key" from an ordinary
+    /// `UNIQUE` constraint (both become [`ConstraintKind::Unique`] entries),
+    /// so this identifies the pkey the same way the generated constraint
+    /// enum does: the one constraint whose columns are exactly the id column
+    /// on its own. A table is not expected to carry a second, redundant
+    /// single-column unique constraint on its own id.
+    pub fn pkey_constraint_name(&self, table: &str, id_column: &str) -> String {
+        let catalog_table = table.to_lowercase();
+        let id_column = id_column.to_lowercase();
+        self.constraints
+            .iter()
+            .find(|e| e.table == catalog_table && e.columns == [id_column.clone()])
+            .map(|e| e.name.clone())
+            .unwrap_or_else(|| format!("{table}_pkey"))
+    }
 }
 
 // ── AST → catalog ───────────────────────────────────────────────────────────

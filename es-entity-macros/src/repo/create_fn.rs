@@ -228,6 +228,11 @@ impl ToTokens for CreateFn<'_> {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     #assignments
+                    // A single create already knows its id from its own
+                    // input, so a duplicate-id conflict always attributes
+                    // to exactly this id -- captured before `new_entity` is
+                    // consumed into `events` below.
+                    let __attempted_id = (*id).clone();
                     #constraint_values
                     #record_id
 
@@ -244,7 +249,7 @@ impl ToTokens for CreateFn<'_> {
                     let rows = sqlx::query_with(#query, __query_args)
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_create_write(e).map_rejected(|r| r.with_attempted(__constraint_values)))?;
+                        .map_err(|e| Self::classify_create_write(e, move |_| Some(__attempted_id)).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                     #forgettable_code
 
@@ -348,6 +353,7 @@ mod tests {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     let id = &new_entity.id;
+                    let __attempted_id = (*id).clone();
                     let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), };
 
                     let mut __query_args = sqlx::postgres::PgArguments::default();
@@ -366,7 +372,7 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_create_write(e).map_rejected(|r| r.with_attempted(__constraint_values)))?;
+                        .map_err(|e| Self::classify_create_write(e, move |_| Some(__attempted_id)).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                     let recorded_at = rows
                         .first()
@@ -463,6 +469,7 @@ mod tests {
 
                     let id = &new_entity.id;
                     let name = &new_entity.name();
+                    let __attempted_id = (*id).clone();
                     let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), name: Some((*name).clone()), };
 
                     let mut __query_args = sqlx::postgres::PgArguments::default();
@@ -482,7 +489,7 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_create_write(e).map_rejected(|r| r.with_attempted(__constraint_values)))?;
+                        .map_err(|e| Self::classify_create_write(e, move |_| Some(__attempted_id)).map_rejected(|r| r.with_attempted(__constraint_values)))?;
 
                     let recorded_at = rows
                         .first()

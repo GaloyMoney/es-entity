@@ -107,6 +107,14 @@ impl ToTokens for CreateAllFn<'_> {
         );
 
         let id_type = self.id;
+        // Postgres reports the bare table name in errors, so a
+        // schema-qualified events table is reduced to its last path
+        // component before being compared against `DatabaseError::table()`.
+        let events_table_bare = self
+            .events_table_name
+            .rsplit('.')
+            .next()
+            .unwrap_or(self.events_table_name);
 
         let batch_declarations = events_insert.batch_declarations(id_type);
         let gather = events_insert.gather_batch(quote! { events }, quote! { id });
@@ -271,7 +279,22 @@ impl ToTokens for CreateAllFn<'_> {
                     let rows = sqlx::query_with(#query, __query_args)
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_create_write)?;
+                        .map_err(|e| Self::classify_create_write(e, |db_err| {
+                            // The database message is a lookup key, never a
+                            // value: the attributed id is always one of the
+                            // batch's own ids, found by matching the
+                            // reported key text against them. A duplicate
+                            // reported inside the batch itself still
+                            // matches correctly -- both occurrences are the
+                            // same id, so `find`'s first hit is right either
+                            // way.
+                            let reported = if db_err.table() == Some(#events_table_bare) {
+                                es_entity::extract_events_pkey_id_value(db_err)
+                            } else {
+                                es_entity::extract_constraint_value(db_err)
+                            }?;
+                            all_ids.iter().find(|id| id.to_string() == reported).map(|id| (**id).clone())
+                        }))?;
 
                     #forgettable_insert
 
@@ -426,7 +449,14 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(Self::classify_create_write)?;
+                        .map_err(|e| Self::classify_create_write(e, |db_err| {
+                            let reported = if db_err.table() == Some("entity_events") {
+                                es_entity::extract_events_pkey_id_value(db_err)
+                            } else {
+                                es_entity::extract_constraint_value(db_err)
+                            }?;
+                            all_ids.iter().find(|id| id.to_string() == reported).map(|id| (**id).clone())
+                        }))?;
 
                     if expected_events > 0 {
                         if rows.len() != expected_events {

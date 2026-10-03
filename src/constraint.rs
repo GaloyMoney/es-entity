@@ -62,3 +62,45 @@ impl<V: fmt::Debug> Error for ConstraintConflict<V> {
         Some(&self.diagnostics)
     }
 }
+
+/// The primary-key conflict of a create: the id is always known, from the
+/// write's own input (a single create) or by matching the database's
+/// reported key against the batch's own ids (`create_all`). Unlike
+/// [`ConstraintConflict`], `attempted` is never optional here — a pkey
+/// violation with no attributable id is `Fatal(Invariant)` instead, never
+/// this variant with a guessed or missing id.
+#[derive(Debug, Clone)]
+pub struct IdConflict<Id> {
+    pub attempted: Id,
+    pub diagnostics: ConstraintDiagnostics,
+}
+impl<Id> IdConflict<Id> {
+    #[doc(hidden)]
+    pub fn new(
+        attempted: Id,
+        table: &'static str,
+        constraint: &'static str,
+        kind: ConstraintKind,
+        source: sqlx::Error,
+    ) -> Self {
+        Self {
+            attempted,
+            diagnostics: ConstraintDiagnostics {
+                table,
+                constraint,
+                kind,
+                source: Arc::new(source),
+            },
+        }
+    }
+}
+impl<Id> fmt::Display for IdConflict<Id> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.diagnostics.fmt(f)
+    }
+}
+impl<Id: fmt::Debug> Error for IdConflict<Id> {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.diagnostics)
+    }
+}

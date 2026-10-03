@@ -60,9 +60,18 @@ impl From<(&'static str, &'static str)> for CursorDestructureError {
 /// Extracts the conflicting value from a PostgreSQL constraint violation detail message.
 ///
 /// PostgreSQL formats unique violation details as:
-/// `Key (column)=(value) already exists.`
+/// `Key (column)=(value) already exists.` — but `lc_messages` localises the
+/// surrounding words (and sometimes the quote characters) around that
+/// `(column)=(value)` core, so this anchors on the first `=(` and the *last*
+/// `)` in the detail rather than on the English `") already"`. Every fixed
+/// case below (plain, composite, a value containing `)` or `, `, an empty
+/// value, and a translated detail) is honoured by this rule unchanged.
 ///
 /// Returns `None` if the detail is missing or doesn't match the expected format.
+///
+/// Known weakness, accepted: trailing text after the value that itself
+/// contains a `)` (not something PostgreSQL's own detail format produces)
+/// would overshoot and swallow it into the returned value.
 ///
 /// **Security note:** the extracted value is attacker-influenced input that
 /// was rejected by a unique constraint and may be PII (e.g. an email
@@ -71,7 +80,7 @@ impl From<(&'static str, &'static str)> for CursorDestructureError {
 pub fn parse_constraint_detail_value(detail: Option<&str>) -> Option<String> {
     let detail = detail?;
     let start = detail.find("=(")? + 2;
-    let end = detail.rfind(") already")?;
+    let end = detail.rfind(')')?;
     if start <= end {
         Some(detail[start..end].to_string())
     } else {
@@ -79,11 +88,12 @@ pub fn parse_constraint_detail_value(detail: Option<&str>) -> Option<String> {
     }
 }
 
-#[doc(hidden)]
 /// Extracts the conflicting value from a database error's constraint violation.
 ///
 /// Downcasts to [`sqlx::postgres::PgDatabaseError`], reads its `detail()`,
-/// and parses the conflicting value.
+/// and parses the conflicting value. Called by generated `create_all` code
+/// to attribute a batch's duplicate-id conflict to one of its own ids — see
+/// [`crate::IdConflict`].
 ///
 /// **Security note:** see [`parse_constraint_detail_value`] — the returned
 /// value may be PII and must not be exposed to untrusted clients.
@@ -92,14 +102,14 @@ pub fn extract_constraint_value(db_err: &dyn sqlx::error::DatabaseError) -> Opti
     parse_constraint_detail_value(pg_err.detail())
 }
 
-#[doc(hidden)]
 /// Extracts the conflicting id from an events-table primary-key violation.
 ///
 /// The events tables' primary key is `(id, sequence)`, so the violation
 /// detail reads `Key (id, sequence)=(<id>, <seq>) already exists.` — the id
 /// is everything before the last `, `. The sequence is an integer and can
 /// never contain `, `, so splitting at the last occurrence is unambiguous
-/// even for ids that themselves contain commas.
+/// even for ids that themselves contain commas. Called by generated
+/// `create_all` code — see [`crate::IdConflict`].
 ///
 /// **Security note:** see [`parse_constraint_detail_value`] — the returned
 /// value may be PII and must not be exposed to untrusted clients.
@@ -294,6 +304,21 @@ mod tests {
         assert_eq!(parse_constraint_detail_value(detail), Some("".to_string()));
     }
 
+    /// `lc_messages` localises the surrounding words and, as here, the quote
+    /// characters — German renders it as `Schlüssel »(id)=(wert)«
+    /// existiert bereits.`. The parser anchors on `=(` and the last `)`,
+    /// neither of which depends on the English wording, so this must parse
+    /// exactly like the English case.
+    #[test]
+    fn parse_translated_detail_value() {
+        let detail =
+            Some("Schlüssel »(id)=(550e8400-e29b-41d4-a716-446655440000)« existiert bereits.");
+        assert_eq!(
+            parse_constraint_detail_value(detail),
+            Some("550e8400-e29b-41d4-a716-446655440000".to_string())
+        );
+    }
+
     #[test]
     fn not_found_value_uses_display_when_available() {
         #[allow(unused_imports)]
@@ -334,9 +359,7 @@ mod tests {
                     prop_assert!(detail.contains(&v));
                     // The markers that drove the indices must actually be present.
                     let start = detail.find("=(").expect("start marker present") + 2;
-                    let end = detail
-                        .rfind(") already")
-                        .expect("end marker present");
+                    let end = detail.rfind(')').expect("end marker present");
                     prop_assert!(start <= end);
                     prop_assert_eq!(&detail[start..end], v.as_str());
                 }
