@@ -137,6 +137,8 @@ impl ToTokens for ForgetFn<'_> {
                 #gather
 
                 let rows = {
+                    use es_entity::errlanes::ResultExt as _;
+
                     let id = &entity.id;
                     sqlx::query!(
                         #combined_query,
@@ -145,7 +147,8 @@ impl ToTokens for ForgetFn<'_> {
                     )
                     .fetch_all(op.as_executor())
                     .await
-                    .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)).map_rejected(|r| r.with_attempted(#constraint_values { id: Some((*id).clone()), ..Default::default() })))?
+                    .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)))
+                    .map_rejected(|r| r.with_attempted(#constraint_values { id: Some((*id).clone()), ..Default::default() }))?
                 };
             };
 

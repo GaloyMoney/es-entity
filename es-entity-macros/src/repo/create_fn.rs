@@ -220,6 +220,7 @@ impl ToTokens for CreateFn<'_> {
                 OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<#entity, es_entity::RepoWriteError<#constraint_violation>> = async {
+                    use es_entity::errlanes::ResultExt as _;
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     #assignments
@@ -244,7 +245,8 @@ impl ToTokens for CreateFn<'_> {
                     let rows = sqlx::query_with(#query, __query_args)
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_create_write(e, move |_| Some(__attempted_id)).map_rejected(|r| r.with_attempted(__constraint_values)))?;
+                        .map_err(|e| Self::classify_create_write(e, move |_| Some(__attempted_id)))
+                        .map_rejected(|r| r.with_attempted(__constraint_values))?;
 
                     #forgettable_code
 
@@ -345,6 +347,7 @@ mod tests {
                 OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                    use es_entity::errlanes::ResultExt as _;
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     let id = &new_entity.id;
@@ -367,7 +370,8 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_create_write(e, move |_| Some(__attempted_id)).map_rejected(|r| r.with_attempted(__constraint_values)))?;
+                        .map_err(|e| Self::classify_create_write(e, move |_| Some(__attempted_id)))
+                        .map_rejected(|r| r.with_attempted(__constraint_values))?;
 
                     let recorded_at = rows
                         .first()
@@ -460,6 +464,7 @@ mod tests {
                 OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                    use es_entity::errlanes::ResultExt as _;
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     let id = &new_entity.id;
@@ -484,7 +489,8 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_create_write(e, move |_| Some(__attempted_id)).map_rejected(|r| r.with_attempted(__constraint_values)))?;
+                        .map_err(|e| Self::classify_create_write(e, move |_| Some(__attempted_id)))
+                        .map_rejected(|r| r.with_attempted(__constraint_values))?;
 
                     let recorded_at = rows
                         .first()

@@ -171,6 +171,8 @@ impl ToTokens for UpdateFn<'_> {
             };
 
             quote! {
+                use es_entity::errlanes::ResultExt as _;
+
                 #assignments
                     #constraint_values
                 #gather
@@ -184,7 +186,8 @@ impl ToTokens for UpdateFn<'_> {
                 )
                     .fetch_all(op.as_executor())
                     .await
-                    .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)).map_rejected(|r| r.with_attempted(__constraint_values)))?;
+                    .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)))
+                    .map_rejected(|r| r.with_attempted(__constraint_values))?;
 
                 #forgettable_code
 
@@ -432,6 +435,8 @@ mod tests {
                         return Ok(0);
                     }
 
+                    use es_entity::errlanes::ResultExt as _;
+
                     let id = &entity.id;
                     let name = &entity.name;
                     let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), name: Some((*name).clone()), };
@@ -450,7 +455,8 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")).map_rejected(|r| r.with_attempted(__constraint_values)))?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")))
+                        .map_rejected(|r| r.with_attempted(__constraint_values))?;
 
                     let recorded_at = rows
                         .first()
