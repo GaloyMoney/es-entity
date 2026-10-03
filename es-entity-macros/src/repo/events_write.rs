@@ -284,7 +284,6 @@ impl ForgettablePayloads<'_> {
     pub fn insert_per_entity(
         &self,
         events: TokenStream,
-        constraint_violation: &syn::Ident,
         events_table: &str,
         snapshot: Option<TokenStream>,
     ) -> TokenStream {
@@ -306,7 +305,7 @@ impl ForgettablePayloads<'_> {
                 }
             }
             if !payload_sequences.is_empty() {
-                Self::classify_conflict::<_, #constraint_violation>(
+                Self::classify_conflict(
                     sqlx::query!(
                         #query,
                         id as &#id_type,
@@ -394,18 +393,14 @@ impl ForgettablePayloads<'_> {
     }
 
     /// The batch payload insert.
-    pub fn insert_batch(
-        &self,
-        constraint_violation: &syn::Ident,
-        events_table: &str,
-    ) -> TokenStream {
+    pub fn insert_batch(&self, events_table: &str) -> TokenStream {
         let query = format!(
             "INSERT INTO {} (entity_id, sequence, payload) SELECT unnested.entity_id, unnested.sequence, unnested.payload FROM UNNEST($1, $2::INT[], $3::JSONB[]) AS unnested(entity_id, sequence, payload)",
             self.table
         );
         quote! {
             if !payload_sequences.is_empty() {
-                Self::classify_conflict::<_, #constraint_violation>(
+                Self::classify_conflict(
                     sqlx::query(#query)
                         .bind(&payload_ids)
                         .bind(&payload_sequences)

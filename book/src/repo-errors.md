@@ -14,13 +14,19 @@ retries. This chapter covers what es-entity puts into it.
 ```rust,ignore
 use es_entity::errlanes::{Fail, Fault, lanes};
 
-pub type RepoReadError = Fault<lanes!(Transient, Fatal)>;
+pub type RepoFault = Fault<lanes!(Transient, Fatal)>;
 pub type RepoWriteError<C> = Fail<C, lanes!(Transient, Fatal)>;
 ```
 
-Reads return `RepoReadError`.
+Reads return `RepoFault`.
 Writes return `RepoWriteError<C>`, where `C` is the repository's typed
-constraint enum described next.
+constraint enum described next — unless the write's own statement can hit no
+constraint *and* the repository has no nested children, in which case it
+returns the plain `RepoFault` instead: there is nothing left in the
+`Rejected` lane for it to ever construct. `update`/`update_all` narrow this
+way whenever every column they persist on update is otherwise unconstrained
+and nothing is nested (a repo of only scope/reference columns written once on
+create, say); `delete` and `forget` keep `RepoWriteError` unconditionally.
 
 ## Typed constraint violations
 

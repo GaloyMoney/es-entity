@@ -123,12 +123,7 @@ impl ToTokens for CreateFn<'_> {
                     id_type: self.id,
                     event_type: self.event,
                 }
-                .insert_per_entity(
-                    quote! { events },
-                    constraint_violation,
-                    self.events_table_name,
-                    None,
-                );
+                .insert_per_entity(quote! { events }, self.events_table_name, None);
                 quote! {
                     let offset = events.len_persisted();
                     let id = events.id();

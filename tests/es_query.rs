@@ -24,7 +24,7 @@ mod tbl_prefix_param {
             Self { pool }
         }
 
-        async fn query_with_args(&self, id: UserId) -> Result<User, es_entity::RepoReadError> {
+        async fn query_with_args(&self, id: UserId) -> Result<User, es_entity::RepoFault> {
             es_query!(
                 tbl_prefix = "ignore_prefix",
                 "SELECT * FROM ignore_prefix_users WHERE id = $1",
@@ -35,7 +35,7 @@ mod tbl_prefix_param {
             .ok_or_else(|| NotFound::new("User", Some("id"), format!("{:?}", id)).into())
         }
 
-        async fn query_without_args(&self) -> Result<(Vec<User>, bool), es_entity::RepoReadError> {
+        async fn query_without_args(&self) -> Result<(Vec<User>, bool), es_entity::RepoFault> {
             es_query!(
                 tbl_prefix = "ignore_prefix",
                 "SELECT * FROM ignore_prefix_users"
@@ -104,7 +104,7 @@ mod entity_param {
             Self { pool }
         }
 
-        async fn query_with_args(&self, id: UserId) -> Result<User, es_entity::RepoReadError> {
+        async fn query_with_args(&self, id: UserId) -> Result<User, es_entity::RepoFault> {
             let mut op = self.begin_op().await?;
             es_query!(
                 entity = User,
@@ -116,7 +116,7 @@ mod entity_param {
             .ok_or_else(|| NotFound::new("User", Some("id"), format!("{:?}", id)).into())
         }
 
-        async fn query_without_args(&self) -> Result<(Vec<User>, bool), es_entity::RepoReadError> {
+        async fn query_without_args(&self) -> Result<(Vec<User>, bool), es_entity::RepoFault> {
             let mut op = self.begin_op().await?;
             es_query!(entity = User, "SELECT * FROM custom_name_for_users")
                 .fetch_n(&mut op, 2)
@@ -178,14 +178,14 @@ mod no_params {
             Self { pool }
         }
 
-        async fn query_with_args(&self, id: UserId) -> Result<User, es_entity::RepoReadError> {
+        async fn query_with_args(&self, id: UserId) -> Result<User, es_entity::RepoFault> {
             es_query!("SELECT * FROM users WHERE id = $1", id as UserId)
                 .fetch_optional(self.pool())
                 .await?
                 .ok_or_else(|| NotFound::new("User", Some("id"), format!("{:?}", id)).into())
         }
 
-        async fn query_without_args(&self) -> Result<(Vec<User>, bool), es_entity::RepoReadError> {
+        async fn query_without_args(&self) -> Result<(Vec<User>, bool), es_entity::RepoFault> {
             es_query!("SELECT * FROM users")
                 .fetch_n(self.pool(), 2)
                 .await

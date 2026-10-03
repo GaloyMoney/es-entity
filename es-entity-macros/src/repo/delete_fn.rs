@@ -155,7 +155,6 @@ impl ToTokens for DeleteFn<'_> {
             }
             .insert_per_entity(
                 quote! { entity.events() },
-                constraint_violation,
                 self.events_table_name,
                 None,
             ),
@@ -517,7 +516,7 @@ mod tests {
                         }
                     }
                     if !payload_sequences.is_empty() {
-                        Self::classify_conflict::<_, EntityConstraintViolation>(
+                        Self::classify_conflict(
                             sqlx::query!(
                                 "INSERT INTO entities_forgettable_payloads (entity_id, sequence, payload) SELECT $1, unnested.sequence, unnested.payload FROM UNNEST($2::INT[], $3::JSONB[]) AS unnested(sequence, payload)",
                                 id as &EntityId,

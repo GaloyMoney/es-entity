@@ -880,6 +880,16 @@ impl Column {
         self.opts.is_id
     }
 
+    /// Whether this column's own update statement can ever hit a constraint
+    /// — `false` for an `update(persist = false)` column, since an update
+    /// that never writes a column can never violate a constraint on it.
+    /// Used by `RepositoryOptions::update_can_reject` to decide, per
+    /// constraint, whether any of its columns are actually reachable from
+    /// `update`/`update_all`.
+    pub fn persist_on_update(&self) -> bool {
+        self.opts.persist_on_update()
+    }
+
     /// The verbatim SQL predicate of a `virtual = "<sql>"` column. Panics on
     /// a non-virtual column — callers only ever hold virtual columns via
     /// [`Columns::all_virtual_filters`].

@@ -235,29 +235,36 @@ fn update_write_classifier_fn(
 /// only the bare table name in `DatabaseError::table()`, so the comparison
 /// strips a schema prefix here — once, centrally — rather than requiring
 /// every call site to remember to.
+///
+/// Returns `es_entity::RepoFault` unconditionally, not generic over a
+/// constraint type: nothing a column-less statement can hit is ever a typed
+/// rejection, so there is no `D` for it to carry. A call site whose own
+/// return type is `RepoWriteError<D>` still propagates it with a bare `?` —
+/// `From<Fault<S>> for Fail<D, L>` already exists for exactly this — and one
+/// whose return type is `RepoFault` itself propagates it by identity.
 pub fn classify_conflict_fn() -> TokenStream {
     quote! {
         #[inline(always)]
-        fn classify_conflict<T, D>(
+        fn classify_conflict<T>(
             res: Result<T, sqlx::Error>,
             events_table: &'static str,
             context: impl FnOnce() -> String,
-        ) -> Result<T, es_entity::RepoWriteError<D>> {
+        ) -> Result<T, es_entity::RepoFault> {
             let events_table = events_table.rsplit('.').next().unwrap_or(events_table);
             match res {
                 Ok(v) => Ok(v),
                 Err(e) if e.as_database_error().is_some_and(|db_err|
                     db_err.is_unique_violation() && db_err.table() == Some(events_table)) =>
                 {
-                    Err(errlanes::Fail::from(
+                    Err(errlanes::Fault::from(
                         errlanes::Transient::from_error(errlanes::TransientKind::OptimisticConflict, e)
                             .with_context(context())
                     ))
                 }
                 Err(e) if e.as_database_error().is_some_and(|db_err| db_err.is_unique_violation()) => {
-                    Err(errlanes::Fail::from(errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, e).with_context(context())))
+                    Err(errlanes::Fault::from(errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, e).with_context(context())))
                 }
-                Err(e) => Err(errlanes::Fail::from(e)),
+                Err(e) => Err(errlanes::Fault::from(e)),
             }
         }
     }

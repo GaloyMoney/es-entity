@@ -94,7 +94,7 @@ impl ToTokens for Nested<'_> {
                 rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
                 tag_cursor: &mut i32,
                 entities: &mut [P],
-            ) -> Result<(), es_entity::RepoReadError>
+            ) -> Result<(), es_entity::RepoFault>
                 where
                     P: es_entity::Parent<<#nested_repo_ty as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
                     #nested_repo_ty: es_entity::HydrateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
@@ -103,7 +103,7 @@ impl ToTokens for Nested<'_> {
                 <#nested_repo_ty>::hydrate_in_op(rows_by_tag, tag_cursor, lookup)
             }
 
-            async fn #delete_fn_name<OP, P>(op: &mut OP, entity: &P) -> Result<(), es_entity::RepoReadError>
+            async fn #delete_fn_name<OP, P>(op: &mut OP, entity: &P) -> Result<(), es_entity::RepoFault>
                 where
                     OP: es_entity::AtomicOperation + ?Sized,
                     P: es_entity::EsEntity,
@@ -184,7 +184,7 @@ mod tests {
                 rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
                 tag_cursor: &mut i32,
                 entities: &mut [P],
-            ) -> Result<(), es_entity::RepoReadError>
+            ) -> Result<(), es_entity::RepoFault>
                 where
                     P: es_entity::Parent<<UserRepo as es_entity::EsRepo>::Entity> + es_entity::EsEntity,
                     UserRepo: es_entity::HydrateNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
@@ -193,7 +193,7 @@ mod tests {
                 <UserRepo>::hydrate_in_op(rows_by_tag, tag_cursor, lookup)
             }
 
-            async fn delete_nested_users_in_op<OP, P>(op: &mut OP, entity: &P) -> Result<(), es_entity::RepoReadError>
+            async fn delete_nested_users_in_op<OP, P>(op: &mut OP, entity: &P) -> Result<(), es_entity::RepoFault>
                 where
                     OP: es_entity::AtomicOperation + ?Sized,
                     P: es_entity::EsEntity,

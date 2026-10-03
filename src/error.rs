@@ -1,8 +1,10 @@
 //! Types for working with errors produced by es-entity.
 
-/// Repository read failures: transient infrastructure faults or fatal failures.
-/// Reads cannot reject or deny; optional reads represent absence with `None`.
-pub type RepoReadError = errlanes::Fault<errlanes::lanes!(Transient, Fatal)>;
+/// Transient or fatal, never rejected: every read, and every write whose
+/// statement can hit no constraint (see `RepositoryOptions::update_can_reject`
+/// in the macro crate for exactly which generated updates qualify). Reads
+/// cannot reject or deny; optional reads represent absence with `None`.
+pub type RepoFault = errlanes::Fault<errlanes::lanes!(Transient, Fatal)>;
 
 /// Repository write failures, with `C` carrying the typed constraint violation.
 /// Writes may reject, fail transiently, or fail fatally, but cannot deny.
