@@ -1,3 +1,11 @@
+# [cala release v0.16.2](https://github.com/GaloyMoney/cala/releases/tag/0.16.2)
+
+
+
+### Features
+
+- Add ResultExt::rejected (#253)
+
 # [cala release v0.16.1](https://github.com/GaloyMoney/cala/releases/tag/0.16.1)
 
 

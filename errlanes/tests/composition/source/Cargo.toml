@@ -1,6 +1,6 @@
 [package]
 name = "composition-source"
-version = "0.16.2-dev"
+version = "0.16.2"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
