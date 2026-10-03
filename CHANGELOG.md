@@ -1,3 +1,11 @@
+# [cala release v0.16.4](https://github.com/GaloyMoney/cala/releases/tag/0.16.4)
+
+
+
+### Features
+
+- Widen a never-rejecting Classify wrapper into a Fault (#255)
+
 # [cala release v0.16.3](https://github.com/GaloyMoney/cala/releases/tag/0.16.3)
 
 
