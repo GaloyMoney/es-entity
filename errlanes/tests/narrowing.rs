@@ -3,8 +3,8 @@
 //! writing an adapter. The README covers the same ground.
 //!
 //! The `result_*` tests below exercise the same three narrowings, plus
-//! `widen`/`classify`/`record`, through `ResultExt` directly on a `Result`
-//! rather than on the bare error value.
+//! `rejected`/`widen`/`classify`/`record`, through `ResultExt` directly on a
+//! `Result` rather than on the bare error value.
 use errlanes::{Denied, Fail, Fatal, Fault, ResultExt, Transient, TransientKind, lanes};
 
 type Tf = lanes!(Transient, Fatal);
@@ -85,6 +85,65 @@ fn result_narrow_rejected_turns_fail_into_fault() {
             );
         }
         other => panic!("expected Err(Fault::Fatal(Invariant)), got {other:?}"),
+    }
+}
+
+/// `rejected` is the dual of `narrow_rejected`: the rejection crosses to the
+/// `Ok` side as the domain outcome's `Err`, the success value is kept, and
+/// only the faults stay on the `Err` side for `?` to carry.
+#[test]
+fn result_rejected_splits_the_rejection_from_the_faults() {
+    let ok: Result<u8, Fail<Small, Tf>> = Ok(7);
+    assert_eq!(ok.rejected().unwrap().unwrap(), 7);
+
+    let rejected: Result<u8, Fail<Small, Tf>> = Err(Fail::Rejected(Small));
+    assert_eq!(rejected.rejected().unwrap().unwrap_err(), Small);
+
+    let transient: Result<u8, Fail<Small, Tf>> =
+        Err(Transient::new(TransientKind::Deadlock).into());
+    match transient.rejected() {
+        Err(Fault::Transient(t)) => assert_eq!(t.kind, TransientKind::Deadlock),
+        other => panic!("expected Err(Fault::Transient), got {other:?}"),
+    }
+}
+
+/// The call-site shape `rejected` exists for: a wait-forever loop over a
+/// timeout-rejecting await. `?` lifts the `Fault` back into the enclosing
+/// `Fail` through the blanket `From`, so the loop only has to name the two
+/// domain outcomes.
+#[test]
+fn result_rejected_propagates_faults_through_question_mark() {
+    #[derive(Debug, PartialEq, Eq, errlanes::Rejection)]
+    #[rejection(code = "TIMED_OUT")]
+    struct TimedOut;
+
+    fn wait_forever(
+        mut await_once: impl FnMut() -> Result<u64, Fail<TimedOut, Tf>>,
+    ) -> Result<u64, Fail<TimedOut, Tf>> {
+        loop {
+            match await_once().rejected()? {
+                Ok(outcome) => break Ok(outcome),
+                Err(TimedOut) => continue,
+            }
+        }
+    }
+
+    let mut calls = 0;
+    let outcome = wait_forever(|| {
+        calls += 1;
+        if calls < 3 {
+            Err(Fail::Rejected(TimedOut))
+        } else {
+            Ok(42)
+        }
+    });
+    assert_eq!(outcome.unwrap(), 42);
+    assert_eq!(calls, 3);
+
+    let fatal = wait_forever(|| Err(Fatal::invariant("router not started").into())).unwrap_err();
+    match fatal {
+        Fail::Fatal(f) => assert_eq!(f.context.as_deref(), Some("router not started")),
+        other => panic!("expected Fail::Fatal, got {other:?}"),
     }
 }
 
