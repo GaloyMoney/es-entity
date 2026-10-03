@@ -233,3 +233,5 @@ pub struct Users {
 ```
 
 Note that if no columns need updating (all columns have `update(persist = false)`), the `UPDATE` query is skipped entirely for better performance.
+
+`update`/`update_in_op` return `Result<usize, es_entity::RepoWriteError<C>>` unless the write's own statement can hit no constraint — every column it persists on update is otherwise unconstrained, as in the example just above — *and* the repository has no nested children, in which case they return the plain `Result<usize, es_entity::RepoFault>` instead: there is nothing left in the `Rejected` lane for them to ever construct. A repo with at least one constrained persisted column, or with any `#[es_repo(nested)]` field, keeps `RepoWriteError` regardless of its other columns.

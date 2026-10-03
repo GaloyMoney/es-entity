@@ -58,7 +58,7 @@ impl ToTokens for HydrateNested<'_> {
                     rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
                     tag_cursor: &mut i32,
                     mut lookup: std::collections::HashMap<#ty, &mut P>,
-                ) -> Result<(), es_entity::RepoReadError>
+                ) -> Result<(), es_entity::RepoFault>
                 where
                     P: Parent<<Self as EsRepo>::Entity>,
                 {
@@ -139,7 +139,7 @@ impl ToTokens for HydrateNested<'_> {
                     async fn cascade_delete_in_op<OP>(
                         op: &mut OP,
                         parent_id: &#ty,
-                    ) -> Result<(), es_entity::RepoReadError>
+                    ) -> Result<(), es_entity::RepoFault>
                     where
                         OP: es_entity::AtomicOperation + ?Sized,
                     {

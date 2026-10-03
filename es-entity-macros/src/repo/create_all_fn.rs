@@ -144,7 +144,7 @@ impl ToTokens for CreateAllFn<'_> {
             .unwrap_or_default();
         let forgettable_insert = payloads
             .as_ref()
-            .map(|p| p.insert_batch(constraint_violation, self.events_table_name))
+            .map(|p| p.insert_batch(self.events_table_name))
             .unwrap_or_default();
 
         #[cfg(feature = "instrument")]

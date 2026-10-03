@@ -21,6 +21,12 @@ pub struct UpdateAllFn<'a> {
     constraint_violation: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
     post_persist_hook: bool,
+    /// Whether the generated `update_all`/`update_all_in_op`/
+    /// `update_all_mut_in_op` can ever reject — see
+    /// `RepositoryOptions::update_can_reject`. `false` narrows every
+    /// generated signature (and the inner `__result` annotation) from
+    /// `RepoWriteError<CV>` to the plain `es_entity::RepoFault`.
+    update_can_reject: bool,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -44,6 +50,7 @@ impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
                 .map(|f| f.update_nested_fn_name())
                 .collect(),
             post_persist_hook: opts.post_persist_hook.is_some(),
+            update_can_reject: opts.update_can_reject(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -93,6 +100,11 @@ impl UpdateAllFn<'_> {
         let constraint_violation = &self.constraint_violation;
         let table_name = self.table_name;
         let events_table_name = self.events_table_name;
+        let write_error_ty = if self.update_can_reject {
+            quote! { es_entity::RepoWriteError<#constraint_violation> }
+        } else {
+            quote! { es_entity::RepoFault }
+        };
 
         let (fn_name, entities_param, entities_prelude, iter_ref, iter_mut_ref) = match mode {
             BatchMode::OwnedSlice => (
@@ -162,7 +174,7 @@ impl UpdateAllFn<'_> {
             .unwrap_or_default();
         let forgettable_insert = payloads
             .as_ref()
-            .map(|p| p.insert_batch(constraint_violation, self.events_table_name))
+            .map(|p| p.insert_batch(self.events_table_name))
             .unwrap_or_default();
 
         let snapshot_upsert = self
@@ -253,15 +265,14 @@ impl UpdateAllFn<'_> {
                     // rows, so a concurrent delete of any one of them is a
                     // genuine race, not a torn batch.
                     if rows.len() != expected_events {
-                        return Err(errlanes::Fail::from(
-                            errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                        return Err(errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
                                 .with_context(format!(
                                     "{} batch wrote {} of {} events",
                                     #table_name,
                                     rows.len(),
                                     expected_events
-                                )),
-                        ));
+                                ))
+                                .into());
                     }
 
                     let recorded_at = rows
@@ -288,7 +299,7 @@ impl UpdateAllFn<'_> {
                             if events.any_new() { Some(events) } else { None }
                         })
                         .collect();
-                    let n_persisted = Self::classify_conflict::<_, #constraint_violation>(
+                    let n_persisted = Self::classify_conflict(
                         self.persist_events_batch(op, &mut all_event_refs).await,
                         #events_table_name,
                         || format!("{} batch conflict", #table_name),
@@ -408,7 +419,7 @@ impl UpdateAllFn<'_> {
                     pub async fn update_all(
                         &self,
                         entities: &mut [#entity]
-                    ) -> Result<usize, es_entity::RepoWriteError<#constraint_violation>> {
+                    ) -> Result<usize, #write_error_ty> {
                         let mut op = self.begin_op().await?;
                         let res = self.update_all_in_op(&mut op, entities).await?;
                         op.commit().await?;
@@ -425,11 +436,11 @@ impl UpdateAllFn<'_> {
                 &self,
                 op: &mut OP,
                 #entities_param
-            ) -> Result<usize, es_entity::RepoWriteError<#constraint_violation>>
+            ) -> Result<usize, #write_error_ty>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, es_entity::RepoWriteError<#constraint_violation>> = async {
+                let __result: Result<usize, #write_error_ty> = async {
                     use es_entity::prelude::sqlx::Row;
 
                     #entities_prelude
@@ -520,6 +531,7 @@ mod tests {
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_persist_hook: false,
+            update_can_reject: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -527,11 +539,12 @@ mod tests {
         let mut tokens = TokenStream::new();
         update_all_fn.to_tokens(&mut tokens);
 
+        let write_error_ty = quote! { es_entity::RepoWriteError<EntityConstraintViolation> };
         let expected = quote! {
             pub async fn update_all(
                 &self,
                 entities: &mut [Entity]
-            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> {
+            ) -> Result<usize, #write_error_ty> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_all_in_op(&mut op, entities).await?;
                 op.commit().await?;
@@ -542,11 +555,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entities: &mut [Entity]
-            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>>
+            ) -> Result<usize, #write_error_ty>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                let __result: Result<usize, #write_error_ty> = async {
                     use es_entity::prelude::sqlx::Row;
 
                     if entities.is_empty() {
@@ -603,15 +616,14 @@ mod tests {
                         .map_err(|e| Self::classify_update_write(e, format!("{} batch conflict", "entities")))?;
 
                     if rows.len() != expected_events {
-                        return Err(errlanes::Fail::from(
-                            errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                        return Err(errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
                                 .with_context(format!(
                                     "{} batch wrote {} of {} events",
                                     "entities",
                                     rows.len(),
                                     expected_events
-                                )),
-                        ));
+                                ))
+                                .into());
                     }
 
                     let recorded_at = rows
@@ -644,11 +656,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entities: impl IntoIterator<Item = &mut Entity>
-            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>>
+            ) -> Result<usize, #write_error_ty>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                let __result: Result<usize, #write_error_ty> = async {
                     use es_entity::prelude::sqlx::Row;
 
                     let mut entities: Vec<&mut Entity> = entities.into_iter().collect();
@@ -707,15 +719,14 @@ mod tests {
                         .map_err(|e| Self::classify_update_write(e, format!("{} batch conflict", "entities")))?;
 
                     if rows.len() != expected_events {
-                        return Err(errlanes::Fail::from(
-                            errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                        return Err(errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
                                 .with_context(format!(
                                     "{} batch wrote {} of {} events",
                                     "entities",
                                     rows.len(),
                                     expected_events
-                                )),
-                        ));
+                                ))
+                                .into());
                     }
 
                     let recorded_at = rows
@@ -771,6 +782,7 @@ mod tests {
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_persist_hook: false,
+            update_can_reject: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -778,11 +790,12 @@ mod tests {
         let mut tokens = TokenStream::new();
         update_all_fn.to_tokens(&mut tokens);
 
+        let write_error_ty = quote! { es_entity::RepoWriteError<EntityConstraintViolation> };
         let expected = quote! {
             pub async fn update_all(
                 &self,
                 entities: &mut [Entity]
-            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> {
+            ) -> Result<usize, #write_error_ty> {
                 let mut op = self.begin_op().await?;
                 let res = self.update_all_in_op(&mut op, entities).await?;
                 op.commit().await?;
@@ -793,11 +806,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entities: &mut [Entity]
-            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>>
+            ) -> Result<usize, #write_error_ty>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                let __result: Result<usize, #write_error_ty> = async {
                     use es_entity::prelude::sqlx::Row;
 
                     if entities.is_empty() {
@@ -822,7 +835,7 @@ mod tests {
                             if events.any_new() { Some(events) } else { None }
                         })
                         .collect();
-                    let n_persisted = Self::classify_conflict::<_, EntityConstraintViolation>(
+                    let n_persisted = Self::classify_conflict(
                         self.persist_events_batch(op, &mut all_event_refs).await,
                         "entity_events",
                         || format!("{} batch conflict", "entities"),
@@ -848,11 +861,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 entities: impl IntoIterator<Item = &mut Entity>
-            ) -> Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>>
+            ) -> Result<usize, #write_error_ty>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<usize, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                let __result: Result<usize, #write_error_ty> = async {
                     use es_entity::prelude::sqlx::Row;
 
                     let mut entities: Vec<&mut Entity> = entities.into_iter().collect();
@@ -879,7 +892,7 @@ mod tests {
                             if events.any_new() { Some(events) } else { None }
                         })
                         .collect();
-                    let n_persisted = Self::classify_conflict::<_, EntityConstraintViolation>(
+                    let n_persisted = Self::classify_conflict(
                         self.persist_events_batch(op, &mut all_event_refs).await,
                         "entity_events",
                         || format!("{} batch conflict", "entities"),
@@ -903,6 +916,54 @@ mod tests {
         };
 
         assert_eq!(tokens.to_string(), expected.to_string());
+    }
+
+    /// `update_can_reject: false` (the shape `RepositoryOptions::update_can_reject`
+    /// computes for a repo with no constrained persisted column and no
+    /// nested children) narrows every signature to the plain `RepoFault`
+    /// instead of `RepoWriteError<CV>`.
+    #[test]
+    fn update_all_fn_cannot_reject_returns_repo_fault() {
+        let id = syn::parse_str("EntityId").unwrap();
+        let entity = Ident::new("Entity", Span::call_site());
+
+        let mut columns = Columns::default();
+        columns.set_id_column(&id);
+
+        let event = Ident::new("EntityEvent", Span::call_site());
+        let update_all_fn = UpdateAllFn {
+            in_op_only: false,
+            entity: &entity,
+            id: &id,
+            event: &event,
+            table_name: "entities",
+            events_table_name: "entity_events",
+            event_ctx: false,
+            forgettable_table_name: None,
+            snapshot_table_name: None,
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
+            columns: &columns,
+            nested_fn_names: Vec::new(),
+            post_persist_hook: false,
+            update_can_reject: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        update_all_fn.to_tokens(&mut tokens);
+        let out = tokens.to_string();
+
+        assert_eq!(
+            out.matches("-> Result < usize , es_entity :: RepoFault >")
+                .count(),
+            3,
+            "expected update_all / update_all_in_op / update_all_mut_in_op to all narrow to RepoFault, got: {out}"
+        );
+        assert!(
+            !out.contains("RepoWriteError"),
+            "RepoWriteError must not appear when update_can_reject is false: {out}"
+        );
     }
 
     /// A snapshot repo's `update_all_in_op` refreshes clean-but-stale
@@ -930,6 +991,7 @@ mod tests {
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_persist_hook: false,
+            update_can_reject: true,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

@@ -56,51 +56,41 @@ fn constraint_variant_ident(
     dedupe_variant_ident(candidate, taken)
 }
 
-impl<'a> ErrorTypes<'a> {
-    pub fn new(opts: &'a RepositoryOptions) -> Self {
-        Self { opts }
-    }
-    pub fn generate(&self) -> TokenStream {
-        let opts = self.opts;
-        let cv = opts.constraint_violation();
-        let values = format_ident!("{}ConstraintValues", opts.entity());
-        let table = opts.table_name();
-        let catalog_table = table.to_lowercase();
-        let catalog = opts.index_catalog();
-        let columns: Vec<_> = opts.columns.column_enum_columns().collect();
-        let mut constraints = catalog.table_constraints(table);
-        // Keep conventional names where migrations are unavailable. The id
-        // column gets exactly one synthesized entry: the pkey's actual name
-        // (the catalog's own, when a migration names the primary key
-        // explicitly, the `{table}_pkey` convention otherwise), never *also*
-        // the generic `{table}_{col}_key` form — its uniqueness comes from
-        // being the primary key, not from a separate same-column unique
-        // constraint, so adding both would fabricate a second, phantom
-        // "pkey" variant for a constraint name Postgres will never report
-        // (and, now that the id-only case gets one fixed `Pkey` variant
-        // name regardless of which of the two it came from, a name
-        // collision between them).
-        for col in &columns {
-            let name = col.name().to_string();
-            let name = if col.is_id() {
-                catalog.pkey_constraint_name(table, &name)
-            } else {
-                format!("{table}_{name}_key")
-            };
-            if !constraints.iter().any(|(n, _)| *n == name) {
-                constraints.push((name, ConstraintKind::Unique));
-            }
+/// Every constraint on the entity's table, enumerated once: `(name, kind,
+/// matched column names)`. `matched` is the catalog's own columns when it
+/// has an entry for `name`, the conventional single-column match otherwise,
+/// and empty for an opaque CHECK expression the catalog cannot resolve to
+/// columns. The id column contributes exactly one entry, under the pkey's
+/// actual name (the catalog's own, when a migration names the primary key
+/// explicitly, the `{table}_pkey` convention otherwise) — never *also* the
+/// generic `{table}_{col}_key` form, which would fabricate a second,
+/// phantom "pkey" entry for a constraint name Postgres will never report.
+///
+/// Shared by `ErrorTypes` (building the constraint violation enum) and
+/// `RepositoryOptions::update_can_reject` (deciding whether an update can
+/// ever hit one of these), so both see exactly the same constraint set.
+pub(crate) fn enumerate_constraints(
+    opts: &RepositoryOptions,
+) -> Vec<(String, ConstraintKind, Vec<String>)> {
+    let table = opts.table_name();
+    let catalog_table = table.to_lowercase();
+    let catalog = opts.index_catalog();
+    let columns: Vec<_> = opts.columns.column_enum_columns().collect();
+    let mut constraints = catalog.table_constraints(table);
+    for col in &columns {
+        let name = col.name().to_string();
+        let name = if col.is_id() {
+            catalog.pkey_constraint_name(table, &name)
+        } else {
+            format!("{table}_{name}_key")
+        };
+        if !constraints.iter().any(|(n, _)| *n == name) {
+            constraints.push((name, ConstraintKind::Unique));
         }
-        let mut taken = HashSet::new();
-        let mut variants = Vec::new();
-        let mut classifiers = Vec::new();
-        let mut set_values = Vec::new();
-        let mut payloads = Vec::new();
-        // `pkey_from_database`, once the id-only pkey constraint is found
-        // below. A composite or non-id primary key leaves this `None` and
-        // that constraint keeps `ConstraintConflict` like any other.
-        let mut pkey_from_database: Option<TokenStream> = None;
-        for (name, kind) in constraints {
+    }
+    constraints
+        .into_iter()
+        .map(|(name, kind)| {
             let col_names = catalog
                 .constraints
                 .iter()
@@ -116,6 +106,32 @@ impl<'a> ErrorTypes<'a> {
                         .map(|c| c.name().to_string())
                         .collect()
                 });
+            (name, kind, col_names)
+        })
+        .collect()
+}
+
+impl<'a> ErrorTypes<'a> {
+    pub fn new(opts: &'a RepositoryOptions) -> Self {
+        Self { opts }
+    }
+    pub fn generate(&self) -> TokenStream {
+        let opts = self.opts;
+        let cv = opts.constraint_violation();
+        let values = format_ident!("{}ConstraintValues", opts.entity());
+        let table = opts.table_name();
+        let columns: Vec<_> = opts.columns.column_enum_columns().collect();
+        let constraints = enumerate_constraints(opts);
+        let mut taken = HashSet::new();
+        let mut variants = Vec::new();
+        let mut classifiers = Vec::new();
+        let mut set_values = Vec::new();
+        let mut payloads = Vec::new();
+        // `pkey_from_database`, once the id-only pkey constraint is found
+        // below. A composite or non-id primary key leaves this `None` and
+        // that constraint keeps `ConstraintConflict` like any other.
+        let mut pkey_from_database: Option<TokenStream> = None;
+        for (name, kind, col_names) in constraints {
             let matched: Option<Vec<_>> = if col_names.is_empty() {
                 None
             } else {

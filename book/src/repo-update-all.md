@@ -95,3 +95,10 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+`update_all`/`update_all_in_op` (and the nested-batching `update_all_mut_in_op`) return
+`Result<usize, es_entity::RepoWriteError<C>>` unless the write's own statement can hit no
+constraint — every column it persists on update is otherwise unconstrained — *and* the
+repository has no nested children, in which case they return the plain
+`Result<usize, es_entity::RepoFault>` instead: see [`update`](./repo-update.md)'s
+`update(persist = false)` example for the column shape that triggers this.

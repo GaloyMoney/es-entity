@@ -88,7 +88,7 @@ impl ToTokens for ForgetFn<'_> {
             let persist = if wants_hook {
                 quote! {
                     let n_events = if entity.events().any_new() {
-                        Self::classify_conflict::<_, #constraint_violation>(
+                        Self::classify_conflict(
                             self.persist_events(op, entity.events_mut() #persist_events_snapshot_arg).await,
                             #events_table_name,
                             || format!("{} seq conflict", #table_name),
@@ -100,7 +100,7 @@ impl ToTokens for ForgetFn<'_> {
             } else {
                 quote! {
                     if entity.events().any_new() {
-                        Self::classify_conflict::<_, #constraint_violation>(
+                        Self::classify_conflict(
                             self.persist_events(op, entity.events_mut() #persist_events_snapshot_arg).await,
                             #events_table_name,
                             || format!("{} seq conflict", #table_name),
@@ -215,7 +215,7 @@ impl ToTokens for ForgetFn<'_> {
                             .await
                         {
                             Ok(e) => e,
-                            Err(es_entity::RepoReadError::Fatal(fatal)) if es_entity::fatal_is_not_found(&fatal) => {
+                            Err(es_entity::RepoFault::Fatal(fatal)) if es_entity::fatal_is_not_found(&fatal) => {
                                 return Err(errlanes::Fail::from(
                                     errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
                                         .with_context(format!("{} vanished during forget", #table_name))
