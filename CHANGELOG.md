@@ -1,3 +1,11 @@
+# [cala release v0.16.3](https://github.com/GaloyMoney/cala/releases/tag/0.16.3)
+
+
+
+### Features
+
+- Narrow_rejected on a bare Rejection (#254)
+
 # [cala release v0.16.2](https://github.com/GaloyMoney/cala/releases/tag/0.16.2)
 
 
