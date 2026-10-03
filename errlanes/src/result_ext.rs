@@ -125,6 +125,14 @@ pub trait ResultExt<T, E>: Sized {
     ///     value.widen()
     /// }
     /// ```
+    ///
+    /// A [`Classify`] wrapper widens too — into a `Fail` as usual, or
+    /// straight into a `Fault` when it never rejects. That last form is how a
+    /// wrapper enters the lanes at a call site with no signature to infer the
+    /// destination from, above all on the way into a `Box<dyn Error>`, where
+    /// `?` on the bare wrapper would box it unlaned and lose its
+    /// classification (see `classify.rs` and the README's box-boundary
+    /// section).
     fn widen<E2>(self) -> Result<T, E2>
     where
         Self: WidenResult<T, E2>;
