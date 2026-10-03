@@ -213,6 +213,13 @@ narrowing cannot happen by accident either. The same three verbs are also
 available directly on a `Result` through `ResultExt`, so a call site that is
 already holding one does not have to `.map_err()` into the value-level form.
 
+`narrow_rejected` also takes a *bare* rejection. A public method returns just
+`R` when its caller can act on it; an internal frame that calls it having
+already proved the precondition has no caller left, so the rejection is an
+invariant there. With no profile to keep, the narrowed value is the bare
+`Fatal`, and `?` carries it into whatever `Fault`/`Fail` the frame returns:
+`outbox.listen::<L>(from).narrow_rejected()?`.
+
 ### Handling a rejection where it occurs
 
 `narrow_rejected` is for a boundary with no caller left to correct the
@@ -713,6 +720,7 @@ every case:
 | `W: Classify<Rejected = Infallible>` | `Fault<M>` | `?`, given `W::Lanes ⊆ M` |
 | `W: Classify<Rejected = Infallible, Lanes = lanes!(Fatal)>` | bare `Fatal` | `?` (same for a lone `Transient`) |
 | `Result<T, Fail<D, L>>` | `Result<T, Fault<L>>` | `.narrow_rejected()` |
+| `Result<T, R>`, a bare rejection | `Result<T, Fatal>`, then `?` into any `Fault`/`Fail` with a `Fatal` lane | `.narrow_rejected()?` — an internal frame consuming a public method's rejection after proving the precondition |
 | `Result<T, Fail<D, L>>` | `Result<Result<T, D>, Fault<L>>` | `.rejected()`, to handle the rejection at the call site |
 | `Result<T, Fail<D, L>>` | `Result<T, Fail<D2, L>>` | `.map_rejected(f)`, to enrich a rejection with call-site data; a type-level remap is `.widen()` |
 | `Result<T, Fault<L>>` or `Result<T, Fail<D, L>>` | lanes narrowed, `WithoutTransient<L>` | `.narrow_transient(attempts)` |

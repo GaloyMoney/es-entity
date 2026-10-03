@@ -12,23 +12,52 @@ use crate::{
 };
 
 /// Sealed. The error-level engine for [`ResultExt::narrow_rejected`] — keyed
-/// on the source shape the same way [`WidenResult`] is, since only `Fail`
-/// carries a rejected lane to narrow away.
+/// on the source shape the same way [`WidenResult`] is: a `Fail` narrows to
+/// the `Fault` of its own profile, a bare `Rejection` to the bare `Fatal`.
+/// Both outputs are associated types, read off the source, so
+/// `.narrow_rejected()?` never needs a destination named at the call site.
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no rejected lane to narrow",
-    note = "`narrow_rejected` is for a `Fail<D, L>` whose rejected lane has no \
-            caller left to correct it; a `Fault<L>` has no rejected lane at all"
+    note = "`narrow_rejected` is for a `Fail<D, L>`, or a bare `Rejection`, with no \
+            caller left to correct the rejection; a `Fault<L>` has no rejected lane at all"
 )]
-pub trait NarrowRejectedLane: crate::fail::sealed::Sealed {
+pub trait NarrowRejectedLane: narrow_sealed::Sealed {
     type Narrowed;
     fn narrow_rejected(self) -> Self::Narrowed;
+}
+
+/// Its own seal rather than `fail::sealed`: that one is blanket-implemented
+/// for every `Failure`, and a downstream type may be both a `Failure` carrier
+/// and a `Rejection`, so a second blanket over `R: Rejection` would overlap
+/// there. Here the two impls are `Fail<D, L>` and `R: Rejection`, which
+/// coherence can tell apart — `Fail` is local and never a `Rejection`.
+mod narrow_sealed {
+    use crate::{
+        fail::{Fail, Rejection},
+        profile::LaneProfile,
+    };
+    pub trait Sealed {}
+    impl<D: Rejection, L: LaneProfile> Sealed for Fail<D, L> {}
+    impl<R: Rejection> Sealed for R {}
 }
 
 impl<D: Rejection, L: LaneProfile<Fatal = Fatal>> NarrowRejectedLane for Fail<D, L> {
     type Narrowed = Fault<L>;
     fn narrow_rejected(self) -> Fault<L> {
         Fail::narrow_rejected(self)
+    }
+}
+
+/// A bare rejection has no profile to keep, so narrowing it yields the bare
+/// payload: `Fatal(Invariant)` with the rejection as its (opaque) source. `?`
+/// then carries that into any `Fault<L>` or `Fail<D, L>` whose `Fatal` lane
+/// is enabled — the destination profile is read off the function signature,
+/// never named at the call site.
+impl<R: Rejection> NarrowRejectedLane for R {
+    type Narrowed = Fatal;
+    fn narrow_rejected(self) -> Fatal {
+        crate::fail::invariant_from_rejection(self)
     }
 }
 
@@ -102,9 +131,35 @@ pub trait ResultExt<T, E>: Sized {
 
     /// Narrows away the `Rejected` lane: a rejection with no caller left to
     /// correct it becomes `Fatal(Invariant)`, carrying the rejection as its
-    /// source. Only available where `E` is a `Fail` — a `Fault` has no
-    /// rejected lane to narrow, and that is a compile error, not an
-    /// identity:
+    /// source. On a `Fail<D, L>` the result is `Fault<L>`. On a *bare*
+    /// `Rejection` — a public method that returns just `R` because its
+    /// caller can act on it, consumed by an internal frame that already
+    /// proved the precondition — the result is the bare `Fatal`, and `?`
+    /// carries it into whatever `Fault`/`Fail` the function returns, so the
+    /// destination profile is never named at the call site:
+    ///
+    /// ```
+    /// use errlanes::{Fault, ResultExt, lanes};
+    ///
+    /// #[derive(Debug, errlanes::Rejection)]
+    /// #[rejection(code = "LANE_DISABLED")]
+    /// struct LaneDisabled;
+    ///
+    /// fn listen() -> Result<(), LaneDisabled> {
+    ///     Err(LaneDisabled)
+    /// }
+    ///
+    /// // The lane was required at registration: by now, off is an invariant.
+    /// fn run() -> Result<(), Fault<lanes!(Transient, Fatal)>> {
+    ///     listen().narrow_rejected()?;
+    ///     Ok(())
+    /// }
+    ///
+    /// assert!(matches!(run(), Err(Fault::Fatal(_))));
+    /// ```
+    ///
+    /// A `Fault` has no rejected lane to narrow, and that is a compile
+    /// error, not an identity:
     ///
     /// ```compile_fail
     /// use errlanes::{Fault, ResultExt, lanes};
