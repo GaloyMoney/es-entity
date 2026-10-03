@@ -176,3 +176,44 @@ where
         })
     }
 }
+
+/// The same act for a destination with no rejected lane: a wrapper that never
+/// rejects widens straight into a [`Fault<M>`]. `?` already covers the case
+/// where the destination is the function's own return type (the `From` impl
+/// above); this is for the call site that must name the destination because
+/// nothing else will infer it — above all a `Box<dyn Error>` boundary, where
+/// `?` alone would box the wrapper *unlaned* and the receiving
+/// [`Fault::classify`] would then walk past it to whatever foreign error it
+/// wraps, reverting the very classification the wrapper exists to override.
+///
+/// ```
+/// use errlanes::{Fault, ResultExt, lanes};
+///
+/// #[derive(Debug, errlanes::Classify)]
+/// #[classify(fatal(CorruptState))]
+/// #[error("could not decode stored state")]
+/// struct Stored(#[source] std::io::Error);
+///
+/// fn decode() -> Result<u8, Stored> {
+///     Err(Stored(std::io::Error::other("bad bytes")))
+/// }
+///
+/// // A boxed boundary: the destination carrier is named, then boxed.
+/// fn boundary() -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
+///     Ok(decode().widen::<Fault<lanes!(Transient, Fatal)>>()?)
+/// }
+///
+/// let fault = errlanes::Fault::classify(&*boundary().unwrap_err());
+/// assert!(matches!(fault, Fault::Fatal(f) if f.kind == errlanes::FatalKind::CorruptState));
+/// ```
+impl<T, C: Classify<Rejected = Infallible>, M: LaneProfile> crate::fail::WidenResult<T, Fault<M>>
+    for Result<T, C>
+where
+    <C::Lanes as LaneProfile>::Denied: Into<M::Denied>,
+    <C::Lanes as LaneProfile>::Transient: Into<M::Transient>,
+    <C::Lanes as LaneProfile>::Fatal: Into<M::Fatal>,
+{
+    fn widen(self) -> Result<T, Fault<M>> {
+        self.map_err(Fault::from)
+    }
+}

@@ -300,6 +300,51 @@ let fault: errlanes::Fault<errlanes::lanes!(Transient, Fatal)> = match runner.ru
 persist(fault).await?;
 ```
 
+### Sending an error *into* a box
+
+The rule has two halves, and they are not symmetric.
+
+A **raw foreign error** needs no conversion on its way in: plain `?` boxes it,
+and the boundary's `Fault::classify` reads the lane back out of the chain from
+the very same table `From<sqlx::Error>` uses. An eager conversion there is
+ceremony.
+
+A **`Classify` wrapper** must reach a carrier *before* it reaches the box. Its
+classification lives in its `impl Classify`, not in the value, and a
+half-entered wrapper is neither a lane payload nor a blessed foreign type — so
+the walk steps straight past it to whatever it wraps, reverting the very
+classification the wrapper exists to override. Nothing warns: `?` compiles
+(std boxes any `Error`), the wrapper's message still appears in the chain, and
+only the `kind` is wrong, which is the one field the wrapper was written to
+set.
+
+`.widen()` is that step. The destination is named here because `?` into a box
+leaves it unconstrained, the same reason `.classify::<W>()` names its wrapper:
+
+```rust
+use errlanes::{Fault, ResultExt, lanes};
+
+#[derive(Debug, errlanes::Classify)]
+#[classify(fatal(CorruptState), from)]
+#[error("could not decode a stored row")]
+struct StoredRow(#[source] std::io::Error);
+
+fn decode() -> Result<u8, StoredRow> {
+    Err(StoredRow(std::io::Error::other("bad bytes")))
+}
+
+// Inside a boundary whose own trait returns a box:
+fn run() -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
+    Ok(decode().widen::<Fault<lanes!(Transient, Fatal)>>()?)
+}
+
+let fault = Fault::classify(&*run().unwrap_err());
+assert!(matches!(fault, Fault::Fatal(f) if f.kind == errlanes::FatalKind::CorruptState));
+```
+
+A crate with its own carrier newtype names that instead
+(`.widen::<MyFault>()?`), which is the same move and reads better.
+
 ## Local errors
 
 Every local error type says, through one trait, how it enters the lanes:
@@ -718,6 +763,7 @@ every case:
 | `W: Classify` | `Fail<D, M>` | `?`, given `D` lifts `W::Rejected` totally and `W::Lanes ⊆ M` |
 | `W: Classify` | `Fail<D, M>` | `.widen()?`, if `D` only lifts `W::Rejected` partially |
 | `W: Classify<Rejected = Infallible>` | `Fault<M>` | `?`, given `W::Lanes ⊆ M` |
+| `Result<T, W: Classify<Rejected = Infallible>>` | `Result<T, Fault<M>>` | `.widen::<Fault<M>>()?` — when no signature infers the destination, above all on the way into a `Box<dyn Error>` |
 | `W: Classify<Rejected = Infallible, Lanes = lanes!(Fatal)>` | bare `Fatal` | `?` (same for a lone `Transient`) |
 | `Result<T, Fail<D, L>>` | `Result<T, Fault<L>>` | `.narrow_rejected()` |
 | `Result<T, R>`, a bare rejection | `Result<T, Fatal>`, then `?` into any `Fault`/`Fail` with a `Fatal` lane | `.narrow_rejected()?` — an internal frame consuming a public method's rejection after proving the precondition |

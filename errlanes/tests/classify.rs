@@ -305,3 +305,81 @@ fn a_named_struct_field_converts_with_from() {
         other => panic!("expected Fatal(Config), got {other:?}"),
     }
 }
+
+/// A `Classify` wrapper's whole purpose can be to *override* the
+/// classification its payload would get on its own — `Stored` lanes an
+/// `io::Error` as `Fatal(CorruptState)`, where the bare error would fall
+/// through to `Fatal(Dependency)`. The override lives in the `impl Classify`,
+/// not in the value, so it only survives a `Box<dyn Error>` boundary if the
+/// wrapper reaches a carrier *before* it reaches the box: `Fault::classify`
+/// walks for lane payloads and blessed foreign types, and a half-entered
+/// wrapper is neither.
+///
+/// `?` alone boxes the wrapper unlaned (std boxes any `Error`), which
+/// compiles, keeps the message, and silently reverts the one field the
+/// wrapper existed to set. `.widen::<Fault<_>>()?` is the short spelling that
+/// does not.
+#[test]
+fn a_wrapper_keeps_its_override_across_a_box_only_once_laned() {
+    fn decode() -> Result<u8, Stored> {
+        Err(Stored(std::io::Error::other("bad bytes")))
+    }
+
+    // Boxed raw: the wrapper is not a lane payload, so the boundary falls
+    // through to rule 3 and the `CorruptState` override is gone.
+    fn boxed_raw() -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(decode()?)
+    }
+    match Fault::classify(&*boxed_raw().unwrap_err()) {
+        Fault::Fatal(f) => assert_eq!(
+            f.kind,
+            errlanes::FatalKind::Dependency,
+            "boxing a wrapper raw must not be mistaken for a laned one",
+        ),
+        other => panic!("expected Fatal, got {other:?}"),
+    }
+
+    // Laned first, through the same `widen` verb every other relocation
+    // uses: the override survives, carried by the `Fault` one hop down.
+    fn boxed_laned() -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(decode().widen::<Fault<Tf>>()?)
+    }
+    match Fault::classify(&*boxed_laned().unwrap_err()) {
+        Fault::Fatal(f) => assert_eq!(f.kind, errlanes::FatalKind::CorruptState),
+        other => panic!("expected Fatal(CorruptState), got {other:?}"),
+    }
+}
+
+/// The same pin on the shape that found this: a wrapper overriding a *blessed
+/// foreign* classification. `serde_json::Error` lanes itself as
+/// `Fatal(Invariant)`; bytes that came out of a database earn
+/// `Fatal(CorruptState)` instead, and that is exactly what boxing the wrapper
+/// raw throws away — the boundary finds the `serde_json::Error` in the chain
+/// and lanes *that*.
+#[cfg(feature = "classify-serde-json")]
+#[test]
+fn an_override_of_a_blessed_foreign_classification_needs_the_same_care() {
+    #[derive(Debug, errlanes::Classify)]
+    #[classify(fatal(CorruptState), from)]
+    #[error("could not decode a stored row")]
+    struct StoredRow(#[source] serde_json::Error);
+
+    fn decode() -> Result<u8, StoredRow> {
+        Err(StoredRow(
+            serde_json::from_str::<u8>("\"not a number\"").unwrap_err(),
+        ))
+    }
+
+    let raw: Box<dyn std::error::Error + Send + Sync> = Box::new(decode().unwrap_err());
+    match Fault::classify(&*raw) {
+        Fault::Fatal(f) => assert_eq!(f.kind, errlanes::FatalKind::Invariant),
+        other => panic!("expected Fatal(Invariant), got {other:?}"),
+    }
+
+    let laned: Box<dyn std::error::Error + Send + Sync> =
+        Box::new(decode().widen::<Fault<Tf>>().unwrap_err());
+    match Fault::classify(&*laned) {
+        Fault::Fatal(f) => assert_eq!(f.kind, errlanes::FatalKind::CorruptState),
+        other => panic!("expected Fatal(CorruptState), got {other:?}"),
+    }
+}
