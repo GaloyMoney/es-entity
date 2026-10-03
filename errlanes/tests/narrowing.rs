@@ -88,6 +88,53 @@ fn result_narrow_rejected_turns_fail_into_fault() {
     }
 }
 
+/// A public method returns a *bare* rejection because its caller can act on
+/// it; an internal frame that already proved the precondition consumes it as
+/// an invariant. One verb, and `?` reads the destination off the signature —
+/// a two-lane `Fault`, a `Fail`, or the bare `Fatal` alike.
+#[test]
+fn result_narrow_rejected_on_a_bare_rejection_through_question_mark() {
+    fn listen() -> Result<u8, Small> {
+        Err(Small)
+    }
+    fn into_fault() -> Result<u8, Fault<Tf>> {
+        listen().narrow_rejected()?;
+        Ok(1)
+    }
+    fn into_fail() -> Result<u8, Fail<Small, lanes!(Fatal)>> {
+        listen().narrow_rejected()?;
+        Ok(1)
+    }
+    fn into_bare_fatal() -> Result<u8, Fatal> {
+        listen().narrow_rejected()
+    }
+
+    let fault = into_fault().unwrap_err();
+    let Fault::Fatal(fatal) = &fault else {
+        panic!("expected Fatal(Invariant), got {fault:?}")
+    };
+    assert_eq!(fatal.kind, errlanes::FatalKind::Invariant);
+    assert!(
+        std::error::Error::source(fatal)
+            .unwrap()
+            .downcast_ref::<Small>()
+            .is_some(),
+        "the rejection must still be reachable for a handler or test to downcast"
+    );
+    let message = fault.message();
+    assert!(
+        !message.contains("SMALL"),
+        "a bare rejection's Display must never reach an operator-facing message; \
+         got {message:?}"
+    );
+
+    assert!(matches!(into_fail().unwrap_err(), Fail::Fatal(_)));
+    assert_eq!(
+        into_bare_fatal().unwrap_err().kind,
+        errlanes::FatalKind::Invariant
+    );
+}
+
 /// `rejected` is the dual of `narrow_rejected`: the rejection crosses to the
 /// `Ok` side as the domain outcome's `Err`, the success value is kept, and
 /// only the faults stay on the `Err` side for `?` to carry.

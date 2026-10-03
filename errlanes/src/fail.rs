@@ -507,16 +507,23 @@ impl<D, L: LaneProfile> Fail<D, L> {
         L: LaneProfile<Fatal = Fatal>,
     {
         match self {
-            Fail::Rejected(d) => Fault::Fatal(
-                Fatal::from_error(crate::FatalKind::Invariant, d)
-                    .with_context("rejected with no caller to correct")
-                    .with_opaque_source(),
-            ),
+            Fail::Rejected(d) => Fault::Fatal(invariant_from_rejection(d)),
             Fail::Denied(d) => Fault::Denied(d),
             Fail::Transient(t) => Fault::Transient(t),
             Fail::Fatal(f) => Fault::Fatal(f),
         }
     }
+}
+
+/// The one construction site for "a rejection with no caller left to correct
+/// it": `Fatal(Invariant)` carrying the rejection as its source. Shared by
+/// [`Fail::narrow_rejected`] and the bare-rejection `narrow_rejected` in
+/// `result_ext`, so both apply the same context and the same
+/// `with_opaque_source` discipline (`d`'s `Display` may embed caller input).
+pub(crate) fn invariant_from_rejection<D: Rejection>(d: D) -> Fatal {
+    Fatal::from_error(crate::FatalKind::Invariant, d)
+        .with_context("rejected with no caller to correct")
+        .with_opaque_source()
 }
 
 /// The real blanket the `Infallible` encoding could not have: `Fault<L>` is not
