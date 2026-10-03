@@ -1,3 +1,22 @@
+# [cala release v0.16.0](https://github.com/GaloyMoney/cala/releases/tag/0.16.0)
+
+
+
+### Bug Fixes
+
+- Update stale oracle marker in parse_constraint_detail target
+
+### Features
+
+- [**breaking**] Attribute the id on every pkey conflict (IdConflict)
+
+### Miscellaneous Tasks
+
+- Whitespace
+- Type updates that cannot reject as RepoFault
+- Attribute the id on every pkey conflict (IdConflict) (#251)
+- Add ResultExt, drop ClassifyResult/RecordResult (#250)
+
 # [cala release v0.15.1](https://github.com/GaloyMoney/cala/releases/tag/0.15.1)
 
 
