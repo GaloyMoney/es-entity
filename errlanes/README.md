@@ -714,6 +714,7 @@ every case:
 | `W: Classify<Rejected = Infallible, Lanes = lanes!(Fatal)>` | bare `Fatal` | `?` (same for a lone `Transient`) |
 | `Result<T, Fail<D, L>>` | `Result<T, Fault<L>>` | `.narrow_rejected()` |
 | `Result<T, Fail<D, L>>` | `Result<Result<T, D>, Fault<L>>` | `.rejected()`, to handle the rejection at the call site |
+| `Result<T, Fail<D, L>>` | `Result<T, Fail<D2, L>>` | `.map_rejected(f)`, to enrich a rejection with call-site data; a type-level remap is `.widen()` |
 | `Result<T, Fault<L>>` or `Result<T, Fail<D, L>>` | lanes narrowed, `WithoutTransient<L>` | `.narrow_transient(attempts)` |
 | `Result<T, Fault<L>>` or `Result<T, Fail<D, L>>` | lanes narrowed, `WithoutDenied<L>` | `.narrow_denied()` |
 | `Fault<L>` | `Fault<WithoutTransient<L>>` | `.narrow_transient(attempts)` (on the value itself, e.g. a retry loop's match arm) |

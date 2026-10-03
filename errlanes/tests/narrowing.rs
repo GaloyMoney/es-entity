@@ -147,6 +147,33 @@ fn result_rejected_propagates_faults_through_question_mark() {
     }
 }
 
+/// `map_rejected` touches only the rejected lane; a fault passes through
+/// untouched, and the success value is never seen by the closure.
+#[test]
+fn result_map_rejected_touches_only_the_rejected_lane() {
+    #[derive(Debug, PartialEq, Eq, errlanes::Rejection)]
+    #[rejection(code = "ATTEMPTED")]
+    struct Attempted(u8);
+
+    let rejected: Result<u8, Fail<Small, Tf>> = Err(Fail::Rejected(Small));
+    let mapped: Result<u8, Fail<Attempted, Tf>> = rejected.map_rejected(|Small| Attempted(9));
+    assert!(matches!(mapped, Err(Fail::Rejected(Attempted(9)))));
+
+    let transient: Result<u8, Fail<Small, Tf>> =
+        Err(Transient::new(TransientKind::Deadlock).into());
+    match transient.map_rejected(|Small| Attempted(9)) {
+        Err(Fail::Transient(t)) => assert_eq!(t.kind, TransientKind::Deadlock),
+        other => panic!("expected Err(Fail::Transient), got {other:?}"),
+    }
+
+    let ok: Result<u8, Fail<Small, Tf>> = Ok(7);
+    assert_eq!(
+        ok.map_rejected(|Small| unreachable!("Ok never reaches the closure"))
+            .unwrap(),
+        7
+    );
+}
+
 #[test]
 fn result_narrow_transient_on_both_carriers() {
     let fault: Result<u8, Fault<Tf>> = Err(Transient::new(TransientKind::Deadlock).into());

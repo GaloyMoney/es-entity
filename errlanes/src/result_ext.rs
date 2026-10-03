@@ -189,6 +189,15 @@ pub trait ResultExt<T, E>: Sized {
     where
         E: Failure;
 
+    /// Maps the rejection with a closure and leaves every other lane as it
+    /// is: the `Result`-level form of [`Fail::map_rejected`]. For a
+    /// type-level remap use [`widen`](Self::widen); this is for enriching a
+    /// rejection with data only the call site has, such as the input that
+    /// was attempted: `repo.create(new).await.map_rejected(|r| r.with_attempted(id))?`.
+    fn map_rejected<D2>(self, f: impl FnOnce(E::Rejection) -> D2) -> Result<T, Fail<D2, E::Lanes>>
+    where
+        E: Failure;
+
     /// `.classify::<W>()` — the verb that turns a foreign error into a local
     /// [`Classify`] wrapper at a one-off call site, so a function that does
     /// not itself return `W` can still enter the lanes through it:
@@ -242,6 +251,13 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
             Ok(value) => Ok(Ok(value)),
             Err(e) => e.into_fail().rejected().map(Err),
         }
+    }
+
+    fn map_rejected<D2>(self, f: impl FnOnce(E::Rejection) -> D2) -> Result<T, Fail<D2, E::Lanes>>
+    where
+        E: Failure,
+    {
+        self.map_err(|e| e.into_fail().map_rejected(f))
     }
 
     fn classify<W: Classify + From<E>>(self) -> Result<T, W> {
