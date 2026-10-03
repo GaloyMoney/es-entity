@@ -213,6 +213,40 @@ narrowing cannot happen by accident either. The same three verbs are also
 available directly on a `Result` through `ResultExt`, so a call site that is
 already holding one does not have to `.map_err()` into the value-level form.
 
+### Handling a rejection where it occurs
+
+`narrow_rejected` is for a boundary with no caller left to correct the
+rejection. Where the caller is right there, `rejected()` hands it the
+rejection as a value instead: `Result<T, Fail<D, L>>` becomes
+`Result<Result<T, D>, Fault<L>>`. The outer `?` keeps the faults propagating;
+the inner `Result` is the domain outcome, matched on the spot.
+
+```rust
+use errlanes::{Fail, Fault, ResultExt, lanes};
+
+#[derive(Debug, errlanes::Rejection)]
+#[rejection(code = "TIMED_OUT")]
+struct TimedOut;
+
+fn await_completion() -> Result<u64, Fail<TimedOut, lanes!(Transient, Fatal)>> {
+    Err(Fail::Rejected(TimedOut))
+}
+
+fn poll_once() -> Result<Option<u64>, Fault<lanes!(Transient, Fatal)>> {
+    match await_completion().rejected()? {
+        Ok(outcome) => Ok(Some(outcome)),
+        Err(TimedOut) => Ok(None),
+    }
+}
+
+assert!(poll_once().unwrap().is_none());
+```
+
+There is deliberately no `Option`-returning `as_rejected()` on a `Result`: it
+would answer `None` for both a success and a fault, the one place a lane could
+be dropped without being named. On the error value itself, where there is no
+success to conflate, `Fail::as_rejected` and `Fail::rejected` remain.
+
 ## At a `Box<dyn Error>` boundary
 
 `Fatal` and `Transient` store their source as `Arc<dyn Error + Send + Sync>`
@@ -679,6 +713,8 @@ every case:
 | `W: Classify<Rejected = Infallible>` | `Fault<M>` | `?`, given `W::Lanes ⊆ M` |
 | `W: Classify<Rejected = Infallible, Lanes = lanes!(Fatal)>` | bare `Fatal` | `?` (same for a lone `Transient`) |
 | `Result<T, Fail<D, L>>` | `Result<T, Fault<L>>` | `.narrow_rejected()` |
+| `Result<T, Fail<D, L>>` | `Result<Result<T, D>, Fault<L>>` | `.rejected()`, to handle the rejection at the call site |
+| `Result<T, Fail<D, L>>` | `Result<T, Fail<D2, L>>` | `.map_rejected(f)`, to enrich a rejection with call-site data; a type-level remap is `.widen()` |
 | `Result<T, Fault<L>>` or `Result<T, Fail<D, L>>` | lanes narrowed, `WithoutTransient<L>` | `.narrow_transient(attempts)` |
 | `Result<T, Fault<L>>` or `Result<T, Fail<D, L>>` | lanes narrowed, `WithoutDenied<L>` | `.narrow_denied()` |
 | `Fault<L>` | `Fault<WithoutTransient<L>>` | `.narrow_transient(attempts)` (on the value itself, e.g. a retry loop's match arm) |

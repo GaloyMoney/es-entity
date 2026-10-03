@@ -187,6 +187,8 @@ impl ToTokens for DeleteFn<'_> {
                 OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<(), es_entity::RepoWriteError<#constraint_violation>> = async {
+                    use es_entity::errlanes::ResultExt as _;
+
                     #(#nested_deletes)*
                     #assignments
                     #constraint_values
@@ -204,7 +206,8 @@ impl ToTokens for DeleteFn<'_> {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)).map_rejected(|r| r.with_attempted(__constraint_values)))?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)))
+                        .map_rejected(|r| r.with_attempted(__constraint_values))?;
 
                     #staged_payload_insert
 
@@ -290,6 +293,8 @@ mod tests {
                 OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                    use es_entity::errlanes::ResultExt as _;
+
                     let id = &entity.id;
                     let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), };
 
@@ -308,7 +313,8 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")).map_rejected(|r| r.with_attempted(__constraint_values)))?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")))
+                        .map_rejected(|r| r.with_attempted(__constraint_values))?;
 
                     if new_events {
                         let recorded_at = rows
@@ -387,6 +393,8 @@ mod tests {
                 OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                    use es_entity::errlanes::ResultExt as _;
+
                     let id = &entity.id;
                     let name = &entity.name;
                     let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), name: Some((*name).clone()), };
@@ -407,7 +415,8 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")).map_rejected(|r| r.with_attempted(__constraint_values)))?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")))
+                        .map_rejected(|r| r.with_attempted(__constraint_values))?;
 
                     if new_events {
                         let recorded_at = rows
@@ -480,6 +489,8 @@ mod tests {
                 OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                    use es_entity::errlanes::ResultExt as _;
+
                     let id = &entity.id;
                     let __constraint_values = EntityConstraintValues { id: Some((*id).clone()), };
 
@@ -505,7 +516,8 @@ mod tests {
                     )
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")).map_rejected(|r| r.with_attempted(__constraint_values)))?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", "entities")))
+                        .map_rejected(|r| r.with_attempted(__constraint_values))?;
 
                     let mut payload_sequences: Vec<i32> = Vec::new();
                     let mut payload_values: Vec<es_entity::prelude::serde_json::Value> = Vec::new();

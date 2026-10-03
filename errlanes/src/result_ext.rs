@@ -1,12 +1,12 @@
 //! `ResultExt` — the one trait a consumer imports to move a `Result` from one
-//! error signature to another. `widen`, the three `narrow_*`, `classify`, and
-//! (under `tracing`) `record` are all the same act — relocating a `Result`'s
-//! error — so they live on one blanket-impl'd trait rather than one import
-//! per verb.
+//! error signature to another. `widen`, the three `narrow_*`, `rejected`,
+//! `classify`, and (under `tracing`) `record` are all the same act —
+//! relocating a `Result`'s error — so they live on one blanket-impl'd trait
+//! rather than one import per verb.
 
 use crate::{
     classify::Classify,
-    fail::{Fail, Fault, Laned, Rejection, WidenResult},
+    fail::{Fail, Failure, Fault, Laned, Rejection, WidenResult},
     lane::{Denied, Fatal},
     profile::{LaneProfile, NarrowDenied, WithoutDenied},
 };
@@ -77,8 +77,9 @@ where
 
 /// The one trait a consumer imports to move a `Result` between error
 /// signatures: widen it to a bigger profile, narrow away a lane that is no
-/// longer live at this boundary, classify a foreign error into a local
-/// wrapper, or (under `tracing`) record it onto the current span.
+/// longer live at this boundary, hand the rejection to the caller as a value,
+/// classify a foreign error into a local wrapper, or (under `tracing`) record
+/// it onto the current span.
 pub trait ResultExt<T, E>: Sized {
     /// Target-inferred widening for `Fault` or `Fail` results.
     ///
@@ -142,6 +143,61 @@ pub trait ResultExt<T, E>: Sized {
     where
         E: NarrowDeniedLane;
 
+    /// Hands the rejection to the caller as a value and keeps the faults
+    /// propagating: `Result<T, Fail<D, L>>` becomes
+    /// `Result<Result<T, D>, Fault<L>>`, the `Result`-level form of
+    /// [`Fail::rejected`]. The outer `?` carries the faults on into any
+    /// enclosing carrier; the inner `Result` is the domain outcome, with the
+    /// rejection as its `Err`, matched right where it occurred:
+    ///
+    /// ```
+    /// use errlanes::{Fail, Fault, ResultExt, lanes};
+    ///
+    /// #[derive(Debug, errlanes::Rejection)]
+    /// #[rejection(code = "TIMED_OUT")]
+    /// struct TimedOut;
+    ///
+    /// fn await_completion() -> Result<u64, Fail<TimedOut, lanes!(Transient, Fatal)>> {
+    ///     Err(Fail::Rejected(TimedOut))
+    /// }
+    ///
+    /// fn poll_once() -> Result<Option<u64>, Fault<lanes!(Transient, Fatal)>> {
+    ///     match await_completion().rejected()? {
+    ///         Ok(outcome) => Ok(Some(outcome)),
+    ///         Err(TimedOut) => Ok(None),
+    ///     }
+    /// }
+    ///
+    /// assert!(poll_once().unwrap().is_none());
+    /// ```
+    ///
+    /// This is the dual of [`narrow_rejected`](Self::narrow_rejected): that
+    /// one is for a boundary with no caller left to correct the rejection,
+    /// this one for the call site that is going to. There is deliberately no
+    /// `Option`-returning accessor on a `Result`: an `as_rejected()` that
+    /// answered `None` for both `Ok` and a fault would be the one place a
+    /// lane could be dropped without naming it. Only available where `E`
+    /// carries a rejected lane; a `Fault` has none:
+    ///
+    /// ```compile_fail
+    /// use errlanes::{Fault, ResultExt, lanes};
+    /// fn split(value: Result<(), Fault<lanes!(Fatal)>>) {
+    ///     let _ = value.rejected();
+    /// }
+    /// ```
+    fn rejected(self) -> Result<Result<T, E::Rejection>, Fault<E::Lanes>>
+    where
+        E: Failure;
+
+    /// Maps the rejection with a closure and leaves every other lane as it
+    /// is: the `Result`-level form of [`Fail::map_rejected`]. For a
+    /// type-level remap use [`widen`](Self::widen); this is for enriching a
+    /// rejection with data only the call site has, such as the input that
+    /// was attempted: `repo.create(new).await.map_rejected(|r| r.with_attempted(id))?`.
+    fn map_rejected<D2>(self, f: impl FnOnce(E::Rejection) -> D2) -> Result<T, Fail<D2, E::Lanes>>
+    where
+        E: Failure;
+
     /// `.classify::<W>()` — the verb that turns a foreign error into a local
     /// [`Classify`] wrapper at a one-off call site, so a function that does
     /// not itself return `W` can still enter the lanes through it:
@@ -185,6 +241,23 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
         E: NarrowDeniedLane,
     {
         self.map_err(NarrowDeniedLane::narrow_denied)
+    }
+
+    fn rejected(self) -> Result<Result<T, E::Rejection>, Fault<E::Lanes>>
+    where
+        E: Failure,
+    {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(e) => e.into_fail().rejected().map(Err),
+        }
+    }
+
+    fn map_rejected<D2>(self, f: impl FnOnce(E::Rejection) -> D2) -> Result<T, Fail<D2, E::Lanes>>
+    where
+        E: Failure,
+    {
+        self.map_err(|e| e.into_fail().map_rejected(f))
     }
 
     fn classify<W: Classify + From<E>>(self) -> Result<T, W> {
