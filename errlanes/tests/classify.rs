@@ -5,7 +5,7 @@
 
 use std::convert::Infallible;
 
-use errlanes::{Classify, ClassifyResult, Fail, Fault, Rejection, WidenResult, lanes};
+use errlanes::{Classify, Fail, Fault, Rejection, ResultExt, lanes};
 
 type Tf = lanes!(Transient, Fatal);
 

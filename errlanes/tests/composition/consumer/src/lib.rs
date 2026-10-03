@@ -1,4 +1,4 @@
-use errlanes::{Fail, Fault, Rejection, WidenResult, lanes};
+use errlanes::{Fail, Fault, Rejection, ResultExt, lanes};
 
 #[errlanes::compose]
 #[derive(Debug)]

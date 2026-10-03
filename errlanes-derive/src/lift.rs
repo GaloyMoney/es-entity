@@ -33,21 +33,41 @@ impl Parse for Registration {
 pub(crate) struct Mapping {
     pub case: Path,
     pub with: Option<Path>,
+    pub field: Option<syn::Ident>,
 }
 impl Parse for Mapping {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let case = input.parse()?;
         let mut with = None;
-        if input.peek(Token![,]) {
+        let mut field = None;
+        while input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
             let key: syn::Ident = input.parse()?;
-            if key != "with" {
-                return Err(syn::Error::new_spanned(key, "expected with = mapper"));
-            }
             input.parse::<Token![=]>()?;
-            with = Some(input.parse()?);
+            if key == "with" {
+                if field.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        "`field` and `with` cannot be combined",
+                    ));
+                }
+                with = Some(input.parse()?);
+            } else if key == "field" {
+                if with.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        "`field` and `with` cannot be combined",
+                    ));
+                }
+                field = Some(input.parse()?);
+            } else {
+                return Err(syn::Error::new_spanned(
+                    key,
+                    "expected `with = mapper` or `field = name`",
+                ));
+            }
         }
-        Ok(Self { case, with })
+        Ok(Self { case, with, field })
     }
 }
 pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
@@ -132,6 +152,31 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             let arm = if let Some(mapper) = &mapping.with {
                 // The mapper consumes the whole selected source; supports genuine shape changes.
                 quote! { value @ #case { .. } => Ok(#mapper(value)) }
+            } else if let Some(field) = &mapping.field {
+                // A projection of one field out of the source variant's
+                // payload. `#case(payload)` is a tuple-destructuring
+                // pattern, not `#case { .. }`: the source variant must be a
+                // single-field tuple variant, and a named-field or unit
+                // source variant fails right here as an ordinary type
+                // error — the derive cannot know a foreign variant's field
+                // names, so it cannot validate the shape ahead of time.
+                match &variant.fields {
+                    Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
+                        quote! { #case(payload) => Ok(Self::#dest(payload.#field)) }
+                    }
+                    Fields::Named(fields) if fields.named.len() == 1 => {
+                        let dest_field = &fields.named[0].ident;
+                        quote! {
+                            #case(payload) => Ok(Self::#dest { #dest_field: payload.#field })
+                        }
+                    }
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            &variant.ident,
+                            "a `field` lift needs exactly one destination field",
+                        ));
+                    }
+                }
             } else if *whole_value {
                 // `Payload` is a struct source: the whole value becomes the
                 // one field of the destination variant.

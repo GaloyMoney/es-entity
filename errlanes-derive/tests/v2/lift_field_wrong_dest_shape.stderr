@@ -1,0 +1,5 @@
+error: a `field` lift needs exactly one destination field
+  --> tests/v2/lift_field_wrong_dest_shape.rs:16:5
+   |
+16 |     Attempted(u32, u32),
+   |     ^^^^^^^^^

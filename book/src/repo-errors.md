@@ -107,7 +107,7 @@ query you hand-write against the repository's own tables classifies its error
 the same way, with `.classify::<W>()`:
 
 ```rust,ignore
-use es_entity::errlanes::ClassifyResult;
+use es_entity::errlanes::ResultExt;
 
 async fn touch_last_seen(pool: &sqlx::PgPool, id: UserId) -> Result<(), es_entity::RepoWriteError<UserConstraintViolation>> {
     sqlx::query!("UPDATE users SET last_seen_at = now() WHERE id = $1", id as UserId)

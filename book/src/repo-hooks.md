@@ -59,7 +59,7 @@ impl Users {
         entity: &User,
         new_events: es_entity::LastPersisted<'_, UserEvent>,
     ) -> Result<(), errlanes::Fault<errlanes::lanes!(Transient, Fatal)>> {
-        use errlanes::ClassifyResult;
+        use errlanes::ResultExt;
         for event in new_events {
             let payload = serde_json::to_value(event.event).classify::<OutboxEncode>()?;
             sqlx::query!(

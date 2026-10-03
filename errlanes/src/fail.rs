@@ -633,7 +633,7 @@ impl<D: Rejection, L: LaneProfile> Failure for Fail<D, L> {
     }
 }
 
-mod sealed {
+pub(crate) mod sealed {
     pub trait Sealed {}
     impl<F: super::Failure> Sealed for F {}
     impl<L: super::LaneProfile> Sealed for super::Fault<L> {}
@@ -727,20 +727,12 @@ where
     }
 }
 
-/// Target-inferred widening for results containing [`Fault`] or [`Fail`].
-///
-/// `Fault` results widen to `Fault`; `Fail` results widen to `Fail`, converting
-/// the rejection through [`From`]. Success values and fault payloads are preserved.
-/// Widening can add lanes, but cannot silently discard an enabled lane:
-///
-/// ```compile_fail
-/// use errlanes::{Fault, WidenResult, lanes};
-/// fn discard_denied(value: Result<(), Fault<lanes!(Denied, Fatal)>>)
-///     -> Result<(), Fault<lanes!(Fatal)>>
-/// {
-///     value.widen()
-/// }
-/// ```
+/// Dispatch engine for [`crate::ResultExt::widen`], keyed on the source
+/// shape so each carrier (`Fault`, `Fail`, a bare [`crate::Classify`] source)
+/// gets its own body. Hidden: a consumer calls `.widen()` on a `Result`,
+/// never this trait directly. See `ResultExt::widen` for the full doc,
+/// including the `compile_fail` example of a lane widening cannot discard.
+#[doc(hidden)]
 pub trait WidenResult<T, E>: Sized {
     fn widen(self) -> Result<T, E>;
 }
