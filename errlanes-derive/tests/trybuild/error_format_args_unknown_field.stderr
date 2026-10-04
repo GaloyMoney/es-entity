@@ -1,0 +1,5 @@
+error: #[error("..", ..)] trailing argument starts from `nope`, which is not a field here
+ --> tests/trybuild/error_format_args_unknown_field.rs:5:20
+  |
+5 | #[error("bad: {}", nope.field)]
+  |                    ^^^^
