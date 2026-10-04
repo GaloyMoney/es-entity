@@ -356,7 +356,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "composition-consumer"
-version = "0.16.5-dev"
+version = "0.16.5"
 dependencies = [
  "composition-middle",
  "errlanes",
@@ -364,7 +364,7 @@ dependencies = [
 
 [[package]]
 name = "composition-middle"
-version = "0.16.5-dev"
+version = "0.16.5"
 dependencies = [
  "composition-source",
  "errlanes",
@@ -372,7 +372,7 @@ dependencies = [
 
 [[package]]
 name = "composition-source"
-version = "0.16.5-dev"
+version = "0.16.5"
 dependencies = [
  "errlanes",
  "thiserror",
@@ -685,7 +685,7 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "downstream"
-version = "0.16.5-dev"
+version = "0.16.5"
 dependencies = [
  "errlanes",
  "tokio",
@@ -724,7 +724,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "errlanes"
-version = "0.16.5-dev"
+version = "0.16.5"
 dependencies = [
  "composition-consumer",
  "downstream",
@@ -741,7 +741,7 @@ dependencies = [
 
 [[package]]
 name = "errlanes-derive"
-version = "0.16.5-dev"
+version = "0.16.5"
 dependencies = [
  "convert_case",
  "darling 0.24.1",
@@ -767,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "es-entity"
-version = "0.16.5-dev"
+version = "0.16.5"
 dependencies = [
  "anyhow",
  "async-graphql",
@@ -804,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "es-entity-macros"
-version = "0.16.5-dev"
+version = "0.16.5"
 dependencies = [
  "convert_case",
  "darling 0.24.1",
@@ -2033,7 +2033,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "repo-composition-middle"
-version = "0.16.5-dev"
+version = "0.16.5"
 dependencies = [
  "errlanes",
  "repo-composition-source",
@@ -2041,7 +2041,7 @@ dependencies = [
 
 [[package]]
 name = "repo-composition-source"
-version = "0.16.5-dev"
+version = "0.16.5"
 dependencies = [
  "derive_builder",
  "errlanes",
@@ -3118,7 +3118,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "upstream"
-version = "0.16.5-dev"
+version = "0.16.5"
 dependencies = [
  "errlanes",
  "thiserror",

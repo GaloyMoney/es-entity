@@ -1,3 +1,11 @@
+# [cala release v0.16.5](https://github.com/GaloyMoney/cala/releases/tag/0.16.5)
+
+
+
+### Bug Fixes
+
+- Format-args in #[error(..)], per-variant #[error] under a type-level lane, and inferred Classify bounds (#256)
+
 # [cala release v0.16.4](https://github.com/GaloyMoney/cala/releases/tag/0.16.4)
 
 
