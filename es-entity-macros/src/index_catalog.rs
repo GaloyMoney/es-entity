@@ -69,6 +69,8 @@ pub struct ConstraintEntry {
     /// auto-naming convention.
     pub name: String,
     pub kind: ConstraintKind,
+    /// Keep primary-key identity even though its violation kind is `Unique`.
+    pub primary_key: bool,
     /// Physical key columns; empty when a CHECK expression is opaque.
     pub columns: Vec<String>,
 }
@@ -235,18 +237,15 @@ impl IndexCatalog {
     /// `PRIMARY KEY`, so an unnamed pkey's catalog entry already carries this
     /// same name).
     ///
-    /// The catalog does not distinguish "primary key" from an ordinary
-    /// `UNIQUE` constraint (both become [`ConstraintKind::Unique`] entries),
-    /// so this identifies the pkey the same way the generated constraint
-    /// enum does: the one constraint whose columns are exactly the id column
-    /// on its own. A table is not expected to carry a second, redundant
-    /// single-column unique constraint on its own id.
+    /// Primary-key identity comes from the DDL, independently of declaration
+    /// order or other constraints on the same column. Its violation kind is
+    /// still [`ConstraintKind::Unique`].
     pub fn pkey_constraint_name(&self, table: &str, id_column: &str) -> String {
         let catalog_table = table.to_lowercase();
         let id_column = id_column.to_lowercase();
         self.constraints
             .iter()
-            .find(|e| e.table == catalog_table && e.columns == [id_column.clone()])
+            .find(|e| e.primary_key && e.table == catalog_table && e.columns == [id_column.clone()])
             .map(|e| e.name.clone())
             .unwrap_or_else(|| format!("{table}_pkey"))
     }
@@ -278,6 +277,7 @@ fn apply_statement(
                         constraint_name,
                         ConstraintKind::Unique,
                         columns.clone(),
+                        false,
                     );
                 }
             }
@@ -326,7 +326,14 @@ fn apply_statement(
                         _ => None,
                     };
                     if let Some((name, kind)) = classified {
-                        push_constraint(constraints, &table, name, kind, vec![col.clone()]);
+                        push_constraint(
+                            constraints,
+                            &table,
+                            name,
+                            kind,
+                            vec![col.clone()],
+                            matches!(opt.option, ColumnOption::PrimaryKey(_)),
+                        );
                     }
                     if matches!(
                         opt.option,
@@ -414,6 +421,7 @@ fn apply_table_constraint(
                 name.clone().unwrap_or_else(|| format!("{table}_pkey")),
                 ConstraintKind::Unique,
                 columns.clone(),
+                true,
             );
             push_entry(
                 entries,
@@ -439,6 +447,7 @@ fn apply_table_constraint(
                     constraint_name,
                     ConstraintKind::Unique,
                     columns.clone(),
+                    false,
                 );
             }
             push_entry(
@@ -466,6 +475,7 @@ fn apply_table_constraint(
                     constraint_name,
                     ConstraintKind::ForeignKey,
                     columns.clone(),
+                    false,
                 );
             }
         }
@@ -477,6 +487,7 @@ fn apply_table_constraint(
                     name.value.to_lowercase(),
                     ConstraintKind::Check,
                     vec![],
+                    false,
                 );
             }
         }
@@ -502,6 +513,7 @@ fn push_constraint(
     name: String,
     kind: ConstraintKind,
     columns: Vec<String>,
+    primary_key: bool,
 ) {
     // Postgres truncates identifiers beyond 63 bytes; skip rather than guess.
     if name.len() > 63 {
@@ -511,6 +523,7 @@ fn push_constraint(
         table: table.to_string(),
         name,
         kind,
+        primary_key,
         columns,
     };
     if !constraints.contains(&entry) {
@@ -676,6 +689,54 @@ fn find_dollar_close(chars: &[char], from: usize, tag: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn primary_key_identity_does_not_depend_on_constraint_order() {
+        for sql in [
+            "CREATE TABLE t (id UUID PRIMARY KEY REFERENCES parents(id) CHECK (id IS NOT NULL) UNIQUE);",
+            "CREATE TABLE t (id UUID REFERENCES parents(id) CHECK (id IS NOT NULL) UNIQUE PRIMARY KEY);",
+            "CREATE TABLE t (id UUID REFERENCES parents(id) CHECK (id IS NOT NULL) UNIQUE, PRIMARY KEY (id));",
+            "CREATE TABLE t (id UUID, UNIQUE (id), FOREIGN KEY (id) REFERENCES parents(id), PRIMARY KEY (id));",
+        ] {
+            let catalog = cat(sql);
+            assert_eq!(catalog.pkey_constraint_name("t", "id"), "t_pkey", "{sql}");
+            assert_eq!(
+                catalog.constraints.iter().filter(|c| c.primary_key).count(),
+                1,
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn named_primary_keys_survive_other_id_constraints_and_alter_table() {
+        for sql in [
+            "CREATE TABLE t (id UUID UNIQUE REFERENCES parents(id) CONSTRAINT actual_pk PRIMARY KEY);",
+            "CREATE TABLE t (id UUID UNIQUE REFERENCES parents(id), CONSTRAINT actual_pk PRIMARY KEY (id));",
+            "CREATE TABLE t (id UUID UNIQUE REFERENCES parents(id)); CREATE UNIQUE INDEX redundant_id ON t(id); ALTER TABLE t ADD CONSTRAINT actual_pk PRIMARY KEY (id);",
+            "CREATE TABLE t (id UUID UNIQUE, CONSTRAINT old_pk PRIMARY KEY (id)); ALTER TABLE t DROP CONSTRAINT old_pk; ALTER TABLE t ADD CONSTRAINT actual_pk PRIMARY KEY (id);",
+        ] {
+            let catalog = cat(sql);
+            assert_eq!(
+                catalog.pkey_constraint_name("t", "id"),
+                "actual_pk",
+                "{sql}"
+            );
+            assert_eq!(
+                catalog.constraints.iter().filter(|c| c.primary_key).count(),
+                1,
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn primary_key_fallback_never_borrows_another_id_constraint_name() {
+        let catalog =
+            cat("CREATE TABLE t (id UUID UNIQUE REFERENCES parents(id) CHECK (id IS NOT NULL));");
+        assert_eq!(catalog.pkey_constraint_name("t", "id"), "t_pkey");
+        assert!(catalog.constraints.iter().all(|c| !c.primary_key));
+    }
 
     fn cat(sql: &str) -> IndexCatalog {
         IndexCatalog::from_sql_files(&[("001_test.sql".to_string(), sql.to_string())])

@@ -149,6 +149,11 @@ impl<'a> ErrorTypes<'a> {
             if let Some(cols) = &matched
                 && cols.len() == 1
                 && cols[0].is_id()
+                && matches!(kind, ConstraintKind::Unique)
+                && name
+                    == opts
+                        .index_catalog()
+                        .pkey_constraint_name(table, &cols[0].name().to_string())
             {
                 let ty = cols[0].ty();
                 taken.insert("Pkey".to_string());
@@ -376,5 +381,42 @@ mod tests {
         taken.insert("WidgetsUnknown".to_string());
         let variant = constraint_variant_ident("widgets", "widgets_unknown", &mut taken);
         assert_eq!(variant.to_string(), "WidgetsUnknown2");
+    }
+    #[test]
+    fn id_foreign_key_and_redundant_unique_are_not_primary_keys() {
+        use darling::FromDeriveInput;
+        let input: syn::DeriveInput = syn::parse_quote! {
+            #[es_repo(entity = "SharedId", migrations_dir = "tests/fixtures/shared_id")]
+            struct SharedIds { pool: sqlx::PgPool }
+        };
+        let opts = RepositoryOptions::from_derive_input(&input).unwrap();
+        let generated: syn::File = syn::parse2(ErrorTypes::new(&opts).generate()).unwrap();
+        let variants = generated
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Enum(item) if item.ident == "SharedIdConstraintViolation" => {
+                    Some(&item.variants)
+                }
+                _ => None,
+            })
+            .expect("generated rejection enum");
+        assert_eq!(variants.iter().filter(|v| v.ident == "Pkey").count(), 1);
+        let pkey = variants.iter().find(|v| v.ident == "Pkey").unwrap();
+        assert!(quote!(#pkey).to_string().contains("IdConflict"));
+        let generated_tokens = quote!(#generated).to_string();
+        assert!(generated_tokens.contains("fn pkey_from_database"));
+        assert!(generated_tokens.contains("\"shared_ids_actual_pk\""));
+        for expected in ["IdFkey", "IdCheck", "IdKey"] {
+            let variant = variants
+                .iter()
+                .find(|v| v.ident == expected)
+                .expect(expected);
+            let syn::Fields::Unnamed(fields) = &variant.fields else {
+                panic!("constraint payload")
+            };
+            let ty = &fields.unnamed[0].ty;
+            assert!(quote!(#ty).to_string().contains("ConstraintConflict"));
+        }
     }
 }
