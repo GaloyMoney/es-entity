@@ -1,0 +1,16 @@
+error[E0769]: tuple variant `Source::Value` written as struct variant
+ --> tests/v2/lift_struct_wrong_source.rs:3:10
+  |
+3 | #[derive(errlanes::Lift)]
+  |          ^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `errlanes::Lift` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no variant named `Missing` found for enum `Source`
+ --> tests/v2/lift_struct_wrong_source.rs:8:26
+  |
+1 | enum Source { Value(u32) }
+  | ----------- variant `Missing` not found here
+...
+8 | #[lift(Source, variant = Missing)]
+  |                          ^^^^^^^ variant not found in `Source`

@@ -1,0 +1,17 @@
+error: a struct lift requires named fields
+ --> tests/v2/lift_struct_requires_named_fields.rs:2:1
+  |
+2 | struct Unit;
+  | ^^^^^^
+
+error: a struct lift requires named fields
+ --> tests/v2/lift_struct_requires_named_fields.rs:5:1
+  |
+5 | struct Tuple(u32);
+  | ^^^^^^
+
+error: Lift can only be derived for enums or named-field structs
+ --> tests/v2/lift_struct_requires_named_fields.rs:8:1
+  |
+8 | union Union { value: u32 }
+  | ^^^^^

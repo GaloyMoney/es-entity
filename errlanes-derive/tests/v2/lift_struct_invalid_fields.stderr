@@ -1,0 +1,29 @@
+error: pattern requires `..` due to inaccessible fields
+ --> tests/v2/lift_struct_invalid_fields.rs:3:10
+  |
+3 | #[derive(errlanes::Lift)]
+  |          ^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `errlanes::Lift` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0026]: variant `Source::Value` does not have a field named `absent`
+  --> tests/v2/lift_struct_invalid_fields.rs:10:19
+   |
+10 |     #[lift(from = absent)]
+   |                   ^^^^^^ variant `Source::Value` does not have this field
+
+error: pattern requires `..` due to inaccessible fields
+ --> tests/v2/lift_struct_invalid_fields.rs:7:10
+  |
+7 | #[derive(errlanes::Lift)]
+  |          ^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `errlanes::Lift` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> tests/v2/lift_struct_invalid_fields.rs:15:10
+   |
+15 | #[derive(errlanes::Lift)]
+   |          ^^^^^^^^^^^^^^ expected `String`, found `u32`
+   |
+   = note: this error originates in the derive macro `errlanes::Lift` (in Nightly builds, run with -Z macro-backtrace for more info)

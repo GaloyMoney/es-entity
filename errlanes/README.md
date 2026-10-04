@@ -714,9 +714,57 @@ destination domain. If the remaining cases would indicate a violated invariant,
 `#[lift(Source, unhandled = fatal)]` allows a partial mapping. An unmapped
 rejection becomes Fatal with the original rejection as its source, so the
 destination must permit Fatal, which the compiler checks. Whether a mapping is
-total or partial is declared once, on the destination enum; the call site is
+total or partial is declared once, on the destination type; the call site is
 the same `.widen()?` either way. A partial mapping does not generate `From`,
 because there is no infallible conversion to be had.
+
+A named-field **destination struct** can select one source enum variant with
+`#[lift(Source, variant = Case)]`. Fields move directly by name; use
+`#[lift(from = source_field)]` on a destination field to rename it:
+
+```rust
+use errlanes::{Fail, ResultExt, lanes};
+use std::time::Duration;
+
+#[derive(Debug, errlanes::Rejection)]
+enum SubscriptionRejection {
+    CaughtUpTimeout { checkpoint: u64, target: u64, waited: Duration },
+    NoSuchJob { key: String },
+}
+
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+#[rejection(code = "EC_CAUGHT_UP_TIMEOUT")]
+#[error("checkpoint {applied} had not reached {frontier} after {waited:?}")]
+#[lift(SubscriptionRejection, variant = CaughtUpTimeout, unhandled = fatal)]
+struct EcCaughtUpTimeout {
+    #[lift(from = checkpoint)]
+    applied: u64,
+    #[lift(from = target)]
+    frontier: u64,
+    waited: Duration,
+}
+
+let result: Result<(), Fail<EcCaughtUpTimeout, lanes!(Fatal)>> =
+    Err(SubscriptionRejection::CaughtUpTimeout {
+        checkpoint: 3,
+        target: 8,
+        waited: Duration::from_secs(2),
+    }).widen();
+let Fail::Rejected(timeout) = result.unwrap_err() else { panic!("expected timeout") };
+assert_eq!((timeout.applied, timeout.frontier), (3, 8));
+```
+
+This generates a partial `Lift<SubscriptionRejection>` implementation; other
+variants are returned unchanged and `.widen()` turns them into `Fatal(Invariant)`
+with the original rejection as the source. Without `unhandled = fatal` (or with
+explicit `strict`), it generates an exhaustive `From<Source>` implementation,
+so any unhandled variant is a compile error and no Fatal lane is required.
+
+A struct accepts one source registration and uses named-field destructuring.
+Every source field must be mapped exactly once, and Rust checks names, types,
+and exhaustiveness. This form does not discard payload fields, run mappers,
+or infer rejection metadata: `Rejection` structs still declare their own
+`#[rejection(code = "...")]`. Enum destination syntax is unchanged.
 
 A source need not be an enum. A struct rejection — the shape a wrapped foreign
 error naturally takes (see "Errors from other crates" above) — lifts as a

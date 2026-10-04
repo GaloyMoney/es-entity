@@ -1,0 +1,41 @@
+error: a struct lift requires #[lift(Source, variant = Case)]
+ --> tests/v2/lift_struct_invalid_registration.rs:2:8
+  |
+2 | struct MissingRegistration { value: u32 }
+  |        ^^^^^^^^^^^^^^^^^^^
+
+error: a struct lift requires `variant = Case`
+ --> tests/v2/lift_struct_invalid_registration.rs:5:8
+  |
+5 | #[lift(Source)]
+  |        ^^^^^^
+
+error: a struct lift supports exactly one source registration
+  --> tests/v2/lift_struct_invalid_registration.rs:10:1
+   |
+10 | #[lift(Other, variant = Value)]
+   | ^
+
+error: duplicate `variant`
+  --> tests/v2/lift_struct_invalid_registration.rs:14:33
+   |
+14 | #[lift(Source, variant = Value, variant = Other)]
+   |                                 ^^^^^^^
+
+error: choose either `strict` or `unhandled = fatal` once
+  --> tests/v2/lift_struct_invalid_registration.rs:18:41
+   |
+18 | #[lift(Source, variant = Value, strict, unhandled = fatal)]
+   |                                         ^^^^^^^^^
+
+error: expected fatal
+  --> tests/v2/lift_struct_invalid_registration.rs:22:45
+   |
+22 | #[lift(Source, variant = Value, unhandled = ignored)]
+   |                                             ^^^^^^^
+
+error: expected `variant = Case`, `strict`, or `unhandled = fatal`
+  --> tests/v2/lift_struct_invalid_registration.rs:26:33
+   |
+26 | #[lift(Source, variant = Value, with = mapper)]
+   |                                 ^^^^
