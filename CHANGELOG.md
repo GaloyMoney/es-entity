@@ -1,3 +1,11 @@
+# [cala release v0.16.6](https://github.com/GaloyMoney/cala/releases/tag/0.16.6)
+
+
+
+### Bug Fixes
+
+- Distinguish id foreign keys from primary keys (#257)
+
 # [cala release v0.16.5](https://github.com/GaloyMoney/cala/releases/tag/0.16.5)
 
 
