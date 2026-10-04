@@ -202,21 +202,24 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                 };
                 let pat = std_error::bind_pattern(quote! { Self }, &raw.fields);
                 let error = std_error::take_error_lit(&ast.attrs).map_err(darling::Error::from)?;
-                out.extend(
-                    std_error::emit(
-                        ident,
-                        &ast.generics,
-                        DisplayDefault::Code,
-                        &[Unit {
-                            pat,
-                            fields: &raw.fields,
-                            error,
-                            name: ident.clone(),
-                            source,
-                        }],
-                    )
-                    .map_err(darling::Error::from)?,
-                );
+                // `Rejection`'s own impl doesn't infer generic bounds the
+                // way `Classify`'s does (that's `classify.rs`'s doing, not
+                // this derive's), so the `extra` bounds `emit` returns
+                // alongside its tokens have nowhere to go here.
+                let (display_tokens, _extra) = std_error::emit(
+                    ident,
+                    &ast.generics,
+                    DisplayDefault::Code,
+                    &[Unit {
+                        pat,
+                        fields: &raw.fields,
+                        error,
+                        name: ident.clone(),
+                        source,
+                    }],
+                )
+                .map_err(darling::Error::from)?;
+                out.extend(display_tokens);
             }
 
             return Ok(out);
@@ -483,10 +486,13 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
     tokens.extend(schema);
     tokens.extend(from_impls);
     if !error_manual {
-        tokens.extend(
+        // See the sibling call site above: `Rejection`'s own impl doesn't
+        // infer generic bounds, so `emit`'s returned `extra` bounds have
+        // nowhere to go here.
+        let (display_tokens, _extra) =
             std_error::emit(ident, &ast.generics, DisplayDefault::Code, &display_units)
-                .map_err(darling::Error::from)?,
-        );
+                .map_err(darling::Error::from)?;
+        tokens.extend(display_tokens);
     }
     Ok(tokens)
 }

@@ -318,10 +318,21 @@ fn rewrite_literal(
     Ok((out, refs))
 }
 
+/// Whether `param` appears anywhere in `ty`'s tokens — recursing into
+/// groups (`(..)`, `[..]`, `{..}`), not just the top level, so a param
+/// buried in a tuple, array, or parenthesized type (`(E, String)`, `[E; 3]`)
+/// is still found. A flat, one-level scan over `to_token_stream()` would
+/// see such a group as a single opaque `TokenTree::Group` and miss the
+/// `Ident` inside it entirely.
 fn type_mentions_param(ty: &Type, param: &Ident) -> bool {
-    ty.to_token_stream()
-        .into_iter()
-        .any(|t| matches!(t, proc_macro2::TokenTree::Ident(i) if i == *param))
+    fn contains(ts: TokenStream, param: &Ident) -> bool {
+        ts.into_iter().any(|t| match t {
+            proc_macro2::TokenTree::Ident(i) => i == *param,
+            proc_macro2::TokenTree::Group(g) => contains(g.stream(), param),
+            _ => false,
+        })
+    }
+    contains(ty.to_token_stream(), param)
 }
 
 /// Every field's own declared type, in declaration order. Unlike
@@ -351,18 +362,27 @@ pub(crate) fn merge_where(
     }
 }
 
-/// Bounds the generated `Classify` impl needs for its own supertrait
-/// (`Classify: Error + Send + Sync + 'static`, so `Self` needs all four) to
-/// hold when the deriving type is generic. Unlike [`extra_bounds`] — which
-/// binds a *formatted* field's own compound type, to whichever of
-/// `Display`/`Debug` its placeholder asked for — this binds the bare type
-/// *parameter* to all four traits, over every field, not only ones a
-/// message happens to format: `Debug`'s own derive and the `Send`/`Sync`
-/// auto traits already propagate through any container (`Vec<E>`,
-/// `Option<E>`, …) once `E` itself carries the bound, so the parameter is
-/// both the simplest thing to bind and sufficient; the formatted-field style
-/// `extra_bounds` uses doesn't generalize here, since plenty of fields carry
-/// no placeholder at all and still have to satisfy `Classify`'s supertrait.
+/// The *structural* share of what the generated `Classify` impl needs for
+/// its own supertrait (`Classify: Error + Send + Sync + 'static`) to hold
+/// when the deriving type is generic: every field, formatted or not,
+/// contributes to `Self: Debug` (the standard `#[derive(Debug)]`'s own
+/// bound) and to `Self: Send + Sync + 'static` (the auto traits), so every
+/// generic parameter that appears in any field needs all four. Unlike
+/// [`extra_bounds`] — which binds a *formatted* field's own compound type to
+/// whichever of `Display`/`Debug` its placeholder asked for — this binds the
+/// bare type *parameter*: `Debug`'s own derive and the auto traits already
+/// propagate through any container (`Vec<E>`, `Option<E>`, …) once `E`
+/// itself carries the bound, so the parameter is both simpler and
+/// sufficient here.
+///
+/// This is only the structural share: `Self: Error` also needs `Self:
+/// Display`, which — for a generic field — only this derive's own
+/// `std_error::emit` can know about (it depends on which fields a message
+/// actually formats, and whether `:?` was used). The caller must still
+/// merge in the `extra` bounds `emit` returns alongside its `Display`/
+/// `Error` impls; `classify_bounds` alone is not sufficient whenever a
+/// non-`Debug` placeholder formats a field whose type mentions a generic
+/// parameter directly (`#[error("{0}")]` over a bare `E` field, say).
 pub(crate) fn classify_bounds(generics: &syn::Generics, field_types: &[Type]) -> Vec<TokenStream> {
     generics
         .type_params()
@@ -400,13 +420,17 @@ fn extra_bounds(generics: &syn::Generics, refs: &[FieldRef]) -> Vec<TokenStream>
 }
 
 /// Emits `impl Display` and `impl std::error::Error` for `target`, one match
-/// arm per unit.
+/// arm per unit, plus the `extra_bounds` this emission needed — a caller
+/// that also emits a `Classify` impl for the same generic type (`Classify:
+/// Error + ..`) needs these same bounds merged into its own where-clause,
+/// since they are exactly what makes `Self: Display`/`Self: Error` hold
+/// here; see `classify_bounds`'s doc comment.
 pub(crate) fn emit(
     target: &Ident,
     generics: &syn::Generics,
     default: DisplayDefault,
     units: &[Unit<'_>],
-) -> syn::Result<TokenStream> {
+) -> syn::Result<(TokenStream, Vec<TokenStream>)> {
     let mut display_arms = Vec::with_capacity(units.len());
     let mut source_arms = Vec::with_capacity(units.len());
     let mut all_refs = Vec::new();
@@ -459,11 +483,38 @@ pub(crate) fn emit(
         source_arms.push(quote! { #pat => #source_body });
     }
     let extra = extra_bounds(generics, &all_refs);
+    // `std::error::Error: Debug + Display` — unconditionally, regardless of
+    // which fields (if any) a message actually formats. `extra_bounds`
+    // above only ever adds a bound for a field some placeholder *formats*,
+    // which is right for `Display` (nothing else needs that field rendered)
+    // but not sufficient for `Error`'s own `Debug` supertrait: that needs
+    // every field's type to be `Debug`, exactly like the standard
+    // `#[derive(Debug)]`'s own bound (`P: Debug` per generic parameter,
+    // structurally, over every field) — the same criterion `classify_bounds`
+    // already uses. Computed separately from `extra` because it applies
+    // only to the `Error` impl below, not the `Display` impl, which needs
+    // nothing beyond what a placeholder actually references.
+    let all_field_types: Vec<Type> = units.iter().flat_map(|u| field_types(u.fields)).collect();
+    let mut error_extra = extra.clone();
+    for param in generics.type_params().map(|p| &p.ident) {
+        if !all_field_types
+            .iter()
+            .any(|ty| type_mentions_param(ty, param))
+        {
+            continue;
+        }
+        let bound = quote! { #param: std::fmt::Debug };
+        let key = bound.to_string();
+        if !error_extra.iter().any(|b| b.to_string() == key) {
+            error_extra.push(bound);
+        }
+    }
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-    let where_tokens = merge_where(where_clause, &extra);
-    Ok(quote! {
+    let display_where_tokens = merge_where(where_clause, &extra);
+    let error_where_tokens = merge_where(where_clause, &error_extra);
+    let tokens = quote! {
         #[automatically_derived]
-        impl #impl_generics std::fmt::Display for #target #ty_generics #where_tokens {
+        impl #impl_generics std::fmt::Display for #target #ty_generics #display_where_tokens {
             #[allow(unused_variables)]
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self {
@@ -472,7 +523,7 @@ pub(crate) fn emit(
             }
         }
         #[automatically_derived]
-        impl #impl_generics std::error::Error for #target #ty_generics #where_tokens {
+        impl #impl_generics std::error::Error for #target #ty_generics #error_where_tokens {
             #[allow(unused_variables)]
             fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
                 match self {
@@ -480,5 +531,6 @@ pub(crate) fn emit(
                 }
             }
         }
-    })
+    };
+    Ok((tokens, extra))
 }

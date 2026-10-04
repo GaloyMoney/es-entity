@@ -360,7 +360,10 @@ fn with_impl(
     if !error_manual {
         let fields = Fields::Unit;
         let error = std_error::take_error_lit(attrs)?;
-        out.extend(std_error::emit(
+        // `fields` is always `Fields::Unit` here, so `emit`'s `extra`
+        // bounds are always empty — a type-level `#[error(..)]` literal
+        // with no fields to bind can never reference a generic parameter.
+        let (display_tokens, _extra) = std_error::emit(
             ident,
             generics,
             DisplayDefault::Name,
@@ -371,7 +374,8 @@ fn with_impl(
                 name: ident.clone(),
                 source: None,
             }],
-        )?);
+        )?;
+        out.extend(display_tokens);
     }
     Ok(out)
 }
@@ -402,6 +406,7 @@ fn derive_laned_struct(ast: &syn::DeriveInput, data: &syn::DataStruct) -> syn::R
         return Ok(out);
     }
 
+    let mut display_extra: Vec<TokenStream> = Vec::new();
     if !meta.error_manual {
         std_error::reject_from_field_attr(&data.fields)?;
         let source = match &from_payload {
@@ -413,7 +418,7 @@ fn derive_laned_struct(ast: &syn::DeriveInput, data: &syn::DataStruct) -> syn::R
         };
         let pat = std_error::bind_pattern(quote! { Self }, &data.fields);
         let error = std_error::take_error_lit(&ast.attrs)?;
-        out.extend(std_error::emit(
+        let (display_tokens, extra) = std_error::emit(
             ident,
             &ast.generics,
             DisplayDefault::Name,
@@ -424,7 +429,9 @@ fn derive_laned_struct(ast: &syn::DeriveInput, data: &syn::DataStruct) -> syn::R
                 name: ident.clone(),
                 source,
             }],
-        )?);
+        )?;
+        out.extend(display_tokens);
+        display_extra = extra;
     }
 
     let Some(lane) = &meta.lane else {
@@ -437,8 +444,13 @@ fn derive_laned_struct(ast: &syn::DeriveInput, data: &syn::DataStruct) -> syn::R
     };
     let lanes_ty = lane_profile_ty(&meta, None)?;
     let body = static_lane_expr(lane, quote! { self });
-    let classify_extra =
+    // `display_extra` (from `emit`, above) covers `Self: Display` for a
+    // generic field a message actually formats; `classify_bounds` covers
+    // the rest of `Classify`'s own supertrait structurally. Both are
+    // needed for `Self: Error + Send + Sync + 'static` to hold.
+    let mut classify_extra =
         std_error::classify_bounds(&ast.generics, &std_error::field_types(&data.fields));
+    classify_extra.extend(display_extra);
     let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
     let where_tokens = std_error::merge_where(where_clause, &classify_extra);
     out.extend(quote! {
@@ -492,20 +504,9 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
             .iter()
             .flat_map(|v| std_error::field_types(&v.fields))
             .collect();
-        let classify_extra = std_error::classify_bounds(&ast.generics, &field_types);
-        let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
-        let where_tokens = std_error::merge_where(where_clause, &classify_extra);
-        let mut out = quote! {
-            impl #impl_generics errlanes::Classify for #ident #ty_generics #where_tokens {
-                type Rejected = core::convert::Infallible;
-                type Lanes = #lanes_ty;
+        let mut classify_extra = std_error::classify_bounds(&ast.generics, &field_types);
 
-                fn classify(self) -> errlanes::Fail<Self::Rejected, Self::Lanes> {
-                    #body
-                }
-            }
-        };
-        if !type_meta.error_manual {
+        let display_tokens = if !type_meta.error_manual {
             let type_level_error = std_error::take_error_lit(&ast.attrs)?;
             let mut display_units = Vec::with_capacity(data.variants.len());
             for variant in &data.variants {
@@ -529,12 +530,30 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
                     source,
                 });
             }
-            out.extend(std_error::emit(
-                ident,
-                &ast.generics,
-                DisplayDefault::Name,
-                &display_units,
-            )?);
+            let (tokens, extra) =
+                std_error::emit(ident, &ast.generics, DisplayDefault::Name, &display_units)?;
+            // See `derive_laned_struct`: `extra` covers `Self: Display` for
+            // a generic field some variant's message actually formats.
+            classify_extra.extend(extra);
+            Some(tokens)
+        } else {
+            None
+        };
+
+        let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+        let where_tokens = std_error::merge_where(where_clause, &classify_extra);
+        let mut out = quote! {
+            impl #impl_generics errlanes::Classify for #ident #ty_generics #where_tokens {
+                type Rejected = core::convert::Infallible;
+                type Lanes = #lanes_ty;
+
+                fn classify(self) -> errlanes::Fail<Self::Rejected, Self::Lanes> {
+                    #body
+                }
+            }
+        };
+        if let Some(tokens) = display_tokens {
+            out.extend(tokens);
         }
         return Ok(out);
     }
@@ -650,24 +669,9 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
         .iter()
         .flat_map(|r| std_error::field_types(&r.variant.fields))
         .collect();
-    let classify_extra = std_error::classify_bounds(&ast.generics, &field_types);
-    let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
-    let where_tokens = std_error::merge_where(where_clause, &classify_extra);
-    let mut out = quote! {
-        impl #impl_generics errlanes::Classify for #ident #ty_generics #where_tokens {
-            type Rejected = #rejected_ty;
-            type Lanes = #lanes_ty;
+    let mut classify_extra = std_error::classify_bounds(&ast.generics, &field_types);
 
-            fn classify(self) -> errlanes::Fail<Self::Rejected, Self::Lanes> {
-                match self {
-                    #(#arms,)*
-                }
-            }
-        }
-    };
-    out.extend(from_impls);
-
-    if !type_meta.error_manual {
+    let display_tokens = if !type_meta.error_manual {
         let mut display_units = Vec::with_capacity(resolved.len());
         for r in &resolved {
             std_error::reject_from_field_attr(&r.variant.fields)?;
@@ -689,12 +693,33 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
                 source,
             });
         }
-        out.extend(std_error::emit(
-            ident,
-            &ast.generics,
-            DisplayDefault::Name,
-            &display_units,
-        )?);
+        let (tokens, extra) =
+            std_error::emit(ident, &ast.generics, DisplayDefault::Name, &display_units)?;
+        // See `derive_laned_struct`: `extra` covers `Self: Display` for a
+        // generic field some variant's message actually formats.
+        classify_extra.extend(extra);
+        Some(tokens)
+    } else {
+        None
+    };
+
+    let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+    let where_tokens = std_error::merge_where(where_clause, &classify_extra);
+    let mut out = quote! {
+        impl #impl_generics errlanes::Classify for #ident #ty_generics #where_tokens {
+            type Rejected = #rejected_ty;
+            type Lanes = #lanes_ty;
+
+            fn classify(self) -> errlanes::Fail<Self::Rejected, Self::Lanes> {
+                match self {
+                    #(#arms,)*
+                }
+            }
+        }
+    };
+    out.extend(from_impls);
+    if let Some(tokens) = display_tokens {
+        out.extend(tokens);
     }
 
     Ok(out)
