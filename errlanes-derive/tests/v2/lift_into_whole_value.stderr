@@ -1,0 +1,5 @@
+error: an `into` lift requires a source variant (`Source::Variant`)
+ --> tests/v2/lift_into_whole_value.rs:6:12
+  |
+6 |     #[lift(Source, into)]
+  |            ^^^^^^
