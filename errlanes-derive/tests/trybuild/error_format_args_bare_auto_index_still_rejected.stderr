@@ -1,0 +1,5 @@
+error: #[error("..")] does not support auto-indexed `{}`; name the field, e.g. `{0}` or `{field}`
+ --> tests/trybuild/error_format_args_bare_auto_index_still_rejected.rs:6:9
+  |
+6 | #[error("bad {}")]
+  |         ^^^^^^^^

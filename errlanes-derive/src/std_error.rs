@@ -8,7 +8,10 @@
 use convert_case::{Case, Casing};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
-use syn::{Fields, Ident, LitStr, Type};
+use syn::{
+    Expr, Fields, Ident, LitStr, Token, Type,
+    parse::{Parse, ParseStream},
+};
 
 /// What `Display` falls back to when a unit carries no explicit
 /// `#[error("..")]`.
@@ -26,11 +29,91 @@ pub(crate) struct Unit<'a> {
     pub pat: TokenStream,
     pub fields: &'a Fields,
     /// Explicit `#[error("..")]`, already pulled off the AST by the caller.
-    pub error: Option<LitStr>,
+    pub error: Option<ErrorSpec>,
     /// This unit's own name, used by the `Name` default.
     pub name: Ident,
     /// The locally-bound field name that is `source()`, if any.
     pub source: Option<TokenStream>,
+}
+
+/// `#[error("..", trailing, args)]`: the format string, plus any
+/// `thiserror`-style trailing format arguments. Each trailing argument must
+/// be a field access path (a bound field name, optionally followed by one or
+/// more `.member` accesses, e.g. `failure.error`) — see [`Parse`] below for
+/// why arbitrary expressions are rejected here rather than accepted.
+pub(crate) struct ErrorSpec {
+    pub lit: LitStr,
+    pub args: Vec<Expr>,
+}
+
+/// Only a bound field name, or a chain of `.member` accesses off one, is
+/// accepted as a trailing argument. This is deliberately narrower than
+/// `thiserror`, which accepts arbitrary expressions: extending `#[error(..)]`
+/// to arbitrary Rust expressions would let a derive attribute run arbitrary
+/// code, and (per the design handoff this implements) the field-of-a-field
+/// shape is all the motivating case needs. The root is checked against the
+/// unit's actual fields later, once a [`Fields`] is in scope (see
+/// `check_trailing_args`); here only the *shape* is validated.
+fn validate_field_access_path(expr: &Expr) -> syn::Result<()> {
+    match expr {
+        Expr::Path(p) if p.path.get_ident().is_some() => Ok(()),
+        Expr::Field(f) => validate_field_access_path(&f.base),
+        _ => Err(syn::Error::new_spanned(
+            expr,
+            "#[error(\"..\", ..)] trailing arguments must be field access paths (e.g. \
+             `field.sub_field`); arbitrary expressions are not supported",
+        )),
+    }
+}
+
+impl Parse for ErrorSpec {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let lit: LitStr = input.parse()?;
+        let mut args = Vec::new();
+        while !input.is_empty() {
+            input.parse::<Token![,]>()?;
+            if input.is_empty() {
+                // A single trailing comma, same as `write!`/`format!`.
+                break;
+            }
+            let arg = input.parse::<Expr>()?;
+            validate_field_access_path(&arg)?;
+            args.push(arg);
+        }
+        Ok(ErrorSpec { lit, args })
+    }
+}
+
+/// The bound local an already-shape-validated field access path is rooted
+/// at. Panics on a path that `validate_field_access_path` would have
+/// rejected — every [`ErrorSpec::args`] entry is validated at parse time, so
+/// this is an invariant, not user input.
+fn root_ident(expr: &Expr) -> &Ident {
+    match expr {
+        Expr::Path(p) => p.path.get_ident().expect("validated as a bare ident"),
+        Expr::Field(f) => root_ident(&f.base),
+        _ => unreachable!("ErrorSpec::args are validated to be field access paths"),
+    }
+}
+
+/// Checks that every trailing argument's root is one of this unit's own
+/// fields — the same diagnostic shape `rewrite_literal` uses for named
+/// placeholders that are not a field.
+fn check_trailing_args(args: &[Expr], fields: &Fields) -> syn::Result<()> {
+    let names = bound_fields(fields);
+    for arg in args {
+        let root = root_ident(arg);
+        if !names.iter().any(|n| n == root) {
+            return Err(syn::Error::new_spanned(
+                root,
+                format!(
+                    "#[error(\"..\", ..)] trailing argument starts from `{root}`, which is not \
+                     a field here"
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn field_list(fields: &Fields) -> Vec<&syn::Field> {
@@ -92,7 +175,7 @@ pub(crate) fn marked_source(fields: &Fields, span: &Ident) -> syn::Result<Option
 
 /// Pulls the single `#[error("..")]` off a unit's attributes, erroring on a
 /// second one. Every other attribute is left untouched.
-pub(crate) fn take_error_lit(attrs: &[syn::Attribute]) -> syn::Result<Option<LitStr>> {
+pub(crate) fn take_error_lit(attrs: &[syn::Attribute]) -> syn::Result<Option<ErrorSpec>> {
     let mut found = None;
     for attr in attrs {
         if attr.path().is_ident("error") {
@@ -102,7 +185,7 @@ pub(crate) fn take_error_lit(attrs: &[syn::Attribute]) -> syn::Result<Option<Lit
                     "at most one #[error(\"..\")] per type or variant",
                 ));
             }
-            found = Some(attr.parse_args::<LitStr>()?);
+            found = Some(attr.parse_args::<ErrorSpec>()?);
         }
     }
     Ok(found)
@@ -133,7 +216,19 @@ type FieldRef = (Ident, Type, bool);
 /// resolves natively and is only validated here. Returns the rewritten
 /// literal text plus, for each referenced field, its bound name, type, and
 /// whether its format spec requested `Debug` (contains `?`).
-fn rewrite_literal(lit: &LitStr, fields: &Fields) -> syn::Result<(String, Vec<FieldRef>)> {
+///
+/// `allow_auto_index` is `true` only when the `#[error(..)]` carries trailing
+/// format arguments: auto-indexed `{}` is then passed through unchanged, to
+/// be matched positionally against those arguments by the emitted `write!`,
+/// exactly as `write!`/`format!` already do when mixing named and positional
+/// arguments. With no trailing arguments, `{}` stays rejected with today's
+/// diagnostic — unchanged, since nothing before it could ever have supplied
+/// a positional argument for `{}` to bind to.
+fn rewrite_literal(
+    lit: &LitStr,
+    fields: &Fields,
+    allow_auto_index: bool,
+) -> syn::Result<(String, Vec<FieldRef>)> {
     let names = bound_fields(fields);
     let types: Vec<Type> = field_list(fields).iter().map(|f| f.ty.clone()).collect();
     let src = lit.value();
@@ -171,6 +266,12 @@ fn rewrite_literal(lit: &LitStr, fields: &Fields) -> syn::Result<(String, Vec<Fi
                     None => (body.as_str(), ""),
                 };
                 if name_part.is_empty() {
+                    if allow_auto_index {
+                        out.push('{');
+                        out.push_str(&body);
+                        out.push('}');
+                        continue;
+                    }
                     return Err(syn::Error::new(
                         lit.span(),
                         "#[error(\"..\")] does not support auto-indexed `{}`; name the field, \
@@ -263,8 +364,10 @@ pub(crate) fn emit(
     for unit in units {
         let pat = &unit.pat;
         let body = match &unit.error {
-            Some(lit) => {
-                let (rewritten, refs) = rewrite_literal(lit, unit.fields)?;
+            Some(spec) => {
+                check_trailing_args(&spec.args, unit.fields)?;
+                let (rewritten, refs) =
+                    rewrite_literal(&spec.lit, unit.fields, !spec.args.is_empty())?;
                 all_refs.extend(refs);
                 // `call_site()`, not `lit.span()`: a composed type's `#[error(..)]`
                 // can arrive via a macro round-trip (the composition schema's
@@ -274,7 +377,20 @@ pub(crate) fn emit(
                 // a mismatch here reads as "cannot find value" despite the name
                 // matching.
                 let rewritten = LitStr::new(&rewritten, proc_macro2::Span::call_site());
-                quote! { write!(f, #rewritten) }
+                let args = &spec.args;
+                // The trailing arguments are not field-only placeholders, so
+                // they get no `FieldRef` and no entry in `extra_bounds` — the
+                // expression's own type is whatever it is at the `write!`
+                // call site, and rustc infers the `Display`/`Debug` bound
+                // from that call directly. Extracting a `syn::Type` for an
+                // arbitrary expression is not generally possible, so this
+                // path deliberately does not try; only the field-only
+                // placeholders above feed `extra_bounds`.
+                if args.is_empty() {
+                    quote! { write!(f, #rewritten) }
+                } else {
+                    quote! { write!(f, #rewritten, #(#args),*) }
+                }
             }
             None => match default {
                 DisplayDefault::Code => {

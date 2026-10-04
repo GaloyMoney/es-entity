@@ -1,0 +1,5 @@
+error: #[error("..", ..)] trailing arguments must be field access paths (e.g. `field.sub_field`); arbitrary expressions are not supported
+ --> tests/trybuild/error_format_args_arbitrary_expr.rs:6:20
+  |
+6 | #[error("bad: {}", id.to_string())]
+  |                    ^^
