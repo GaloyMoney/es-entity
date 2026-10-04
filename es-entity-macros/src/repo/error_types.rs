@@ -402,7 +402,12 @@ mod tests {
             })
             .expect("generated rejection enum");
         assert_eq!(variants.iter().filter(|v| v.ident == "Pkey").count(), 1);
-        for expected in ["IdFkey", "IdKey"] {
+        let pkey = variants.iter().find(|v| v.ident == "Pkey").unwrap();
+        assert!(quote!(#pkey).to_string().contains("IdConflict"));
+        let generated_tokens = quote!(#generated).to_string();
+        assert!(generated_tokens.contains("fn pkey_from_database"));
+        assert!(generated_tokens.contains("\"shared_ids_actual_pk\""));
+        for expected in ["IdFkey", "IdCheck", "IdKey"] {
             let variant = variants
                 .iter()
                 .find(|v| v.ident == expected)
