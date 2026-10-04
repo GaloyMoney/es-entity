@@ -17,6 +17,10 @@ fn ui() {
     t.pass("tests/trybuild/instrument_fields_declares_error.rs");
     t.pass("tests/trybuild/instrument_trailing_comma.rs");
     t.compile_fail("tests/trybuild/instrument_not_laned.rs");
+    t.pass("tests/trybuild/classify_type_level_lane_honors_variant_error.rs");
+    t.pass("tests/trybuild/classify_type_level_lane_no_variant_error_unchanged.rs");
+    t.pass("tests/trybuild/classify_type_level_lane_mixed_error_fallback.rs");
+    t.pass("tests/trybuild/classify_generic_needs_no_type_level_bounds.rs");
 }
 
 // A direct (non-trybuild) runtime check that trailing `#[error(..)]`

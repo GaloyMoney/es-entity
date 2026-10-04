@@ -336,6 +336,7 @@ fn with_impl(
     lanes: &[Ident],
     error_manual: bool,
     attrs: &[syn::Attribute],
+    field_types: &[syn::Type],
 ) -> syn::Result<TokenStream> {
     if lanes.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -343,9 +344,11 @@ fn with_impl(
             "`with = ..` requires `lanes(..)` naming at least one lane",
         ));
     }
+    let classify_extra = std_error::classify_bounds(generics, field_types);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let where_tokens = std_error::merge_where(where_clause, &classify_extra);
     let mut out = quote! {
-        impl #impl_generics errlanes::Classify for #ident #ty_generics #where_clause {
+        impl #impl_generics errlanes::Classify for #ident #ty_generics #where_tokens {
             type Rejected = core::convert::Infallible;
             type Lanes = errlanes::lanes!(#(#lanes),*);
 
@@ -394,6 +397,7 @@ fn derive_laned_struct(ast: &syn::DeriveInput, data: &syn::DataStruct) -> syn::R
             &meta.lanes,
             meta.error_manual,
             &ast.attrs,
+            &std_error::field_types(&data.fields),
         )?);
         return Ok(out);
     }
@@ -433,9 +437,12 @@ fn derive_laned_struct(ast: &syn::DeriveInput, data: &syn::DataStruct) -> syn::R
     };
     let lanes_ty = lane_profile_ty(&meta, None)?;
     let body = static_lane_expr(lane, quote! { self });
+    let classify_extra =
+        std_error::classify_bounds(&ast.generics, &std_error::field_types(&data.fields));
     let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+    let where_tokens = std_error::merge_where(where_clause, &classify_extra);
     out.extend(quote! {
-        impl #impl_generics errlanes::Classify for #ident #ty_generics #where_clause {
+        impl #impl_generics errlanes::Classify for #ident #ty_generics #where_tokens {
             type Rejected = core::convert::Infallible;
             type Lanes = #lanes_ty;
 
@@ -452,6 +459,11 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
     let type_meta = parse_classify_meta(&ast.attrs, true)?;
 
     if let Some(with) = &type_meta.with {
+        let field_types: Vec<syn::Type> = data
+            .variants
+            .iter()
+            .flat_map(|v| std_error::field_types(&v.fields))
+            .collect();
         return with_impl(
             ident,
             &ast.generics,
@@ -459,18 +471,32 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
             &type_meta.lanes,
             type_meta.error_manual,
             &ast.attrs,
+            &field_types,
         );
     }
 
     // A type-level lane applies uniformly to every variant: the whole enum
     // value is the payload's source, so no per-variant attribute (or even a
-    // per-variant match) is needed at all.
+    // per-variant match) is needed for *classification*. `#[error(..)]` is
+    // different: a variant with its own fields still wants its own message
+    // (see the `errlanes-classify-derive-codegen-gaps` handoff's Finding 1),
+    // so each variant gets its own `Unit`, falling back to the type-level
+    // `#[error(..)]` (if any) and then to the type's own snake_cased name —
+    // exactly today's rendering — only when that variant has no `#[error]`
+    // of its own.
     if let Some(lane) = &type_meta.lane {
         let lanes_ty = lane_profile_ty(&type_meta, None)?;
         let body = static_lane_expr(lane, quote! { self });
+        let field_types: Vec<syn::Type> = data
+            .variants
+            .iter()
+            .flat_map(|v| std_error::field_types(&v.fields))
+            .collect();
+        let classify_extra = std_error::classify_bounds(&ast.generics, &field_types);
         let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+        let where_tokens = std_error::merge_where(where_clause, &classify_extra);
         let mut out = quote! {
-            impl #impl_generics errlanes::Classify for #ident #ty_generics #where_clause {
+            impl #impl_generics errlanes::Classify for #ident #ty_generics #where_tokens {
                 type Rejected = core::convert::Infallible;
                 type Lanes = #lanes_ty;
 
@@ -480,19 +506,34 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
             }
         };
         if !type_meta.error_manual {
-            let fields = Fields::Unit;
-            let error = std_error::take_error_lit(&ast.attrs)?;
+            let type_level_error = std_error::take_error_lit(&ast.attrs)?;
+            let mut display_units = Vec::with_capacity(data.variants.len());
+            for variant in &data.variants {
+                std_error::reject_from_field_attr(&variant.fields)?;
+                let variant_ident = &variant.ident;
+                let source = std_error::marked_source(&variant.fields, variant_ident)?;
+                let pat = std_error::bind_pattern(quote! { Self::#variant_ident }, &variant.fields);
+                let error = match std_error::take_error_lit(&variant.attrs)? {
+                    Some(spec) => Some(spec),
+                    None => type_level_error.clone(),
+                };
+                display_units.push(Unit {
+                    pat,
+                    fields: &variant.fields,
+                    error,
+                    // The *type*'s name, not the variant's: with no
+                    // `#[error(..)]` at all (type- or variant-level), this
+                    // must keep rendering exactly what it renders today —
+                    // the snake_cased type name, uniformly across variants.
+                    name: ident.clone(),
+                    source,
+                });
+            }
             out.extend(std_error::emit(
                 ident,
                 &ast.generics,
                 DisplayDefault::Name,
-                &[Unit {
-                    pat: quote! { _ },
-                    fields: &fields,
-                    error,
-                    name: ident.clone(),
-                    source: None,
-                }],
+                &display_units,
             )?);
         }
         return Ok(out);
@@ -605,9 +646,15 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
         }
     }
 
+    let field_types: Vec<syn::Type> = resolved
+        .iter()
+        .flat_map(|r| std_error::field_types(&r.variant.fields))
+        .collect();
+    let classify_extra = std_error::classify_bounds(&ast.generics, &field_types);
     let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+    let where_tokens = std_error::merge_where(where_clause, &classify_extra);
     let mut out = quote! {
-        impl #impl_generics errlanes::Classify for #ident #ty_generics #where_clause {
+        impl #impl_generics errlanes::Classify for #ident #ty_generics #where_tokens {
             type Rejected = #rejected_ty;
             type Lanes = #lanes_ty;
 

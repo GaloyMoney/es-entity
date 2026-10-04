@@ -41,6 +41,7 @@ pub(crate) struct Unit<'a> {
 /// be a field access path (a bound field name, optionally followed by one or
 /// more `.member` accesses, e.g. `failure.error`) — see [`Parse`] below for
 /// why arbitrary expressions are rejected here rather than accepted.
+#[derive(Clone)]
 pub(crate) struct ErrorSpec {
     pub lit: LitStr,
     pub args: Vec<Expr>,
@@ -323,6 +324,54 @@ fn type_mentions_param(ty: &Type, param: &Ident) -> bool {
         .any(|t| matches!(t, proc_macro2::TokenTree::Ident(i) if i == *param))
 }
 
+/// Every field's own declared type, in declaration order. Unlike
+/// [`FieldRef`], this isn't limited to fields an `#[error(..)]` placeholder
+/// happens to reference — a caller needing a bound that applies to the
+/// *whole* value (e.g. `classify_bounds`, which mirrors what `Debug`'s own
+/// derive and the `Send`/`Sync` auto traits already require structurally)
+/// needs every field, formatted or not.
+pub(crate) fn field_types(fields: &Fields) -> Vec<Type> {
+    field_list(fields).iter().map(|f| f.ty.clone()).collect()
+}
+
+/// Appends `extra` bounds to `where_clause`, synthesizing a fresh `where`
+/// when there wasn't one. Shared by [`emit`]'s own `Display`/`Error` impls
+/// and by `classify.rs`'s generated `Classify` impl, which needs the
+/// analogous [`classify_bounds`] appended the same way.
+pub(crate) fn merge_where(
+    where_clause: Option<&syn::WhereClause>,
+    extra: &[TokenStream],
+) -> TokenStream {
+    if extra.is_empty() {
+        quote! { #where_clause }
+    } else if let Some(wc) = where_clause {
+        quote! { #wc #(, #extra)* }
+    } else {
+        quote! { where #(#extra),* }
+    }
+}
+
+/// Bounds the generated `Classify` impl needs for its own supertrait
+/// (`Classify: Error + Send + Sync + 'static`, so `Self` needs all four) to
+/// hold when the deriving type is generic. Unlike [`extra_bounds`] — which
+/// binds a *formatted* field's own compound type, to whichever of
+/// `Display`/`Debug` its placeholder asked for — this binds the bare type
+/// *parameter* to all four traits, over every field, not only ones a
+/// message happens to format: `Debug`'s own derive and the `Send`/`Sync`
+/// auto traits already propagate through any container (`Vec<E>`,
+/// `Option<E>`, …) once `E` itself carries the bound, so the parameter is
+/// both the simplest thing to bind and sufficient; the formatted-field style
+/// `extra_bounds` uses doesn't generalize here, since plenty of fields carry
+/// no placeholder at all and still have to satisfy `Classify`'s supertrait.
+pub(crate) fn classify_bounds(generics: &syn::Generics, field_types: &[Type]) -> Vec<TokenStream> {
+    generics
+        .type_params()
+        .map(|p| &p.ident)
+        .filter(|p| field_types.iter().any(|ty| type_mentions_param(ty, p)))
+        .map(|p| quote! { #p: std::fmt::Debug + Send + Sync + 'static })
+        .collect()
+}
+
 /// A field referenced by an `#[error(..)]` placeholder whose type mentions
 /// one of the deriving type's own generic parameters needs an explicit
 /// `Display`/`Debug` bound on the generated impl — the type parameter has
@@ -411,13 +460,7 @@ pub(crate) fn emit(
     }
     let extra = extra_bounds(generics, &all_refs);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-    let where_tokens = if extra.is_empty() {
-        quote! { #where_clause }
-    } else if let Some(wc) = where_clause {
-        quote! { #wc #(, #extra)* }
-    } else {
-        quote! { where #(#extra),* }
-    };
+    let where_tokens = merge_where(where_clause, &extra);
     Ok(quote! {
         #[automatically_derived]
         impl #impl_generics std::fmt::Display for #target #ty_generics #where_tokens {
