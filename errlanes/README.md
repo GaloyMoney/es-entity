@@ -689,6 +689,70 @@ case, this mapping must be updated before it compiles. Unit, tuple and named
 payloads forward automatically; `#[lift(Source::Variant, with = mapper)]`
 handles a genuine payload transformation.
 
+`#[lift(Source::Variant, into)]` converts a single payload using its `Into`
+implementation, then wraps it in the destination variant. For example, a batch
+operation can reuse the single operation's phases while extending preparation:
+
+```rust
+use errlanes::Rejection;
+
+#[derive(Debug, errlanes::Rejection)]
+enum Prepare {
+    MissingArgument(String),
+}
+
+#[errlanes::compose]
+#[derive(Debug)]
+enum BatchPrepare {
+    #[compose(flatten)]
+    Posting(Prepare),
+    DuplicateInput,
+}
+
+#[derive(Debug, errlanes::Rejection)]
+enum Posting {
+    #[error("{0}")]
+    #[rejection(delegate, from)]
+    Prepare(Prepare),
+    Validate,
+    Apply,
+}
+
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+#[lift(Posting)]
+enum BatchPosting {
+    #[lift(Posting::Prepare, into)]
+    #[error("{0}")]
+    #[rejection(delegate, from)]
+    Prepare(BatchPrepare),
+    #[lift(Posting::Validate)]
+    Validate,
+    #[lift(Posting::Apply)]
+    Apply,
+}
+
+let error = BatchPosting::from(Posting::Prepare(
+    Prepare::MissingArgument("amount".into()),
+));
+assert!(matches!(
+    error,
+    BatchPosting::Prepare(BatchPrepare::PostingMissingArgument(name)) if name == "amount"
+));
+```
+
+The `into` arm generates the equivalent of
+`Posting::Prepare(e) => Self::Prepare(e.into())`. The destination field determines
+the conversion's target type; there must be a direct `Into` implementation
+(usually supplied by `From`). The source must be a single-field tuple variant,
+and the destination must have exactly one tuple or named field. `into` cannot
+be combined with `field` or `with`, and does not apply to whole-value struct
+lifts. It works with both exhaustive and partial lifts.
+
+Since the converted payload has a different type, `Rejection` cannot implicitly
+forward the original variant's metadata. Use `#[rejection(delegate)]` to obtain
+code and level from the converted payload, as above, or declare an explicit
+`#[rejection(code = "...")]`. `Lift` alone does not require rejection metadata.
+
 `#[lift(Source::Variant, field = name)]` is the narrower case in between:
 the source variant is a single-field tuple variant, and the destination keeps
 only one named field out of its payload rather than the whole thing —

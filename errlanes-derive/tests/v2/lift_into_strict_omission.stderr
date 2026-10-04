@@ -1,0 +1,16 @@
+error[E0004]: non-exhaustive patterns: `Source::Other` not covered
+ --> tests/v2/lift_into_strict_omission.rs:6:10
+  |
+6 | #[derive(errlanes::Lift)]
+  |          ^^^^^^^^^^^^^^ pattern `Source::Other` not covered
+  |
+note: `Source` defined here
+ --> tests/v2/lift_into_strict_omission.rs:1:6
+  |
+1 | enum Source {
+  |      ^^^^^^
+2 |     Value(u8),
+3 |     Other,
+  |     ----- not covered
+  = note: the matched value is of type `Source`
+  = note: this error originates in the derive macro `errlanes::Lift` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,29 @@
+error: duplicate `into`
+ --> tests/v2/lift_into_conflicts.rs:8:33
+  |
+8 |     #[lift(Source::Value, into, into)]
+  |                                 ^^^^
+
+error: `into` cannot be combined with `field` or `with`
+  --> tests/v2/lift_into_conflicts.rs:15:33
+   |
+15 |     #[lift(Source::Value, into, with = mapper)]
+   |                                 ^^^^
+
+error: `into` cannot be combined with `field` or `with`
+  --> tests/v2/lift_into_conflicts.rs:22:42
+   |
+22 |     #[lift(Source::Value, with = mapper, into)]
+   |                                          ^^^^
+
+error: `into` cannot be combined with `field` or `with`
+  --> tests/v2/lift_into_conflicts.rs:29:33
+   |
+29 |     #[lift(Source::Value, into, field = value)]
+   |                                 ^^^^^
+
+error: `into` cannot be combined with `field` or `with`
+  --> tests/v2/lift_into_conflicts.rs:36:42
+   |
+36 |     #[lift(Source::Value, field = value, into)]
+   |                                          ^^^^

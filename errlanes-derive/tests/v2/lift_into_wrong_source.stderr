@@ -1,0 +1,38 @@
+error[E0532]: expected tuple struct or tuple variant, found unit variant `Source::Unit`
+ --> tests/v2/lift_into_wrong_source.rs:7:10
+  |
+2 |     Unit,
+  |     ---- `Source::Unit` defined here
+...
+7 | #[derive(errlanes::Lift)]
+  |          ^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `errlanes::Lift` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider importing this tuple variant instead
+  |
+1 + use crate::Destination::Unit;
+  |
+help: if you import `Unit`, refer to it directly
+  |
+10-     #[lift(Source::Unit, into)]
+10+     #[lift(Unit, into)]
+  |
+
+error[E0023]: this pattern has 1 field, but the corresponding tuple variant has 2 fields
+ --> tests/v2/lift_into_wrong_source.rs:7:10
+  |
+3 |     Tuple(u8, u8),
+  |           --  -- tuple variant has 2 fields
+...
+7 | #[derive(errlanes::Lift)]
+  |          ^^^^^^^^^^^^^^ expected 2 fields, found 1
+  |
+  = note: this error originates in the derive macro `errlanes::Lift` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0164]: expected tuple struct or tuple variant, found struct variant `Source::Named`
+ --> tests/v2/lift_into_wrong_source.rs:7:10
+  |
+7 | #[derive(errlanes::Lift)]
+  |          ^^^^^^^^^^^^^^ not a tuple struct or tuple variant
+  |
+  = note: this error originates in the derive macro `errlanes::Lift` (in Nightly builds, run with -Z macro-backtrace for more info)

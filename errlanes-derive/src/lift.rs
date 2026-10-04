@@ -34,15 +34,36 @@ pub(crate) struct Mapping {
     pub case: Path,
     pub with: Option<Path>,
     pub field: Option<syn::Ident>,
+    pub into: bool,
 }
 impl Parse for Mapping {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let case = input.parse()?;
         let mut with = None;
         let mut field = None;
+        let mut into = false;
         while input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
             let key: syn::Ident = input.parse()?;
+            if key == "into" {
+                if into {
+                    return Err(syn::Error::new_spanned(key, "duplicate `into`"));
+                }
+                if with.is_some() || field.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        "`into` cannot be combined with `field` or `with`",
+                    ));
+                }
+                into = true;
+                continue;
+            }
+            if into && (key == "field" || key == "with") {
+                return Err(syn::Error::new_spanned(
+                    key,
+                    "`into` cannot be combined with `field` or `with`",
+                ));
+            }
             input.parse::<Token![=]>()?;
             if key == "with" {
                 if field.is_some() {
@@ -63,11 +84,16 @@ impl Parse for Mapping {
             } else {
                 return Err(syn::Error::new_spanned(
                     key,
-                    "expected `with = mapper` or `field = name`",
+                    "expected `with = mapper`, `field = name`, or `into`",
                 ));
             }
         }
-        Ok(Self { case, with, field })
+        Ok(Self {
+            case,
+            with,
+            field,
+            into,
+        })
     }
 }
 pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
@@ -161,6 +187,31 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             let arm = if let Some(mapper) = &mapping.with {
                 // The mapper consumes the whole selected source; supports genuine shape changes.
                 quote! { value @ #case { .. } => Ok(#mapper(value)) }
+            } else if mapping.into {
+                if *whole_value {
+                    return Err(syn::Error::new_spanned(
+                        case,
+                        "an `into` lift requires a source variant (`Source::Variant`)",
+                    ));
+                }
+                // Only the payload is converted. The tuple pattern makes rustc
+                // check that the source also has exactly one unnamed field.
+                let converted = quote!(::core::convert::Into::into(payload));
+                match &variant.fields {
+                    Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
+                        quote! { #case(payload) => Ok(Self::#dest(#converted)) }
+                    }
+                    Fields::Named(fields) if fields.named.len() == 1 => {
+                        let field = &fields.named[0].ident;
+                        quote! { #case(payload) => Ok(Self::#dest { #field: #converted }) }
+                    }
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            &variant.ident,
+                            "an `into` lift needs exactly one destination field",
+                        ));
+                    }
+                }
             } else if let Some(field) = &mapping.field {
                 // A projection of one field out of the source variant's
                 // payload. `#case(payload)` is a tuple-destructuring

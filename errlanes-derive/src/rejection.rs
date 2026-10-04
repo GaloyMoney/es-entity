@@ -343,7 +343,7 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
         let mut whole_value_source: Option<Path> = None;
         // Lift owns conversion generation. Its mapping also identifies the
         // default metadata source; no Lift implementation is required here.
-        if forward.is_none() && v.code.is_none() && v.level.is_none() && !v.delegate {
+        if forward.is_none() && v.code.is_none() && !v.delegate {
             let mappings: Vec<_> = raw
                 .attrs
                 .iter()
@@ -351,7 +351,16 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                 .map(|a| a.parse_args::<crate::lift::Mapping>())
                 .collect::<syn::Result<_>>()
                 .map_err(darling::Error::from)?;
-            if mappings.len() > 1 {
+            // Converted fields cannot stand in for the source variant's fields
+            // when evaluating metadata, even if only the level is overridden.
+            if mappings.iter().any(|mapping| mapping.into) {
+                return Err(darling::Error::custom(
+                    "an `into` lift requires an explicit rejection code or \
+                     `#[rejection(delegate)]`",
+                )
+                .with_span(&v.ident));
+            }
+            if v.level.is_none() && mappings.len() > 1 {
                 return Err(darling::Error::custom(
                     "multiple source variants require an explicit canonical rejection code",
                 )
@@ -366,18 +375,20 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                 // projection keeps only the one named field, not the whole
                 // source payload, so there is nothing of the right shape to
                 // forward with — same restriction, same message family.
-                if mapping.with.is_none() && mapping.field.is_none() {
-                    if mapping.case.segments.len() >= 2 {
-                        forward = Some(mapping.case);
+                if v.level.is_none() {
+                    if mapping.with.is_none() && mapping.field.is_none() {
+                        if mapping.case.segments.len() >= 2 {
+                            forward = Some(mapping.case);
+                        } else {
+                            whole_value_source = Some(mapping.case);
+                        }
                     } else {
-                        whole_value_source = Some(mapping.case);
+                        return Err(darling::Error::custom(
+                            "a payload mapper or a `field` projection requires an explicit \
+                             rejection code",
+                        )
+                        .with_span(&v.ident));
                     }
-                } else {
-                    return Err(darling::Error::custom(
-                        "a payload mapper or a `field` projection requires an explicit \
-                         rejection code",
-                    )
-                    .with_span(&v.ident));
                 }
             }
         }
