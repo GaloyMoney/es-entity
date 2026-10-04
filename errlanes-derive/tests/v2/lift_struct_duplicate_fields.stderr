@@ -1,0 +1,11 @@
+error: source field mapped more than once
+ --> tests/v2/lift_struct_duplicate_fields.rs:5:19
+  |
+5 |     #[lift(from = value)]
+  |                   ^^^^^
+
+error: duplicate field lift mapping
+  --> tests/v2/lift_struct_duplicate_fields.rs:13:5
+   |
+13 |     #[lift(from = other)]
+   |     ^

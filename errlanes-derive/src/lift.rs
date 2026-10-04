@@ -71,14 +71,15 @@ impl Parse for Mapping {
     }
 }
 pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
+    if let syn::Data::Struct(data) = &input.data {
+        return derive_struct(input, data);
+    }
     let syn::Data::Enum(data) = &input.data else {
         return Err(syn::Error::new_spanned(
             input,
-            "Lift can only be derived for enums",
+            "Lift can only be derived for enums or named-field structs",
         ));
     };
-    let name = &input.ident;
-    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     let mut registrations = Vec::new();
     for attr in &input.attrs {
         if attr.path().is_ident("lift") {
@@ -88,6 +89,14 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
     let mut mappings = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for variant in &data.variants {
+        for field in &variant.fields {
+            if let Some(attr) = field.attrs.iter().find(|a| a.path().is_ident("lift")) {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "field lift mappings are only supported on struct destinations",
+                ));
+            }
+        }
         for attr in &variant.attrs {
             if !attr.path().is_ident("lift") {
                 continue;
@@ -213,32 +222,188 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             };
             arms.push(quote! { #(#cfg)* #arm });
         }
-        // Strict mode emits only `From`: errlanes' blanket `impl<X, P: From<X>>
-        // Lift<X> for P` supplies the `Lift` view with `Unmapped = Infallible`,
-        // so one call-site method (`widen`) covers strict and partial alike.
-        // Emitting both here would collide with that blanket (E0119).
-        if registration.partial {
-            out.extend(quote! {
-                impl #impl_generics errlanes::Lift<#source> for #name #ty_generics #where_clause {
-                    type Unmapped = #source;
-                    fn lift(source: #source) -> Result<Self, Self::Unmapped> {
-                        match source { #(#arms,)* unhandled => Err(unhandled) }
+        out.extend(conversion_impl(input, &source, registration.partial, &arms));
+    }
+    Ok(out)
+}
+
+fn conversion_impl(
+    input: &syn::DeriveInput,
+    source: &Path,
+    partial: bool,
+    arms: &[TokenStream],
+) -> TokenStream {
+    let name = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    // Strict mode emits only `From`: errlanes' blanket `impl<X, P: From<X>>
+    // Lift<X> for P` supplies the `Lift` view with `Unmapped = Infallible`,
+    // so one call-site method (`widen`) covers strict and partial alike.
+    // Emitting both here would collide with that blanket (E0119).
+    if partial {
+        quote! {
+            impl #impl_generics errlanes::Lift<#source> for #name #ty_generics #where_clause {
+                type Unmapped = #source;
+                fn lift(source: #source) -> Result<Self, Self::Unmapped> {
+                    match source { #(#arms,)* unhandled => Err(unhandled) }
+                }
+            }
+        }
+    } else {
+        quote! {
+            impl #impl_generics From<#source> for #name #ty_generics #where_clause {
+                fn from(source: #source) -> Self {
+                    let mapped: Result<Self, core::convert::Infallible> =
+                        match source { #(#arms,)* };
+                    match mapped {
+                        Ok(mapped) => mapped, Err(never) => match never {},
                     }
                 }
-            });
-        } else {
-            out.extend(quote! {
-                impl #impl_generics From<#source> for #name #ty_generics #where_clause {
-                    fn from(source: #source) -> Self {
-                        let mapped: Result<Self, core::convert::Infallible> =
-                            match source { #(#arms,)* };
-                        match mapped {
-                            Ok(mapped) => mapped, Err(never) => match never {},
+            }
+        }
+    }
+}
+
+/// A struct maps exactly one named-field source variant into its own fields.
+/// Keep this grammar separate from enum registrations: `variant` is meaningful
+/// only on a struct destination, and enum mappings retain their existing syntax.
+struct StructRegistration {
+    source: Path,
+    variant: syn::Ident,
+    partial: bool,
+}
+
+impl Parse for StructRegistration {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let source: Path = input.parse()?;
+        let mut variant = None;
+        let mut partial = None;
+        while input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+            if input.is_empty() {
+                break;
+            }
+            let key: syn::Ident = input.parse()?;
+            match key.to_string().as_str() {
+                "variant" => {
+                    if variant.is_some() {
+                        return Err(syn::Error::new_spanned(key, "duplicate `variant`"));
+                    }
+                    input.parse::<Token![=]>()?;
+                    variant = Some(input.parse()?);
+                }
+                "strict" | "unhandled" => {
+                    if partial.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "choose either `strict` or `unhandled = fatal` once",
+                        ));
+                    }
+                    partial = Some(key == "unhandled");
+                    if key == "unhandled" {
+                        input.parse::<Token![=]>()?;
+                        let fatal: syn::Ident = input.parse()?;
+                        if fatal != "fatal" {
+                            return Err(syn::Error::new_spanned(fatal, "expected fatal"));
                         }
                     }
                 }
-            });
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        "expected `variant = Case`, `strict`, or `unhandled = fatal`",
+                    ));
+                }
+            }
         }
+        let variant = variant.ok_or_else(|| {
+            syn::Error::new_spanned(&source, "a struct lift requires `variant = Case`")
+        })?;
+        Ok(Self {
+            source,
+            variant,
+            partial: partial.unwrap_or(false),
+        })
     }
-    Ok(out)
+}
+
+struct SourceField(syn::Ident);
+
+impl Parse for SourceField {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let key: syn::Ident = input.parse()?;
+        if key != "from" {
+            return Err(syn::Error::new_spanned(
+                key,
+                "expected `from = source_field`",
+            ));
+        }
+        input.parse::<Token![=]>()?;
+        let field = input.parse()?;
+        if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+        }
+        Ok(Self(field))
+    }
+}
+
+fn derive_struct(input: &syn::DeriveInput, data: &syn::DataStruct) -> syn::Result<TokenStream> {
+    let Fields::Named(fields) = &data.fields else {
+        return Err(syn::Error::new_spanned(
+            input,
+            "a struct lift requires named fields",
+        ));
+    };
+    let mut attrs = input.attrs.iter().filter(|a| a.path().is_ident("lift"));
+    let attr = attrs.next().ok_or_else(|| {
+        syn::Error::new_spanned(
+            &input.ident,
+            "a struct lift requires #[lift(Source, variant = Case)]",
+        )
+    })?;
+    if let Some(extra) = attrs.next() {
+        return Err(syn::Error::new_spanned(
+            extra,
+            "a struct lift supports exactly one source registration",
+        ));
+    }
+    let StructRegistration {
+        source,
+        variant,
+        partial,
+    } = attr.parse_args()?;
+    let mut case = source.clone();
+    // Infer the enum's arguments from the match scrutinee. Explicit lifetime
+    // arguments are not permitted on variant patterns.
+    case.segments.last_mut().expect("source path").arguments = syn::PathArguments::None;
+    case.segments.push(variant.into());
+    let mut bindings = Vec::new();
+    let mut assignments = Vec::new();
+    let mut sources = std::collections::HashSet::new();
+    for (i, field) in fields.named.iter().enumerate() {
+        let dest = field.ident.as_ref().expect("named field");
+        let mut attrs = field.attrs.iter().filter(|a| a.path().is_ident("lift"));
+        let from = match attrs.next() {
+            Some(attr) => attr.parse_args::<SourceField>()?.0,
+            None => dest.clone(),
+        };
+        if let Some(extra) = attrs.next() {
+            return Err(syn::Error::new_spanned(
+                extra,
+                "duplicate field lift mapping",
+            ));
+        }
+        if !sources.insert(from.to_string().trim_start_matches("r#").to_owned()) {
+            return Err(syn::Error::new_spanned(
+                from,
+                "source field mapped more than once",
+            ));
+        }
+        let binding = format_ident!("__lift_field_{i}");
+        bindings.push(quote! { #from: #binding });
+        assignments.push(quote! { #dest: #binding });
+    }
+    // No `..`: rustc checks the complete source payload, including missing
+    // fields and shape/type mismatches. No fields are silently discarded.
+    let arm = quote! { #case { #(#bindings),* } => Ok(Self { #(#assignments),* }) };
+    Ok(conversion_impl(input, &source, partial, &[arm]))
 }

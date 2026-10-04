@@ -1,0 +1,12 @@
+error[E0277]: the trait bound `Destination: From<Source>` is not satisfied
+  --> tests/v2/lift_struct_partial_not_from.rs:10:53
+   |
+10 |     let _: Destination = Source::Value { value: 1 }.into();
+   |                                                     ^^^^ unsatisfied trait bound
+   |
+help: the trait `From<Source>` is not implemented for `Destination`
+  --> tests/v2/lift_struct_partial_not_from.rs:7:1
+   |
+ 7 | struct Destination { value: u32 }
+   | ^^^^^^^^^^^^^^^^^^
+   = note: required for `Source` to implement `Into<Destination>`

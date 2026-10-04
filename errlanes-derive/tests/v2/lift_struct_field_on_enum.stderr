@@ -1,0 +1,5 @@
+error: field lift mappings are only supported on struct destinations
+ --> tests/v2/lift_struct_field_on_enum.rs:8:9
+  |
+8 |         #[lift(from = right)]
+  |         ^

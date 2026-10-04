@@ -1,0 +1,21 @@
+error[E0277]: the trait bound `Source: UnmappedInto<Infallible>` is not satisfied
+  --> tests/v2/lift_struct_partial_without_fatal.rs:12:12
+   |
+12 |     result.widen()
+   |            ^^^^^ unsatisfied trait bound
+   |
+help: the trait `UnmappedInto<Infallible>` is not implemented for `Source`
+  --> tests/v2/lift_struct_partial_without_fatal.rs:4:1
+   |
+ 4 | enum Source { Value { value: u32 }, Other }
+   | ^^^^^^^^^^^
+   = help: the trait `UnmappedInto<F>` is implemented for `Infallible`
+   = note: required for `Result<(), Source>` to implement `WidenResult<(), Fail<Destination, Profile<false, false, false>>>`
+note: required by a bound in `errlanes::ResultExt::widen`
+  --> $WORKSPACE/errlanes/src/result_ext.rs
+   |
+   |     fn widen<E2>(self) -> Result<T, E2>
+   |        ----- required by a bound in this associated function
+   |     where
+   |         Self: WidenResult<T, E2>;
+   |               ^^^^^^^^^^^^^^^^^^ required by this bound in `ResultExt::widen`

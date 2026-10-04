@@ -1,0 +1,11 @@
+error: expected `from = source_field`
+ --> tests/v2/lift_struct_invalid_field_attribute.rs:4:12
+  |
+4 |     #[lift(field = value)]
+  |            ^^^^^
+
+error: unexpected token
+  --> tests/v2/lift_struct_invalid_field_attribute.rs:11:26
+   |
+11 |     #[lift(from = value, with = mapper)]
+   |                          ^^^^
