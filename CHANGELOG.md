@@ -1,3 +1,11 @@
+# [cala release v0.16.7](https://github.com/GaloyMoney/cala/releases/tag/0.16.7)
+
+
+
+### Features
+
+- Derive Lift for named-field struct destinations (#258)
+
 # [cala release v0.16.6](https://github.com/GaloyMoney/cala/releases/tag/0.16.6)
 
 
