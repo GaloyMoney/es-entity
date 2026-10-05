@@ -1,3 +1,11 @@
+# [cala release v0.16.11](https://github.com/GaloyMoney/cala/releases/tag/0.16.11)
+
+
+
+### Features
+
+- Derive field projections into newtypes (#262)
+
 # [cala release v0.16.10](https://github.com/GaloyMoney/cala/releases/tag/0.16.10)
 
 

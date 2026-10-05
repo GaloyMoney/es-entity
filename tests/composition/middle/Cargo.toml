@@ -1,6 +1,6 @@
 [package]
 name = "repo-composition-middle"
-version = "0.16.11-dev"
+version = "0.16.11"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
