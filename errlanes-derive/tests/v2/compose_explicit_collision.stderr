@@ -1,0 +1,10 @@
+error: composed variant name collision; declare a local compose(merge) variant, list explicit merge participants, or import the source under an `as` prefix
+ --> tests/v2/compose_explicit_collision.rs:5:17
+  |
+5 | #[derive(Debug, errlanes::Rejection)]
+  |                 ^^^^^^^^^^^^^^^^^^^
+...
+8 | #[errlanes::compose(Left, Right, AddedLater)]
+  | --------------------------------------------- in this attribute macro expansion
+  |
+  = note: this error originates in the macro `errlanes::__compose_rejection` which comes from the expansion of the attribute macro `errlanes::compose` (in Nightly builds, run with -Z macro-backtrace for more info)

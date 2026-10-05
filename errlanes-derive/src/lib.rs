@@ -91,12 +91,13 @@ pub fn derive_failure(input: TokenStream) -> TokenStream {
     expand(input, failure::derive)
 }
 
-/// Compose rejection families using prefixed `#[compose(flatten)]` placeholders,
-/// or `#[compose(union(SourceA, SourceB))]` to import original variant names.
-/// Union collisions require local `#[compose(merge)]` variants; use
-/// `#[compose(merge(SourceA::Case, SourceB::OtherCase))]` to select participants
-/// explicitly. Merged variants own their metadata through an explicit rejection
-/// code or payload delegation. Both forms generate total lifts from each source.
+/// Compose rejection families from a list of sources: `Source` imports every
+/// case under its original variant name, `Source as Prefix` under a prefixed
+/// one. Collisions between unprefixed sources require a local
+/// `#[compose(merge)]` variant; use `#[compose(merge(SourceA::Case,
+/// SourceB::OtherCase))]` to select participants explicitly. Merged variants
+/// own their metadata through an explicit rejection code or payload
+/// delegation. Every source gets a total lift.
 #[proc_macro_attribute]
 pub fn compose(args: TokenStream, input: TokenStream) -> TokenStream {
     match syn::parse::<syn::ItemEnum>(input)

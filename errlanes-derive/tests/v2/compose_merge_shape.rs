@@ -3,7 +3,7 @@ enum Left { Shared(u32) }
 #[derive(Debug, errlanes::Rejection)]
 enum Right { Shared(String) }
 
-#[errlanes::compose(union(Left, Right))]
+#[errlanes::compose(Left, Right)]
 #[derive(Debug)]
 enum WrongType {
     #[compose(merge)]
@@ -11,7 +11,7 @@ enum WrongType {
     Shared(u32),
 }
 
-#[errlanes::compose(union(Left))]
+#[errlanes::compose(Left)]
 #[derive(Debug)]
 enum WrongShape {
     #[compose(merge)]

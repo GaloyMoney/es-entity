@@ -5,7 +5,7 @@ enum Right { Shared }
 #[derive(Debug, errlanes::Rejection)]
 enum AddedLater { Shared }
 
-#[errlanes::compose(union(Left, Right, AddedLater))]
+#[errlanes::compose(Left, Right, AddedLater)]
 enum ReviewedParticipants {
     #[compose(merge(Left::Shared, Right::Shared))]
     #[rejection(code = "CANONICAL")]

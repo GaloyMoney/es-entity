@@ -1,35 +1,35 @@
-error: compose(merge) did not match any union source variant
-  --> tests/v2/union_merge_participants.rs:40:5
+error: compose(merge) did not match any composition source variant
+  --> tests/v2/compose_merge_participants.rs:40:5
    |
 40 | /     #[rejection(code = "CANONICAL")]
 41 | |     Missing,
    | |___________^
 
 error: source variant selected by both a name merge and an explicit merge
-  --> tests/v2/union_merge_participants.rs:1:17
+  --> tests/v2/compose_merge_participants.rs:1:17
    |
  1 | #[derive(Debug, errlanes::Rejection)]
    |                 ^^^^^^^^^^^^^^^^^^^
 ...
-27 | #[errlanes::compose(union(Left))]
-   | --------------------------------- in this attribute macro expansion
+27 | #[errlanes::compose(Left)]
+   | -------------------------- in this attribute macro expansion
    |
    = note: this error originates in the macro `errlanes::__compose_rejection` which comes from the expansion of the attribute macro `errlanes::compose` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: source variant merged more than once
-  --> tests/v2/union_merge_participants.rs:22:35
+  --> tests/v2/compose_merge_participants.rs:22:35
    |
 22 |     #[compose(merge(Left::Shared, Left::Shared))]
    |                                   ^^^^^^^^^^^^
 
-error: merge participant is not a variant of a listed union source
-  --> tests/v2/union_merge_participants.rs:15:21
+error: merge participant is not a variant of a listed composition source
+  --> tests/v2/compose_merge_participants.rs:15:21
    |
 15 |     #[compose(merge(Right::Shared))]
    |                     ^^^^^^^^^^^^^
 
-error: merge participant is not a variant of a listed union source
- --> tests/v2/union_merge_participants.rs:8:21
+error: merge participant is not a variant of a listed composition source
+ --> tests/v2/compose_merge_participants.rs:8:21
   |
 8 |     #[compose(merge(Left::Missing))]
   |                     ^^^^^^^^^^^^^

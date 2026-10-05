@@ -1,0 +1,23 @@
+error: #[compose(merge)] needs sources to merge; list them as #[errlanes::compose(Source, Other as Prefix)]
+  --> tests/v2/compose_variant_arguments.rs:22:5
+   |
+22 |     #[compose(merge)]
+   |     ^^^^^^^^^^^^^^^^^
+
+error: `flatten` is not a composition attribute; list the family as #[errlanes::compose(Source as Prefix)]
+  --> tests/v2/compose_variant_arguments.rs:29:5
+   |
+29 |     #[flatten]
+   |     ^^^^^^^^^^
+
+error: whole-family imports are listed on the attribute: write #[errlanes::compose(Source as Prefix)] and drop this placeholder variant
+  --> tests/v2/compose_variant_arguments.rs:16:15
+   |
+16 |     #[compose(flatten)]
+   |               ^^^^^^^
+
+error: expected compose(merge) or compose(merge(Source::Variant, ...))
+ --> tests/v2/compose_variant_arguments.rs:8:15
+  |
+8 |     #[compose(rename)]
+  |               ^^^^^^

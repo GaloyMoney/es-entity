@@ -8,11 +8,9 @@ enum Prepare {
     Missing(String),
 }
 
-#[errlanes::compose]
+#[errlanes::compose(Prepare as Posting)]
 #[derive(Debug)]
 enum BatchPrepare {
-    #[compose(flatten)]
-    Posting(Prepare),
     Duplicate,
 }
 

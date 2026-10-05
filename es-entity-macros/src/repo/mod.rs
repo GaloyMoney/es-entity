@@ -589,7 +589,7 @@ mod tests {
         };
         let out = derive(nested).unwrap().to_string();
         assert!(out.contains("pub enum OrderConstraintViolation"));
-        assert!(out.contains("compose (flatten)"));
+        assert!(out.contains("compose (OrderItemConstraintViolation as Items)"));
     }
 
     /// The id-only primary key gets the non-optional `Pkey(IdConflict<IdTy>)`

@@ -20,12 +20,10 @@ enum Constraint {
     Pkey,
 }
 
-#[errlanes::compose]
+#[errlanes::compose(Enforcement as Velocity)]
 #[derive(Debug)]
 #[lift(Constraint, unhandled = fatal)]
 enum Operation {
-    #[compose(flatten)]
-    Velocity(Enforcement),
     #[lift(Constraint::Code)]
     #[rejection(code = "ACCOUNT_CODE_ALREADY_EXISTS")]
     CodeAlreadyExists(String),
@@ -116,12 +114,10 @@ fn bare_rejection_widens_through_a_partial_mapping() {
 }
 
 // Explicit strict lifts preserve custom or previously unprefixed names.
-#[errlanes::compose]
+#[errlanes::compose(Constraint as Repo)]
 #[derive(Debug)]
 #[lift(Enforcement)]
 enum CustomNames {
-    #[compose(flatten)]
-    Repo(Constraint),
     #[lift(Enforcement::Limit)]
     Limit(u64),
     #[lift(Enforcement::Disabled)]

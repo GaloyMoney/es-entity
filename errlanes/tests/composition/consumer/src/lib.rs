@@ -1,10 +1,8 @@
 use errlanes::{Fail, Fault, Rejection, ResultExt, lanes};
 
-#[errlanes::compose]
+#[errlanes::compose(middle::Posting as Post)]
 #[derive(Debug)]
 pub enum Api {
-    #[compose(flatten)]
-    Post(middle::Posting),
     #[error("local")]
     Local,
 }
@@ -61,7 +59,7 @@ pub fn check() {
     ));
 }
 
-#[errlanes::compose(union(middle::Combined))]
+#[errlanes::compose(middle::Combined)]
 #[derive(Debug)]
 pub enum UnionApi {}
 

@@ -701,11 +701,9 @@ enum Prepare {
     MissingArgument(String),
 }
 
-#[errlanes::compose]
+#[errlanes::compose(Prepare as Posting)]
 #[derive(Debug)]
 enum BatchPrepare {
-    #[compose(flatten)]
-    Posting(Prepare),
     DuplicateInput,
 }
 
@@ -902,7 +900,12 @@ always a method call and not a `From` (see "Narrowing a lane" above).
 An outer domain may also want to expose every case from an inner rejection
 family, including cases added in the future. In that situation, there is no
 individual mapping decision to make for each case.
-`#[errlanes::compose]` expresses that relationship directly:
+`#[errlanes::compose(..)]` expresses that relationship directly. It takes the
+source families to import and generates both `Rejection` and `Lift` for the
+composed enum.
+
+A source listed as `Source as Prefix` imports every one of its cases under a
+prefixed name:
 
 ```rust
 use errlanes::Rejection;
@@ -913,11 +916,9 @@ pub enum Validation {
     InvalidAmount,
 }
 
-#[errlanes::compose]
+#[errlanes::compose(Validation as Amount)]
 #[derive(Debug)]
 pub enum Payment {
-    #[compose(flatten)]
-    Amount(Validation),
     WindowClosed,
 }
 
@@ -926,25 +927,25 @@ assert!(matches!(payment, Payment::AmountInvalidAmount));
 assert_eq!(Into::<&'static str>::into(payment.code()), "INVALID_AMOUNT");
 ```
 
-The placeholder `Amount(Validation)` expands into real variants such as
-`AmountInvalidAmount`. Its name supplies the prefix; the imported cases keep
-their payloads, codes, levels, formatting, and sources. The attribute supplies
-both `Rejection` and `Lift`, including total `From` conversions, so the
-resulting family supports `.widen()?` just like the explicit mapping above,
-and it can sit alongside explicit lifts from other sources.
+`Validation as Amount` expands into real variants such as
+`AmountInvalidAmount`. The imported cases keep their payloads, codes, levels,
+formatting, and sources. The attribute supplies both `Rejection` and `Lift`,
+including total `From` conversions, so the resulting family supports
+`.widen()?` just like the explicit mapping above, and it can sit alongside
+explicit lifts from other sources.
 
 Composition includes new source cases automatically. Explicit lifts are
 useful when each addition needs review or individual cases need different
 names. When an outer layer adds no semantics of its own, it can simply reuse
 the inner rejection type.
 
-### Unions with shared outcomes
+### Shared outcomes across sources
 
-Use `#[errlanes::compose(union(SourceA, SourceB))]` to import complete
-families under their original variant names. Unique variants keep their
-payloads, codes, levels, display, and error sources. When names overlap,
-declare a local `#[compose(merge)]` variant to receive every source case
-with that name:
+A source listed without `as` imports its cases under their original variant
+names, which is what lets several families share one outcome. Unique
+variants keep their payloads, codes, levels, display, and error sources.
+When names overlap, declare a local `#[compose(merge)]` variant to receive
+every source case with that name:
 
 ```rust
 use errlanes::Rejection;
@@ -971,7 +972,7 @@ pub enum AddSetMembersRejection {
     JournalIdMismatch,
 }
 
-#[errlanes::compose(union(AddAccountMembersRejection, AddSetMembersRejection))]
+#[errlanes::compose(AddAccountMembersRejection, AddSetMembersRejection)]
 #[derive(Debug)]
 pub enum AddMemberRejection {
     #[compose(merge)]
@@ -1010,7 +1011,7 @@ list them explicitly:
 # pub enum Accounts { Missing { id: u64 } }
 # #[derive(Debug, errlanes::Rejection)]
 # pub enum Sets { NotFound { id: u64 } }
-#[errlanes::compose(union(Accounts, Sets))]
+#[errlanes::compose(Accounts, Sets)]
 #[derive(Debug)]
 pub enum LookupRejection {
     #[compose(merge(Accounts::Missing, Sets::NotFound))]
@@ -1025,19 +1026,46 @@ assert!(matches!(
 ));
 ```
 
-Explicit participants must name actual variants using the source paths
-listed in `union(...)`. A source case cannot target two merged variants.
-Unresolved name collisions, empty or unmatched merges, duplicate sources,
-and incompatible payloads are compile errors. A shared composition origin
-arriving along multiple paths must resolve to one canonical destination.
+Explicit participants must name actual variants of the sources listed on the
+attribute. A source case cannot target two merged variants. Unresolved name
+collisions, empty or unmatched merges, duplicate sources, and incompatible
+payloads are compile errors. A shared composition origin arriving along
+multiple paths must resolve to one canonical destination.
 
 New unique source cases are included automatically. A name-based merge also
 accepts new source cases with that name, subject to Rust's type checks; an
 explicit participant list does not absorb them. Use explicit exhaustive
-`#[lift]` mappings when every source addition needs review. Unions can also
-contain local cases, prefixed `#[compose(flatten)]` placeholders, and lifts
-from other source families. Source enums remain independently usable with
-their original, narrower contracts.
+`#[lift]` mappings when every source addition needs review. A prefix exists
+to keep a family's cases distinct, so a prefixed source never joins a
+name-based merge, though an explicit participant list can still pull one of
+its cases to a canonical destination.
+
+### Mixing both forms
+
+One attribute takes any number of sources in either form, alongside local
+cases and lifts from other families:
+
+```rust
+# use errlanes::Rejection;
+# #[derive(Debug, errlanes::Rejection)]
+# pub enum Accounts { Missing { id: u64 } }
+# #[derive(Debug, errlanes::Rejection)]
+# pub enum Ledger { Closed }
+#[errlanes::compose(Accounts, Ledger as Ledger)]
+#[derive(Debug)]
+pub enum Posting {
+    Unbalanced,
+}
+
+assert!(matches!(
+    Posting::from(Accounts::Missing { id: 1 }),
+    Posting::Missing { id: 1 },
+));
+assert!(matches!(Posting::from(Ledger::Closed), Posting::LedgerClosed));
+```
+
+Source enums remain independently usable with their original, narrower
+contracts.
 
 ---
 
