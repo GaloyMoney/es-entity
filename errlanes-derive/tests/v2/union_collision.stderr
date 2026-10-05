@@ -1,0 +1,21 @@
+error: union variant name collision; declare a local compose(merge) variant or list explicit merge participants
+ --> tests/v2/union_collision.rs:1:17
+  |
+1 | #[derive(Debug, errlanes::Rejection)]
+  |                 ^^^^^^^^^^^^^^^^^^^
+...
+9 | #[errlanes::compose(union(Left))]
+  | --------------------------------- in this attribute macro expansion
+  |
+  = note: this error originates in the macro `errlanes::__compose_rejection` which comes from the expansion of the attribute macro `errlanes::compose` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: union variant name collision; declare a local compose(merge) variant or list explicit merge participants
+ --> tests/v2/union_collision.rs:3:17
+  |
+3 | #[derive(Debug, errlanes::Rejection)]
+  |                 ^^^^^^^^^^^^^^^^^^^
+...
+6 | #[errlanes::compose(union(Left, Right))]
+  | ---------------------------------------- in this attribute macro expansion
+  |
+  = note: this error originates in the macro `errlanes::__compose_rejection` which comes from the expansion of the attribute macro `errlanes::compose` (in Nightly builds, run with -Z macro-backtrace for more info)

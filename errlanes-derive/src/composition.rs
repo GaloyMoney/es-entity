@@ -1,3 +1,5 @@
+mod union;
+
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use syn::{ItemEnum, Token, parse::Parse, parse_quote};
@@ -99,6 +101,14 @@ pub fn schema(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         #[doc(hidden)]
         #vis use #helper as #exported;
     })
+}
+
+pub fn compose(args: TokenStream, item: ItemEnum) -> syn::Result<TokenStream> {
+    if args.is_empty() {
+        expand(item)
+    } else {
+        union::start(args, item)
+    }
 }
 
 fn is_placeholder(variant: &syn::Variant) -> bool {
@@ -214,8 +224,13 @@ pub fn expand(mut item: ItemEnum) -> syn::Result<TokenStream> {
     Ok(quote! { #helper!(errlanes::__compose_rejection, [#item], #source); })
 }
 
+enum Context {
+    Flatten(ItemEnum),
+    Union(union::Context),
+}
+
 struct Callback {
-    item: ItemEnum,
+    context: Context,
     source: syn::Type,
     schema: syn::LitStr,
 }
@@ -223,11 +238,16 @@ impl Parse for Callback {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let item;
         syn::bracketed!(item in input);
-        let item = item.parse()?;
+        let context = if item.peek(Token![union]) {
+            item.parse::<Token![union]>()?;
+            Context::Union(item.parse()?)
+        } else {
+            Context::Flatten(item.parse()?)
+        };
         let source;
         syn::bracketed!(source in input);
         Ok(Self {
-            item,
+            context,
             source: source.parse()?,
             schema: input.parse()?,
         })
@@ -235,13 +255,10 @@ impl Parse for Callback {
 }
 pub fn callback(input: TokenStream) -> syn::Result<TokenStream> {
     let Callback {
-        mut item,
+        context,
         source,
         schema,
     } = syn::parse2(input)?;
-    let index = item.variants.iter().position(is_placeholder).unwrap();
-    let placeholder = &item.variants[index];
-    let prefix = placeholder.ident.to_string();
     fn substitute(tokens: TokenStream, source: &syn::Type) -> TokenStream {
         use proc_macro2::{Group, TokenTree};
         tokens
@@ -260,6 +277,13 @@ pub fn callback(input: TokenStream) -> syn::Result<TokenStream> {
     }
     let variants = substitute(schema.value().parse()?, &source);
     let parsed: ItemEnum = syn::parse2(quote!(enum Schema { #variants }))?;
+    let mut item = match context {
+        Context::Union(context) => return context.receive(parsed.variants),
+        Context::Flatten(item) => item,
+    };
+    let index = item.variants.iter().position(is_placeholder).unwrap();
+    let placeholder = &item.variants[index];
+    let prefix = placeholder.ident.to_string();
     let mut names: std::collections::HashSet<String> = item
         .variants
         .iter()
@@ -267,22 +291,6 @@ pub fn callback(input: TokenStream) -> syn::Result<TokenStream> {
         .filter(|(i, _)| *i != index)
         .map(|(_, v)| v.ident.to_string())
         .collect();
-    fn origin(variant: &syn::Variant) -> syn::Result<Option<String>> {
-        let mut origin = None;
-        for attr in &variant.attrs {
-            if attr.path().is_ident("rejection") {
-                attr.parse_nested_meta(|meta| {
-                    if meta.path.is_ident("origin") {
-                        origin = Some(meta.value()?.parse::<syn::LitStr>()?.value());
-                    } else if meta.input.peek(Token![=]) {
-                        let _: syn::Expr = meta.value()?.parse()?;
-                    }
-                    Ok(())
-                })?;
-            }
-        }
-        Ok(origin)
-    }
     let mut origins = std::collections::HashSet::new();
     for variant in &item.variants {
         if let Some(origin) = origin(variant)? {
@@ -326,4 +334,21 @@ pub fn callback(input: TokenStream) -> syn::Result<TokenStream> {
     item.variants = variants;
     item.attrs.push(parse_quote!(#[lift(#source, strict)]));
     expand(item)
+}
+
+fn origin(variant: &syn::Variant) -> syn::Result<Option<String>> {
+    let mut origin = None;
+    for attr in &variant.attrs {
+        if attr.path().is_ident("rejection") {
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("origin") {
+                    origin = Some(meta.value()?.parse::<syn::LitStr>()?.value());
+                } else if meta.input.peek(Token![=]) {
+                    let _: syn::Expr = meta.value()?.parse()?;
+                }
+                Ok(())
+            })?;
+        }
+    }
+    Ok(origin)
 }
