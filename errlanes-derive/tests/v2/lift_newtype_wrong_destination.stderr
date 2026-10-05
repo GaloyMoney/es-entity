@@ -1,0 +1,17 @@
+error: a tuple struct lift requires exactly one field
+ --> tests/v2/lift_newtype_wrong_destination.rs:5:13
+  |
+5 | struct Empty();
+  |             ^^
+
+error: a tuple struct lift requires exactly one field
+ --> tests/v2/lift_newtype_wrong_destination.rs:9:16
+  |
+9 | struct Multiple(u32, u32);
+  |                ^^^^^^^^^^
+
+error: expected `variant = Case`, `strict`, or `unhandled = fatal`
+  --> tests/v2/lift_newtype_wrong_destination.rs:12:16
+   |
+12 | #[lift(Source, field = value)]
+   |                ^^^^^

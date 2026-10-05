@@ -1,0 +1,47 @@
+error: a tuple struct lift requires `field = name`
+ --> tests/v2/lift_newtype_invalid_registration.rs:4:8
+  |
+4 | #[lift(Source)]
+  |        ^^^^^^
+
+error: duplicate `field`
+ --> tests/v2/lift_newtype_invalid_registration.rs:8:31
+  |
+8 | #[lift(Source, field = value, field = value)]
+  |                               ^^^^^
+
+error: a struct lift supports exactly one source registration
+  --> tests/v2/lift_newtype_invalid_registration.rs:13:1
+   |
+13 | #[lift(Source, field = value)]
+   | ^
+
+error: a tuple struct lift supports only `field = name`
+  --> tests/v2/lift_newtype_invalid_registration.rs:17:16
+   |
+17 | #[lift(Source, variant = Value, field = value)]
+   |                ^^^^^^^
+
+error: a tuple struct lift supports only `field = name`
+  --> tests/v2/lift_newtype_invalid_registration.rs:21:31
+   |
+21 | #[lift(Source, field = value, unhandled = fatal)]
+   |                               ^^^^^^^^^
+
+error: a tuple struct lift supports only `field = name`
+  --> tests/v2/lift_newtype_invalid_registration.rs:25:31
+   |
+25 | #[lift(Source, field = value, into)]
+   |                               ^^^^
+
+error: a tuple struct lift supports only `field = name`
+  --> tests/v2/lift_newtype_invalid_registration.rs:29:31
+   |
+29 | #[lift(Source, field = value, with = mapper)]
+   |                               ^^^^
+
+error: put the field projection on the struct: #[lift(Source, field = name)]
+  --> tests/v2/lift_newtype_invalid_registration.rs:34:23
+   |
+34 | struct FieldAttribute(#[lift(from = value)] u32);
+   |                       ^
