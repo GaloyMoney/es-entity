@@ -1,7 +1,5 @@
-#[errlanes::compose]
+#[errlanes::compose(foreign::LaneParentConstraintViolation as Order)]
 #[derive(Debug)]
 pub enum WriteRejection {
-    #[compose(flatten)]
-    Order(foreign::LaneParentConstraintViolation),
     Local,
 }

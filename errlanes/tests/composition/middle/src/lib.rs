@@ -1,8 +1,6 @@
-#[lanes_runtime::compose]
+#[lanes_runtime::compose(renamed::Enforcement as Velocity)]
 #[derive(Debug)]
 pub enum Posting {
-    #[compose(flatten)]
-    Velocity(renamed::Enforcement),
     #[error("batch too large")]
     Batch,
 }
@@ -10,7 +8,7 @@ pub fn limit() -> Posting {
     renamed::Enforcement::Limit(renamed::domain::Limit(42)).into()
 }
 
-#[lanes_runtime::compose(union(renamed::Enforcement, renamed::Secondary))]
+#[lanes_runtime::compose(renamed::Enforcement, renamed::Secondary)]
 #[derive(Debug)]
 pub enum Combined {
     #[compose(merge)]

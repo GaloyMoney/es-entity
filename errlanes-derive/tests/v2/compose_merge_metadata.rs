@@ -3,13 +3,13 @@ enum Left { Shared }
 #[derive(Debug, errlanes::Rejection)]
 enum Right { Shared }
 
-#[errlanes::compose(union(Left, Right))]
+#[errlanes::compose(Left, Right)]
 enum NoCanonicalMetadata {
     #[compose(merge)]
     Shared,
 }
 
-#[errlanes::compose(union(Left, Right))]
+#[errlanes::compose(Left, Right)]
 enum LevelOnly {
     #[compose(merge)]
     #[rejection(level = "warn")]

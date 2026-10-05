@@ -1,29 +1,25 @@
-error: expected `union`
- --> tests/v2/compose_arguments.rs:1:21
+error: expected `,`
+ --> tests/v2/compose_arguments.rs:6:28
   |
-1 | #[errlanes::compose(prefix = "X")]
-  |                     ^^^^^^
+6 | #[errlanes::compose(prefix = "X")]
+  |                            ^
 
-error: expected #[compose(flatten)]; the placeholder name supplies the prefix, with no prefix or rename arguments
- --> tests/v2/compose_arguments.rs:6:5
+error: unexpected end of input, expected identifier
+ --> tests/v2/compose_arguments.rs:9:1
   |
-6 |     #[compose(flatten, prefix = "X")]
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+9 | #[errlanes::compose(Source as)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `errlanes::compose` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error: expected exactly one #[compose(flatten)] on a source placeholder
-  --> tests/v2/compose_arguments.rs:12:5
+error: generic rejection composition is unsupported; use a concrete enum
+  --> tests/v2/compose_arguments.rs:12:21
    |
-12 |     #[compose(rename)]
-   |     ^^^^^^^^^^^^^^^^^^
+12 | #[errlanes::compose(Source<u32>)]
+   |                     ^^^^^^^^^^^
 
-error: expected exactly one #[compose(flatten)] on a source placeholder
-  --> tests/v2/compose_arguments.rs:19:5
+error: expected identifier
+  --> tests/v2/compose_arguments.rs:15:21
    |
-19 |     #[compose(flatten)]
-   |     ^^^^^^^^^^^^^^^^^^^
-
-error: use #[compose(flatten)] and the placeholder name as prefix; use explicit lifts for custom names
-  --> tests/v2/compose_arguments.rs:25:5
-   |
-25 |     #[flatten]
-   |     ^^^^^^^^^^
+15 | #[errlanes::compose(&'static Source)]
+   |                     ^

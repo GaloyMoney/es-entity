@@ -1,0 +1,14 @@
+error: expected exactly one compose attribute per variant
+  --> tests/v2/compose_merge_arguments.rs:15:5
+   |
+15 | /     #[compose(merge)]
+16 | |     #[compose(merge(Source::Shared))]
+17 | |     #[rejection(code = "SHARED")]
+18 | |     Shared,
+   | |__________^
+
+error: unexpected end of input, explicit merge requires at least one source variant
+ --> tests/v2/compose_merge_arguments.rs:8:14
+  |
+8 |     #[compose(merge())]
+  |              ^^^^^^^^^

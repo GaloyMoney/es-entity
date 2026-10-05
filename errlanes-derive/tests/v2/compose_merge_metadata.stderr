@@ -1,5 +1,5 @@
 error: merged variants require an explicit canonical rejection code or rejection(delegate)
-  --> tests/v2/union_merge_metadata.rs:14:5
+  --> tests/v2/compose_merge_metadata.rs:14:5
    |
 14 | /     #[compose(merge)]
 15 | |     #[rejection(level = "warn")]
@@ -7,7 +7,7 @@ error: merged variants require an explicit canonical rejection code or rejection
    | |__________^
 
 error: merged variants require an explicit canonical rejection code or rejection(delegate)
- --> tests/v2/union_merge_metadata.rs:8:5
+ --> tests/v2/compose_merge_metadata.rs:8:5
   |
 8 | /     #[compose(merge)]
 9 | |     Shared,

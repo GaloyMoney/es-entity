@@ -30,7 +30,7 @@ enum Sets {
     Depth { depth: u32, max: u32 },
 }
 
-#[errlanes::compose(union(Accounts, Sets))]
+#[errlanes::compose(Accounts, Sets)]
 #[derive(Debug)]
 enum AddMember {
     #[compose(merge)]
@@ -42,7 +42,7 @@ enum AddMember {
 }
 
 #[test]
-fn union_shares_leaf_outcomes_and_imports_every_other_shape() {
+fn bare_sources_share_leaf_outcomes_and_import_every_other_shape() {
     for error in [
         AddMember::from(Accounts::AlreadyAdded(MemberAlreadyAdded(1))),
         AddMember::from(Sets::AlreadyAdded(MemberAlreadyAdded(1))),
@@ -82,7 +82,7 @@ fn union_shares_leaf_outcomes_and_imports_every_other_shape() {
 }
 
 #[test]
-fn union_supports_bare_question_mark_and_widening_without_changing_faults() {
+fn composition_supports_bare_question_mark_and_widening_without_changing_faults() {
     fn bare() -> Result<(), Fail<AddMember, lanes!(Fatal)>> {
         Err::<(), _>(Accounts::AccountMissing(3))?;
         Ok(())
@@ -116,7 +116,7 @@ enum Right {
     Absent { id: u64 },
 }
 
-#[errlanes::compose(union(Left, Right))]
+#[errlanes::compose(Left, Right)]
 #[derive(Debug)]
 enum Renamed {
     #[compose(merge(Left::Missing, Right::Absent))]
@@ -125,7 +125,7 @@ enum Renamed {
     NotFound { id: u64 },
 }
 
-#[errlanes::compose(union(Right, Left))]
+#[errlanes::compose(Right, Left)]
 #[derive(Debug)]
 enum Reversed {
     #[compose(merge(Right::Absent, Left::Missing))]
@@ -156,21 +156,18 @@ fn explicit_participants_rename_cases_and_choose_canonical_metadata() {
     }
 }
 
-#[errlanes::compose(union(AddMember))]
+#[errlanes::compose(AddMember)]
 #[derive(Debug)]
 enum Outer {}
 
-#[errlanes::compose]
+#[errlanes::compose(AddMember as Member)]
 #[derive(Debug)]
 // Every variant is intentionally prefixed in this composition fixture.
 #[allow(clippy::enum_variant_names)]
-enum Prefixed {
-    #[compose(flatten)]
-    Member(AddMember),
-}
+enum Prefixed {}
 
 #[test]
-fn unions_export_schemas_for_further_union_and_prefixed_composition() {
+fn compositions_export_schemas_for_further_bare_and_prefixed_imports() {
     let outer = Outer::from(AddMember::from(MemberAlreadyAdded(5)));
     assert!(matches!(outer, Outer::AlreadyAdded(MemberAlreadyAdded(5))));
     assert_eq!(
@@ -186,15 +183,12 @@ fn unions_export_schemas_for_further_union_and_prefixed_composition() {
     assert_eq!(prefixed.level(), Level::Warn);
 }
 
-#[errlanes::compose(union(Left))]
+#[errlanes::compose(Left, Sets as Set)]
 #[derive(Debug)]
-enum Mixed {
-    #[compose(flatten)]
-    Set(Sets),
-}
+enum Mixed {}
 
 #[test]
-fn unions_can_coexist_with_prefixed_imports() {
+fn bare_and_prefixed_sources_coexist_in_one_list() {
     assert!(matches!(
         Mixed::from(Left::Missing { id: 6 }),
         Mixed::Missing { id: 6 }
@@ -205,13 +199,13 @@ fn unions_can_coexist_with_prefixed_imports() {
     ));
 }
 
-#[errlanes::compose(union(Left))]
+#[errlanes::compose(Left)]
 #[derive(Debug)]
 enum BranchA {}
-#[errlanes::compose(union(Left))]
+#[errlanes::compose(Left)]
 #[derive(Debug)]
 enum BranchB {}
-#[errlanes::compose(union(BranchA, BranchB))]
+#[errlanes::compose(BranchA, BranchB)]
 #[derive(Debug)]
 enum Diamond {
     #[compose(merge)]

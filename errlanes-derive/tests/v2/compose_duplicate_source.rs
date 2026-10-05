@@ -3,22 +3,15 @@ enum Source {
     One,
 }
 
-#[errlanes::compose]
-#[derive(Debug)]
-#[lift(Source)]
-enum Mixed {
-    #[compose(flatten)]
-    Whole(Source),
-    #[lift(Source::One)]
-    One,
-}
+// A family listed twice, even under a prefix, would import every case twice.
+#[errlanes::compose(Source, Source as Second)]
+enum Twice {}
 
-#[errlanes::compose]
-#[derive(Debug)]
-enum Twice {
-    #[compose(flatten)]
-    First(Source),
-    #[compose(flatten)]
-    Second(Source),
+#[errlanes::compose(Source)]
+#[lift(Source)]
+enum AlreadyLifted {
+    #[compose(merge)]
+    #[rejection(code = "ONE")]
+    One,
 }
 fn main() {}

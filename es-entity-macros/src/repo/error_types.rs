@@ -127,6 +127,9 @@ impl<'a> ErrorTypes<'a> {
         let mut classifiers = Vec::new();
         let mut set_values = Vec::new();
         let mut payloads = Vec::new();
+        // A nested repository imports its whole constraint family under a
+        // prefix, which the compose attribute lists as `Source as Prefix`.
+        let mut imports = Vec::new();
         // `pkey_from_database`, once the id-only pkey constraint is found
         // below. A composite or non-id primary key leaves this `None` and
         // that constraint keeps `ConstraintConflict` like any other.
@@ -242,17 +245,22 @@ impl<'a> ErrorTypes<'a> {
             last.ident = format_ident!("{entity}ConstraintViolation");
             last.arguments = syn::PathArguments::None;
             let name = nested.nested_variant_name();
-            variants.push(quote! { #[compose(flatten)] #name(#path) });
+            imports.push(quote! { #path as #name });
         }
         let fields: Vec<_> = columns.iter().map(|c| c.name()).collect();
         let types: Vec<_> = columns.iter().map(|c| c.ty()).collect();
         let write_error = write_error_type(opts, &cv);
+        let compose = if imports.is_empty() {
+            quote!(#[es_entity::errlanes::compose])
+        } else {
+            quote!(#[es_entity::errlanes::compose(#(#imports),*)])
+        };
         quote! {
             #(#payloads)*
             #[doc(hidden)]
             #[derive(Default)]
             pub struct #values { #(pub #fields: Option<#types>),* }
-            #[es_entity::errlanes::compose]
+            #compose
             #[derive(Debug, Clone, es_entity::ConstraintRejection)]
             pub enum #cv { #(#variants),* }
             impl #cv {

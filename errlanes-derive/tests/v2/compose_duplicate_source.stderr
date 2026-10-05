@@ -1,13 +1,11 @@
-error: source family already mapped; choose whole-family #[compose(flatten)] or explicit #[lift] mappings for that source
-  --> tests/v2/compose_duplicate_source.rs:10:5
-   |
-10 | /     #[compose(flatten)]
-11 | |     Whole(Source),
-   | |_________________^
+error: duplicate composition source
+ --> tests/v2/compose_duplicate_source.rs:7:29
+  |
+7 | #[errlanes::compose(Source, Source as Second)]
+  |                             ^^^^^^^^^^^^^^^^
 
-error: source family already mapped; choose whole-family #[compose(flatten)] or explicit #[lift] mappings for that source
-  --> tests/v2/compose_duplicate_source.rs:21:5
+error: source family already mapped; list it in #[errlanes::compose(..)] or map it with #[lift], not both
+  --> tests/v2/compose_duplicate_source.rs:11:1
    |
-21 | /     #[compose(flatten)]
-22 | |     Second(Source),
-   | |__________________^
+11 | #[lift(Source)]
+   | ^^^^^^^^^^^^^^^

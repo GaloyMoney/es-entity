@@ -2,32 +2,61 @@ use std::collections::{HashMap, HashSet};
 
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
-use syn::{ItemEnum, Path, Token, Variant, parse::Parse, parse_quote, punctuated::Punctuated};
+use syn::{
+    Ident, ItemEnum, Path, Token, Variant, parse::Parse, parse_quote, punctuated::Punctuated,
+};
 
 type Variants = Punctuated<Variant, Token![,]>;
 
+/// One entry of `#[errlanes::compose(Source, Other as Prefix)]`. A bare path
+/// imports the family under its original variant names; `as Prefix` keeps its
+/// cases distinct by prefixing every imported name.
+struct Import {
+    path: Path,
+    prefix: Option<Ident>,
+}
+
+impl Parse for Import {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let path: Path = input.parse()?;
+        let prefix = if input.peek(Token![as]) {
+            input.parse::<Token![as]>()?;
+            Some(input.parse()?)
+        } else {
+            None
+        };
+        Ok(Self { path, prefix })
+    }
+}
+
+// The import list travels through the schema callback as tokens, so it has to
+// round-trip through its own `Parse`.
+impl ToTokens for Import {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.path.to_tokens(tokens);
+        if let Some(prefix) = &self.prefix {
+            tokens.extend(quote!(as #prefix));
+        }
+    }
+}
+
 struct Arguments {
-    sources: Punctuated<Path, Token![,]>,
+    imports: Punctuated<Import, Token![,]>,
 }
 
 impl Parse for Arguments {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        input.parse::<Token![union]>()?;
-        let sources;
-        syn::parenthesized!(sources in input);
-        let sources = sources.parse_terminated(Path::parse, Token![,])?;
-        if sources.is_empty() {
-            return Err(input.error("union requires at least one source enum"));
+        let imports = input.parse_terminated(Import::parse, Token![,])?;
+        if imports.is_empty() {
+            return Err(input.error("compose requires at least one source enum"));
         }
-        if input.peek(Token![,]) {
-            input.parse::<Token![,]>()?;
-        }
-        Ok(Self { sources })
+        Ok(Self { imports })
     }
 }
 
 struct Source {
     path: Path,
+    prefix: Option<Ident>,
     variants: Variants,
 }
 
@@ -35,7 +64,7 @@ struct Source {
 // of source order and lets explicit participants be checked against real cases.
 pub(super) struct Context {
     item: ItemEnum,
-    remaining: Punctuated<Path, Token![,]>,
+    remaining: Punctuated<Import, Token![,]>,
     sources: Vec<Source>,
 }
 
@@ -51,52 +80,63 @@ impl Parse for Context {
         while !sources.is_empty() {
             let path;
             syn::bracketed!(path in sources);
+            let prefix;
+            syn::bracketed!(prefix in sources);
             let variants;
             syn::braced!(variants in sources);
             collected.push(Source {
                 path: path.parse()?,
+                prefix: if prefix.is_empty() {
+                    None
+                } else {
+                    Some(prefix.parse()?)
+                },
                 variants: variants.parse_terminated(Variant::parse, Token![,])?,
             });
         }
         Ok(Self {
             item: item.parse()?,
-            remaining: remaining.parse_terminated(Path::parse, Token![,])?,
+            remaining: remaining.parse_terminated(Import::parse, Token![,])?,
             sources: collected,
         })
     }
 }
 
 pub(super) fn start(args: TokenStream, item: ItemEnum) -> syn::Result<TokenStream> {
-    let Arguments { sources } = syn::parse2(args)?;
+    let Arguments { imports } = syn::parse2(args)?;
     let mut seen = HashSet::new();
-    for source in &sources {
-        if !seen.insert(key(source)) {
-            return Err(syn::Error::new_spanned(source, "duplicate union source"));
+    for import in &imports {
+        if !seen.insert(key(&import.path)) {
+            return Err(syn::Error::new_spanned(
+                import,
+                "duplicate composition source",
+            ));
         }
-        if source
+        if import
+            .path
             .segments
             .iter()
             .any(|segment| !matches!(segment.arguments, syn::PathArguments::None))
         {
             return Err(syn::Error::new_spanned(
-                source,
+                &import.path,
                 "generic rejection composition is unsupported; use a concrete enum",
             ));
         }
         for attr in &item.attrs {
             if attr.path().is_ident("lift")
-                && key(&attr.parse_args::<crate::lift::Registration>()?.source) == key(source)
+                && key(&attr.parse_args::<crate::lift::Registration>()?.source) == key(&import.path)
             {
                 return Err(syn::Error::new_spanned(
                     attr,
-                    "union source family already mapped; use compose(merge) to resolve its variants",
+                    "source family already mapped; list it in #[errlanes::compose(..)] or map it with #[lift], not both",
                 ));
             }
         }
     }
     Context {
         item,
-        remaining: sources,
+        remaining: imports,
         sources: Vec::new(),
     }
     .next()
@@ -107,34 +147,61 @@ impl Context {
         if self.remaining.is_empty() {
             return finish(self.item, self.sources);
         }
-        let source = self.remaining.first().unwrap().clone();
+        let source = &self.remaining.first().unwrap().path;
         let mut helper = source.clone();
         let last = helper.segments.last_mut().unwrap();
         last.ident = format_ident!("{}Schema", last.ident);
         let item = &self.item;
         let remaining = &self.remaining;
-        let sources = self.sources.iter().map(|Source { path, variants }| {
-            quote! { [#path] { #variants } }
-        });
+        let sources = self.sources.iter().map(
+            |Source {
+                 path,
+                 prefix,
+                 variants,
+             }| quote! { [#path] [#prefix] { #variants } },
+        );
         Ok(quote! {
             #helper!(errlanes::__compose_rejection,
-                [union [#item] [#remaining] [#(#sources)*]], #source);
+                [[#item] [#remaining] [#(#sources)*]], #source);
         })
     }
 
     pub(super) fn receive(mut self, variants: Variants) -> syn::Result<TokenStream> {
-        let source = self.remaining.first().unwrap().clone();
-        self.remaining = self.remaining.into_iter().skip(1).collect();
+        let Import { path, prefix } = self.remaining.first().unwrap();
         self.sources.push(Source {
-            path: source,
+            path: path.clone(),
+            prefix: prefix.clone(),
             variants,
         });
+        self.remaining = self.remaining.into_iter().skip(1).collect();
         self.next()
     }
 }
 
 fn key(value: &impl ToTokens) -> String {
     value.to_token_stream().to_string()
+}
+
+/// A `#[compose(..)]` that survives to the end of composition is either the
+/// removed placeholder form or a merge with no sources to merge.
+pub(super) fn unexpected(attr: &syn::Attribute) -> syn::Error {
+    if attr
+        .parse_args::<Ident>()
+        .is_ok_and(|name| name == "flatten")
+    {
+        return removed(attr);
+    }
+    syn::Error::new_spanned(
+        attr,
+        "#[compose(merge)] needs sources to merge; list them as #[errlanes::compose(Source, Other as Prefix)]",
+    )
+}
+
+fn removed(spanned: impl ToTokens) -> syn::Error {
+    syn::Error::new_spanned(
+        spanned,
+        "whole-family imports are listed on the attribute: write #[errlanes::compose(Source as Prefix)] and drop this placeholder variant",
+    )
 }
 
 enum Merge {
@@ -144,7 +211,10 @@ enum Merge {
 
 impl Parse for Merge {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let name: syn::Ident = input.parse()?;
+        let name: Ident = input.parse()?;
+        if name == "flatten" {
+            return Err(removed(name));
+        }
         if name != "merge" {
             return Err(syn::Error::new_spanned(
                 name,
@@ -166,7 +236,7 @@ impl Parse for Merge {
 
 fn finish(mut item: ItemEnum, sources: Vec<Source>) -> syn::Result<TokenStream> {
     let mut available = HashSet::new();
-    for Source { path, variants } in &sources {
+    for Source { path, variants, .. } in &sources {
         for variant in variants {
             let name = &variant.ident;
             available.insert(key(&quote!(#path::#name)));
@@ -181,14 +251,6 @@ fn finish(mut item: ItemEnum, sources: Vec<Source>) -> syn::Result<TokenStream> 
             .iter()
             .filter(|a| a.path().is_ident("compose"))
             .collect();
-        // Ordinary prefixed imports can coexist with a union.
-        if attrs.len() == 1
-            && attrs[0]
-                .parse_args::<syn::Ident>()
-                .is_ok_and(|name| name == "flatten")
-        {
-            continue;
-        }
         if attrs.is_empty() {
             continue;
         }
@@ -209,7 +271,7 @@ fn finish(mut item: ItemEnum, sources: Vec<Source>) -> syn::Result<TokenStream> 
                     if !available.contains(&case_key) {
                         return Err(syn::Error::new_spanned(
                             case,
-                            "merge participant is not a variant of a listed union source",
+                            "merge participant is not a variant of a listed composition source",
                         ));
                     }
                     if explicit.insert(case_key, index).is_some() {
@@ -250,12 +312,22 @@ fn finish(mut item: ItemEnum, sources: Vec<Source>) -> syn::Result<TokenStream> 
     let mut used = HashSet::new();
     let mut names: HashSet<_> = item.variants.iter().map(|v| v.ident.to_string()).collect();
     let mut origins = HashMap::new();
-    let mut imported = Vec::new();
-    for Source { path, variants } in sources {
+    let mut collected = Vec::new();
+    for Source {
+        path,
+        prefix,
+        variants,
+    } in sources
+    {
         for mut variant in variants {
-            let name = &variant.ident;
+            let name = variant.ident.clone();
             let case: Path = parse_quote!(#path::#name);
-            let by_name_target = by_name.get(&name.to_string()).copied();
+            // A prefix exists to keep a family's cases distinct, so it never
+            // joins a by-name merge; an explicit participant list still can.
+            let by_name_target = prefix
+                .is_none()
+                .then(|| by_name.get(&name.to_string()).copied())
+                .flatten();
             let explicit_target = explicit.get(&key(&case)).copied();
             if by_name_target.is_some()
                 && explicit_target.is_some()
@@ -267,9 +339,13 @@ fn finish(mut item: ItemEnum, sources: Vec<Source>) -> syn::Result<TokenStream> 
                 ));
             }
             let target = explicit_target.or(by_name_target);
+            let imported = match &prefix {
+                Some(prefix) => format_ident!("{prefix}{name}"),
+                None => name,
+            };
             let destination = target
                 .map(|i| item.variants[i].ident.to_string())
-                .unwrap_or_else(|| name.to_string());
+                .unwrap_or_else(|| imported.to_string());
             if let Some(origin) = super::origin(&variant)?
                 && let Some(previous) = origins.insert(origin, destination.clone())
                 && previous != destination
@@ -288,14 +364,15 @@ fn finish(mut item: ItemEnum, sources: Vec<Source>) -> syn::Result<TokenStream> 
                 if !names.insert(destination) {
                     return Err(syn::Error::new_spanned(
                         case,
-                        "union variant name collision; declare a local compose(merge) variant or list explicit merge participants",
+                        "composed variant name collision; declare a local compose(merge) variant, list explicit merge participants, or import the source under an `as` prefix",
                     ));
                 }
+                variant.ident = imported;
                 variant.attrs.push(parse_quote!(#[lift(#case)]));
                 variant
                     .attrs
                     .push(parse_quote!(#[rejection(forward = #case)]));
-                imported.push(variant);
+                collected.push(variant);
             }
         }
         item.attrs.push(parse_quote!(#[lift(#path, strict)]));
@@ -304,10 +381,10 @@ fn finish(mut item: ItemEnum, sources: Vec<Source>) -> syn::Result<TokenStream> 
         if !used.contains(&index) {
             return Err(syn::Error::new_spanned(
                 &item.variants[index],
-                "compose(merge) did not match any union source variant",
+                "compose(merge) did not match any composition source variant",
             ));
         }
     }
-    item.variants.extend(imported);
+    item.variants.extend(collected);
     super::expand(item)
 }

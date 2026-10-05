@@ -1,28 +1,17 @@
+#[derive(Debug, errlanes::Rejection)]
+enum Source {
+    Shared,
+}
+
 #[errlanes::compose(prefix = "X")]
-enum EnumArgs {}
+enum NotASourceList {}
 
-#[errlanes::compose]
-enum VariantArgs {
-    #[compose(flatten, prefix = "X")]
-    Child(Source),
-}
+#[errlanes::compose(Source as)]
+enum MissingPrefix {}
 
-#[errlanes::compose]
-enum UnknownOption {
-    #[compose(rename)]
-    Child(Source),
-}
+#[errlanes::compose(Source<u32>)]
+enum Generic {}
 
-#[errlanes::compose]
-enum DuplicateOption {
-    #[compose(flatten)]
-    #[compose(flatten)]
-    Child(Source),
-}
-
-#[errlanes::compose]
-enum LegacyOption {
-    #[flatten]
-    Child(Source),
-}
+#[errlanes::compose(&'static Source)]
+enum Reference {}
 fn main() {}
