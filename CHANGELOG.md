@@ -1,3 +1,11 @@
+# [cala release v0.16.10](https://github.com/GaloyMoney/cala/releases/tag/0.16.10)
+
+
+
+### Features
+
+- List compose sources with optional `as` prefix (#261)
+
 # [cala release v0.16.9](https://github.com/GaloyMoney/cala/releases/tag/0.16.9)
 
 
