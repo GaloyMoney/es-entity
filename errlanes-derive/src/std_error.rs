@@ -212,9 +212,9 @@ pub(crate) fn reject_from_field_attr(fields: &Fields) -> syn::Result<()> {
 type FieldRef = (Ident, Type, bool);
 
 /// Rewrites positional placeholders (`{0}`, `{1:?}`) in an `#[error("..")]`
-/// literal to the referenced field's bound local name, so it resolves as a
-/// Rust 2021 inline capture; a named placeholder (`{field}`) already
-/// resolves natively and is only validated here. Returns the rewritten
+/// literal to the referenced field's bound local name; a named placeholder
+/// (`{field}`) is only validated here. The emitter passes those bindings as
+/// explicit named format arguments. Returns the rewritten
 /// literal text plus, for each referenced field, its bound name, type, and
 /// whether its format spec requested `Debug` (contains `?`).
 ///
@@ -441,15 +441,18 @@ pub(crate) fn emit(
                 check_trailing_args(&spec.args, unit.fields)?;
                 let (rewritten, refs) =
                     rewrite_literal(&spec.lit, unit.fields, !spec.args.is_empty())?;
+                let mut named_args = Vec::new();
+                for (name, _, _) in &refs {
+                    if !named_args.contains(name) {
+                        named_args.push(name.clone());
+                    }
+                }
                 all_refs.extend(refs);
-                // `call_site()`, not `lit.span()`: a composed type's `#[error(..)]`
-                // can arrive via a macro round-trip (the composition schema's
-                // `macro_rules!`), which gives the literal a different hygiene
-                // context than the `field_N` idents this invocation just bound —
-                // an inline capture resolves by the format string's own span, so
-                // a mismatch here reads as "cannot find value" despite the name
-                // matching.
-                let rewritten = LitStr::new(&rewritten, proc_macro2::Span::call_site());
+                // Explicit arguments retain the bound fields' hygiene even
+                // when local and imported variants have crossed different
+                // schema callbacks. No single format-literal span can make
+                // implicit captures resolve correctly for both.
+                let rewritten = LitStr::new(&rewritten, spec.lit.span());
                 let args = &spec.args;
                 // The trailing arguments are not field-only placeholders, so
                 // they get no `FieldRef` and no entry in `extra_bounds` — the
@@ -459,11 +462,7 @@ pub(crate) fn emit(
                 // arbitrary expression is not generally possible, so this
                 // path deliberately does not try; only the field-only
                 // placeholders above feed `extra_bounds`.
-                if args.is_empty() {
-                    quote! { write!(f, #rewritten) }
-                } else {
-                    quote! { write!(f, #rewritten, #(#args),*) }
-                }
+                quote! { write!(f, #rewritten #(, #args)* #(, #named_args = #named_args)*) }
             }
             None => match default {
                 DisplayDefault::Code => {

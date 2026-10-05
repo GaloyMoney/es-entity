@@ -938,6 +938,107 @@ useful when each addition needs review or individual cases need different
 names. When an outer layer adds no semantics of its own, it can simply reuse
 the inner rejection type.
 
+### Unions with shared outcomes
+
+Use `#[errlanes::compose(union(SourceA, SourceB))]` to import complete
+families under their original variant names. Unique variants keep their
+payloads, codes, levels, display, and error sources. When names overlap,
+declare a local `#[compose(merge)]` variant to receive every source case
+with that name:
+
+```rust
+use errlanes::Rejection;
+
+#[derive(Debug, errlanes::Rejection)]
+#[error("member already added")]
+#[rejection(code = "MEMBER_ALREADY_ADDED")]
+pub struct MemberAlreadyAdded;
+
+#[derive(Debug, errlanes::Rejection)]
+pub enum AddAccountMembersRejection {
+    #[error("{0}")]
+    #[rejection(delegate, from)]
+    MemberAlreadyAdded(MemberAlreadyAdded),
+}
+
+#[derive(Debug, errlanes::Rejection)]
+pub enum AddSetMembersRejection {
+    #[error("{0}")]
+    #[rejection(delegate, from)]
+    MemberAlreadyAdded(MemberAlreadyAdded),
+    #[error("account sets must belong to the same journal")]
+    #[rejection(code = "JOURNAL_ID_MISMATCH")]
+    JournalIdMismatch,
+}
+
+#[errlanes::compose(union(AddAccountMembersRejection, AddSetMembersRejection))]
+#[derive(Debug)]
+pub enum AddMemberRejection {
+    #[compose(merge)]
+    #[error("{0}")]
+    #[rejection(delegate, from)]
+    MemberAlreadyAdded(MemberAlreadyAdded),
+}
+
+let account = AddMemberRejection::from(
+    AddAccountMembersRejection::MemberAlreadyAdded(MemberAlreadyAdded),
+);
+let set = AddMemberRejection::from(
+    AddSetMembersRejection::MemberAlreadyAdded(MemberAlreadyAdded),
+);
+assert!(matches!(account, AddMemberRejection::MemberAlreadyAdded(_)));
+assert!(matches!(set, AddMemberRejection::MemberAlreadyAdded(_)));
+assert_eq!(Into::<&'static str>::into(set.code()), "MEMBER_ALREADY_ADDED");
+assert!(matches!(
+    AddMemberRejection::from(AddSetMembersRejection::JournalIdMismatch),
+    AddMemberRejection::JournalIdMismatch,
+));
+```
+
+The merged declaration owns its code, level, display, and source behavior;
+it must supply `#[rejection(code = "...")]` or `#[rejection(delegate)]`.
+No source wins by import order. Rust checks that each source variant's
+field shape and types fit the destination without payload conversion.
+The generated total `From` and `Lift` implementations support `?` for
+bare rejections and `.widen()?` for failures, as with prefixed composition.
+
+To merge differently named cases, or limit a merge to reviewed participants,
+list them explicitly:
+
+```rust
+# #[derive(Debug, errlanes::Rejection)]
+# pub enum Accounts { Missing { id: u64 } }
+# #[derive(Debug, errlanes::Rejection)]
+# pub enum Sets { NotFound { id: u64 } }
+#[errlanes::compose(union(Accounts, Sets))]
+#[derive(Debug)]
+pub enum LookupRejection {
+    #[compose(merge(Accounts::Missing, Sets::NotFound))]
+    #[error("member {id} not found")]
+    #[rejection(code = "MEMBER_NOT_FOUND")]
+    MemberNotFound { id: u64 },
+}
+
+assert!(matches!(
+    LookupRejection::from(Sets::NotFound { id: 42 }),
+    LookupRejection::MemberNotFound { id: 42 },
+));
+```
+
+Explicit participants must name actual variants using the source paths
+listed in `union(...)`. A source case cannot target two merged variants.
+Unresolved name collisions, empty or unmatched merges, duplicate sources,
+and incompatible payloads are compile errors. A shared composition origin
+arriving along multiple paths must resolve to one canonical destination.
+
+New unique source cases are included automatically. A name-based merge also
+accepts new source cases with that name, subject to Rust's type checks; an
+explicit participant list does not absorb them. Use explicit exhaustive
+`#[lift]` mappings when every source addition needs review. Unions can also
+contain local cases, prefixed `#[compose(flatten)]` placeholders, and lifts
+from other source families. Source enums remain independently usable with
+their original, narrower contracts.
+
 ---
 
 The Rust snippets above are checked by the crate's doctests. The opening enum

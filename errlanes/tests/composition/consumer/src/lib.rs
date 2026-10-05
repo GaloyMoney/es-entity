@@ -60,3 +60,31 @@ pub fn check() {
         Api::PostVelocityExtra
     ));
 }
+
+#[errlanes::compose(union(middle::Combined))]
+#[derive(Debug)]
+pub enum UnionApi {}
+
+pub fn check_union() {
+    let error = UnionApi::from(middle::combined_limit());
+    assert!(matches!(error, UnionApi::Limit(ref value) if value.0 == 43));
+    assert_eq!(Into::<&'static str>::into(error.code()), "VELOCITY_LIMIT");
+    assert_eq!(error.level(), errlanes::Level::Warn);
+    assert_eq!(error.to_string(), "canonical limit limit 43");
+    assert_eq!(
+        std::error::Error::source(&error).unwrap().to_string(),
+        "limit 43"
+    );
+    assert!(matches!(
+        UnionApi::from(middle::Combined::Stopped),
+        UnionApi::Stopped
+    ));
+    let range = UnionApi::from(middle::Combined::Range { min: 1, max: 9 });
+    assert!(matches!(range, UnionApi::Range { min: 1, max: 9 }));
+    assert_eq!(range.to_string(), "range 1..9");
+    #[cfg(feature = "extra")]
+    assert!(matches!(
+        UnionApi::from(middle::Combined::Extra),
+        UnionApi::Extra
+    ));
+}

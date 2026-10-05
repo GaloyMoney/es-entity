@@ -91,17 +91,17 @@ pub fn derive_failure(input: TokenStream) -> TokenStream {
     expand(input, failure::derive)
 }
 
+/// Compose rejection families using prefixed `#[compose(flatten)]` placeholders,
+/// or `#[compose(union(SourceA, SourceB))]` to import original variant names.
+/// Union collisions require local `#[compose(merge)]` variants; use
+/// `#[compose(merge(SourceA::Case, SourceB::OtherCase))]` to select participants
+/// explicitly. Merged variants own their metadata through an explicit rejection
+/// code or payload delegation. Both forms generate total lifts from each source.
 #[proc_macro_attribute]
 pub fn compose(args: TokenStream, input: TokenStream) -> TokenStream {
-    if !args.is_empty() {
-        return syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "compose takes no arguments; use #[compose(flatten)] on source placeholders",
-        )
-        .to_compile_error()
-        .into();
-    }
-    match syn::parse::<syn::ItemEnum>(input).and_then(composition::expand) {
+    match syn::parse::<syn::ItemEnum>(input)
+        .and_then(|item| composition::compose(args.into(), item))
+    {
         Ok(t) => resolve_runtime(t).into(),
         Err(e) => e.to_compile_error().into(),
     }

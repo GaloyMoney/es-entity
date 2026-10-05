@@ -19,3 +19,12 @@ pub mod domain {
     }
 }
 pub use domain::{Enforcement, EnforcementSchema};
+
+#[derive(Debug, errlanes::Rejection)]
+pub enum Secondary {
+    #[error("secondary limit {0}")]
+    #[rejection(code = "SECONDARY_LIMIT", from)]
+    Limit(domain::Limit),
+    #[error("stopped")]
+    Stopped,
+}
