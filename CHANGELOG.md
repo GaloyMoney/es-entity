@@ -1,3 +1,11 @@
+# [cala release v0.16.9](https://github.com/GaloyMoney/cala/releases/tag/0.16.9)
+
+
+
+### Features
+
+- Compose unprefixed unions with explicit merges (#260)
+
 # [cala release v0.16.8](https://github.com/GaloyMoney/cala/releases/tag/0.16.8)
 
 
