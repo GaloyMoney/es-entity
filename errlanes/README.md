@@ -828,6 +828,49 @@ and exhaustiveness. This form does not discard payload fields, run mappers,
 or infer rejection metadata: `Rejection` structs still declare their own
 `#[rejection(code = "...")]`. Enum destination syntax is unchanged.
 
+A **single-field tuple struct** can instead project one named field from a
+source struct with `#[lift(Source, field = name)]`. This generates
+`From<Source>` using `Self(source.name)`; the blanket `Lift` implementation
+then supplies a total lift. The projection explicitly discards the other
+source fields. For example, a shared domain rejection can retain an attempted
+value from a constraint payload:
+
+```rust
+use errlanes::{Lift, Rejection};
+
+struct ConstraintConflict<T> {
+    attempted: Option<T>,
+    diagnostic: String,
+}
+
+#[derive(Debug, Rejection, Lift)]
+#[rejection(code = "ACCOUNT_EXTERNAL_ID_ALREADY_EXISTS")]
+#[error("External id already exists: {0:?}")]
+#[lift(ConstraintConflict<Option<String>>, field = attempted)]
+struct AccountExternalIdAlreadyExists(Option<Option<String>>);
+
+let rejection = AccountExternalIdAlreadyExists::from(ConstraintConflict {
+    attempted: Some(Some("external-id".into())),
+    diagnostic: "unique constraint".into(),
+});
+assert_eq!(rejection.0, Some(Some("external-id".into())));
+```
+
+An operation enum can use `#[lift(Constraints::ExternalIdKey, into)]` to
+convert that variant's payload into this shared leaf, then use
+`#[rejection(delegate)]` to obtain metadata from the contained leaf. No
+handwritten payload `From` implementation is needed. The operation's mapping
+still decides which constraint represents that domain outcome.
+
+Tuple-struct projection accepts exactly one source registration and requires
+`field = name`. It does not accept `variant`, `strict`, `unhandled`, `into`,
+`with`, or field-level lift attributes. The selected field moves directly,
+without cloning or implicit conversion. Rust checks its accessibility and
+type; ordinary move rules apply, including restrictions on moving fields out
+of types that implement `Drop`. Generics, lifetimes, and where clauses are
+preserved. The source need not implement `Rejection` for the generated
+`From`; rejection metadata remains independently owned by the destination.
+
 A source need not be an enum. A struct rejection — the shape a wrapped foreign
 error naturally takes (see "Errors from other crates" above) — lifts as a
 whole value: `#[lift(Payload)]` with no variant suffix names the registered

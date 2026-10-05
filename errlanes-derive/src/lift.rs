@@ -103,7 +103,7 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
     let syn::Data::Enum(data) = &input.data else {
         return Err(syn::Error::new_spanned(
             input,
-            "Lift can only be derived for enums or named-field structs",
+            "Lift can only be derived for enums or structs",
         ));
     };
     let mut registrations = Vec::new();
@@ -398,10 +398,13 @@ impl Parse for SourceField {
 }
 
 fn derive_struct(input: &syn::DeriveInput, data: &syn::DataStruct) -> syn::Result<TokenStream> {
+    if let Fields::Unnamed(fields) = &data.fields {
+        return derive_newtype(input, fields);
+    }
     let Fields::Named(fields) = &data.fields else {
         return Err(syn::Error::new_spanned(
             input,
-            "a struct lift requires named fields",
+            "a struct lift requires named fields or a single-field tuple struct",
         ));
     };
     let mut attrs = input.attrs.iter().filter(|a| a.path().is_ident("lift"));
@@ -457,4 +460,83 @@ fn derive_struct(input: &syn::DeriveInput, data: &syn::DataStruct) -> syn::Resul
     // fields and shape/type mismatches. No fields are silently discarded.
     let arm = quote! { #case { #(#bindings),* } => Ok(Self { #(#assignments),* }) };
     Ok(conversion_impl(input, &source, partial, &[arm]))
+}
+
+/// A newtype explicitly projects one field from a source struct. Unlike the
+/// named-field enum-variant mapping, this intentionally drops the other fields.
+struct NewtypeRegistration {
+    source: Path,
+    field: syn::Ident,
+}
+
+impl Parse for NewtypeRegistration {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let source: Path = input.parse()?;
+        let mut field = None;
+        while input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+            if input.is_empty() {
+                break;
+            }
+            let key: syn::Ident = input.parse()?;
+            if key != "field" {
+                return Err(syn::Error::new_spanned(
+                    key,
+                    "a tuple struct lift supports only `field = name`",
+                ));
+            }
+            if field.is_some() {
+                return Err(syn::Error::new_spanned(key, "duplicate `field`"));
+            }
+            input.parse::<Token![=]>()?;
+            field = Some(input.parse()?);
+        }
+        let field = field.ok_or_else(|| {
+            syn::Error::new_spanned(&source, "a tuple struct lift requires `field = name`")
+        })?;
+        Ok(Self { source, field })
+    }
+}
+
+fn derive_newtype(
+    input: &syn::DeriveInput,
+    fields: &syn::FieldsUnnamed,
+) -> syn::Result<TokenStream> {
+    if fields.unnamed.len() != 1 {
+        return Err(syn::Error::new_spanned(
+            fields,
+            "a tuple struct lift requires exactly one field",
+        ));
+    }
+    for field in &fields.unnamed {
+        if let Some(attr) = field.attrs.iter().find(|a| a.path().is_ident("lift")) {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "put the field projection on the struct: #[lift(Source, field = name)]",
+            ));
+        }
+    }
+    let mut attrs = input.attrs.iter().filter(|a| a.path().is_ident("lift"));
+    let attr = attrs.next().ok_or_else(|| {
+        syn::Error::new_spanned(
+            &input.ident,
+            "a tuple struct lift requires #[lift(Source, field = name)]",
+        )
+    })?;
+    if let Some(extra) = attrs.next() {
+        return Err(syn::Error::new_spanned(
+            extra,
+            "a struct lift supports exactly one source registration",
+        ));
+    }
+    let NewtypeRegistration { source, field } = attr.parse_args()?;
+    let name = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    Ok(quote! {
+        impl #impl_generics From<#source> for #name #ty_generics #where_clause {
+            fn from(source: #source) -> Self {
+                Self(source.#field)
+            }
+        }
+    })
 }

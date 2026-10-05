@@ -81,6 +81,9 @@ pub fn derive_classify(input: TokenStream) -> TokenStream {
     expand(input, classify::derive)
 }
 
+/// Derive error conversion mappings. A single-field tuple struct can project
+/// a source struct field with `#[lift(Source, field = name)]`, generating
+/// `From<Source>` independently of rejection metadata.
 #[proc_macro_derive(Lift, attributes(lift))]
 pub fn derive_lift(input: TokenStream) -> TokenStream {
     expand(input, |ast| lift::derive(ast).map_err(darling::Error::from))
