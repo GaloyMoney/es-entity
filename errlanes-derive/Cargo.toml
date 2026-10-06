@@ -2,7 +2,7 @@
 name = "errlanes-derive"
 description = "Derive macros for errlanes (Rejection, Lift, Failure)"
 repository = "https://github.com/GaloyMoney/es-entity"
-version = "0.16.13"
+version = "0.16.14-dev"
 edition = "2024"
 license = "Apache-2.0"
 categories = ["data-structures"]
