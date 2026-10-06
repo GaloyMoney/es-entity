@@ -1,3 +1,11 @@
+# [cala release v0.16.13](https://github.com/GaloyMoney/cala/releases/tag/0.16.13)
+
+
+
+### Features
+
+- Preserve Denied diagnostics through classification and narrowing (#265)
+
 # [cala release v0.16.12](https://github.com/GaloyMoney/cala/releases/tag/0.16.12)
 
 
