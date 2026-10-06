@@ -208,3 +208,19 @@ fn record_result_records_onto_the_current_span_and_returns_self() {
     });
     assert_eq!(captured.get("error.lane").as_deref(), Some("rejected"));
 }
+
+#[test]
+fn denied_recording_never_emits_retained_diagnostics() {
+    let denied: Fail<Small> = Denied::new()
+        .with_action("read")
+        .with_context("sentinel-context")
+        .with_source(std::io::Error::other("sentinel-source"))
+        .into();
+    let captured = record(denied);
+    assert_eq!(captured.get("error.lane").as_deref(), Some("denied"));
+    assert_eq!(captured.get("error.code").as_deref(), Some("FORBIDDEN"));
+    assert!(captured.get("exception.message").is_none());
+    for value in captured.0.lock().unwrap().values() {
+        assert!(!value.contains("sentinel"), "{value}");
+    }
+}

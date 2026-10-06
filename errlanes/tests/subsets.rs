@@ -42,10 +42,7 @@ fn widening_fault_results_preserves_transient_and_denied_payloads() {
         error.source_arc().unwrap()
     ));
 
-    let denied = errlanes::Denied {
-        action: Some("write".into()),
-        ..Default::default()
-    };
+    let denied = errlanes::Denied::new().with_action("write");
     let result: Result<(), Fault<lanes!(Denied)>> = Err(denied.into());
     let widened: Result<(), Fault<lanes!(Denied, Fatal)>> = result.widen();
     let Fault::Denied(error) = widened.unwrap_err() else {

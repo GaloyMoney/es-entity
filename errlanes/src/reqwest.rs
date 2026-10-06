@@ -46,11 +46,11 @@ fn lane_table(e: &::reqwest::Error) -> Fault<crate::lanes!(Denied, Transient, Fa
 }
 
 /// Classifies a raw `reqwest::Error`, moving it — the error itself becomes
-/// the lane payload's source (or is discarded for `Denied`, which carries no
-/// source today). What `impl Classify for reqwest::Error` delegates to.
+/// the lane payload's source. What `impl Classify for reqwest::Error`
+/// delegates to.
 fn classify_reqwest_fault(e: ::reqwest::Error) -> Fault<crate::lanes!(Denied, Transient, Fatal)> {
     match lane_table(&e) {
-        Fault::Denied(d) => Fault::Denied(d),
+        Fault::Denied(d) => d.with_source(e).into(),
         Fault::Transient(t) => t.with_source(e).into(),
         Fault::Fatal(f) => f.with_source(e).into(),
     }
@@ -65,7 +65,7 @@ pub(crate) fn classify_reqwest_ref(
     e: &::reqwest::Error,
 ) -> Fault<crate::lanes!(Denied, Transient, Fatal)> {
     match lane_table(e) {
-        Fault::Denied(d) => Fault::Denied(d),
+        Fault::Denied(d) => d.with_context(e.to_string()).into(),
         Fault::Transient(t) => t.with_context(e.to_string()).into(),
         Fault::Fatal(f) => f.with_context(e.to_string()).into(),
     }
