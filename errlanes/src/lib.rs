@@ -24,9 +24,6 @@ pub mod serde_json;
 #[cfg(feature = "classify-reqwest")]
 pub mod reqwest;
 
-#[cfg(feature = "classify-reqwest-013")]
-pub mod reqwest_013;
-
 #[cfg(feature = "tracing")]
 mod record;
 

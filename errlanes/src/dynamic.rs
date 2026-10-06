@@ -156,16 +156,6 @@ impl Fault {
                 cur = x.source();
             }
         }
-        #[cfg(feature = "classify-reqwest-013")]
-        {
-            let mut cur: Option<&(dyn Error + 'static)> = Some(e);
-            while let Some(x) = cur {
-                if let Some(req) = x.downcast_ref::<::reqwest_013::Error>() {
-                    return crate::reqwest_013::classify_reqwest_ref(req).widen();
-                }
-                cur = x.source();
-            }
-        }
         Fault::Fatal(Fatal::new(FatalKind::Dependency).with_context(message_chain(e)))
     }
 }
