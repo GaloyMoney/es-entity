@@ -29,6 +29,7 @@ instrument = ["es-entity-macros/instrument", "dep:tracing", "errlanes-tracing"]
 # (job, lana) enables it through es-entity rather than taking a direct
 # errlanes dependency. serde_json's is always on: hydration delegates to it.
 errlanes-classify-reqwest = ["errlanes/classify-reqwest"]
+errlanes-classify-reqwest-013 = ["errlanes/classify-reqwest-013"]
 
 [dependencies]
 es-entity-macros = { workspace = true }
@@ -113,6 +114,8 @@ tracing-opentelemetry = { version = "0.34.0", default-features = false }
 opentelemetry = { version = "0.33.0", default-features = false }
 opentelemetry_sdk = { version = "0.33.0", features = ["rt-tokio"] }
 reqwest = { version = "0.12", default-features = false }
+reqwest-013 = { package = "reqwest", version = "0.13", default-features = false }
+http = "1"
 futures = "0.3"
 futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
