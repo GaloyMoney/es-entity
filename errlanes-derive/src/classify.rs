@@ -214,9 +214,9 @@ fn static_lane_expr(lane: &Lane, value: TokenStream) -> TokenStream {
         Lane::Transient(kind) => quote! {
             errlanes::Fail::Transient(errlanes::Transient::from_error(errlanes::TransientKind::#kind, #value))
         },
-        // `Denied` carries no source today (see `errlanes::Denied`'s docs) —
-        // the value is still consumed by the match arm, just not kept.
-        Lane::Denied => quote! { errlanes::Fail::Denied(errlanes::Denied::default()) },
+        Lane::Denied => quote! {
+            errlanes::Fail::Denied(errlanes::Denied::from_error(#value))
+        },
     }
 }
 

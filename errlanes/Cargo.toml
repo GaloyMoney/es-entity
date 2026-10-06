@@ -31,6 +31,8 @@ tracing = { workspace = true, optional = true, features = ["attributes"] }
 composition-consumer = { path = "tests/composition/consumer" }
 downstream = { path = "tests/coherence/downstream" }
 upstream = { path = "tests/coherence/upstream" }
+http = "1"
+tokio = { workspace = true }
 trybuild = "1"
 thiserror = "2"
 tracing = { workspace = true, features = ["std"] }

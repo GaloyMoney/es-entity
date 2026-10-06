@@ -329,6 +329,55 @@ impl Error for Fatal {
 pub struct Denied {
     pub object: Option<Cow<'static, str>>,
     pub action: Option<Cow<'static, str>>,
+    context: Option<Cow<'static, str>>,
+    source: Option<Arc<dyn Error + Send + Sync + 'static>>,
+}
+
+impl Denied {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_error(e: impl Error + Send + Sync + 'static) -> Self {
+        Self::new().with_source(e)
+    }
+
+    pub fn with_object(mut self, object: impl Into<Cow<'static, str>>) -> Self {
+        self.object = Some(object.into());
+        self
+    }
+
+    pub fn with_action(mut self, action: impl Into<Cow<'static, str>>) -> Self {
+        self.action = Some(action.into());
+        self
+    }
+
+    pub fn with_source(mut self, e: impl Error + Send + Sync + 'static) -> Self {
+        self.source = Some(Arc::new(e));
+        self
+    }
+
+    pub fn with_context(mut self, c: impl Into<Cow<'static, str>>) -> Self {
+        self.context = Some(c.into());
+        self
+    }
+
+    pub fn context(&self) -> Option<&str> {
+        self.context.as_deref()
+    }
+
+    pub fn source_arc(&self) -> Option<&Arc<dyn Error + Send + Sync>> {
+        self.source.as_ref()
+    }
+
+    pub(crate) fn into_fatal(mut self) -> Fatal {
+        let context = self.context.take();
+        let fatal = Fatal::from_error(FatalKind::Denied, self);
+        match context {
+            Some(c) => fatal.with_context(c),
+            None => fatal,
+        }
+    }
 }
 
 impl fmt::Display for Denied {
@@ -347,7 +396,13 @@ impl fmt::Display for Denied {
     }
 }
 
-impl Error for Denied {}
+impl Error for Denied {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.source
+            .as_ref()
+            .map(|s| s.as_ref() as &(dyn Error + 'static))
+    }
+}
 
 /// A [`Transient`] lane that never succeeded within the retry budget.
 #[derive(Debug, Clone)]

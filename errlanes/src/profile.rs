@@ -71,7 +71,7 @@ impl<F> NarrowDenied<F> for Infallible {
 }
 impl NarrowDenied<Fatal> for Denied {
     fn narrow(self) -> Fatal {
-        Fatal::from_error(crate::FatalKind::Denied, self)
+        self.into_fatal()
     }
 }
 
