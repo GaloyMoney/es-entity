@@ -1,3 +1,11 @@
+# [cala release v0.16.12](https://github.com/GaloyMoney/cala/releases/tag/0.16.12)
+
+
+
+### Features
+
+- Update reqwest classifier to 0.13 (#263)
+
 # [cala release v0.16.11](https://github.com/GaloyMoney/cala/releases/tag/0.16.11)
 
 
