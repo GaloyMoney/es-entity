@@ -28,7 +28,6 @@ reqwest = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true, features = ["attributes"] }
 
 [dev-dependencies]
-http = { workspace = true }
 composition-consumer = { path = "tests/composition/consumer" }
 downstream = { path = "tests/coherence/downstream" }
 upstream = { path = "tests/coherence/upstream" }

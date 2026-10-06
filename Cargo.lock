@@ -729,7 +729,6 @@ dependencies = [
  "composition-consumer",
  "downstream",
  "errlanes-derive",
- "http",
  "reqwest",
  "serde_json",
  "sqlx",
