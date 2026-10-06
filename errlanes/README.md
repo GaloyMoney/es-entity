@@ -1118,10 +1118,3 @@ sketch compiles, and the examples execute their assertions:
 ```sh
 nix develop -c cargo test --profile mdbook-test -p errlanes --doc
 ```
-
-### Reqwest version
-
-The `classify-reqwest` feature supports reqwest 0.13. It provides the
-`Classify` implementation for reqwest errors, preserves the original source
-for transient/fatal lanes, and supports borrowed dynamic classification.
-`es-entity` forwards it as `errlanes-classify-reqwest`.
