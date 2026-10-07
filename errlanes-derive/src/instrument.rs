@@ -4,9 +4,9 @@ use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
 use quote::{format_ident, quote};
 use syn::ItemFn;
 
-/// The six span fields [`crate`]'s runtime `errlanes::FIELDS` promises;
-/// declared here as literal dotted names so the generated `fields(..)` entries
-/// match it token for token.
+/// The span fields [`crate`]'s runtime `errlanes::FIELDS` promises; declared
+/// here as literal dotted names so the generated `fields(..)` entries match
+/// it token for token.
 const FIELDS: &[&str] = &[
     "error",
     "error.lane",
@@ -14,6 +14,7 @@ const FIELDS: &[&str] = &[
     "error.level",
     "exception.message",
     "exception.type",
+    "otel.status_code",
 ];
 
 /// `tracing::field::Empty` is a bare path, not run through `runtime_path()`:

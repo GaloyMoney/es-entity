@@ -16,9 +16,14 @@ use crate::fail::Level;
 ///     error.level = tracing::field::Empty,
 ///     exception.message = tracing::field::Empty,
 ///     exception.type = tracing::field::Empty,
+///     otel.status_code = tracing::field::Empty,
 /// );
-/// assert_eq!(FIELDS.len(), 6);
+/// assert_eq!(FIELDS.len(), 7);
 /// ```
+///
+/// `otel.status_code` is set to `"ERROR"` for a `Fatal` outcome only.
+/// `Rejected`, `Denied` and `Transient` are not span failures, which is the
+/// distinction the lanes exist to make; the field stays `Empty` for them.
 pub const FIELDS: &[&str] = &[
     "error",
     "error.lane",
@@ -26,6 +31,7 @@ pub const FIELDS: &[&str] = &[
     "error.level",
     "exception.message",
     "exception.type",
+    "otel.status_code",
 ];
 
 /// **Display discipline**: `error.code` for a `Rejected` outcome comes from
@@ -55,6 +61,7 @@ pub(crate) fn record_lanes<R: LaneRejected>(span: &tracing::Span, lane: LaneRef<
         LaneRef::Fatal(x) => {
             span.record("exception.message", message_chain(x));
             span.record("exception.type", x.kind.as_str());
+            span.record("otel.status_code", "ERROR");
         }
     }
 }
