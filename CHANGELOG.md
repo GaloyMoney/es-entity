@@ -1,3 +1,11 @@
+# [cala release v0.17.0](https://github.com/GaloyMoney/cala/releases/tag/0.17.0)
+
+
+
+### Features
+
+- [**breaking**] Enum carriers via #[derive(errlanes::Carrier)] replace Failure (#267)
+
 # [cala release v0.16.13](https://github.com/GaloyMoney/cala/releases/tag/0.16.13)
 
 
