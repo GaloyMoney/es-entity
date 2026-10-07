@@ -5,7 +5,7 @@
 //! rather than one import per verb.
 
 use crate::{
-    carrier::{Carrier, IntoLanes, kind},
+    carrier::{BuiltinFor, Carrier, IntoLanes, kind},
     classify::Classify,
     fail::{Fail, Fault, Laned, Rejection, WidenResult},
     lane::{Denied, Fatal},
@@ -300,6 +300,59 @@ pub trait ResultExt<T, E>: Sized {
         E: IntoLanes,
         E::Rejected: Rejection;
 
+    /// Lands the error in its *own* built-in, with no destination named:
+    /// `Fault<L>` for a source that never rejects, `Fail<R, L>` for one that
+    /// can, where `L` is exactly the source's lanes. Works on every lane
+    /// source: a carrier (its `Repr`), a [`Classify`] wrapper, a bare
+    /// `Rejection`, a lane payload, or a `Fault` / `Fail` (identity).
+    ///
+    /// Two uses:
+    ///
+    /// - **Into a `Box<dyn Error>`.** A wrapper's classification lives in its
+    ///   `impl Classify`, not in the value, so `?` on the bare wrapper boxes it
+    ///   unlaned and the receiving [`Fault::classify`] walks past it to the
+    ///   foreign error underneath. Through its built-in, the box holds the lane
+    ///   payload, with the wrapper and its own source still in the chain, so
+    ///   what the boundary records (kind as `error.code`, `error.level`,
+    ///   `exception.message`) is exactly what recording the built-in directly
+    ///   gives. A *rejection* does not survive a box this way or any other:
+    ///   `Fault::classify` has no rejected arm. Resolve rejections before
+    ///   boxing.
+    /// - **Into a carrier from another crate.** `?` cannot convert one crate's
+    ///   carrier into another crate's carrier, but every carrier absorbs a
+    ///   built-in, so `.widen_via_builtin()?` reaches it in two hops.
+    ///
+    /// The built-in has exactly the source's lanes, the narrowest it can
+    /// become, so any destination that would accept a wider one accepts it.
+    /// It is not needed for a built-in `Fault` destination: a wrapper or a
+    /// carrier already `?`s straight into one, and `Fault` to `Fault` is never
+    /// a `?` (that is `.widen()`).
+    ///
+    /// ```
+    /// use errlanes::{Fault, FatalKind, ResultExt};
+    ///
+    /// #[derive(Debug, errlanes::Classify)]
+    /// #[classify(fatal(CorruptState))]
+    /// #[error("stored bytes do not decode")]
+    /// struct Undecodable(#[source] std::io::Error);
+    ///
+    /// fn decode() -> Result<u8, Undecodable> {
+    ///     Err(Undecodable(std::io::Error::other("bad bytes")))
+    /// }
+    ///
+    /// fn boundary() -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
+    ///     Ok(decode().widen_via_builtin()?)
+    /// }
+    ///
+    /// let boxed = boundary().unwrap_err();
+    /// assert!(matches!(Fault::classify(&*boxed), Fault::Fatal(f) if f.kind == FatalKind::CorruptState));
+    /// ```
+    #[allow(clippy::type_complexity)]
+    fn widen_via_builtin(self) -> Result<T, <E::Rejected as BuiltinFor<E::Lanes>>::Builtin>
+    where
+        E: IntoLanes,
+        E::Rejected: BuiltinFor<E::Lanes>;
+
     /// `.classify::<W>()` — the verb that turns a foreign error into a local
     /// [`Classify`] wrapper at a one-off call site, so a function that does
     /// not itself return `W` can still enter the lanes through it:
@@ -362,6 +415,14 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
         E::Rejected: Rejection,
     {
         self.map_err(|e| e.into_lanes().map_rejected(f))
+    }
+
+    fn widen_via_builtin(self) -> Result<T, <E::Rejected as BuiltinFor<E::Lanes>>::Builtin>
+    where
+        E: IntoLanes,
+        E::Rejected: BuiltinFor<E::Lanes>,
+    {
+        self.map_err(|e| BuiltinFor::builtin(e.into_lanes()))
     }
 
     fn classify<W: Classify + From<E>>(self) -> Result<T, W> {

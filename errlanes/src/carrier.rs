@@ -155,6 +155,31 @@ impl IntoLanes for Infallible {
     }
 }
 
+/// The built-in a lane source lands in when nothing names a destination:
+/// `Fault<L>` for a source that never rejects, `Fail<R, L>` for one that can.
+/// Keyed on the rejected slot, which is `Infallible` or a [`Rejection`] for
+/// every source errlanes knows. Hidden: it is the engine of
+/// [`ResultExt::widen_via_builtin`](crate::ResultExt::widen_via_builtin).
+#[doc(hidden)]
+pub trait BuiltinFor<L: LaneProfile>: Sized {
+    type Builtin: Error + Send + Sync + 'static;
+    fn builtin(f: Fail<Self, L>) -> Self::Builtin;
+}
+
+impl<L: LaneProfile> BuiltinFor<L> for Infallible {
+    type Builtin = Fault<L>;
+    fn builtin(f: Fail<Infallible, L>) -> Fault<L> {
+        fail_into_fault(f)
+    }
+}
+
+impl<R: Rejection, L: LaneProfile> BuiltinFor<L> for R {
+    type Builtin = Fail<R, L>;
+    fn builtin(f: Fail<R, L>) -> Fail<R, L> {
+        f
+    }
+}
+
 /// A fault-only value, as a `Fault<M>`. The shared body of every `?` into a
 /// `Fault`; the lane-subset bounds are what make it total.
 fn fail_into_fault<L: LaneProfile, M: LaneProfile>(f: Fail<Infallible, L>) -> Fault<M>

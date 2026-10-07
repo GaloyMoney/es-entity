@@ -318,11 +318,14 @@ classification the wrapper exists to override. Nothing warns: `?` compiles
 only the `kind` is wrong, which is the one field the wrapper was written to
 set.
 
-`.widen()` is that step. The destination is named here because `?` into a box
-leaves it unconstrained, the same reason `.classify::<W>()` names its wrapper:
+`.widen_via_builtin()` is that step. It lands the wrapper in its *own*
+built-in (`Fault<L>` with exactly the wrapper's lanes, or `Fail<R, L>` if it
+can reject), so nothing has to be named even though `?` into a box leaves the
+destination unconstrained. The box then holds the lane payload, and the
+wrapper and the foreign error under it stay in the `source()` chain:
 
 ```rust
-use errlanes::{Fault, ResultExt, lanes};
+use errlanes::{Fault, ResultExt};
 
 #[derive(Debug, errlanes::Classify)]
 #[classify(fatal(CorruptState), from)]
@@ -335,15 +338,16 @@ fn decode() -> Result<u8, StoredRow> {
 
 // Inside a boundary whose own trait returns a box:
 fn run() -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
-    Ok(decode().widen::<Fault<lanes!(Transient, Fatal)>>()?)
+    Ok(decode().widen_via_builtin()?)
 }
 
 let fault = Fault::classify(&*run().unwrap_err());
 assert!(matches!(fault, Fault::Fatal(f) if f.kind == errlanes::FatalKind::CorruptState));
 ```
 
-A crate with its own carrier newtype names that instead
-(`.widen::<MyFault>()?`), which is the same move and reads better.
+`.widen::<Fault<M>>()?` does the same with a named, possibly wider, profile.
+A carrier needs neither on its way into a box: its `source()` is already the
+lane payload, so plain `?` keeps its lane.
 
 ## Local errors
 
@@ -916,7 +920,8 @@ every case:
 | `W: Classify` | `Fail<D, M>` | `?`, given `D` lifts `W::Rejected` totally and `W::Lanes ⊆ M` |
 | `W: Classify` | `Fail<D, M>` | `.widen()?`, if `D` only lifts `W::Rejected` partially |
 | `W: Classify<Rejected = Infallible>` | `Fault<M>` | `?`, given `W::Lanes ⊆ M` |
-| `Result<T, W: Classify<Rejected = Infallible>>` | `Result<T, Fault<M>>` | `.widen::<Fault<M>>()?` — when no signature infers the destination, above all on the way into a `Box<dyn Error>` |
+| `Result<T, W: Classify<Rejected = Infallible>>` | `Result<T, Fault<M>>` | `.widen::<Fault<M>>()?` — when no signature infers the destination |
+| `Result<T, W>`, any lane source (wrapper, carrier, rejection, payload) | its own built-in: `Fault<W::Lanes>`, or `Fail<R, W::Lanes>` if it can reject | `.widen_via_builtin()?` — into a `Box<dyn Error>`, or into a carrier from another crate |
 | `W: Classify<Rejected = Infallible, Lanes = lanes!(Fatal)>` | bare `Fatal` | `?` (same for a lone `Transient`) |
 | `Result<T, Fail<D, L>>` | `Result<T, Fault<L>>` | `.narrow_rejected()` |
 | `Result<T, R>`, a bare rejection | `Result<T, Fatal>`, then `?` into any `Fault`/`Fail` with a `Fatal` lane | `.narrow_rejected()?` — an internal frame consuming a public method's rejection after proving the precondition |
@@ -1015,11 +1020,11 @@ What `?` does, in and out of a carrier `E`:
 standard library's reflexive `impl<T> From<T> for T`. So the conversion you
 want is listed: `#[carrier(from(HostFault))]` adds `impl From<HostFault> for E`. The list
 only works for carriers declared in the *same crate* as `E` (see below). The
-list-free route works for any carrier: name the built-in, and the outer `?`
-absorbs it.
+list-free route works for any carrier, in any crate: hand it over as its
+built-in, and the outer `?` absorbs that.
 
 ```rust
-# use errlanes::{Fault, ResultExt, lanes};
+# use errlanes::{ResultExt};
 # #[derive(Debug, errlanes::Carrier)]
 # pub enum HostFault {
 #     Transient(errlanes::Transient),
@@ -1036,7 +1041,7 @@ fn host() -> Result<u8, HostFault> {
 }
 
 fn party() -> Result<u8, PartyFault> {
-    let v = host().widen::<Fault<lanes!(Denied, Transient, Fatal)>>()?;
+    let v = host().widen_via_builtin()?;
     Ok(v)
 }
 # assert_eq!(party().unwrap(), 1);
@@ -1047,10 +1052,13 @@ profile: each is a one-field tuple variant, at most one of each, and
 `Rejected(T)` makes the carrier `Fail`-like. Variants may carry doc comments,
 and `Debug` is yours to derive.
 
-**Limitation.** `from(..)` cannot list a carrier declared in another crate:
-the carrier's one blanket inbound `From` overlaps it, because rustc cannot
-rule out that the other crate's type implements `Classify` one day. Use
-`.widen::<Fault<..>>()?` across crates.
+**Limitation.** `from(..)` cannot list a carrier declared in another crate,
+and neither can a hand-written `impl From<OtherCrate::Carrier> for E`: the
+carrier's one blanket inbound `From` overlaps it, because rustc cannot know
+the other crate's carrier is not a plain lane source. Use
+`.widen_via_builtin()?` across crates, and in generic code over a foreign
+carrier, bound on its built-in (`E: From<Fault<lanes!(Transient, Fatal)>>`)
+rather than on the carrier.
 
 ## Composing rejection families
 

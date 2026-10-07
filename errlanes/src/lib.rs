@@ -29,7 +29,7 @@ pub mod reqwest;
 mod record;
 
 #[doc(hidden)]
-pub use carrier::{Absorb, IntoLanes, LaneRejected, WidenBy, kind};
+pub use carrier::{Absorb, BuiltinFor, IntoLanes, LaneRejected, WidenBy, kind};
 pub use carrier::{Carrier, LaneRef, Repr};
 pub use classify::{Classify, RejectedSlot, RejectedUnion};
 #[doc(hidden)]

@@ -259,6 +259,20 @@ fn into_customer_from_upstream_carrier() -> Result<(), CustomerError> {
     Ok(())
 }
 
+/// The cross-crate carrier -> carrier hop: `upstream::HostFault` cannot be
+/// listed in `from(..)` here, but its built-in reaches any carrier by `?`.
+fn into_party_from_upstream_host_via_builtin() -> Result<(), PartyFault> {
+    upstream::host_transient().widen_via_builtin()?;
+    Ok(())
+}
+
+/// Generic host code over an upstream carrier: the bound names the built-in,
+/// and every local carrier, `Fail` and `#[from]`-on-built-in enum satisfies it.
+fn in_effect_via_builtin<E: Error + From<Fault<lanes!(Transient, Fatal)>>>() -> Result<u8, E> {
+    let v = upstream::host_op().widen_via_builtin()?;
+    Ok(v)
+}
+
 fn into_customer_from_wrapper() -> Result<(), CustomerError> {
     Err(stored())?;
     Ok(())
@@ -482,6 +496,17 @@ pub fn smoke() {
         into_customer_from_upstream_carrier()
             .unwrap_err()
             .is_rejected()
+    );
+    assert!(matches!(
+        into_party_from_upstream_host_via_builtin(),
+        Err(PartyFault::Transient(_))
+    ));
+    assert_eq!(in_effect_via_builtin::<PartyFault>().unwrap(), 7);
+    assert_eq!(in_effect_via_builtin::<CustomerError>().unwrap(), 7);
+    assert_eq!(
+        in_effect_via_builtin::<Fail<CustomerRejection, lanes!(Denied, Transient, Fatal)>>()
+            .unwrap(),
+        7
     );
     assert!(into_customer_from_wrapper().unwrap_err().is_fatal());
     assert!(into_customer_from_payload().unwrap_err().is_transient());
