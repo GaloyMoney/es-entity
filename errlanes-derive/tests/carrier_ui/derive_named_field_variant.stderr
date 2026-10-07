@@ -1,0 +1,5 @@
+error: a carrier variant is a one-field tuple variant: `Fatal(Payload)`
+ --> tests/carrier_ui/derive_named_field_variant.rs:3:11
+  |
+3 |     Fatal { inner: errlanes::Fatal },
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^

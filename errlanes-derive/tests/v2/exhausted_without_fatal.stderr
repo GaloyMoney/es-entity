@@ -7,7 +7,7 @@ error[E0277]: the trait bound `errlanes::Transient: NarrowTransient<Infallible>`
    = help: the trait `NarrowTransient<Infallible>` is not implemented for `errlanes::Transient`
            but trait `NarrowTransient<errlanes::Fatal>` is implemented for it
    = help: for that trait implementation, expected `errlanes::Fatal`, found `Infallible`
-note: required by a bound in `Fail::<D, L>::narrow_transient`
+note: required by a bound in `errlanes::Fail::<D, L>::narrow_transient`
   --> $WORKSPACE/errlanes/src/fail.rs
    |
    |     pub fn narrow_transient(self, attempts: u32) -> Fail<D, crate::profile::WithoutTransient<L>>

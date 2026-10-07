@@ -1,0 +1,5 @@
+error: `Rejected` is not a fault lane: it is selected by the carrier, not the profile. Use `#[errlanes::fail(YourRejection; ..)]` instead of listing `Rejected`.
+ --> tests/carrier_ui/attr_rejected_in_lanes.rs:1:19
+  |
+1 | #[errlanes::fault(Rejected, Fatal)]
+  |                   ^^^^^^^^

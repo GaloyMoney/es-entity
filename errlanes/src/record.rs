@@ -1,6 +1,6 @@
+use crate::carrier::{LaneRef, LaneRejected};
 use crate::dynamic::message_chain;
-use crate::fail::{Fail, Fault, Level, Rejection};
-use crate::profile::{LaneProfile, Slot};
+use crate::fail::Level;
 
 /// Span fields a boundary span must declare as `tracing::field::Empty` for
 /// [`crate::Laned::record`] to fill.
@@ -52,51 +52,28 @@ fn level_str(level: Level) -> &'static str {
 /// lane built from an arbitrary error whose message embeds caller input
 /// should set its own operator-safe `context` instead of relying on the
 /// default.
-pub(crate) fn record_fail<D: Rejection, L: LaneProfile>(span: &tracing::Span, f: &Fail<D, L>) {
+pub(crate) fn record_lanes<R: LaneRejected>(span: &tracing::Span, lane: LaneRef<'_, R>) {
     span.record("error", true);
-    span.record("error.lane", f.lane().as_str());
-    match f {
-        Fail::Rejected(d) => {
-            span.record("error.code", Into::<&'static str>::into(d.code()));
+    span.record("error.lane", lane.lane().as_str());
+    match lane {
+        LaneRef::Rejected(d) => {
+            span.record("error.code", d.code_str());
             span.record("error.level", level_str(d.level()));
         }
-        Fail::Denied(_) => {
+        LaneRef::Denied(_) => {
             span.record("error.code", "FORBIDDEN");
             span.record("error.level", "WARN");
         }
-        Fail::Transient(t) => {
-            span.record("error.code", t.marker().kind.as_str());
+        LaneRef::Transient(t) => {
+            span.record("error.code", t.kind.as_str());
             span.record("error.level", "INFO");
             span.record("exception.message", message_chain(t));
         }
-        Fail::Fatal(x) => {
-            span.record("error.code", x.marker().kind.as_str());
+        LaneRef::Fatal(x) => {
+            span.record("error.code", x.kind.as_str());
             span.record("error.level", "ERROR");
             span.record("exception.message", message_chain(x));
-            span.record("exception.type", x.marker().kind.as_str());
-        }
-    }
-}
-
-/// [`record_fail`] for a [`Fault`] — no `Rejected` arm to key a code from.
-pub(crate) fn record_fault<L: LaneProfile>(span: &tracing::Span, f: &Fault<L>) {
-    span.record("error", true);
-    span.record("error.lane", f.lane().as_str());
-    match f {
-        Fault::Denied(_) => {
-            span.record("error.code", "FORBIDDEN");
-            span.record("error.level", "WARN");
-        }
-        Fault::Transient(t) => {
-            span.record("error.code", t.marker().kind.as_str());
-            span.record("error.level", "INFO");
-            span.record("exception.message", message_chain(t));
-        }
-        Fault::Fatal(x) => {
-            span.record("error.code", x.marker().kind.as_str());
-            span.record("error.level", "ERROR");
-            span.record("exception.message", message_chain(x));
-            span.record("exception.type", x.marker().kind.as_str());
+            span.record("exception.type", x.kind.as_str());
         }
     }
 }

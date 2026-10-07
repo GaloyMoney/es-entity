@@ -1,0 +1,42 @@
+error[E0271]: type mismatch resolving `<CustomerError as IntoLanes>::Kind == Plain`
+  --> tests/coherence/carrier_fail/fail_like_into_fault_only.rs:14:6
+   |
+14 |     r?;
+   |      ^ type mismatch resolving `<CustomerError as IntoLanes>::Kind == Plain`
+   |
+note: expected this to be `Plain`
+  --> tests/coherence/carrier_fail/fail_like_into_fault_only.rs:10:1
+   |
+10 | #[errlanes::fail(Closed; Transient, Fatal)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `HostFault` to implement `From<CustomerError>`
+  --> tests/coherence/carrier_fail/fail_like_into_fault_only.rs:7:1
+   |
+ 7 | #[errlanes::fault(Transient, Fatal)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced in this `derive` macro
+ 8 | struct HostFault;
+   |        ^^^^^^^^^
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: this error originates in the derive macro `errlanes::Carrier` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0271]: type mismatch resolving `<CustomerError as IntoLanes>::Rejected == Infallible`
+  --> tests/coherence/carrier_fail/fail_like_into_fault_only.rs:14:6
+   |
+14 |     r?;
+   |      ^ type mismatch resolving `<CustomerError as IntoLanes>::Rejected == Infallible`
+   |
+note: expected this to be `Infallible`
+  --> tests/coherence/carrier_fail/fail_like_into_fault_only.rs:10:18
+   |
+10 | #[errlanes::fail(Closed; Transient, Fatal)]
+   |                  ^^^^^^
+   = note: required for `errlanes::Fault<Profile<false, true, true>>` to implement `Absorb<CustomerError>`
+note: required for `HostFault` to implement `From<CustomerError>`
+  --> tests/coherence/carrier_fail/fail_like_into_fault_only.rs:7:1
+   |
+ 7 | #[errlanes::fault(Transient, Fatal)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced in this `derive` macro
+ 8 | struct HostFault;
+   |        ^^^^^^^^^
+   = note: this error originates in the derive macro `errlanes::Carrier` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -2,7 +2,7 @@ use std::{error::Error, fmt};
 
 use crate::profile::{AllLanes, LaneProfile, NarrowDenied, NarrowTransient};
 
-use crate::lane::{Denied, Exhausted, Fatal, Lane, Transient};
+use crate::lane::{Denied, Fatal, Lane, Transient};
 
 /// Operator level, independent of any tracing dependency in the core API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -147,11 +147,7 @@ impl<L: LaneProfile> Fault<L> {
     /// `Fatal`: the whole `source()` chain joined with `": "`. `Denied`: its
     /// `Display`.
     pub fn message(&self) -> String {
-        match self {
-            Fault::Denied(d) => d.to_string(),
-            Fault::Transient(t) => crate::dynamic::message_chain(t),
-            Fault::Fatal(x) => crate::dynamic::message_chain(x),
-        }
+        self.lanes().message()
     }
 
     /// Consumes the `Transient` lane, yielding the same profile with its
@@ -211,7 +207,7 @@ impl<L: LaneProfile<Transient = Transient>> Fault<L> {
         self.as_transient().is_some_and(Transient::is_congestion)
     }
 
-    /// See [`TransientKind::is_contention`].
+    /// See [`crate::TransientKind::is_contention`].
     pub fn is_contention(&self) -> bool {
         self.as_transient().is_some_and(Transient::is_contention)
     }
@@ -247,7 +243,7 @@ impl<D, L: LaneProfile<Transient = Transient>> Fail<D, L> {
         self.as_transient().is_some_and(Transient::is_congestion)
     }
 
-    /// See [`TransientKind::is_contention`].
+    /// See [`crate::TransientKind::is_contention`].
     pub fn is_contention(&self) -> bool {
         self.as_transient().is_some_and(Transient::is_contention)
     }
@@ -281,50 +277,6 @@ impl<L: LaneProfile> Error for Fault<L> {
             Fault::Transient(t) => Some(t),
             Fault::Fatal(x) => Some(x),
         }
-    }
-}
-
-impl<L: LaneProfile> From<Transient> for Fault<L>
-where
-    L: LaneProfile<Transient = Transient>,
-{
-    fn from(t: Transient) -> Self {
-        Fault::Transient(t)
-    }
-}
-
-impl<L: LaneProfile> From<Fatal> for Fault<L>
-where
-    L: LaneProfile<Fatal = Fatal>,
-{
-    fn from(f: Fatal) -> Self {
-        Fault::Fatal(f)
-    }
-}
-
-impl<L: LaneProfile> From<Denied> for Fault<L>
-where
-    L: LaneProfile<Denied = Denied>,
-{
-    fn from(d: Denied) -> Self {
-        Fault::Denied(d)
-    }
-}
-
-impl<L: LaneProfile> From<Exhausted> for Fault<L>
-where
-    L: LaneProfile<Fatal = Fatal>,
-{
-    fn from(e: Exhausted) -> Self {
-        Fault::Fatal(Fatal::from_error(crate::lane::FatalKind::Exhausted, e))
-    }
-}
-
-/// `Infallible` is what a disabled lane slot is, so a value proven never to
-/// exist converts trivially — `match e {}`.
-impl<L: LaneProfile> From<core::convert::Infallible> for Fault<L> {
-    fn from(e: core::convert::Infallible) -> Self {
-        match e {}
     }
 }
 
@@ -413,7 +365,7 @@ impl<D, L: LaneProfile> Fail<D, L> {
 
     /// Narrows to the domain outcome, or the non-domain fault. `let d =
     /// e.rejected()?;` propagates the fault into any enclosing `Fail<_, L>` (or
-    /// a `Failure` carrier) via the blanket `From<Fault<L>>`.
+    /// a [`Carrier`](crate::Carrier)) via the blanket `From<Fault<L>>`.
     pub fn rejected(self) -> Result<D, Fault<L>> {
         match self {
             Fail::Rejected(d) => Ok(d),
@@ -453,12 +405,7 @@ impl<D, L: LaneProfile> Fail<D, L> {
     where
         D: Rejection,
     {
-        match self {
-            Fail::Rejected(d) => d.code().to_string(),
-            Fail::Denied(d) => d.to_string(),
-            Fail::Transient(t) => crate::dynamic::message_chain(t),
-            Fail::Fatal(x) => crate::dynamic::message_chain(x),
-        }
+        self.lanes().message()
     }
 
     /// Consumes the `Transient` lane, yielding the same rejection over `L`
@@ -526,59 +473,6 @@ pub(crate) fn invariant_from_rejection<D: Rejection>(d: D) -> Fatal {
         .with_opaque_source()
 }
 
-/// The real blanket the `Infallible` encoding could not have: `Fault<L>` is not
-/// `Fail`, so this does not overlap `From<T> for T`.
-impl<D, S: LaneProfile, L: LaneProfile> From<Fault<S>> for Fail<D, L>
-where
-    S::Denied: Into<L::Denied>,
-    S::Transient: Into<L::Transient>,
-    S::Fatal: Into<L::Fatal>,
-{
-    fn from(f: Fault<S>) -> Self {
-        match f {
-            Fault::Denied(d) => Fail::Denied(d.into()),
-            Fault::Transient(t) => Fail::Transient(t.into()),
-            Fault::Fatal(x) => Fail::Fatal(x.into()),
-        }
-    }
-}
-
-impl<D, L: LaneProfile> From<Transient> for Fail<D, L>
-where
-    L: LaneProfile<Transient = Transient>,
-{
-    fn from(t: Transient) -> Self {
-        Fail::Transient(t)
-    }
-}
-
-impl<D, L: LaneProfile> From<Fatal> for Fail<D, L>
-where
-    L: LaneProfile<Fatal = Fatal>,
-{
-    fn from(f: Fatal) -> Self {
-        Fail::Fatal(f)
-    }
-}
-
-impl<D, L: LaneProfile> From<Denied> for Fail<D, L>
-where
-    L: LaneProfile<Denied = Denied>,
-{
-    fn from(d: Denied) -> Self {
-        Fail::Denied(d)
-    }
-}
-
-impl<D, L: LaneProfile> From<Exhausted> for Fail<D, L>
-where
-    L: LaneProfile<Fatal = Fatal>,
-{
-    fn from(e: Exhausted) -> Self {
-        Fail::Fatal(Fatal::from_error(crate::lane::FatalKind::Exhausted, e))
-    }
-}
-
 impl<D: fmt::Display, L: LaneProfile> fmt::Display for Fail<D, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -603,53 +497,17 @@ impl<D: Error + 'static, L: LaneProfile> Error for Fail<D, L> {
     }
 }
 
-/// Implemented by per-crate carrier newtypes, typically via
-/// `#[derive(errlanes::Failure)]`. Generic machinery (retry, boundary
-/// recorders) is written against this, not against `Fail<D, L>` directly.
-pub trait Failure: Error + Send + Sync + Sized + 'static {
-    type Rejection: Rejection;
-    type Lanes: LaneProfile;
-
-    fn into_fail(self) -> Fail<Self::Rejection, Self::Lanes>;
-    fn from_fail(f: Fail<Self::Rejection, Self::Lanes>) -> Self;
-    fn as_fail(&self) -> &Fail<Self::Rejection, Self::Lanes>;
-
-    fn lane(&self) -> Lane {
-        self.as_fail().lane()
-    }
-
-    fn is_transient(&self) -> bool {
-        matches!(self.lane(), Lane::Transient)
-    }
-}
-
-impl<D: Rejection, L: LaneProfile> Failure for Fail<D, L> {
-    type Rejection = D;
-    type Lanes = L;
-
-    fn into_fail(self) -> Fail<Self::Rejection, Self::Lanes> {
-        self
-    }
-
-    fn from_fail(f: Fail<Self::Rejection, Self::Lanes>) -> Self {
-        f
-    }
-
-    fn as_fail(&self) -> &Fail<Self::Rejection, Self::Lanes> {
-        self
-    }
-}
-
 pub(crate) mod sealed {
     pub trait Sealed {}
-    impl<F: super::Failure> Sealed for F {}
+    impl<D: super::Rejection, L: super::LaneProfile> Sealed for super::Fail<D, L> {}
     impl<L: super::LaneProfile> Sealed for super::Fault<L> {}
+    impl<C: crate::Carrier> Sealed for C {}
 }
 
 /// Sealed. The thing `retry`/`record` need from any error they are handed:
-/// its lane, and how to narrow it. Implemented by every [`Failure`] (which
-/// covers `Fail<D, L>` itself and every carrier) and by [`Fault<L>`] — the two
-/// shapes a generated repo op can return.
+/// its lane, and how to narrow it. Implemented by [`Fail<D, L>`], by
+/// [`Fault<L>`] — the two shapes a generated repo op can return — and by every
+/// [`Carrier`](crate::Carrier) whose built-in is `Laned`.
 pub trait Laned: sealed::Sealed + Error + Send + Sync + 'static + Sized {
     type WithoutTransient: Error + Send + Sync + 'static;
 
@@ -686,27 +544,55 @@ pub trait Laned: sealed::Sealed + Error + Send + Sync + 'static + Sized {
 /// not `Fatal` is not `Laned`, so `retry` cannot be handed one. Retrying an
 /// operation that claims it can never fail permanently is exactly the
 /// contradiction the bound rules out.
-impl<F: Failure> Laned for F
+impl<D: Rejection, L: LaneProfile> Laned for Fail<D, L>
 where
-    <F::Lanes as LaneProfile>::Transient: NarrowTransient<<F::Lanes as LaneProfile>::Fatal>,
+    L::Transient: NarrowTransient<L::Fatal>,
 {
-    type WithoutTransient = Fail<F::Rejection, crate::profile::WithoutTransient<F::Lanes>>;
+    type WithoutTransient = Fail<D, crate::profile::WithoutTransient<L>>;
 
     fn lane(&self) -> Lane {
-        Failure::lane(self)
+        Fail::lane(self)
     }
 
     fn narrow_transient(self, attempts: u32) -> Self::WithoutTransient {
-        self.into_fail().narrow_transient(attempts)
+        Fail::narrow_transient(self, attempts)
     }
 
     fn message(&self) -> String {
-        self.as_fail().message()
+        Fail::message(self)
     }
 
     #[cfg(feature = "tracing")]
     fn record(&self, span: &tracing::Span) {
-        crate::record::record_fail(span, self.as_fail());
+        self.lanes().record(span);
+    }
+}
+
+/// A carrier is `Laned` exactly when its built-in is, and narrows through it.
+/// Disjoint from the two built-in impls above: `Fault` / `Fail` are not
+/// carriers, and downstream cannot implement `Carrier` for them (orphan rule).
+impl<C: crate::Carrier> Laned for C
+where
+    C::Repr: Laned,
+    <C as crate::IntoLanes>::Rejected: crate::carrier::LaneRejected,
+{
+    type WithoutTransient = <C::Repr as Laned>::WithoutTransient;
+
+    fn lane(&self) -> Lane {
+        crate::Carrier::lanes(self).lane()
+    }
+
+    fn narrow_transient(self, attempts: u32) -> Self::WithoutTransient {
+        self.into_repr().narrow_transient(attempts)
+    }
+
+    fn message(&self) -> String {
+        crate::Carrier::lanes(self).message()
+    }
+
+    #[cfg(feature = "tracing")]
+    fn record(&self, span: &tracing::Span) {
+        crate::Carrier::lanes(self).record(span);
     }
 }
 
@@ -730,55 +616,35 @@ where
 
     #[cfg(feature = "tracing")]
     fn record(&self, span: &tracing::Span) {
-        crate::record::record_fault(span, self);
+        self.lanes().record(span);
     }
 }
 
-/// Dispatch engine for [`crate::ResultExt::widen`], keyed on the source
-/// shape so each carrier (`Fault`, `Fail`, a bare [`crate::Classify`] source)
-/// gets its own body. Hidden: a consumer calls `.widen()` on a `Result`,
-/// never this trait directly. See `ResultExt::widen` for the full doc,
-/// including the `compile_fail` example of a lane widening cannot discard.
+/// Dispatch engine for [`crate::ResultExt::widen`]. One impl, keyed on the
+/// *source*: the target is inferred from the source's shape, which is what
+/// keeps `r.widen()?` inferring. A destination-keyed form makes it ambiguous
+/// (E0283). The per-shape bodies are [`crate::carrier::WidenBy`]. Hidden: a
+/// consumer calls `.widen()` on a `Result`, never this trait directly. See
+/// `ResultExt::widen` for the full doc, including the `compile_fail` example
+/// of a lane widening cannot discard.
 #[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be widened into `Result<{T}, {E}>`",
+    note = "widening can add lanes and lift a rejection, but never drop an enabled lane; a \
+            carrier widens to a built-in (`Fault<..>` / `Fail<..>`), not to another carrier"
+)]
 pub trait WidenResult<T, E>: Sized {
     fn widen(self) -> Result<T, E>;
 }
 
-impl<T, L: LaneProfile, M: LaneProfile> WidenResult<T, Fault<M>> for Result<T, Fault<L>>
+impl<T, S: crate::IntoLanes, E2> WidenResult<T, E2> for Result<T, S>
 where
-    L::Denied: Into<M::Denied>,
-    L::Transient: Into<M::Transient>,
-    L::Fatal: Into<M::Fatal>,
+    S::Shape: crate::carrier::WidenBy<S, E2>,
 {
-    fn widen(self) -> Result<T, Fault<M>> {
-        self.map_err(Fault::widen)
+    fn widen(self) -> Result<T, E2> {
+        self.map_err(<S::Shape as crate::carrier::WidenBy<S, E2>>::widen_err)
     }
 }
-
-/// One rule for every rejection remapping. `P: Lift<R>` is satisfied by a total
-/// `From<R>` (through errlanes' blanket, `Unmapped = Infallible`) and by a
-/// partial `#[lift(Source, unhandled = fatal)]` mapping (`Unmapped = Source`).
-/// The `UnmappedInto` bound then enforces, per destination, exactly what each
-/// mode needs: a total mapping works into any profile, while a partial one
-/// requires the destination to admit `Fatal`. The strict/partial choice is
-/// declared once on the destination enum, so the call site does not repeat it.
-impl<T, R, P: Lift<R>, L: LaneProfile, M: LaneProfile> WidenResult<T, Fail<P, M>>
-    for Result<T, Fail<R, L>>
-where
-    L::Denied: Into<M::Denied>,
-    L::Transient: Into<M::Transient>,
-    L::Fatal: Into<M::Fatal>,
-    P::Unmapped: UnmappedInto<M::Fatal>,
-{
-    fn widen(self) -> Result<T, Fail<P, M>> {
-        self.map_err(Fail::widen)
-    }
-}
-
-// The bare-source impl for `Result<T, C>` (a rejection, a fault wrapper, or a
-// mixed wrapper alike) lives in `classify.rs`, generalised from `C: Rejection`
-// to `C: Classify` — a bare rejection is the `Rejected = C, Lanes = NoLanes`
-// case of that.
 
 impl<L: LaneProfile> Fault<L> {
     pub fn widen<M: LaneProfile>(self) -> Fault<M>
@@ -812,7 +678,7 @@ pub trait RejectionMetadata<const VARIANT: u64>: Rejection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lane::{FatalKind, TransientKind};
+    use crate::lane::{Exhausted, FatalKind, TransientKind};
 
     #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
     struct SmallCode;

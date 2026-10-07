@@ -1,9 +1,10 @@
-//! Proc macros for `errlanes`: `#[derive(Rejection)]`, `#[derive(Lift)]`, `#[derive(Failure)]`,
-//! `#[compose]`, and `#[instrument]`.
+//! Proc macros for `errlanes`: `#[derive(Rejection)]`, `#[derive(Lift)]`, `#[derive(Carrier)]`,
+//! `#[fault]` / `#[fail]`, `#[compose]`, and `#[instrument]`.
 
+mod carrier;
+mod carrier_attr;
 mod classify;
 mod composition;
-mod failure;
 mod instrument;
 mod lift;
 mod rejection;
@@ -89,9 +90,63 @@ pub fn derive_lift(input: TokenStream) -> TokenStream {
     expand(input, |ast| lift::derive(ast).map_err(darling::Error::from))
 }
 
-#[proc_macro_derive(Failure, attributes(failure))]
-pub fn derive_failure(input: TokenStream) -> TokenStream {
-    expand(input, failure::derive)
+/// Derive a [carrier](https://docs.rs/errlanes/latest/errlanes/trait.Carrier.html) on a
+/// hand-written lane enum, for variant doc comments or unusual layouts. The variant names
+/// are the profile: each is a one-field tuple variant named from `Rejected` / `Denied` /
+/// `Transient` / `Fatal`, at most one of each; `Rejected(T)` makes the carrier `Fail`-like
+/// with rejection `T`. `#[carrier(from(Up, ..))]` lists other carriers that convert into this
+/// one by `?`. `Debug` is yours to derive; `#[errlanes::fault]` / `#[errlanes::fail]` emit it
+/// themselves.
+#[proc_macro_derive(Carrier, attributes(carrier))]
+pub fn derive_carrier(input: TokenStream) -> TokenStream {
+    let ast = parse_macro_input!(input as DeriveInput);
+    match carrier::derive(&ast) {
+        Ok(tokens) => resolve_runtime(tokens).into(),
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+/// Declare a fault-only carrier: a crate-local enum with exactly the listed lanes that
+/// stands in for `Fault<lanes!(..)>`.
+///
+/// ```ignore
+/// #[errlanes::fault(Transient, Fatal)]
+/// pub struct HostFault;
+/// // expands to
+/// pub enum HostFault { Transient(errlanes::Transient), Fatal(errlanes::Fatal) }
+/// ```
+///
+/// Lanes are `Denied`, `Transient`, `Fatal`, in any order, at least one.
+/// `; from(OtherCarrier, ..)` lists carriers that convert into this one by `?`. The item must
+/// be a unit struct. Put the attribute **before** any `#[derive]`, and do **not** derive
+/// `Debug`: the macro emits it. `#[non_exhaustive]` is rejected.
+#[proc_macro_attribute]
+pub fn fault(args: TokenStream, input: TokenStream) -> TokenStream {
+    match carrier_attr::expand(carrier_attr::Flavor::Fault, args.into(), input.into()) {
+        Ok(t) => resolve_runtime(t).into(),
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+/// Declare a carrier that can also reject: a crate-local enum with a `Rejected(R)` variant
+/// plus the listed lanes, standing in for `Fail<R, lanes!(..)>`.
+///
+/// ```ignore
+/// #[errlanes::fail(CustomerRejection; Transient, Fatal)]
+/// pub struct CustomerError;
+///
+/// #[errlanes::fail(R; Transient, Fatal)]   // generic over its rejection
+/// pub struct WriteError<R>;
+/// ```
+///
+/// The rejection type is a concrete type or one of the struct's own generic parameters.
+/// Zero lanes is allowed (`Fail<R, NoLanes>`). See [`fault`] for the rest of the rules.
+#[proc_macro_attribute]
+pub fn fail(args: TokenStream, input: TokenStream) -> TokenStream {
+    match carrier_attr::expand(carrier_attr::Flavor::Fail, args.into(), input.into()) {
+        Ok(t) => resolve_runtime(t).into(),
+        Err(e) => e.to_compile_error().into(),
+    }
 }
 
 /// Compose rejection families from a list of sources: `Source` imports every

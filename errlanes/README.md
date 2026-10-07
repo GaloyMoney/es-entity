@@ -938,6 +938,98 @@ because somebody has to handle it. A narrowing goes the other way on purpose:
 each removes exactly one lane by name, never by inference, which is why it is
 always a method call and not a `From` (see "Narrowing a lane" above).
 
+## Carriers: your own `Fault` / `Fail`
+
+`Fault<L>` and `Fail<R, L>` are one type per profile, so two crates that both
+return `Fault<lanes!(Transient, Fatal)>` share it, and a `thiserror` enum that
+wants `#[from]` for both collides. A **carrier** is a crate-local type that
+stands in for one of them:
+
+```rust
+# use errlanes::Rejection;
+# #[derive(Debug, errlanes::Rejection)]
+# pub enum CustomerRejection { Closed }
+#[errlanes::fault(Transient, Fatal)]
+pub struct HostFault;
+
+#[errlanes::fail(CustomerRejection; Transient, Fatal)]
+pub struct CustomerError;
+
+#[errlanes::fail(R; Transient, Fatal)]
+pub struct RepoWriteError<R>;
+
+#[errlanes::fault(Denied, Transient, Fatal; from(HostFault))]
+pub struct PartyFault;
+```
+
+Each is an **enum with exactly the declared lanes**
+(`pub enum HostFault { Transient(Transient), Fatal(Fatal) }`), so it matches
+like the built-in, and a lane it does not declare is not a variant at all:
+
+```rust
+# #[errlanes::fault(Transient, Fatal)]
+# pub struct HostFault;
+fn page(e: HostFault) -> &'static str {
+    match e {
+        HostFault::Transient(_) => "retry",
+        HostFault::Fatal(_) => "page",
+    }
+}
+# assert_eq!(page(HostFault::Fatal(errlanes::Fatal::invariant("x"))), "page");
+```
+
+What `?` does, in and out of a carrier `E`:
+
+- **In:** any lane payload `E` declares; a `Fault<S>` with `S ⊆ E`'s lanes; for
+  a `fail` carrier, a `Fail<R', S>` whose rejection lifts totally; any
+  `Classify` wrapper whose lanes fit; a bare `Rejection` that lifts totally
+  (`fail` only); and each carrier listed in `from(..)`.
+- **Out:** into `Fault<M>` (`fault` carriers, `S ⊆ M`), into `Fail<D, M>`, into
+  a bare `Fatal` / `Transient` when it has just that lane, and into a foreign
+  enum with `#[from] E`.
+- `.widen()`, `narrow_transient`, `narrow_denied`, `narrow_rejected`,
+  `rejected` and `map_rejected` work on `Result<T, E>`. A narrowing returns the
+  narrowed **built-in** (`Fault<..>` / `Fail<..>`), which `?` carries on.
+  `E: Laned` for retry, `record` and `#[errlanes::instrument]`.
+
+**Carrier to carrier is not automatic.** `?` is `From::from`, and a blanket
+`impl From<AnyCarrier> for E` would also cover `E` itself, which overlaps the
+standard library's reflexive `impl<T> From<T> for T`. So the conversion you
+want is listed: `from(HostFault)` adds `impl From<HostFault> for E`. The list
+only works for carriers declared in the *same crate* as `E` (see below). The
+list-free route works for any carrier: name the built-in, and the outer `?`
+absorbs it.
+
+```rust
+# use errlanes::{Fault, ResultExt, lanes};
+# #[errlanes::fault(Transient, Fatal)]
+# pub struct HostFault;
+# #[errlanes::fault(Denied, Transient, Fatal)]
+# pub struct PartyFault;
+fn host() -> Result<u8, HostFault> {
+    Ok(1)
+}
+
+fn party() -> Result<u8, PartyFault> {
+    let v = host().widen::<Fault<lanes!(Denied, Transient, Fatal)>>()?;
+    Ok(v)
+}
+# assert_eq!(party().unwrap(), 1);
+```
+
+`#[derive(errlanes::Carrier)]` on a hand-written enum generates the same code,
+for variant doc comments or extra derives; the variant names (`Rejected`,
+`Denied`, `Transient`, `Fatal`) are the profile.
+
+Two rules for the attribute form: put it **before** any `#[derive]`, and **do
+not derive `Debug`** — the macro emits it, and a second one is a duplicate
+impl. `#[non_exhaustive]` is rejected: the variant set is the profile.
+
+**Limitation.** `from(..)` cannot list a carrier declared in another crate:
+the carrier's one blanket inbound `From` overlaps it, because rustc cannot
+rule out that the other crate's type implements `Classify` one day. Use
+`.widen::<Fault<..>>()?` across crates.
+
 ## Composing rejection families
 
 An outer domain may also want to expose every case from an inner rejection

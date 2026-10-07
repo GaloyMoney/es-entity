@@ -688,7 +688,9 @@ name = "downstream"
 version = "0.16.14-dev"
 dependencies = [
  "errlanes",
+ "thiserror",
  "tokio",
+ "tracing",
  "upstream",
 ]
 

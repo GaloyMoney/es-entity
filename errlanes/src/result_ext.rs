@@ -5,17 +5,23 @@
 //! rather than one import per verb.
 
 use crate::{
+    carrier::{Carrier, IntoLanes, kind},
     classify::Classify,
-    fail::{Fail, Failure, Fault, Laned, Rejection, WidenResult},
+    fail::{Fail, Fault, Laned, Rejection, WidenResult},
     lane::{Denied, Fatal},
     profile::{LaneProfile, NarrowDenied, WithoutDenied},
 };
 
 /// Sealed. The error-level engine for [`ResultExt::narrow_rejected`] — keyed
 /// on the source shape the same way [`WidenResult`] is: a `Fail` narrows to
-/// the `Fault` of its own profile, a bare `Rejection` to the bare `Fatal`.
-/// Both outputs are associated types, read off the source, so
-/// `.narrow_rejected()?` never needs a destination named at the call site.
+/// the `Fault` of its own profile, a bare `Rejection` to the bare `Fatal`, a
+/// carrier through its built-in. Both outputs are associated types, read off
+/// the source, so `.narrow_rejected()?` never needs a destination named at the
+/// call site.
+///
+/// One impl over `S: IntoLanes`, handing off to [`NarrowRejectedBy`] on the
+/// concrete shape type. A separate `C: Carrier` impl would overlap the
+/// `R: Rejection` one (generic against generic).
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no rejected lane to narrow",
@@ -27,25 +33,32 @@ pub trait NarrowRejectedLane: narrow_sealed::Sealed {
     fn narrow_rejected(self) -> Self::Narrowed;
 }
 
-/// Its own seal rather than `fail::sealed`: that one is blanket-implemented
-/// for every `Failure`, and a downstream type may be both a `Failure` carrier
-/// and a `Rejection`, so a second blanket over `R: Rejection` would overlap
-/// there. Here the two impls are `Fail<D, L>` and `R: Rejection`, which
-/// coherence can tell apart — `Fail` is local and never a `Rejection`.
 mod narrow_sealed {
-    use crate::{
-        fail::{Fail, Rejection},
-        profile::LaneProfile,
-    };
+    use crate::carrier::IntoLanes;
     pub trait Sealed {}
-    impl<D: Rejection, L: LaneProfile> Sealed for Fail<D, L> {}
-    impl<R: Rejection> Sealed for R {}
+    impl<S: IntoLanes> Sealed for S {}
 }
 
-impl<D: Rejection, L: LaneProfile<Fatal = Fatal>> NarrowRejectedLane for Fail<D, L> {
+impl<S: IntoLanes> NarrowRejectedLane for S
+where
+    S::Shape: NarrowRejectedBy<S>,
+{
+    type Narrowed = <S::Shape as NarrowRejectedBy<S>>::Narrowed;
+    fn narrow_rejected(self) -> Self::Narrowed {
+        <S::Shape as NarrowRejectedBy<S>>::narrow(self)
+    }
+}
+
+#[doc(hidden)]
+pub trait NarrowRejectedBy<S> {
+    type Narrowed;
+    fn narrow(s: S) -> Self::Narrowed;
+}
+
+impl<D: Rejection, L: LaneProfile<Fatal = Fatal>> NarrowRejectedBy<Fail<D, L>> for kind::Fail {
     type Narrowed = Fault<L>;
-    fn narrow_rejected(self) -> Fault<L> {
-        Fail::narrow_rejected(self)
+    fn narrow(s: Fail<D, L>) -> Fault<L> {
+        Fail::narrow_rejected(s)
     }
 }
 
@@ -54,10 +67,20 @@ impl<D: Rejection, L: LaneProfile<Fatal = Fatal>> NarrowRejectedLane for Fail<D,
 /// then carries that into any `Fault<L>` or `Fail<D, L>` whose `Fatal` lane
 /// is enabled — the destination profile is read off the function signature,
 /// never named at the call site.
-impl<R: Rejection> NarrowRejectedLane for R {
+impl<R: Rejection> NarrowRejectedBy<R> for kind::Source {
     type Narrowed = Fatal;
-    fn narrow_rejected(self) -> Fatal {
-        crate::fail::invariant_from_rejection(self)
+    fn narrow(s: R) -> Fatal {
+        crate::fail::invariant_from_rejection(s)
+    }
+}
+
+impl<C: Carrier> NarrowRejectedBy<C> for kind::CarrierShape
+where
+    C::Repr: NarrowRejectedLane,
+{
+    type Narrowed = <C::Repr as NarrowRejectedLane>::Narrowed;
+    fn narrow(s: C) -> Self::Narrowed {
+        s.into_repr().narrow_rejected()
     }
 }
 
@@ -101,6 +124,20 @@ where
     type Narrowed = Fault<WithoutDenied<L>>;
     fn narrow_denied(self) -> Self::Narrowed {
         Fault::narrow_denied(self)
+    }
+}
+
+/// A carrier narrows through its built-in, so its own lane set governs
+/// availability: a carrier with no `Denied` lane has a `Repr` with a disabled
+/// `Denied` slot, and `narrow_denied` is not callable on it. The result is
+/// the narrowed *built-in*, which `?` carries on.
+impl<C: Carrier> NarrowDeniedLane for C
+where
+    C::Repr: NarrowDeniedLane,
+{
+    type Narrowed = <C::Repr as NarrowDeniedLane>::Narrowed;
+    fn narrow_denied(self) -> Self::Narrowed {
+        self.into_repr().narrow_denied()
     }
 }
 
@@ -248,18 +285,20 @@ pub trait ResultExt<T, E>: Sized {
     ///     let _ = value.rejected();
     /// }
     /// ```
-    fn rejected(self) -> Result<Result<T, E::Rejection>, Fault<E::Lanes>>
+    fn rejected(self) -> Result<Result<T, E::Rejected>, Fault<E::Lanes>>
     where
-        E: Failure;
+        E: IntoLanes,
+        E::Rejected: Rejection;
 
     /// Maps the rejection with a closure and leaves every other lane as it
     /// is: the `Result`-level form of [`Fail::map_rejected`]. For a
     /// type-level remap use [`widen`](Self::widen); this is for enriching a
     /// rejection with data only the call site has, such as the input that
     /// was attempted: `repo.create(new).await.map_rejected(|r| r.with_attempted(id))?`.
-    fn map_rejected<D2>(self, f: impl FnOnce(E::Rejection) -> D2) -> Result<T, Fail<D2, E::Lanes>>
+    fn map_rejected<D2>(self, f: impl FnOnce(E::Rejected) -> D2) -> Result<T, Fail<D2, E::Lanes>>
     where
-        E: Failure;
+        E: IntoLanes,
+        E::Rejected: Rejection;
 
     /// `.classify::<W>()` — the verb that turns a foreign error into a local
     /// [`Classify`] wrapper at a one-off call site, so a function that does
@@ -306,21 +345,23 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
         self.map_err(NarrowDeniedLane::narrow_denied)
     }
 
-    fn rejected(self) -> Result<Result<T, E::Rejection>, Fault<E::Lanes>>
+    fn rejected(self) -> Result<Result<T, E::Rejected>, Fault<E::Lanes>>
     where
-        E: Failure,
+        E: IntoLanes,
+        E::Rejected: Rejection,
     {
         match self {
             Ok(value) => Ok(Ok(value)),
-            Err(e) => e.into_fail().rejected().map(Err),
+            Err(e) => e.into_lanes().rejected().map(Err),
         }
     }
 
-    fn map_rejected<D2>(self, f: impl FnOnce(E::Rejection) -> D2) -> Result<T, Fail<D2, E::Lanes>>
+    fn map_rejected<D2>(self, f: impl FnOnce(E::Rejected) -> D2) -> Result<T, Fail<D2, E::Lanes>>
     where
-        E: Failure,
+        E: IntoLanes,
+        E::Rejected: Rejection,
     {
-        self.map_err(|e| e.into_fail().map_rejected(f))
+        self.map_err(|e| e.into_lanes().map_rejected(f))
     }
 
     fn classify<W: Classify + From<E>>(self) -> Result<T, W> {

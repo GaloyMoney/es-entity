@@ -1,0 +1,5 @@
+error: `#[non_exhaustive]` is not allowed on a carrier: its variant set is the profile, and exhaustive matching is the point
+ --> tests/carrier_ui/attr_non_exhaustive.rs:2:1
+  |
+2 | #[non_exhaustive]
+  | ^^^^^^^^^^^^^^^^^

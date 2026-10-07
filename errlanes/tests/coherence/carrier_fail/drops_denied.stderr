@@ -1,0 +1,16 @@
+error[E0277]: `?` couldn't convert the error to `Infallible`
+ --> tests/coherence/carrier_fail/drops_denied.rs:8:6
+  |
+7 | fn f(r: Result<(), PartyFault>) -> Result<(), Fault<lanes!(Transient, Fatal)>> {
+  |                                    ------------------------------------------- expected `Infallible` because of this
+8 |     r?;
+  |     -^ the trait `From<errlanes::Denied>` is not implemented for `Infallible`
+  |     |
+  |     this can't be annotated with `?` because it has type `Result<_, PartyFault>`
+  |
+  = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+  = help: the following other types implement trait `From<T>`:
+            `Infallible` implements `From<!>`
+            `Infallible` implements `From<zerocopy::error::AlignmentError<Src, Dst>>`
+  = note: required for `errlanes::Denied` to implement `Into<Infallible>`
+  = note: required for `errlanes::Fault<Profile<false, true, true>>` to implement `From<PartyFault>`

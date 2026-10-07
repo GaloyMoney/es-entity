@@ -1,0 +1,7 @@
+error[E0119]: conflicting implementations of trait `std::fmt::Debug` for type `HostFault`
+ --> tests/carrier_ui/attr_user_derive_debug.rs:2:1
+  |
+2 | #[errlanes::fault(Transient, Fatal)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ conflicting implementation for `HostFault`
+3 | #[derive(Debug)]
+  |          ----- first implementation here

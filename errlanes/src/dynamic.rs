@@ -11,7 +11,7 @@ impl Lane {
     ///
     /// `None` means either the chain is not lanes-aware, or it bottoms out
     /// in a `Rejected(D)` whose `D` is not known here — a caller that needs
-    /// the rejected value must go through [`crate::Failure`] instead.
+    /// the rejected value must go through a [`crate::Carrier`] or [`crate::Fail`] instead.
     ///
     /// A bare `Exhausted` (not wrapped in a `Fatal`, which is how
     /// [`crate::profile::NarrowTransient`] always produces one) is still

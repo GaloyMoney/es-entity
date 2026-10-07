@@ -1,0 +1,5 @@
+error: `#[errlanes::fault]` replaces a unit struct with a lane enum; write `pub struct Name;`
+ --> tests/carrier_ui/attr_on_tuple_struct.rs:2:12
+  |
+2 | pub struct HostFault(u8);
+  |            ^^^^^^^^^

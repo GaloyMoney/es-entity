@@ -1,0 +1,31 @@
+error[E0428]: the name `Fatal` is defined multiple times
+ --> tests/carrier_ui/derive_duplicate_variant_lane.rs:4:5
+  |
+3 |     Fatal(errlanes::Fatal),
+  |     ---------------------- previous definition of the type `Fatal` here
+4 |     Fatal(errlanes::Fatal),
+  |     ^^^^^^^^^^^^^^^^^^^^^^ `Fatal` redefined here
+  |
+  = note: `Fatal` must be defined only once in the type namespace of this enum
+
+error: duplicate lane variant `Fatal`
+ --> tests/carrier_ui/derive_duplicate_variant_lane.rs:4:5
+  |
+4 |     Fatal(errlanes::Fatal),
+  |     ^^^^^
+
+error[E0004]: non-exhaustive patterns: `&HostFault::Fatal(_)` not covered
+ --> tests/carrier_ui/derive_duplicate_variant_lane.rs:1:10
+  |
+1 | #[derive(Debug, errlanes::Carrier)]
+  |          ^^^^^ pattern `&HostFault::Fatal(_)` not covered
+  |
+note: `HostFault` defined here
+ --> tests/carrier_ui/derive_duplicate_variant_lane.rs:2:10
+  |
+2 | pub enum HostFault {
+  |          ^^^^^^^^^
+3 |     Fatal(errlanes::Fatal),
+4 |     Fatal(errlanes::Fatal),
+  |     ----- not covered
+  = note: the matched value is of type `&HostFault`

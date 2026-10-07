@@ -1,0 +1,5 @@
+error: duplicate lane `Fatal`
+ --> tests/carrier_ui/attr_duplicate_lane.rs:1:26
+  |
+1 | #[errlanes::fault(Fatal, Fatal)]
+  |                          ^^^^^

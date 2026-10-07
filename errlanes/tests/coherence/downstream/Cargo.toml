@@ -6,6 +6,8 @@ license = "Apache-2.0"
 publish = false
 
 [dependencies]
-errlanes = { path = "../../..", default-features = false, features = ["derive"] }
+errlanes = { path = "../../..", default-features = false, features = ["derive", "tracing"] }
+thiserror = "2.0"
+tracing = "0.1"
 upstream = { path = "../upstream" }
 tokio = { version = "1", features = ["rt", "macros", "time"] }

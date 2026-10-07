@@ -1,0 +1,5 @@
+error: `Sleepy` is not a lane: carrier variants are named `Rejected`, `Denied`, `Transient` or `Fatal`, and the variant names are the profile
+ --> tests/carrier_ui/derive_unknown_variant.rs:4:5
+  |
+4 |     Sleepy(errlanes::Fatal),
+  |     ^^^^^^

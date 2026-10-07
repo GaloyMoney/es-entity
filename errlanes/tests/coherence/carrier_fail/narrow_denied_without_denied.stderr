@@ -1,0 +1,17 @@
+error[E0277]: `errlanes::Fault<Profile<false, true, true>>` has no denied lane to narrow
+ --> tests/coherence/carrier_fail/narrow_denied_without_denied.rs:8:15
+  |
+8 |     let _ = r.narrow_denied();
+  |               ^^^^^^^^^^^^^ the trait `NarrowDeniedLane` is not implemented for `errlanes::Fault<Profile<false, true, true>>`
+  |
+  = note: `narrow_denied` is only available on a profile whose `Denied` lane is enabled
+  = help: the trait `NarrowDeniedLane` is implemented for `errlanes::Fault<L>`
+  = note: required for `HostFault` to implement `NarrowDeniedLane`
+note: required by a bound in `errlanes::ResultExt::narrow_denied`
+ --> src/result_ext.rs
+  |
+  |     fn narrow_denied(self) -> Result<T, E::Narrowed>
+  |        ------------- required by a bound in this associated function
+  |     where
+  |         E: NarrowDeniedLane;
+  |            ^^^^^^^^^^^^^^^^ required by this bound in `ResultExt::narrow_denied`

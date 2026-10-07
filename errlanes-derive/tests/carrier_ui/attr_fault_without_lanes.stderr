@@ -1,0 +1,7 @@
+error: unexpected end of input, a fault carrier needs at least one lane
+ --> tests/carrier_ui/attr_fault_without_lanes.rs:1:1
+  |
+1 | #[errlanes::fault()]
+  | ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `errlanes::fault` (in Nightly builds, run with -Z macro-backtrace for more info)
