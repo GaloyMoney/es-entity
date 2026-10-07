@@ -556,6 +556,11 @@ pub trait Laned: sealed::Sealed + Error + Send + Sync + 'static + Sized {
 
     #[cfg(feature = "tracing")]
     fn record(&self, span: &tracing::Span);
+
+    /// Backs [`crate::emit`].
+    #[cfg(feature = "tracing")]
+    #[doc(hidden)]
+    fn emit_event(&self);
 }
 
 /// Note the `NarrowTransient` bound: a profile that admits `Transient` but
@@ -587,6 +592,11 @@ where
     #[cfg(feature = "tracing")]
     fn record(&self, span: &tracing::Span) {
         self.lanes().record(span);
+    }
+
+    #[cfg(feature = "tracing")]
+    fn emit_event(&self) {
+        self.lanes().emit();
     }
 }
 
@@ -620,6 +630,11 @@ where
     fn record(&self, span: &tracing::Span) {
         crate::Carrier::lanes(self).record(span);
     }
+
+    #[cfg(feature = "tracing")]
+    fn emit_event(&self) {
+        crate::Carrier::lanes(self).emit();
+    }
 }
 
 impl<L: LaneProfile> Laned for Fault<L>
@@ -647,6 +662,11 @@ where
     #[cfg(feature = "tracing")]
     fn record(&self, span: &tracing::Span) {
         self.lanes().record(span);
+    }
+
+    #[cfg(feature = "tracing")]
+    fn emit_event(&self) {
+        self.lanes().emit();
     }
 }
 

@@ -398,6 +398,12 @@ impl<R: LaneRejected> LaneRef<'_, R> {
     pub(crate) fn record(&self, span: &tracing::Span) {
         crate::record::record_lanes(span, *self);
     }
+
+    /// Emits this lane as an event at its own level. See [`crate::emit`].
+    #[cfg(feature = "tracing")]
+    pub(crate) fn emit(&self) {
+        crate::record::emit_lanes(*self);
+    }
 }
 
 /// What the `Rejected` arm of a [`LaneRef`] needs from its `R`: a code, and a
