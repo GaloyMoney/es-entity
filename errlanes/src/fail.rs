@@ -14,6 +14,19 @@ pub enum Level {
     Error,
 }
 
+impl Level {
+    /// The upper-case name written to the `error.level` span field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Level::Trace => "TRACE",
+            Level::Debug => "DEBUG",
+            Level::Info => "INFO",
+            Level::Warn => "WARN",
+            Level::Error => "ERROR",
+        }
+    }
+}
+
 #[cfg(feature = "tracing")]
 impl From<Level> for tracing::Level {
     fn from(level: Level) -> Self {
@@ -513,6 +526,11 @@ pub trait Laned: sealed::Sealed + Error + Send + Sync + 'static + Sized {
 
     fn lane(&self) -> Lane;
 
+    /// The operator level of this failure: the lane's default
+    /// ([`Lane::level`]), overridden only by a `Rejected` outcome's
+    /// [`Rejection::level`].
+    fn level(&self) -> Level;
+
     fn is_transient(&self) -> bool {
         self.lane() == Lane::Transient
     }
@@ -554,6 +572,10 @@ where
         Fail::lane(self)
     }
 
+    fn level(&self) -> Level {
+        self.lanes().level()
+    }
+
     fn narrow_transient(self, attempts: u32) -> Self::WithoutTransient {
         Fail::narrow_transient(self, attempts)
     }
@@ -582,6 +604,10 @@ where
         crate::Carrier::lanes(self).lane()
     }
 
+    fn level(&self) -> Level {
+        crate::Carrier::lanes(self).level()
+    }
+
     fn narrow_transient(self, attempts: u32) -> Self::WithoutTransient {
         self.into_repr().narrow_transient(attempts)
     }
@@ -604,6 +630,10 @@ where
 
     fn lane(&self) -> Lane {
         Fault::lane(self)
+    }
+
+    fn level(&self) -> Level {
+        self.lanes().level()
     }
 
     fn narrow_transient(self, attempts: u32) -> Self::WithoutTransient {

@@ -383,6 +383,16 @@ impl<R: LaneRejected> LaneRef<'_, R> {
         }
     }
 
+    /// The operator level of this failure: the lane default
+    /// ([`Lane::level`]), except a `Rejected` outcome reports what its
+    /// rejection declares through [`Rejection::level`].
+    pub fn level(&self) -> Level {
+        match self {
+            LaneRef::Rejected(d) => d.level(),
+            other => other.lane().level(),
+        }
+    }
+
     /// Records this lane onto `span`. See [`crate::FIELDS`].
     #[cfg(feature = "tracing")]
     pub(crate) fn record(&self, span: &tracing::Span) {

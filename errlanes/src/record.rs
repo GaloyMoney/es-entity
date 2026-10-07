@@ -1,6 +1,5 @@
 use crate::carrier::{LaneRef, LaneRejected};
 use crate::dynamic::message_chain;
-use crate::fail::Level;
 
 /// Span fields a boundary span must declare as `tracing::field::Empty` for
 /// [`crate::Laned::record`] to fill.
@@ -28,16 +27,6 @@ pub const FIELDS: &[&str] = &[
     "exception.type",
 ];
 
-fn level_str(level: Level) -> &'static str {
-    match level {
-        Level::Trace => "TRACE",
-        Level::Debug => "DEBUG",
-        Level::Info => "INFO",
-        Level::Warn => "WARN",
-        Level::Error => "ERROR",
-    }
-}
-
 /// **Display discipline**: `error.code` for a `Rejected` outcome comes from
 /// `Rejection::code`, never from `Fail`'s `Display`/`to_string()` — a
 /// rejection's message may embed caller-supplied input, so the *code* is the
@@ -55,23 +44,20 @@ fn level_str(level: Level) -> &'static str {
 pub(crate) fn record_lanes<R: LaneRejected>(span: &tracing::Span, lane: LaneRef<'_, R>) {
     span.record("error", true);
     span.record("error.lane", lane.lane().as_str());
+    span.record("error.level", lane.level().as_str());
     match lane {
         LaneRef::Rejected(d) => {
             span.record("error.code", d.code_str());
-            span.record("error.level", level_str(d.level()));
         }
         LaneRef::Denied(_) => {
             span.record("error.code", "FORBIDDEN");
-            span.record("error.level", "WARN");
         }
         LaneRef::Transient(t) => {
             span.record("error.code", t.kind.as_str());
-            span.record("error.level", "INFO");
             span.record("exception.message", message_chain(t));
         }
         LaneRef::Fatal(x) => {
             span.record("error.code", x.kind.as_str());
-            span.record("error.level", "ERROR");
             span.record("exception.message", message_chain(x));
             span.record("exception.type", x.kind.as_str());
         }
