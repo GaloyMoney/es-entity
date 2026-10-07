@@ -4,11 +4,18 @@ enum Closed {
     Yes,
 }
 
-#[errlanes::fault(Transient, Fatal)]
-struct HostFault;
+#[derive(Debug, errlanes::Carrier)]
+enum HostFault {
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
-#[errlanes::fail(Closed; Transient, Fatal)]
-struct CustomerError;
+#[derive(Debug, errlanes::Carrier)]
+enum CustomerError {
+    Rejected(Closed),
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
 fn f(r: Result<(), CustomerError>) -> Result<(), HostFault> {
     r?;

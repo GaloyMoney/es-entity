@@ -1,5 +1,0 @@
-error: `#[errlanes::fault]` replaces a unit struct with a lane enum; write `pub struct Name;`
- --> tests/carrier_ui/attr_on_enum.rs:2:5
-  |
-2 | pub enum HostFault {
-  |     ^^^^

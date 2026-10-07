@@ -1,10 +1,16 @@
 // Carrier -> carrier by `?` needs `from(..)`: the reflexive `From<T> for T`
 // is why it cannot be automatic.
-#[errlanes::fault(Transient, Fatal)]
-struct HostFault;
+#[derive(Debug, errlanes::Carrier)]
+enum HostFault {
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
-#[errlanes::fault(Transient, Fatal)]
-struct RepoFault;
+#[derive(Debug, errlanes::Carrier)]
+enum RepoFault {
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
 fn f(r: Result<(), HostFault>) -> Result<(), RepoFault> {
     r?;

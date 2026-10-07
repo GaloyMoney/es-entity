@@ -40,11 +40,17 @@ fn stored() -> Stored {
 /// the blanket inbound `From` is provably disjoint from each listed one. A
 /// carrier declared in *another* crate cannot be listed: see
 /// `tests/coherence/from_foreign_carrier.rs`.
-#[errlanes::fault(Transient, Fatal)]
-pub struct HostFault;
+#[derive(Debug, errlanes::Carrier)]
+pub enum HostFault {
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
-#[errlanes::fault(Transient, Fatal)]
-pub struct RepoFault;
+#[derive(Debug, errlanes::Carrier)]
+pub enum RepoFault {
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
 fn host_op() -> Result<u8, HostFault> {
     Ok(7)
@@ -70,16 +76,31 @@ pub enum HandRolledUpstream {
 }
 
 /// A carrier with a lane the upstream ones lack, absorbing both of them.
-#[errlanes::fault(Denied, Transient, Fatal; from(HostFault, RepoFault))]
-pub struct PartyFault;
+#[derive(Debug, errlanes::Carrier)]
+#[carrier(from(HostFault, RepoFault))]
+pub enum PartyFault {
+    Denied(errlanes::Denied),
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
 /// A fail-like carrier with a declared rejection.
-#[errlanes::fail(CustomerRejection; Transient, Fatal; from(HostFault))]
-pub struct CustomerError;
+#[derive(Debug, errlanes::Carrier)]
+#[carrier(from(HostFault))]
+pub enum CustomerError {
+    Rejected(CustomerRejection),
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
 /// `upstream::WriteError<R>` with `from(HostFault)` added: a downstream copy.
-#[errlanes::fail(R; Transient, Fatal; from(HostFault))]
-pub struct LocalWriteError<R>;
+#[derive(Debug, errlanes::Carrier)]
+#[carrier(from(HostFault))]
+pub enum LocalWriteError<R> {
+    Rejected(R),
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
 /// A carrier declared by derive on a hand-written enum, with a doc comment on
 /// a variant (the reason that form exists).

@@ -6,15 +6,25 @@ pub enum Closed {
 }
 
 /// docs are kept on the enum
-#[errlanes::fault(Fatal, Transient, Denied)]
+#[derive(Debug, errlanes::Carrier)]
 #[derive(Clone)]
-pub struct Any3;
+pub enum Any3 {
+    Denied(errlanes::Denied),
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
-#[errlanes::fail(Closed;)]
-pub struct NoLanes;
+#[derive(Debug, errlanes::Carrier)]
+pub enum NoLanes {
+    Rejected(Closed),
+}
 
-#[errlanes::fail(R; Transient, Fatal)]
-pub struct Generic<R>;
+#[derive(Debug, errlanes::Carrier)]
+pub enum Generic<R> {
+    Rejected(R),
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
 #[derive(Debug, errlanes::Carrier)]
 pub enum Hand {

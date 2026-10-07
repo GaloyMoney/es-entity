@@ -949,26 +949,44 @@ stands in for one of them:
 # use errlanes::Rejection;
 # #[derive(Debug, errlanes::Rejection)]
 # pub enum CustomerRejection { Closed }
-#[errlanes::fault(Transient, Fatal)]
-pub struct HostFault;
+#[derive(Debug, errlanes::Carrier)]
+pub enum HostFault {
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
-#[errlanes::fail(CustomerRejection; Transient, Fatal)]
-pub struct CustomerError;
+#[derive(Debug, errlanes::Carrier)]
+pub enum CustomerError {
+    Rejected(CustomerRejection),
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
-#[errlanes::fail(R; Transient, Fatal)]
-pub struct RepoWriteError<R>;
+#[derive(Debug, errlanes::Carrier)]
+pub enum RepoWriteError<R> {
+    Rejected(R),
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
-#[errlanes::fault(Denied, Transient, Fatal; from(HostFault))]
-pub struct PartyFault;
+#[derive(Debug, errlanes::Carrier)]
+#[carrier(from(HostFault))]
+pub enum PartyFault {
+    Denied(errlanes::Denied),
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 ```
 
-Each is an **enum with exactly the declared lanes**
-(`pub enum HostFault { Transient(Transient), Fatal(Fatal) }`), so it matches
-like the built-in, and a lane it does not declare is not a variant at all:
+Each is an **enum with exactly the declared lanes**, so it matches like the
+built-in, and a lane it does not declare is not a variant at all:
 
 ```rust
-# #[errlanes::fault(Transient, Fatal)]
-# pub struct HostFault;
+# #[derive(Debug, errlanes::Carrier)]
+# pub enum HostFault {
+#     Transient(errlanes::Transient),
+#     Fatal(errlanes::Fatal),
+# }
 fn page(e: HostFault) -> &'static str {
     match e {
         HostFault::Transient(_) => "retry",
@@ -981,10 +999,10 @@ fn page(e: HostFault) -> &'static str {
 What `?` does, in and out of a carrier `E`:
 
 - **In:** any lane payload `E` declares; a `Fault<S>` with `S ⊆ E`'s lanes; for
-  a `fail` carrier, a `Fail<R', S>` whose rejection lifts totally; any
+  a `Fail`-like carrier, a `Fail<R', S>` whose rejection lifts totally; any
   `Classify` wrapper whose lanes fit; a bare `Rejection` that lifts totally
-  (`fail` only); and each carrier listed in `from(..)`.
-- **Out:** into `Fault<M>` (`fault` carriers, `S ⊆ M`), into `Fail<D, M>`, into
+  (`Fail`-like only); and each carrier listed in `from(..)`.
+- **Out:** into `Fault<M>` (`Fault`-like carriers, `S ⊆ M`), into `Fail<D, M>`, into
   a bare `Fatal` / `Transient` when it has just that lane, and into a foreign
   enum with `#[from] E`.
 - `.widen()`, `narrow_transient`, `narrow_denied`, `narrow_rejected`,
@@ -995,17 +1013,24 @@ What `?` does, in and out of a carrier `E`:
 **Carrier to carrier is not automatic.** `?` is `From::from`, and a blanket
 `impl From<AnyCarrier> for E` would also cover `E` itself, which overlaps the
 standard library's reflexive `impl<T> From<T> for T`. So the conversion you
-want is listed: `from(HostFault)` adds `impl From<HostFault> for E`. The list
+want is listed: `#[carrier(from(HostFault))]` adds `impl From<HostFault> for E`. The list
 only works for carriers declared in the *same crate* as `E` (see below). The
 list-free route works for any carrier: name the built-in, and the outer `?`
 absorbs it.
 
 ```rust
 # use errlanes::{Fault, ResultExt, lanes};
-# #[errlanes::fault(Transient, Fatal)]
-# pub struct HostFault;
-# #[errlanes::fault(Denied, Transient, Fatal)]
-# pub struct PartyFault;
+# #[derive(Debug, errlanes::Carrier)]
+# pub enum HostFault {
+#     Transient(errlanes::Transient),
+#     Fatal(errlanes::Fatal),
+# }
+# #[derive(Debug, errlanes::Carrier)]
+# pub enum PartyFault {
+#     Denied(errlanes::Denied),
+#     Transient(errlanes::Transient),
+#     Fatal(errlanes::Fatal),
+# }
 fn host() -> Result<u8, HostFault> {
     Ok(1)
 }
@@ -1017,13 +1042,10 @@ fn party() -> Result<u8, PartyFault> {
 # assert_eq!(party().unwrap(), 1);
 ```
 
-`#[derive(errlanes::Carrier)]` on a hand-written enum generates the same code,
-for variant doc comments or extra derives; the variant names (`Rejected`,
-`Denied`, `Transient`, `Fatal`) are the profile.
-
-Two rules for the attribute form: put it **before** any `#[derive]`, and **do
-not derive `Debug`** — the macro emits it, and a second one is a duplicate
-impl. `#[non_exhaustive]` is rejected: the variant set is the profile.
+The variant names (`Rejected`, `Denied`, `Transient`, `Fatal`) are the
+profile: each is a one-field tuple variant, at most one of each, and
+`Rejected(T)` makes the carrier `Fail`-like. Variants may carry doc comments,
+and `Debug` is yours to derive.
 
 **Limitation.** `from(..)` cannot list a carrier declared in another crate:
 the carrier's one blanket inbound `From` overlaps it, because rustc cannot

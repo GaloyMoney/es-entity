@@ -1,5 +1,4 @@
-//! `#[derive(errlanes::Carrier)]` on a hand-written lane enum, and the single
-//! codegen path behind `#[errlanes::fault]` / `#[errlanes::fail]`.
+//! `#[derive(errlanes::Carrier)]` on a hand-written lane enum.
 //!
 //! The variant names are the profile: `Rejected(R)` makes the carrier
 //! `Fail`-like, otherwise it is `Fault`-like, and `Denied` / `Transient` /
@@ -67,6 +66,24 @@ fn collect_lanes(input: &DeriveInput) -> syn::Result<Vec<Lane<'_>>> {
              `Rejected(R)`, `Denied(..)`, `Transient(..)`, `Fatal(..)`",
         ));
     };
+    if let Some(attr) = input
+        .attrs
+        .iter()
+        .find(|a| a.path().is_ident("non_exhaustive"))
+    {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "`#[non_exhaustive]` is not allowed on a carrier: its variant set is the profile, \
+             and exhaustive matching is the point",
+        ));
+    }
+    if data.variants.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &input.ident,
+            "a carrier needs at least one lane variant: `Rejected(R)`, `Denied(..)`, \
+             `Transient(..)` or `Fatal(..)`",
+        ));
+    }
     let mut lanes: Vec<Lane<'_>> = Vec::new();
     for variant in &data.variants {
         let Some(kind) = LaneKind::from_ident(&variant.ident) else {

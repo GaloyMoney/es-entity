@@ -82,11 +82,19 @@ fn record<E: Laned>(failure: E) -> Captured {
     captured
 }
 
-#[errlanes::fail(Small; Transient, Fatal, Denied)]
-struct Carried;
+#[derive(Debug, errlanes::Carrier)]
+enum Carried {
+    Rejected(Small),
+    Denied(errlanes::Denied),
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
-#[errlanes::fault(Transient, Fatal)]
-struct CarriedFault;
+#[derive(Debug, errlanes::Carrier)]
+enum CarriedFault {
+    Transient(errlanes::Transient),
+    Fatal(errlanes::Fatal),
+}
 
 fn fields(c: &Captured) -> Vec<Option<String>> {
     [

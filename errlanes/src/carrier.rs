@@ -1,11 +1,11 @@
 //! Carriers: crate-local enums that stand in for [`Fault<L>`] / [`Fail<R, L>`].
 //!
-//! A carrier is declared with `#[errlanes::fault(..)]` / `#[errlanes::fail(..)]`
-//! (or `#[derive(errlanes::Carrier)]` on a hand-written enum). It is a distinct
+//! A carrier is declared with `#[derive(errlanes::Carrier)]` on a hand-written
+//! lane enum. It is a distinct
 //! nominal type, so two of them can sit in one enum behind separate `#[from]`s,
 //! but it converts, widens, narrows, records and retries the way its built-in
 //! does. Everything in this module except [`Carrier`] and [`LaneRef`] is hidden
-//! plumbing for those macros and for errlanes' own blanket impls.
+//! plumbing for that derive and for errlanes' own blanket impls.
 //!
 //! The coherence argument for the tag design (`Kind` for consumers, `Shape` for
 //! errlanes itself) is in the `design-options-errlanes-carrier-newtypes` note;
@@ -66,15 +66,15 @@ pub mod kind {
 }
 
 /// Every value that can enter the lanes. Hidden: written by errlanes and by
-/// the carrier macros, never by hand.
+/// the `Carrier` derive, never by hand.
 ///
 /// [`Classify`] itself is unchanged; this is the one trait errlanes' blankets
-/// and the carrier macros key on.
+/// and the carrier derive key on.
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not enter the lanes",
     note = "implement `errlanes::Classify` (or derive `Rejection` / `Classify`), or declare \
-            a carrier with `#[errlanes::fault(..)]` / `#[errlanes::fail(..)]`"
+            a carrier with `#[derive(errlanes::Carrier)]` on a lane enum"
 )]
 pub trait IntoLanes: Sized {
     type Kind;
@@ -442,8 +442,8 @@ impl<L: LaneProfile> Repr for Fault<L> {}
 impl<D, L: LaneProfile> Repr for Fail<D, L> {}
 
 /// A crate-local enum that stands in for `Fault<L>` / `Fail<R, L>`.
-/// Implemented by `#[errlanes::fault]`, `#[errlanes::fail]` and
-/// `#[derive(errlanes::Carrier)]`; do not implement it by hand.
+/// Implemented by `#[derive(errlanes::Carrier)]` on a lane enum; do not
+/// implement it by hand.
 ///
 /// Generic machinery (retry, `record`, `#[errlanes::instrument]`) is written
 /// against [`Laned`](crate::Laned), which every carrier whose profile is
@@ -453,8 +453,11 @@ impl<D, L: LaneProfile> Repr for Fail<D, L> {}
 /// ```
 /// use errlanes::{Carrier, Fault, lanes};
 ///
-/// #[errlanes::fault(Transient, Fatal)]
-/// pub struct HostFault;
+/// #[derive(Debug, errlanes::Carrier)]
+/// pub enum HostFault {
+///     Transient(errlanes::Transient),
+///     Fatal(errlanes::Fatal),
+/// }
 ///
 /// fn to_builtin<C: Carrier>(c: C) -> C::Repr {
 ///     c.into_repr()
@@ -466,7 +469,7 @@ impl<D, L: LaneProfile> Repr for Fail<D, L> {}
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a carrier",
-    note = "declare one with `#[errlanes::fault(..)]` / `#[errlanes::fail(..)]`"
+    note = "declare one with `#[derive(errlanes::Carrier)]` on a lane enum"
 )]
 pub trait Carrier:
     Error + Send + Sync + Sized + 'static + IntoLanes<Kind = kind::Carrier, Shape = kind::CarrierShape>

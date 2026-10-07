@@ -1,0 +1,5 @@
+error: a carrier needs at least one lane variant: `Rejected(R)`, `Denied(..)`, `Transient(..)` or `Fatal(..)`
+ --> tests/carrier_ui/derive_empty_enum.rs:2:10
+  |
+2 | pub enum HostFault {}
+  |          ^^^^^^^^^
