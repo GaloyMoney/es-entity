@@ -1,5 +1,7 @@
 use std::{borrow::Cow, error::Error, fmt, sync::Arc};
 
+use crate::fail::Level;
+
 /// Which of the four lanes an outcome travels in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lane {
@@ -16,6 +18,19 @@ impl Lane {
             Lane::Denied => "denied",
             Lane::Transient => "transient",
             Lane::Fatal => "fatal",
+        }
+    }
+}
+
+impl Lane {
+    /// The lane's operator level. `Rejected` is the lane default; a concrete
+    /// rejection overrides it through [`crate::Rejection::level`].
+    pub fn level(self) -> Level {
+        match self {
+            Lane::Rejected => Level::Info,
+            Lane::Denied => Level::Warn,
+            Lane::Transient => Level::Info,
+            Lane::Fatal => Level::Error,
         }
     }
 }

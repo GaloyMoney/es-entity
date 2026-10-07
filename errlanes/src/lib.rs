@@ -43,7 +43,7 @@ pub use result_ext::ResultExt;
 pub use result_ext::{NarrowDeniedLane, NarrowRejectedBy, NarrowRejectedLane};
 
 #[cfg(feature = "tracing")]
-pub use record::FIELDS;
+pub use record::{FIELDS, emit};
 
 #[cfg(feature = "derive")]
 pub use errlanes_derive::{__compose_rejection, Carrier, Classify, Lift, Rejection, compose};

@@ -14,6 +14,19 @@ pub enum Level {
     Error,
 }
 
+impl Level {
+    /// The upper-case name written to the `error.level` span field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Level::Trace => "TRACE",
+            Level::Debug => "DEBUG",
+            Level::Info => "INFO",
+            Level::Warn => "WARN",
+            Level::Error => "ERROR",
+        }
+    }
+}
+
 #[cfg(feature = "tracing")]
 impl From<Level> for tracing::Level {
     fn from(level: Level) -> Self {
@@ -513,6 +526,11 @@ pub trait Laned: sealed::Sealed + Error + Send + Sync + 'static + Sized {
 
     fn lane(&self) -> Lane;
 
+    /// The operator level of this failure: the lane's default
+    /// ([`Lane::level`]), overridden only by a `Rejected` outcome's
+    /// [`Rejection::level`].
+    fn level(&self) -> Level;
+
     fn is_transient(&self) -> bool {
         self.lane() == Lane::Transient
     }
@@ -538,6 +556,11 @@ pub trait Laned: sealed::Sealed + Error + Send + Sync + 'static + Sized {
 
     #[cfg(feature = "tracing")]
     fn record(&self, span: &tracing::Span);
+
+    /// Backs [`crate::emit`].
+    #[cfg(feature = "tracing")]
+    #[doc(hidden)]
+    fn emit_event(&self);
 }
 
 /// Note the `NarrowTransient` bound: a profile that admits `Transient` but
@@ -554,6 +577,10 @@ where
         Fail::lane(self)
     }
 
+    fn level(&self) -> Level {
+        self.lanes().level()
+    }
+
     fn narrow_transient(self, attempts: u32) -> Self::WithoutTransient {
         Fail::narrow_transient(self, attempts)
     }
@@ -565,6 +592,11 @@ where
     #[cfg(feature = "tracing")]
     fn record(&self, span: &tracing::Span) {
         self.lanes().record(span);
+    }
+
+    #[cfg(feature = "tracing")]
+    fn emit_event(&self) {
+        self.lanes().emit();
     }
 }
 
@@ -582,6 +614,10 @@ where
         crate::Carrier::lanes(self).lane()
     }
 
+    fn level(&self) -> Level {
+        crate::Carrier::lanes(self).level()
+    }
+
     fn narrow_transient(self, attempts: u32) -> Self::WithoutTransient {
         self.into_repr().narrow_transient(attempts)
     }
@@ -593,6 +629,11 @@ where
     #[cfg(feature = "tracing")]
     fn record(&self, span: &tracing::Span) {
         crate::Carrier::lanes(self).record(span);
+    }
+
+    #[cfg(feature = "tracing")]
+    fn emit_event(&self) {
+        crate::Carrier::lanes(self).emit();
     }
 }
 
@@ -606,6 +647,10 @@ where
         Fault::lane(self)
     }
 
+    fn level(&self) -> Level {
+        self.lanes().level()
+    }
+
     fn narrow_transient(self, attempts: u32) -> Self::WithoutTransient {
         Fault::narrow_transient(self, attempts)
     }
@@ -617,6 +662,11 @@ where
     #[cfg(feature = "tracing")]
     fn record(&self, span: &tracing::Span) {
         self.lanes().record(span);
+    }
+
+    #[cfg(feature = "tracing")]
+    fn emit_event(&self) {
+        self.lanes().emit();
     }
 }
 

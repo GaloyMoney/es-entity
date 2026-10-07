@@ -88,7 +88,42 @@ fn record<E: Laned>(failure: E) -> Captured {
 
 #[test]
 fn record_declares_exactly_the_fields_constant() {
-    assert_eq!(errlanes::FIELDS.len(), 6);
+    assert_eq!(errlanes::FIELDS.len(), 7);
+}
+
+/// A span declaring every one of `FIELDS`, so `otel.status_code` is capturable.
+fn record_all<E: Laned>(failure: E) -> Captured {
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::registry().with(CaptureLayer(captured.0.clone()));
+    tracing::subscriber::with_default(subscriber, || {
+        let span = tracing::info_span!(
+            "boundary",
+            error = tracing::field::Empty,
+            error.lane = tracing::field::Empty,
+            error.code = tracing::field::Empty,
+            error.level = tracing::field::Empty,
+            exception.message = tracing::field::Empty,
+            exception.type = tracing::field::Empty,
+            otel.status_code = tracing::field::Empty,
+        );
+        failure.record(&span);
+    });
+    captured
+}
+
+#[test]
+fn only_the_fatal_lane_sets_otel_status_code() {
+    let rejected: Fail<Small> = Fail::Rejected(Small::Unit);
+    assert!(record_all(rejected).get("otel.status_code").is_none());
+    let denied: Fail<Small> = Denied::default().into();
+    assert!(record_all(denied).get("otel.status_code").is_none());
+    let transient: Fail<Small> = Transient::new(TransientKind::Deadlock).into();
+    assert!(record_all(transient).get("otel.status_code").is_none());
+    let fatal: Fail<Small> = Fatal::new(FatalKind::Invariant).into();
+    assert_eq!(
+        record_all(fatal).get("otel.status_code").as_deref(),
+        Some("ERROR")
+    );
 }
 
 #[test]

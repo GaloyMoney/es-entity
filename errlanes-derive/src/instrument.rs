@@ -4,9 +4,9 @@ use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
 use quote::{format_ident, quote};
 use syn::ItemFn;
 
-/// The six span fields [`crate`]'s runtime `errlanes::FIELDS` promises;
-/// declared here as literal dotted names so the generated `fields(..)` entries
-/// match it token for token.
+/// The span fields [`crate`]'s runtime `errlanes::FIELDS` promises; declared
+/// here as literal dotted names so the generated `fields(..)` entries match
+/// it token for token.
 const FIELDS: &[&str] = &[
     "error",
     "error.lane",
@@ -14,6 +14,7 @@ const FIELDS: &[&str] = &[
     "error.level",
     "exception.message",
     "exception.type",
+    "otel.status_code",
 ];
 
 /// `tracing::field::Empty` is a bare path, not run through `runtime_path()`:
@@ -132,7 +133,45 @@ fn inject_fields(args: TokenStream) -> TokenStream {
     output
 }
 
+/// Removes a top-level `emit = true|false` entry from the argument list,
+/// returning the remaining tokens (still comma-separated) and the value.
+/// `emit` is errlanes' own option; `#[tracing::instrument]` must never see it.
+fn take_emit(args: TokenStream) -> syn::Result<(TokenStream, bool)> {
+    let mut emit = true;
+    let mut kept: Vec<Vec<TokenTree>> = Vec::new();
+    for entry in split_entries(args) {
+        let is_emit = matches!(entry.first(), Some(TokenTree::Ident(i)) if i == "emit")
+            && matches!(entry.get(1), Some(TokenTree::Punct(p)) if p.as_char() == '=');
+        if !is_emit {
+            kept.push(entry);
+            continue;
+        }
+        emit = match entry.get(2..) {
+            Some([TokenTree::Ident(v)]) if v == "true" => true,
+            Some([TokenTree::Ident(v)]) if v == "false" => false,
+            _ => {
+                let span = entry[0].span();
+                return Err(syn::Error::new(span, "`emit` must be `true` or `false`"));
+            }
+        };
+    }
+    let mut stream = TokenStream::new();
+    for (i, entry) in kept.into_iter().enumerate() {
+        if i > 0 {
+            stream.extend(quote! { , });
+        }
+        stream.extend(entry);
+    }
+    Ok((stream, emit))
+}
+
 pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
+    let (args, emit) = take_emit(args)?;
+    let emit_call = if emit {
+        quote! { errlanes::emit(__errlanes_err); }
+    } else {
+        quote! {}
+    };
     let func: ItemFn = syn::parse2(item)?;
     let ItemFn {
         attrs,
@@ -151,6 +190,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                 let __errlanes_result = async move #block.await;
                 if let Err(ref __errlanes_err) = __errlanes_result {
                     errlanes::Laned::record(__errlanes_err, &tracing::Span::current());
+                    #emit_call
                 }
                 __errlanes_result
             }
@@ -161,6 +201,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                 let __errlanes_result = (move || #block)();
                 if let Err(ref __errlanes_err) = __errlanes_result {
                     errlanes::Laned::record(__errlanes_err, &tracing::Span::current());
+                    #emit_call
                 }
                 __errlanes_result
             }
@@ -215,6 +256,28 @@ mod tests {
         let args: TokenStream = quote! { fields(job_id = tracing::field::Empty,) };
         let out = inject_fields(args).to_string();
         assert!(!out.contains(" , ,"), "double comma in {out}");
+    }
+
+    #[test]
+    fn take_emit_strips_the_option_and_reads_its_value() {
+        let (rest, emit) = take_emit(quote! { name = "x", emit = false, skip_all }).unwrap();
+        assert!(!emit);
+        assert!(!rest.to_string().contains("emit"), "{rest}");
+        assert!(rest.to_string().contains("skip_all"));
+
+        let (rest, emit) = take_emit(quote! { skip_all, }).unwrap();
+        assert!(emit);
+        assert!(!rest.to_string().contains(" , ,"), "{rest}");
+
+        let (rest, emit) = take_emit(quote! { emit = false }).unwrap();
+        assert!(!emit);
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn take_emit_rejects_a_non_boolean_value() {
+        assert!(take_emit(quote! { emit = "no" }).is_err());
+        assert!(take_emit(quote! { emit }).is_ok());
     }
 
     #[test]
