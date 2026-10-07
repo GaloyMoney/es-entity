@@ -26,3 +26,11 @@ fn classify_appendix_b_negative_cases() {
     t.compile_fail("tests/coherence/classify_u4_rejection_and_classify_conflict.rs");
     t.compile_fail("tests/coherence/classify_n_mixed_wrapper_into_bare_fatal.rs");
 }
+
+/// Carrier misuse, each pinned to the reason it must fail (see the comment
+/// at the top of every case).
+#[test]
+fn carrier_negative_cases() {
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/coherence/carrier_fail/*.rs");
+}

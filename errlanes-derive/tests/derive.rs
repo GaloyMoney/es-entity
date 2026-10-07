@@ -4,13 +4,10 @@ fn ui() {
     t.compile_fail("tests/v2/*.rs");
     t.pass("tests/trybuild/rejection_pass.rs");
     t.pass("tests/trybuild/rejection_multi_lift.rs");
-    t.pass("tests/trybuild/failure_pass.rs");
     t.pass("tests/trybuild/error_format_args_pass.rs");
     t.compile_fail("tests/trybuild/error_format_args_unknown_field.rs");
     t.compile_fail("tests/trybuild/error_format_args_arbitrary_expr.rs");
     t.compile_fail("tests/trybuild/error_format_args_bare_auto_index_still_rejected.rs");
-    t.compile_fail("tests/trybuild/failure_from_not_failure.rs");
-    t.compile_fail("tests/trybuild/fault_is_not_failure.rs");
     t.pass("tests/trybuild/instrument_async_with_fields.rs");
     t.pass("tests/trybuild/instrument_async_without_fields.rs");
     t.pass("tests/trybuild/instrument_sync.rs");
@@ -59,4 +56,11 @@ fn error_format_args_render_composite_field_member() {
         event.to_string(),
         "undecodable event 7 at sequence 42: missing field `foo`"
     );
+}
+
+#[test]
+fn carrier_ui() {
+    let t = trybuild::TestCases::new();
+    t.pass("tests/trybuild/carrier_forms_pass.rs");
+    t.compile_fail("tests/carrier_ui/*.rs");
 }

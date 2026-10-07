@@ -1,14 +1,13 @@
-error[E0277]: the trait bound `Fail<Child, Profile<false, false, true>>: From<errlanes::Denied>` is not satisfied
+error[E0277]: the trait bound `Infallible: From<errlanes::Denied>` is not satisfied
  --> tests/v2/disabled_denied.rs:8:67
   |
 8 | fn main() { let _: Fail<Child, lanes!(Fatal)> = Denied::default().into(); }
-  |                                                                   ^^^^ the trait `From<errlanes::Denied>` is not implemented for `Fail<Child, Profile<false, false, true>>`
+  |                                                                   ^^^^ the trait `From<errlanes::Denied>` is not implemented for `Infallible`
   |
-  = help: the following other types implement trait `From<T>`:
-            `Fail<D, L>` implements `From<Fault<S>>`
-            `Fail<D, L>` implements `From<errlanes::Denied>`
-            `Fail<D, L>` implements `From<errlanes::Exhausted>`
-            `Fail<D, L>` implements `From<errlanes::Fatal>`
-            `Fail<D, L>` implements `From<errlanes::Transient>`
-            `Fail<D, M>` implements `From<W>`
-  = note: required for `errlanes::Denied` to implement `Into<Fail<Child, Profile<false, false, true>>>`
+  = help: the trait `From<errlanes::Denied>` is not implemented for `Infallible`
+          but trait `From<!>` is implemented for it
+  = help: for that trait implementation, expected `!`, found `errlanes::Denied`
+  = note: required for `errlanes::Denied` to implement `Into<Infallible>`
+  = note: required for `errlanes::Fail<Child, Profile<false, false, true>>` to implement `From<errlanes::Denied>`
+  = note: 1 redundant requirement hidden
+  = note: required for `errlanes::Denied` to implement `Into<errlanes::Fail<Child, Profile<false, false, true>>>`

@@ -4,13 +4,13 @@ error: Unknown field: `lift`. Available values: `code`, `code_prefix`, `error`, 
 2 | #[rejection(lift(Source))]
   |             ^^^^
 
-error: Unknown field: `key`. Available values: `code`, `delegate`, `forward`, `from`, `level`, `origin`
+error: Unknown field: `key`. Available values: `code`, `code_and_level_from`, `delegate`, `from`, `level`, `origin`
  --> tests/v2/legacy_rejection_lift.rs:4:17
   |
 4 |     #[rejection(key = Key::Value, via = Source)]
   |                 ^^^
 
-error: Unknown field: `via`. Available values: `code`, `delegate`, `forward`, `from`, `level`, `origin`
+error: Unknown field: `via`. Available values: `code`, `code_and_level_from`, `delegate`, `from`, `level`, `origin`
  --> tests/v2/legacy_rejection_lift.rs:4:35
   |
 4 |     #[rejection(key = Key::Value, via = Source)]

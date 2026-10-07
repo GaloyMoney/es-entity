@@ -371,7 +371,7 @@ fn finish(mut item: ItemEnum, sources: Vec<Source>) -> syn::Result<TokenStream> 
                 variant.attrs.push(parse_quote!(#[lift(#case)]));
                 variant
                     .attrs
-                    .push(parse_quote!(#[rejection(forward = #case)]));
+                    .push(parse_quote!(#[rejection(code_and_level_from = #case)]));
                 collected.push(variant);
             }
         }

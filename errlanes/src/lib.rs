@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod carrier;
 mod classify;
 mod dynamic;
 mod fail;
@@ -27,23 +28,25 @@ pub mod reqwest;
 #[cfg(feature = "tracing")]
 mod record;
 
+#[doc(hidden)]
+pub use carrier::{Absorb, BuiltinFor, IntoLanes, LaneRejected, WidenBy, kind};
+pub use carrier::{Carrier, LaneRef, Repr};
 pub use classify::{Classify, RejectedSlot, RejectedUnion};
 #[doc(hidden)]
 pub use fail::WidenResult;
 pub use fail::{
-    Fail, Failure, Fault, Laned, Level, Lift, Rejection, RejectionField, RejectionMetadata,
-    UnmappedInto,
+    Fail, Fault, Laned, Level, Lift, Rejection, RejectionField, RejectionMetadata, UnmappedInto,
 };
 pub use lane::{Denied, Exhausted, Fatal, FatalKind, Lane, Transient, TransientKind};
 pub use result_ext::ResultExt;
 #[doc(hidden)]
-pub use result_ext::{NarrowDeniedLane, NarrowRejectedLane};
+pub use result_ext::{NarrowDeniedLane, NarrowRejectedBy, NarrowRejectedLane};
 
 #[cfg(feature = "tracing")]
 pub use record::FIELDS;
 
 #[cfg(feature = "derive")]
-pub use errlanes_derive::{__compose_rejection, Classify, Failure, Lift, Rejection, compose};
+pub use errlanes_derive::{__compose_rejection, Carrier, Classify, Lift, Rejection, compose};
 
 #[cfg(all(feature = "derive", feature = "tracing"))]
 pub use errlanes_derive::instrument;

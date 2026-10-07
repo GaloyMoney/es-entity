@@ -1,9 +1,9 @@
-//! Proc macros for `errlanes`: `#[derive(Rejection)]`, `#[derive(Lift)]`, `#[derive(Failure)]`,
+//! Proc macros for `errlanes`: `#[derive(Rejection)]`, `#[derive(Lift)]`, `#[derive(Carrier)]`,
 //! `#[compose]`, and `#[instrument]`.
 
+mod carrier;
 mod classify;
 mod composition;
-mod failure;
 mod instrument;
 mod lift;
 mod rejection;
@@ -89,9 +89,40 @@ pub fn derive_lift(input: TokenStream) -> TokenStream {
     expand(input, |ast| lift::derive(ast).map_err(darling::Error::from))
 }
 
-#[proc_macro_derive(Failure, attributes(failure))]
-pub fn derive_failure(input: TokenStream) -> TokenStream {
-    expand(input, failure::derive)
+/// Derive a [carrier](https://docs.rs/errlanes/latest/errlanes/trait.Carrier.html): a
+/// crate-local lane enum that stands in for `Fault<lanes!(..)>` or `Fail<R, lanes!(..)>`.
+///
+/// ```ignore
+/// #[derive(Debug, errlanes::Carrier)]
+/// #[carrier(from(effects::HostFault))]
+/// pub enum PartyFault {
+///     /// the subject may not do this
+///     Denied(errlanes::Denied),
+///     Transient(errlanes::Transient),
+///     Fatal(errlanes::Fatal),
+/// }
+///
+/// #[derive(Debug, errlanes::Carrier)]
+/// pub enum WriteError<R> {
+///     Rejected(R),
+///     Transient(errlanes::Transient),
+///     Fatal(errlanes::Fatal),
+/// }
+/// ```
+///
+/// The variant names are the profile: each is a one-field tuple variant named from
+/// `Rejected` / `Denied` / `Transient` / `Fatal`, at most one of each. `Rejected(T)` makes the
+/// carrier `Fail`-like with rejection `T` (a concrete type or one of the enum's own generic
+/// parameters); without it the carrier is `Fault`-like and needs at least one lane.
+/// `#[carrier(from(Up, ..))]` lists other carriers that convert into this one by `?`.
+/// `Debug` is yours to derive (`Error` needs it).
+#[proc_macro_derive(Carrier, attributes(carrier))]
+pub fn derive_carrier(input: TokenStream) -> TokenStream {
+    let ast = parse_macro_input!(input as DeriveInput);
+    match carrier::derive(&ast) {
+        Ok(tokens) => resolve_runtime(tokens).into(),
+        Err(e) => e.to_compile_error().into(),
+    }
 }
 
 /// Compose rejection families from a list of sources: `Source` imports every

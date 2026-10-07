@@ -71,7 +71,7 @@ fn simple_lift_forwards_metadata_unless_overridden() {
 
 #[derive(Debug, errlanes::Rejection)]
 enum ExplicitForward {
-    #[rejection(forward = Source::Value)]
+    #[rejection(code_and_level_from = Source::Value)]
     Renamed(String),
 }
 

@@ -4,8 +4,8 @@ error[E0117]: only traits defined in the current crate can be implemented for ty
 9 | impl From<errlanes::Fail<upstream::DepositRejection>> for errlanes::Fail<CustomerRejection> {
   | ^^^^^------------------------------------------------^^^^^---------------------------------
   |      |                                                    |
-  |      |                                                    `Fail` is not defined in the current crate
-  |      `Fail` is not defined in the current crate
+  |      |                                                    `errlanes::Fail` is not defined in the current crate
+  |      `errlanes::Fail` is not defined in the current crate
   |
   = note: impl doesn't have any local type before any uncovered type parameters
   = note: for more information see https://doc.rust-lang.org/reference/items/implementations.html#orphan-rules

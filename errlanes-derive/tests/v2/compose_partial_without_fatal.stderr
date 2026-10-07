@@ -10,7 +10,7 @@ help: the trait `UnmappedInto<Infallible>` is not implemented for `Source`
  2 | enum Source {
    | ^^^^^^^^^^^
    = help: the trait `UnmappedInto<F>` is implemented for `Infallible`
-note: required by a bound in `Fail::<D, L>::widen`
+note: required by a bound in `errlanes::Fail::<D, L>::widen`
   --> $WORKSPACE/errlanes/src/fail.rs
    |
    |     pub fn widen<P: Lift<D>, M: LaneProfile>(self) -> Fail<P, M>

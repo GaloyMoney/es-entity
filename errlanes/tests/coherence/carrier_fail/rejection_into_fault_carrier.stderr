@@ -1,0 +1,15 @@
+error[E0271]: type mismatch resolving `<Closed as IntoLanes>::Rejected == Infallible`
+  --> tests/coherence/carrier_fail/rejection_into_fault_carrier.rs:14:21
+   |
+14 |     Err(Closed::Yes)?;
+   |                     ^ expected `Infallible`, found `Closed`
+   |
+   = note: required for `errlanes::Fault<Profile<false, true, true>>` to implement `Absorb<Closed>`
+note: required for `HostFault` to implement `From<Closed>`
+  --> tests/coherence/carrier_fail/rejection_into_fault_carrier.rs:7:17
+   |
+ 7 | #[derive(Debug, errlanes::Carrier)]
+   |                 ^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced in this `derive` macro
+ 8 | enum HostFault {
+   |      ^^^^^^^^^
+   = note: this error originates in the derive macro `errlanes::Carrier` (in Nightly builds, run with -Z macro-backtrace for more info)
