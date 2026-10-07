@@ -5,19 +5,19 @@ pub enum Source {
 
 #[derive(Debug, errlanes::Rejection)]
 enum Code {
-    #[rejection(forward = Source::Value, code = "LOCAL")]
+    #[rejection(code_and_level_from = Source::Value, code = "LOCAL")]
     Value,
 }
 
 #[derive(Debug, errlanes::Rejection)]
 enum Level {
-    #[rejection(forward = Source::Value, level = "warn")]
+    #[rejection(code_and_level_from = Source::Value, level = "warn")]
     Value,
 }
 
 #[derive(Debug, errlanes::Rejection)]
 enum Delegate {
-    #[rejection(forward = Source::Value, delegate)]
+    #[rejection(code_and_level_from = Source::Value, delegate)]
     Value(Source),
 }
 

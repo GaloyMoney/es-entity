@@ -67,7 +67,7 @@ struct RejectionVariant {
     #[darling(default)]
     delegate: bool,
     #[darling(default)]
-    forward: Option<Path>,
+    code_and_level_from: Option<Path>,
     #[darling(default)]
     #[allow(dead_code)]
     origin: Option<String>,
@@ -241,16 +241,16 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
     };
     let mut metadata = TokenStream::new();
     for (v, raw) in variants.iter().zip(&raw.variants) {
-        if let Some(source) = &v.forward {
+        if let Some(source) = &v.code_and_level_from {
             if source.segments.len() < 2 {
                 return Err(darling::Error::custom(
-                    "forward requires a qualified source variant: Source::Variant",
+                    "code_and_level_from requires a qualified source variant: Source::Variant",
                 )
                 .with_span(source));
             }
             if v.code.is_some() || v.level.is_some() || v.delegate {
                 return Err(darling::Error::custom(
-                    "forward conflicts with code, level, and delegate; choose source metadata or local metadata",
+                    "code_and_level_from conflicts with code, level, and delegate; choose source metadata or local metadata",
                 )
                 .with_span(&v.ident));
             }
@@ -334,16 +334,16 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             });
         }
 
-        let mut forward = v.forward.clone();
+        let mut code_and_level_from = v.code_and_level_from.clone();
         // A whole-value `#[lift(Payload)]` (one segment: a struct source, no
-        // variant to forward from) identifies its metadata source the same
+        // variant to take code and level from) identifies its metadata source the same
         // way `delegate` does — by the field's own `Rejection` impl, not by
         // a variant's `RejectionMetadata<ID>` — since there is no variant ID
         // to look one up by.
         let mut whole_value_source: Option<Path> = None;
         // Lift owns conversion generation. Its mapping also identifies the
         // default metadata source; no Lift implementation is required here.
-        if forward.is_none() && v.code.is_none() && !v.delegate {
+        if code_and_level_from.is_none() && v.code.is_none() && !v.delegate {
             let mappings: Vec<_> = raw
                 .attrs
                 .iter()
@@ -374,11 +374,11 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                 // the source `RejectionMetadata` for its code/level. A
                 // projection keeps only the one named field, not the whole
                 // source payload, so there is nothing of the right shape to
-                // forward with — same restriction, same message family.
+                // `code_and_level_from` with — same restriction, same message family.
                 if v.level.is_none() {
                     if mapping.with.is_none() && mapping.field.is_none() {
                         if mapping.case.segments.len() >= 2 {
-                            forward = Some(mapping.case);
+                            code_and_level_from = Some(mapping.case);
                         } else {
                             whole_value_source = Some(mapping.case);
                         }
@@ -392,7 +392,7 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                 }
             }
         }
-        let (code, level) = if let Some(mut source) = forward {
+        let (code, level) = if let Some(mut source) = code_and_level_from {
             let source_variant = source.segments.pop().unwrap().ident;
             source.segments.pop_punct();
             let source_id = crate::composition::variant_id(&source_variant.to_string());
