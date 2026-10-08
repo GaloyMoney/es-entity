@@ -1232,6 +1232,77 @@ assert!(matches!(Posting::from(Ledger::Closed), Posting::LedgerClosed));
 Source enums remain independently usable with their original, narrower
 contracts.
 
+### The code catalogue
+
+A boundary that speaks a schema (a GraphQL enum, an OpenAPI `enum`) needs
+every code a family can resolve to, without a hand-written copy. Every
+`Rejection::Code` implements `errlanes::RejectionCode`, whose `CODES` is that
+list, one `CodeInfo { code, description }` per code:
+
+- **Complete.** It follows `delegate`, `code_and_level_from`, `#[lift(..)]`
+  and `compose`, however deeply nested. A variant that lifts *one* source
+  variant contributes only that variant's codes, not all of the source's.
+- **Deduplicated.** A code reached along several paths (a diamond) appears
+  once, at its first occurrence.
+- **Ordered.** Declaration order, depth-first.
+
+`FooCode::ALL` is the `code` of every entry of `CODES`, in the same order. It
+is complete, not leaves-only.
+
+A leaf's description is `#[rejection(description = "..")]` if present, else
+its `#[error("..")]` literal **verbatim** (placeholders left in), else `None`
+(for example under `error = manual`). `description` belongs on a leaf; on a
+variant that forwards to another type it is a compile error.
+
+```rust
+use errlanes::{CodeInfo, Rejection, RejectionCode};
+
+#[derive(Debug, errlanes::Rejection)]
+pub enum CloseRejection {
+    #[error("customer {customer_id} still has open facilities")]
+    HasOpenFacilities { customer_id: u64 },
+    #[rejection(description = "The customer is already closed.")]
+    #[error("customer {customer_id} is closed")]
+    AlreadyClosed { customer_id: u64 },
+}
+
+assert_eq!(
+    <CloseRejectionCode as RejectionCode>::CODES,
+    &[
+        CodeInfo {
+            code: "HAS_OPEN_FACILITIES",
+            description: Some("customer {customer_id} still has open facilities"),
+        },
+        CodeInfo {
+            code: "ALREADY_CLOSED",
+            description: Some("The customer is already closed."),
+        },
+    ]
+);
+
+// A boundary is generic over the family and never names a `*Code` type:
+fn publish<R: Rejection>(add_value: &mut impl FnMut(&str, Option<&str>)) {
+    for entry in <R::Code as RejectionCode>::CODES {
+        add_value(entry.code, entry.description);
+    }
+}
+fn value<R: Rejection>(rejection: &R) -> &'static str {
+    rejection.code().into()
+}
+
+let mut published = Vec::new();
+publish::<CloseRejection>(&mut |code, _| published.push(code.to_owned()));
+assert_eq!(published, ["HAS_OPEN_FACILITIES", "ALREADY_CLOSED"]);
+assert_eq!(
+    value(&CloseRejection::AlreadyClosed { customer_id: 1 }),
+    "ALREADY_CLOSED"
+);
+```
+
+errlanes exposes data only: the schema shape and type names stay with the
+consumer. A hand-written `Rejection` impl must also implement
+`RejectionCode` for its `Code` type.
+
 ---
 
 The Rust snippets above are checked by the crate's doctests. The opening enum

@@ -19,6 +19,10 @@ struct RejectionInput {
     code: Option<String>,
     #[darling(default)]
     level: Option<String>,
+    /// Overrides the catalogue description, which otherwise is the
+    /// `#[error("..")]` literal verbatim.
+    #[darling(default)]
+    description: Option<String>,
     /// Emits `From<Payload>`, with the payload also `source()`'s default.
     #[darling(default)]
     from: bool,
@@ -73,9 +77,32 @@ struct RejectionVariant {
     origin: Option<String>,
     #[darling(default)]
     level: Option<String>,
+    /// Leaf only: overrides the catalogue description, which otherwise is the
+    /// `#[error("..")]` literal verbatim.
+    #[darling(default)]
+    description: Option<String>,
     /// Emits `From<Payload>`, with the payload also `source()`'s default.
     #[darling(default)]
     from: bool,
+}
+
+/// `Some("..")` / `None` as tokens for `CodeInfo::description`.
+fn description_tokens(description: &Option<String>) -> TokenStream {
+    match description {
+        Some(d) => quote! { Some(#d) },
+        None => quote! { None },
+    }
+}
+
+/// §1.4: `description = ".."`, else the `#[error("..")]` literal verbatim
+/// (placeholders and all), else nothing.
+fn leaf_description(
+    description: &Option<String>,
+    error: &Option<std_error::ErrorSpec>,
+) -> Option<String> {
+    description
+        .clone()
+        .or_else(|| error.as_ref().map(|spec| spec.lit.value()))
 }
 
 impl RejectionVariant {
@@ -141,6 +168,15 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                 unreachable!()
             };
 
+            // With `error = manual` the `#[error]` attribute belongs to
+            // `thiserror`, not us: no literal to read.
+            let error = if error_manual {
+                None
+            } else {
+                std_error::take_error_lit(&ast.attrs).map_err(darling::Error::from)?
+            };
+            let description = description_tokens(&leaf_description(&input.description, &error));
+
             let mut out = TokenStream::new();
             let from_payload = if input.from {
                 let payload =
@@ -161,6 +197,13 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
 
                 impl #code_ident {
                     pub const ALL: &'static [&'static str] = &[#code];
+                }
+
+                impl errlanes::RejectionCode for #code_ident {
+                    const CODES: &'static [errlanes::CodeInfo] = &[errlanes::CodeInfo {
+                        code: #code,
+                        description: #description,
+                    }];
                 }
 
                 impl std::fmt::Display for #code_ident {
@@ -201,7 +244,6 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                         .map_err(darling::Error::from)?,
                 };
                 let pat = std_error::bind_pattern(quote! { Self }, &raw.fields);
-                let error = std_error::take_error_lit(&ast.attrs).map_err(darling::Error::from)?;
                 // `Rejection`'s own impl doesn't infer generic bounds the
                 // way `Classify`'s does (that's `classify.rs`'s doing, not
                 // this derive's), so the `extra` bounds `emit` returns
@@ -232,7 +274,7 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
     let mut into_str_arms = Vec::new();
     let mut code_match_arms = Vec::new();
     let mut level_match_arms = Vec::new();
-    let mut leaf_codes = Vec::new();
+    let mut code_parts = Vec::new();
     let mut from_impls = TokenStream::new();
     let mut display_units = Vec::new();
 
@@ -314,8 +356,14 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                 .map_err(darling::Error::from)?,
             );
         }
-        if !error_manual {
+        // `error = manual` hands `#[error]` to `thiserror`: nothing to read.
+        let error = if error_manual {
+            None
+        } else {
             std_error::reject_from_field_attr(&raw.fields).map_err(darling::Error::from)?;
+            std_error::take_error_lit(&raw.attrs).map_err(darling::Error::from)?
+        };
+        if !error_manual {
             let source = match &payload {
                 Some(p) => {
                     let name = std_error::field_binding(&raw.fields, p.index);
@@ -324,11 +372,10 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                 None => std_error::marked_source(&raw.fields, variant_ident)
                     .map_err(darling::Error::from)?,
             };
-            let error = std_error::take_error_lit(&raw.attrs).map_err(darling::Error::from)?;
             display_units.push(Unit {
                 pat: pat.clone(),
                 fields: &raw.fields,
-                error,
+                error: error.clone(),
                 name: variant_ident.clone(),
                 source,
             });
@@ -392,7 +439,18 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                 }
             }
         }
-        let (code, level) = if let Some(mut source) = code_and_level_from {
+        let forwards_to = |target: &dyn std::fmt::Display| {
+            darling::Error::custom(format!(
+                "`description` belongs on the leaf that owns the code; this variant forwards \
+                 to `{}`",
+                target.to_string().replace(' ', "")
+            ))
+            .with_span(&v.ident)
+        };
+        let (code, level, variant_codes) = if let Some(mut source) = code_and_level_from {
+            if v.description.is_some() {
+                return Err(forwards_to(&quote!(#source)));
+            }
             let source_variant = source.segments.pop().unwrap().ident;
             source.segments.pop_punct();
             let source_id = crate::composition::variant_id(&source_variant.to_string());
@@ -401,8 +459,12 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             (
                 quote!(#code_ident::#variant_ident(<#source as errlanes::RejectionMetadata<#source_id>>::field_code((#(#fields,)*)))),
                 quote!(<#source as errlanes::RejectionMetadata<#source_id>>::field_level((#(#fields,)*))),
+                quote!(<#source as errlanes::RejectionMetadata<#source_id>>::CODES),
             )
         } else if let Some(source) = &whole_value_source {
+            if v.description.is_some() {
+                return Err(forwards_to(&quote!(#source)));
+            }
             let Some(inner) = fields.first() else {
                 return Err(darling::Error::custom(
                     "a whole-value `#[lift(Source)]` (naming a registered source with no \
@@ -415,27 +477,39 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             (
                 quote!(#code_ident::#variant_ident(<#source as errlanes::Rejection>::code(#inner))),
                 quote!(<#source as errlanes::Rejection>::level(#inner)),
+                quote!(<<#source as errlanes::Rejection>::Code as errlanes::RejectionCode>::CODES),
             )
         } else if let Some(inner_ty) = v.delegate_ty() {
+            if v.description.is_some() {
+                return Err(forwards_to(&quote!(#inner_ty)));
+            }
             let inner = &fields[0];
             code_variants.push(quote!(#variant_ident(<#inner_ty as errlanes::Rejection>::Code)));
             into_str_arms.push(quote!(#code_ident::#variant_ident(inner) => inner.into()));
             (
                 quote!(#code_ident::#variant_ident(<#inner_ty as errlanes::Rejection>::code(#inner))),
                 quote!(<#inner_ty as errlanes::Rejection>::level(#inner)),
+                quote!(<<#inner_ty as errlanes::Rejection>::Code as errlanes::RejectionCode>::CODES),
             )
         } else {
             code_variants.push(quote!(#variant_ident));
             let leaf = v.leaf_code(&input.code_prefix);
             into_str_arms.push(quote!(#code_ident::#variant_ident => #leaf));
-            leaf_codes.push(leaf);
-            (quote!(#code_ident::#variant_ident), v.level_expr())
+            let description = description_tokens(&leaf_description(&v.description, &error));
+            (
+                quote!(#code_ident::#variant_ident),
+                v.level_expr(),
+                quote!(&[errlanes::CodeInfo { code: #leaf, description: #description }]),
+            )
         };
+        let part = quote!(<#ident as errlanes::RejectionMetadata<#id>>::CODES);
+        code_parts.push(part);
         code_match_arms.push(quote!(#pat => #code));
         level_match_arms.push(quote!(#pat => #level));
         metadata.extend(quote! {
             impl errlanes::RejectionMetadata<#id> for #ident {
                 type Fields<'a> = (#(&'a #types,)*);
+                const CODES: &'static [errlanes::CodeInfo] = #variant_codes;
                 #[allow(unused_variables, unused_assignments)]
                 fn field_code(fields: <Self as errlanes::RejectionMetadata<#id>>::Fields<'_>) -> #code_ident {
                     let (#(#fields,)*) = fields;
@@ -450,14 +524,29 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
         });
     }
 
+    // Private helper consts, named after the (unique-in-module) type.
+    let parts_ident = quote::format_ident!("__errlanes_code_parts_{}", ident);
+    let len_ident = quote::format_ident!("__errlanes_code_len_{}", ident);
     let mut tokens = quote! {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum #code_ident {
             #(#code_variants),*
         }
 
+        #[allow(non_upper_case_globals)]
+        const #parts_ident: &[&[errlanes::CodeInfo]] = &[#(#code_parts),*];
+        #[allow(non_upper_case_globals)]
+        const #len_ident: usize = errlanes::__catalogue::catalogue_len(#parts_ident);
+
+        impl errlanes::RejectionCode for #code_ident {
+            const CODES: &'static [errlanes::CodeInfo] =
+                &errlanes::__catalogue::catalogue::<#len_ident>(#parts_ident);
+        }
+
         impl #code_ident {
-            pub const ALL: &'static [&'static str] = &[#(#leaf_codes),*];
+            pub const ALL: &'static [&'static str] = &errlanes::__catalogue::codes_of::<#len_ident>(
+                <#code_ident as errlanes::RejectionCode>::CODES,
+            );
         }
 
         impl std::fmt::Display for #code_ident {

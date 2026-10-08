@@ -123,7 +123,8 @@ fn parse_classify_meta(attrs: &[syn::Attribute], is_type: bool) -> syn::Result<C
                 // tokens to `rejection::derive` instead), so just consume
                 // them so `parse_nested_meta` does not choke on `= value` or
                 // `(..)` it does not otherwise recognise.
-                "code" | "level" | "code_prefix" | "code_and_level_from" | "origin" => {
+                "code" | "level" | "code_prefix" | "code_and_level_from" | "origin"
+                | "description" => {
                     meta.saw_pure_marker = true;
                     if nested.input.peek(Token![=]) {
                         nested.input.parse::<Token![=]>()?;

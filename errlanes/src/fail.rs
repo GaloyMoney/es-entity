@@ -40,21 +40,156 @@ impl From<Level> for tracing::Level {
     }
 }
 
+/// One code a rejection family can resolve to, with its operator-facing text.
+///
+/// ```
+/// use errlanes::{CodeInfo, Rejection, RejectionCode};
+///
+/// fn describe<R: Rejection>() -> Vec<String> {
+///     <R::Code as RejectionCode>::CODES
+///         .iter()
+///         .map(|CodeInfo { code, description }| {
+///             format!("{code}: {}", description.unwrap_or("(undocumented)"))
+///         })
+///         .collect()
+/// }
+/// # fn main() {}
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CodeInfo {
+    /// The wire identity, exactly what `Into<&'static str>` on the `Code` yields.
+    pub code: &'static str,
+    /// From `#[rejection(description = "..")]`, else the leaf's `#[error("..")]`
+    /// literal verbatim (placeholders included), else `None` (`error = manual`
+    /// with no literal).
+    pub description: Option<&'static str>,
+}
+
+/// The code type of a rejection family: a closed, enumerable catalogue.
+///
+/// ```
+/// use errlanes::RejectionCode;
+///
+/// #[derive(errlanes::Rejection, Debug)]
+/// #[rejection(code = "NOT_FOUND")]
+/// #[error("the thing is missing")]
+/// struct NotFound;
+///
+/// for entry in <NotFoundCode as RejectionCode>::CODES {
+///     assert_eq!(entry.code, "NOT_FOUND");
+///     assert_eq!(entry.description, Some("the thing is missing"));
+/// }
+/// ```
+pub trait RejectionCode:
+    Copy + Eq + std::hash::Hash + fmt::Debug + fmt::Display + Into<&'static str> + Send + Sync + 'static
+{
+    /// Every code a value of this type can resolve to — complete through
+    /// `delegate`, `code_and_level_from`, and `#[lift(..)]`-forwarded
+    /// variants; no duplicates (a diamond keeps its first occurrence);
+    /// declaration order, depth-first.
+    const CODES: &'static [CodeInfo];
+}
+
+/// Const helpers the derive uses to build a deduplicated catalogue.
+#[doc(hidden)]
+pub mod __catalogue {
+    use super::CodeInfo;
+
+    const fn str_eq(a: &str, b: &str) -> bool {
+        let (a, b) = (a.as_bytes(), b.as_bytes());
+        if a.len() != b.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < a.len() {
+            if a[i] != b[i] {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
+    /// Whether `code` is already among the first `taken` distinct entries
+    /// found by walking `parts` in order (used to implement first-wins).
+    const fn seen_before(parts: &[&[CodeInfo]], part: usize, idx: usize) -> bool {
+        let code = parts[part][idx].code;
+        let mut p = 0;
+        while p <= part {
+            let end = if p == part { idx } else { parts[p].len() };
+            let mut i = 0;
+            while i < end {
+                if str_eq(parts[p][i].code, code) {
+                    return true;
+                }
+                i += 1;
+            }
+            p += 1;
+        }
+        false
+    }
+
+    /// Count of distinct `code`s across `parts`, first occurrence wins.
+    pub const fn catalogue_len(parts: &[&[CodeInfo]]) -> usize {
+        let mut n = 0;
+        let mut p = 0;
+        while p < parts.len() {
+            let mut i = 0;
+            while i < parts[p].len() {
+                if !seen_before(parts, p, i) {
+                    n += 1;
+                }
+                i += 1;
+            }
+            p += 1;
+        }
+        n
+    }
+
+    /// The distinct entries of `parts` in declaration order. `N` must equal
+    /// [`catalogue_len`]; a mismatch is a const-eval (compile) error.
+    pub const fn catalogue<const N: usize>(parts: &[&[CodeInfo]]) -> [CodeInfo; N] {
+        assert!(catalogue_len(parts) == N, "catalogue length mismatch");
+        let mut out = [CodeInfo {
+            code: "",
+            description: None,
+        }; N];
+        let mut n = 0;
+        let mut p = 0;
+        while p < parts.len() {
+            let mut i = 0;
+            while i < parts[p].len() {
+                if !seen_before(parts, p, i) {
+                    out[n] = parts[p][i];
+                    n += 1;
+                }
+                i += 1;
+            }
+            p += 1;
+        }
+        out
+    }
+
+    /// The `code` of every entry, same order.
+    pub const fn codes_of<const N: usize>(entries: &[CodeInfo]) -> [&'static str; N] {
+        assert!(entries.len() == N, "catalogue length mismatch");
+        let mut out = [""; N];
+        let mut i = 0;
+        while i < N {
+            out[i] = entries[i].code;
+            i += 1;
+        }
+        out
+    }
+}
+
 /// A pure, caller-correctable domain outcome. Implemented by hand or via
 /// `#[derive(errlanes::Rejection)]`, which emits `Display`/`Error` itself
 /// (defaulting `Display` to the code) unless `#[rejection(error = manual)]`
 /// hands that to `thiserror` or a hand-written impl.
 pub trait Rejection: Error + Send + Sync + 'static {
     /// A stable, typed, wire-safe identity for this outcome.
-    type Code: Copy
-        + Eq
-        + std::hash::Hash
-        + fmt::Debug
-        + fmt::Display
-        + Into<&'static str>
-        + Send
-        + Sync
-        + 'static;
+    type Code: RejectionCode;
 
     fn code(&self) -> Self::Code;
 
@@ -721,6 +856,9 @@ pub trait RejectionField<const VARIANT: u64, const FIELD: usize> {
 #[doc(hidden)]
 pub trait RejectionMetadata<const VARIANT: u64>: Rejection {
     type Fields<'a>;
+    /// The codes this one variant can resolve to: its own leaf, or whatever
+    /// it forwards (`delegate`, `code_and_level_from`, `#[lift(..)]`).
+    const CODES: &'static [CodeInfo];
     fn field_code(fields: Self::Fields<'_>) -> Self::Code;
     fn field_level(fields: Self::Fields<'_>) -> Level;
 }
@@ -741,6 +879,12 @@ mod tests {
         fn from(_: SmallCode) -> Self {
             "SMALL"
         }
+    }
+    impl RejectionCode for SmallCode {
+        const CODES: &'static [CodeInfo] = &[CodeInfo {
+            code: "SMALL",
+            description: None,
+        }];
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]

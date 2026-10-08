@@ -1,0 +1,5 @@
+error: `description` belongs on the leaf that owns the code; this variant forwards to `Leaf`
+ --> tests/v2/description_on_delegate.rs:8:5
+  |
+8 |     Inner(Leaf),
+  |     ^^^^^
