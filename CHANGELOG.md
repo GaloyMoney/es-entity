@@ -1,3 +1,11 @@
+# [cala release v0.17.3](https://github.com/GaloyMoney/cala/releases/tag/0.17.3)
+
+
+
+### Features
+
+- Complete rejection-code catalogue (RejectionCode::CODES) (#270)
+
 # [cala release v0.17.2](https://github.com/GaloyMoney/cala/releases/tag/0.17.2)
 
 
