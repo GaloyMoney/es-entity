@@ -1,0 +1,5 @@
+error: `description` belongs on the leaf that owns the code; this variant forwards to `Source::X`
+  --> tests/v2/description_on_code_and_level_from.rs:10:5
+   |
+10 |     OnlyX(u32),
+   |     ^^^^^

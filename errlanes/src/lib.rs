@@ -35,9 +35,12 @@ pub use carrier::{Absorb, BuiltinFor, IntoLanes, LaneRejected, WidenBy, kind};
 pub use carrier::{Carrier, LaneRef, Repr};
 pub use classify::{Classify, RejectedSlot, RejectedUnion};
 #[doc(hidden)]
+pub use fail::__catalogue;
+#[doc(hidden)]
 pub use fail::WidenResult;
 pub use fail::{
-    Fail, Fault, Laned, Level, Lift, Rejection, RejectionField, RejectionMetadata, UnmappedInto,
+    CodeInfo, Fail, Fault, Laned, Level, Lift, Rejection, RejectionCode, RejectionField,
+    RejectionMetadata, UnmappedInto,
 };
 pub use lane::{Denied, Exhausted, Fatal, FatalKind, Lane, Transient, TransientKind};
 pub use result_ext::ResultExt;

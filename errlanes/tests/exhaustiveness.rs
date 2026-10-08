@@ -24,6 +24,13 @@ impl From<NopeCode> for &'static str {
     }
 }
 
+impl errlanes::RejectionCode for NopeCode {
+    const CODES: &'static [errlanes::CodeInfo] = &[errlanes::CodeInfo {
+        code: "NOPE",
+        description: None,
+    }];
+}
+
 impl errlanes::Rejection for Nope {
     type Code = NopeCode;
     fn code(&self) -> NopeCode {
