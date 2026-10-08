@@ -288,7 +288,7 @@ fn conversion_impl(
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     // Strict mode emits only `From`: errlanes' blanket `impl<X, P: From<X>>
     // Lift<X> for P` supplies the `Lift` view with `Unmapped = Infallible`,
-    // so one call-site method (`widen`) covers strict and partial alike.
+    // so one call-site method (`lift`) covers strict and partial alike.
     // Emitting both here would collide with that blanket (E0119).
     if partial {
         quote! {

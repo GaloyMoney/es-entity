@@ -66,8 +66,8 @@ fn narrowed_owned_denied_keeps_the_chain_and_message() {
 
         let cloned = narrowed.clone();
         assert_retains_native(cloned.as_fatal().unwrap(), code);
-        let widened: Fault = cloned.widen();
-        assert_retains_native(widened.as_fatal().unwrap(), code);
+        let converted: Fault = cloned.into();
+        assert_retains_native(converted.as_fatal().unwrap(), code);
     }
 }
 

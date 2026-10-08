@@ -1,6 +1,6 @@
 use errlanes::{
-    Denied, Fail, Fault, ResultExt, WithDenied, WithFatal, WithTransient, WithoutDenied,
-    WithoutTransient, lanes,
+    Denied, Fail, Fault, WithDenied, WithFatal, WithTransient, WithoutDenied, WithoutTransient,
+    lanes,
 };
 
 type MyFault = Fault<lanes!(Transient, Fatal)>;
@@ -25,7 +25,7 @@ fn host() -> Result<(), HostFault> {
 }
 
 fn may_deny(deny: bool) -> Result<(), WithDenied<MyFault>> {
-    base().widen()?;
+    base()?;
     if deny {
         return Err(Fault::Denied(Denied::new()));
     }

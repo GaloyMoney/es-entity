@@ -248,28 +248,27 @@ fn into_customer_from_upstream_rejection() -> Result<(), CustomerError> {
         Fail::<upstream::DepositRejection, lanes!(Transient, Fatal)>::Rejected(
             upstream::DepositRejection::AccountFrozen,
         )
-        .widen::<CustomerRejection, lanes!(Transient, Fatal)>(),
+        .lift::<CustomerRejection, lanes!(Transient, Fatal)>(),
     )?;
     Ok(())
 }
 
 fn into_customer_from_upstream_carrier() -> Result<(), CustomerError> {
-    Err::<(), _>(upstream::frozen())
-        .widen::<Fail<CustomerRejection, lanes!(Transient, Fatal)>>()?;
+    Err::<(), _>(upstream::frozen()).lift()?;
     Ok(())
 }
 
 /// The cross-crate carrier -> carrier hop: `upstream::HostFault` cannot be
 /// listed in `from(..)` here, but its built-in reaches any carrier by `?`.
 fn into_party_from_upstream_host_via_builtin() -> Result<(), PartyFault> {
-    upstream::host_transient().widen_via_builtin()?;
+    upstream::host_transient().into_fault()?;
     Ok(())
 }
 
 /// Generic host code over an upstream carrier: the bound names the built-in,
 /// and every local carrier, `Fail` and `#[from]`-on-built-in enum satisfies it.
 fn in_effect_via_builtin<E: Error + From<Fault<lanes!(Transient, Fatal)>>>() -> Result<u8, E> {
-    let v = upstream::host_op().widen_via_builtin()?;
+    let v = upstream::host_op().into_fault()?;
     Ok(v)
 }
 
@@ -358,33 +357,33 @@ fn single_lane_into_bare_fatal() -> Result<(), Fatal> {
 // Widen
 // ---------------------------------------------------------------------------
 
-fn widen_fail_infers() -> Result<(), Fail<CustomerRejection>> {
+fn expand_fail_infers() -> Result<(), Fail<CustomerRejection>> {
     let r: Result<(), Fail<CustomerRejection, lanes!(Transient, Fatal)>> =
         Err(Fail::Rejected(CustomerRejection::CustomerIsClosed));
-    r.widen()?;
+    r?;
     Ok(())
 }
 
-fn widen_fault_infers() -> Result<(), Fault> {
+fn expand_fault_infers() -> Result<(), Fault> {
     let r: Result<(), Fault<lanes!(Transient, Fatal)>> = Err(Fault::Transient(deadlock()));
-    r.widen()?;
+    r?;
     Ok(())
 }
 
-fn widen_tail_position() -> Result<(), Fault> {
+fn expand_tail_position() -> Result<(), Fault> {
     let r: Result<(), Fault<lanes!(Transient, Fatal)>> = Err(Fault::Transient(deadlock()));
-    r.widen()
+    r.map_err(Into::into)
 }
 
-fn widen_carrier_source() -> Result<(), Fault> {
-    host_transient().widen()?;
+fn expand_carrier_source() -> Result<(), Fault> {
+    host_transient()?;
     Ok(())
 }
 
-fn widen_carrier_into_other_carrier_without_a_list() -> Result<(), PartyFault> {
+fn expand_carrier_into_other_carrier_without_a_list() -> Result<(), PartyFault> {
     // `PartyFault` lists `HostFault`, but a carrier that is not listed goes
-    // through the built-in it widens to, then the outer `?` absorbs it.
-    OnlyFatalAsResult().widen::<Fault<lanes!(Denied, Transient, Fatal)>>()?;
+    // through the built-in it expands to, then the outer `?` absorbs it.
+    OnlyFatalAsResult().into_fault()?;
     Ok(())
 }
 
@@ -397,12 +396,12 @@ fn partial_lift_from_fail() -> Result<(), Fail<FrozenOnly, lanes!(Transient, Fat
     let r: Result<(), Fail<upstream::DepositRejection, lanes!(Transient, Fatal)>> = Err(
         Fail::Rejected(upstream::DepositRejection::DailyLimitExceeded),
     );
-    r.widen()?;
+    r.lift()?;
     Ok(())
 }
 
 fn partial_lift_from_carrier() -> Result<(), Fail<FrozenOnly, lanes!(Transient, Fatal)>> {
-    Err::<(), DepositError>(upstream::frozen()).widen()?;
+    Err::<(), DepositError>(upstream::frozen()).lift()?;
     Ok(())
 }
 
@@ -546,12 +545,12 @@ pub fn smoke() {
     assert!(single_lane_into_bare_fatal().is_err());
 
     // Widen.
-    assert!(widen_fail_infers().unwrap_err().as_rejected().is_some());
-    assert!(widen_fault_infers().unwrap_err().is_transient());
-    assert!(widen_tail_position().unwrap_err().is_transient());
-    assert!(widen_carrier_source().unwrap_err().is_transient());
+    assert!(expand_fail_infers().unwrap_err().as_rejected().is_some());
+    assert!(expand_fault_infers().unwrap_err().is_transient());
+    assert!(expand_tail_position().unwrap_err().is_transient());
+    assert!(expand_carrier_source().unwrap_err().is_transient());
     assert!(
-        widen_carrier_into_other_carrier_without_a_list()
+        expand_carrier_into_other_carrier_without_a_list()
             .unwrap_err()
             .is_fatal()
     );

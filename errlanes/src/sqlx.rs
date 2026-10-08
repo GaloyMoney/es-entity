@@ -160,12 +160,12 @@ mod tests {
         }
     }
 
-    /// A `sqlx::Error` must still widen through to any `D` — pinned
+    /// A `sqlx::Error` must still expand through to any `D` — pinned
     /// separately from the `Fault` cases above so a regression in the
     /// `Fail<D>` wrapper (not just the shared `Fault` classification) fails
     /// its own test.
     #[test]
-    fn classify_sqlx_widens_into_any_rejection_type() {
+    fn classify_sqlx_expands_into_any_rejection_type() {
         #[derive(Debug)]
         struct NeverRejects;
         let f: Fail<NeverRejects> = ::sqlx::Error::PoolTimedOut.into();

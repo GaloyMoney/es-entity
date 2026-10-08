@@ -203,7 +203,7 @@ pub trait Rejection: Error + Send + Sync + 'static {
 /// Consuming mapping. `#[derive(Lift)]` with `#[lift(Source)]` generates an exhaustive
 /// mapping with `Unmapped = Infallible` and a total `From<Source>` conversion.
 /// `#[lift(Source, unhandled = fatal)]` returns the original unmapped source;
-/// [`Fail::widen`] wraps it as a fatal invariant with its source intact.
+/// [`Fail::lift`] wraps it as a fatal invariant with its source intact.
 /// The derive does not require or implement [`Rejection`]. Derive `Rejection`
 /// separately to provide codes and levels; simple lift mappings forward that
 /// metadata by default unless the destination declares its own.
@@ -456,8 +456,9 @@ impl<D, L: LaneProfile> Fail<D, L> {
         }
     }
 
-    /// Widen the rejection and the lane profile without changing any
-    /// classification. The value-level form of [`WidenResult::widen`], with
+    /// Lift the rejection and, when requested, expand the lane profile without
+    /// changing any fault classification. The value-level form of
+    /// [`ResultExt::lift`](crate::ResultExt::lift), with
     /// the same single rule: `P: Lift<D>` is satisfied by a total `From<D>`
     /// (through errlanes' blanket, `Unmapped = Infallible`) and by a partial
     /// `#[lift(Source, unhandled = fatal)]` mapping (`Unmapped = Source`),
@@ -465,7 +466,7 @@ impl<D, L: LaneProfile> Fail<D, L> {
     /// as their source — which is why a partial mapping requires the
     /// destination to admit `Fatal`. The strict/partial choice is declared
     /// once on the destination enum; the call site does not repeat it.
-    pub fn widen<P: Lift<D>, M: LaneProfile>(self) -> Fail<P, M>
+    pub fn lift<P: Lift<D>, M: LaneProfile>(self) -> Fail<P, M>
     where
         L::Denied: Into<M::Denied>,
         L::Transient: Into<M::Transient>,
@@ -483,7 +484,7 @@ impl<D, L: LaneProfile> Fail<D, L> {
         }
     }
 
-    pub fn widen_with<P, M: LaneProfile<Fatal = Fatal>>(
+    pub fn lift_with<P, M: LaneProfile<Fatal = Fatal>>(
         self,
         f: impl FnOnce(D) -> Result<P, Fatal>,
     ) -> Fail<P, M>
@@ -806,47 +807,6 @@ where
     }
 }
 
-/// Dispatch engine for [`crate::ResultExt::widen`]. One impl, keyed on the
-/// *source*: the target is inferred from the source's shape, which is what
-/// keeps `r.widen()?` inferring. A destination-keyed form makes it ambiguous
-/// (E0283). The per-shape bodies are [`crate::carrier::WidenBy`]. Hidden: a
-/// consumer calls `.widen()` on a `Result`, never this trait directly. See
-/// `ResultExt::widen` for the full doc, including the `compile_fail` example
-/// of a lane widening cannot discard.
-#[doc(hidden)]
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` cannot be widened into `Result<{T}, {E}>`",
-    note = "widening can add lanes and lift a rejection, but never drop an enabled lane; a \
-            carrier widens to a built-in (`Fault<..>` / `Fail<..>`), not to another carrier"
-)]
-pub trait WidenResult<T, E>: Sized {
-    fn widen(self) -> Result<T, E>;
-}
-
-impl<T, S: crate::IntoLanes, E2> WidenResult<T, E2> for Result<T, S>
-where
-    S::Shape: crate::carrier::WidenBy<S, E2>,
-{
-    fn widen(self) -> Result<T, E2> {
-        self.map_err(<S::Shape as crate::carrier::WidenBy<S, E2>>::widen_err)
-    }
-}
-
-impl<L: LaneProfile> Fault<L> {
-    pub fn widen<M: LaneProfile>(self) -> Fault<M>
-    where
-        L::Denied: Into<M::Denied>,
-        L::Transient: Into<M::Transient>,
-        L::Fatal: Into<M::Fatal>,
-    {
-        match self {
-            Self::Denied(d) => Fault::Denied(d.into()),
-            Self::Transient(t) => Fault::Transient(t.into()),
-            Self::Fatal(f) => Fault::Fatal(f.into()),
-        }
-    }
-}
-
 /// Compile-time field metadata used by the rejection composition protocol.
 #[doc(hidden)]
 pub trait RejectionField<const VARIANT: u64, const FIELD: usize> {
@@ -924,26 +884,26 @@ mod tests {
     }
 
     #[test]
-    fn widen_preserves_the_lane() {
+    fn expand_preserves_the_lane() {
         let f: Fail<Small> = Fail::Rejected(Small);
-        let widened: Fail<Big> = f.widen();
-        assert_eq!(widened.lane(), Lane::Rejected);
-        assert_eq!(widened.as_rejected(), Some(&Big(Small)));
+        let converted: Fail<Big> = f.lift();
+        assert_eq!(converted.lane(), Lane::Rejected);
+        assert_eq!(converted.as_rejected(), Some(&Big(Small)));
 
         let t: Fail<Small> = Transient::new(TransientKind::Deadlock).into();
-        let widened: Fail<Big> = t.widen();
-        assert_eq!(widened.lane(), Lane::Transient);
+        let converted: Fail<Big> = t.lift();
+        assert_eq!(converted.lane(), Lane::Transient);
     }
 
     #[test]
-    fn widen_with_demotes_an_unmapped_rejection_to_fatal() {
+    fn expand_with_demotes_an_unmapped_rejection_to_fatal() {
         let f: Fail<Small> = Fail::Rejected(Small);
-        let widened: Fail<Big> = f.widen_with(|_| Err(Fatal::invariant("unmapped")));
-        assert_eq!(widened.lane(), Lane::Fatal);
+        let converted: Fail<Big> = f.lift_with(|_| Err(Fatal::invariant("unmapped")));
+        assert_eq!(converted.lane(), Lane::Fatal);
 
         let f: Fail<Small> = Fail::Rejected(Small);
-        let widened: Fail<Big> = f.widen_with(|s| Ok(Big(s)));
-        assert_eq!(widened.lane(), Lane::Rejected);
+        let converted: Fail<Big> = f.lift_with(|s| Ok(Big(s)));
+        assert_eq!(converted.lane(), Lane::Rejected);
     }
 
     /// Regression: `UnmappedInto<Fatal> for R: Rejection` (the partial-lift
@@ -1012,8 +972,8 @@ mod tests {
     #[test]
     fn fault_converts_into_any_fail_via_the_real_blanket() {
         let fault: Fault = Fatal::new(FatalKind::CorruptState).into();
-        let widened: Fail<Small> = fault.into();
-        assert_eq!(widened.lane(), Lane::Fatal);
+        let converted: Fail<Small> = fault.into();
+        assert_eq!(converted.lane(), Lane::Fatal);
     }
 
     #[test]

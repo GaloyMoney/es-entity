@@ -1,4 +1,6 @@
 // `Denied` into a carrier that does not declare the lane.
+use zerocopy as _;
+
 #[derive(Debug, errlanes::Carrier)]
 enum HostFault {
     Transient(errlanes::Transient),

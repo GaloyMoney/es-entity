@@ -1,0 +1,31 @@
+error[E0277]: the trait bound `(): Rejection` is not satisfied
+ --> tests/coherence/carrier_fail/lift_fault.rs:5:27
+  |
+5 |     let _ = source.lift::<()>();
+  |                    ----   ^^ the trait `Rejection` is not implemented for `()`
+  |                    |
+  |                    required by a bound introduced by this call
+  |
+note: required by a bound in `errlanes::ResultExt::lift`
+ --> src/result_ext.rs
+  |
+  |     fn lift<P>(self) -> Result<T, Fail<P, <E::Lanes as LaneProfile>::WithFatal>>
+  |        ---- required by a bound in this associated function
+...
+  |         P: Rejection + Lift<E::Rejected>,
+  |            ^^^^^^^^^ required by this bound in `ResultExt::lift`
+
+error[E0277]: the trait bound `Infallible: Rejection` is not satisfied
+ --> tests/coherence/carrier_fail/lift_fault.rs:5:20
+  |
+5 |     let _ = source.lift::<()>();
+  |                    ^^^^ the trait `Rejection` is not implemented for `Infallible`
+  |
+note: required by a bound in `errlanes::ResultExt::lift`
+ --> src/result_ext.rs
+  |
+  |     fn lift<P>(self) -> Result<T, Fail<P, <E::Lanes as LaneProfile>::WithFatal>>
+  |        ---- required by a bound in this associated function
+...
+  |         E::Rejected: Rejection,
+  |                      ^^^^^^^^^ required by this bound in `ResultExt::lift`

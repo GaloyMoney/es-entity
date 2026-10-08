@@ -1,5 +1,6 @@
 // A carrier with `Denied` `?` into a `Fault` that drops it.
 use errlanes::{Fault, lanes};
+use zerocopy as _;
 
 #[derive(Debug, errlanes::Carrier)]
 enum PartyFault {

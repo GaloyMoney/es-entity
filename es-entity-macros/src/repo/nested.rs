@@ -31,7 +31,7 @@ impl ToTokens for Nested<'_> {
             // the hydrated children back to their owning parent by count.
             // Returns the child repo's own `ConstraintViolation`, unwidened —
             // the caller (one level up the nesting) widens it into its own via
-            // `errlanes::Fail::widen`.
+            // `errlanes::Fail::lift`.
             //
             // Takes `&mut [&mut P]` rather than `&mut [P]` so a caller that
             // already holds scattered `&mut P` borrows (this same fn one

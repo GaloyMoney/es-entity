@@ -1,0 +1,31 @@
+error[E0277]: `?` couldn't convert the error: `errlanes::kind::Fault: IntoFault` is not satisfied
+  --> tests/coherence/carrier_fail/lane_drop.rs:12:19
+   |
+11 | fn f(r: Result<(), HostFault>) -> Result<(), Fault<lanes!(Fatal)>> {
+   |                                   -------------------------------- required `errlanes::kind::Fault: IntoFault` because of this
+12 |     r.into_fault()?;
+   |     - ------------^ the trait `IntoFault` is not implemented for `errlanes::kind::Fault`
+   |     | |
+   |     | this can't be annotated with `?` because it has type `Result<_, errlanes::Fault<Profile<false, true, true>>>`
+   |     this can't be annotated with `?` because it has type `Result<_, HostFault>`
+   |
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+   = note: required for `errlanes::Fault<Profile<false, false, true>>` to implement `From<errlanes::Fault<Profile<false, true, true>>>`
+
+error[E0277]: `?` couldn't convert the error to `Infallible`
+  --> tests/coherence/carrier_fail/lane_drop.rs:12:19
+   |
+11 | fn f(r: Result<(), HostFault>) -> Result<(), Fault<lanes!(Fatal)>> {
+   |                                   -------------------------------- expected `Infallible` because of this
+12 |     r.into_fault()?;
+   |     - ------------^ the trait `From<errlanes::Transient>` is not implemented for `Infallible`
+   |     | |
+   |     | this can't be annotated with `?` because it has type `Result<_, errlanes::Fault<Profile<false, true, true>>>`
+   |     this can't be annotated with `?` because it has type `Result<_, HostFault>`
+   |
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+   = help: the following other types implement trait `From<T>`:
+             `Infallible` implements `From<!>`
+             `Infallible` implements `From<AlignmentError<Src, Dst>>`
+   = note: required for `errlanes::Transient` to implement `Into<Infallible>`
+   = note: required for `errlanes::Fault<Profile<false, false, true>>` to implement `From<errlanes::Fault<Profile<false, true, true>>>`

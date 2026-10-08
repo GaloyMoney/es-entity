@@ -42,7 +42,7 @@ enum BatchPosting {
 #[test]
 fn strict_lift_converts_nested_payload_and_delegates_diagnostics() {
     let result: Result<(), Fail<BatchPosting, lanes!()>> =
-        Err(Posting::Prepare(Prepare::Missing("amount".into()))).widen();
+        Err::<(), _>(Posting::Prepare(Prepare::Missing("amount".into()))).map_err(Into::into);
     let Fail::Rejected(error) = result.unwrap_err();
     assert!(matches!(
         &error,
@@ -91,7 +91,7 @@ fn partial_lift_converts_into_a_named_destination_and_preserves_unmapped_source(
         PrepareOnly::lift(Posting::Apply).unwrap_err(),
         Posting::Apply
     ));
-    let result: Result<(), Fail<PrepareOnly, lanes!(Fatal)>> = Err(Posting::Apply).widen();
+    let result: Result<(), Fail<PrepareOnly, lanes!(Fatal)>> = Err(Posting::Apply).lift();
     let Fail::Fatal(fatal) = result.unwrap_err() else {
         panic!("unmapped phase must become fatal")
     };

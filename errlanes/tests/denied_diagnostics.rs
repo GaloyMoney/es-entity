@@ -81,20 +81,20 @@ fn ordinary_denied_rendering_never_shows_the_retained_diagnostics() {
 }
 
 #[test]
-fn clone_and_widen_keep_context_and_source() {
+fn clone_and_expand_keep_context_and_source() {
     let denied = Denied::new()
         .with_context("ctx-breadcrumb")
         .with_source(std::io::Error::other(SENTINEL));
     let narrow_profile: Fault<lanes!(Denied)> = denied.into();
     let cloned = narrow_profile.clone();
-    let widened: Fault<lanes!(Denied, Transient, Fatal)> = cloned.widen();
-    let Fault::Denied(d) = &widened else {
+    let converted: Fault<lanes!(Denied, Transient, Fatal)> = cloned.into();
+    let Fault::Denied(d) = &converted else {
         panic!("still denied");
     };
     assert_eq!(d.context(), Some("ctx-breadcrumb"));
     assert!(chain_has::<std::io::Error>(d));
 
-    let narrowed = widened.narrow_denied();
+    let narrowed = converted.narrow_denied();
     let message = narrowed.message();
     assert_eq!(
         message,

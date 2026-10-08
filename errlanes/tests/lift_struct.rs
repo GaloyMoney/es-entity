@@ -33,7 +33,7 @@ fn selected_variant_moves_renamed_fields_and_keeps_destination_metadata() {
             target: 8,
             waited,
         })
-        .widen();
+        .lift();
     let Fail::Rejected(timeout) = result.unwrap_err() else {
         panic!("timeout rejection")
     };
@@ -52,13 +52,13 @@ fn selected_variant_moves_renamed_fields_and_keeps_destination_metadata() {
 }
 
 #[test]
-fn unhandled_variant_is_preserved_and_widens_to_an_invariant_fault() {
+fn unhandled_variant_is_preserved_and_expands_to_an_invariant_fault() {
     let source = EcCaughtUpTimeout::lift(SubscriptionRejection::NoSuchJob {
         key: "missing".into(),
     })
     .unwrap_err();
     assert!(matches!(&source, SubscriptionRejection::NoSuchJob { key } if key == "missing"));
-    let result: Result<(), Fail<EcCaughtUpTimeout, lanes!(Fatal)>> = Err(source).widen();
+    let result: Result<(), Fail<EcCaughtUpTimeout, lanes!(Fatal)>> = Err(source).lift();
     let Fail::Fatal(fatal) = result.unwrap_err() else {
         panic!("invariant fault")
     };
@@ -70,15 +70,15 @@ fn unhandled_variant_is_preserved_and_widens_to_an_invariant_fault() {
 }
 
 #[test]
-fn widening_carriers_preserves_success_and_fault_payloads() {
+fn lane_expansion_carriers_preserves_success_and_fault_payloads() {
     type Inner = Fail<SubscriptionRejection, lanes!(Transient, Fatal)>;
     type Outer = Fail<EcCaughtUpTimeout, lanes!(Transient, Fatal)>;
-    let success: Result<_, Outer> = Ok::<_, Inner>(42).widen();
+    let success: Result<_, Outer> = Ok::<_, Inner>(42).lift();
     assert_eq!(success.unwrap(), 42);
     let transient =
         Transient::new(TransientKind::Deadlock).with_source(std::io::Error::other("retry"));
     let source = transient.source_arc().unwrap().clone();
-    let result: Result<(), Outer> = Err::<(), Inner>(transient.into()).widen();
+    let result: Result<(), Outer> = Err::<(), Inner>(transient.into()).lift();
     let Fail::Transient(transient) = result.unwrap_err() else {
         panic!("transient")
     };
@@ -110,7 +110,7 @@ fn strict_struct_lifts_generate_from_and_need_no_fatal_lane() {
     let result: Result<(), Fail<Total, lanes!()>> = Err(Only::Value {
         payload: "rejected".into(),
     })
-    .widen();
+    .map_err(Into::into);
     let Fail::Rejected(value) = result.unwrap_err();
     assert_eq!(value.value, "rejected");
 }

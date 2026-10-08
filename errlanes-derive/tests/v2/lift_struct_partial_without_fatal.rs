@@ -9,7 +9,7 @@ enum Source { Value { value: u32 }, Other }
 struct Destination { value: u32 }
 
 fn boundary(result: Result<(), Source>) -> Result<(), Fail<Destination, lanes!()>> {
-    result.widen()
+    result.lift()
 }
 
 fn main() {}

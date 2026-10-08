@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH updated AS (UPDATE lane_items SET sku = $2 WHERE id = $1 RETURNING id) INSERT INTO lane_item_events (id, recorded_at, sequence, event_type, event, context) SELECT updated.id, COALESCE($3, NOW()), ROW_NUMBER() OVER () + $4, unnested.event_type, unnested.event, unnested.context FROM updated CROSS JOIN UNNEST($5::TEXT[], $6::JSONB[], $7::JSONB[]) AS unnested(event_type, event, context) RETURNING recorded_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "recorded_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Timestamptz",
+        "Int8",
+        "TextArray",
+        "JsonbArray",
+        "JsonbArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ff273e635edafe1ca0137d3d6cdc09a007992a6f24c3f2a4a6f9246354e70933"
+}

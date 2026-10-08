@@ -1,4 +1,4 @@
-use errlanes::{Fail, Lift, Rejection, ResultExt, lanes};
+use errlanes::{Fail, Lift, Rejection, lanes};
 use std::{
     error::Error,
     sync::{
@@ -69,7 +69,7 @@ fn projected_leaf_composes_with_into_and_delegates_its_own_metadata() {
         attempted: Some(Some("external".into())),
         _diagnostic: Diagnostic(Arc::new(AtomicBool::new(false))),
     });
-    let result: Result<(), Fail<PersistRejection, lanes!()>> = Err(source).widen();
+    let result: Result<(), Fail<PersistRejection, lanes!()>> = Err(source).map_err(Into::into);
     let Fail::Rejected(rejection) = result.unwrap_err();
     assert_eq!(
         Into::<&str>::into(rejection.code()),
@@ -145,9 +145,9 @@ fn generated_from_supplies_total_lift_without_a_fatal_lane() {
     .unwrap();
     assert_eq!(projected.0, "lift");
     let result: Result<(), Fail<Projected, lanes!()>> = Err(Input {
-        value: "widen".into(),
+        value: "expand".into(),
     })
-    .widen();
+    .map_err(Into::into);
     let Fail::Rejected(projected) = result.unwrap_err();
-    assert_eq!(projected.0, "widen");
+    assert_eq!(projected.0, "expand");
 }

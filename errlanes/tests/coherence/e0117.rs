@@ -8,7 +8,7 @@ impl From<upstream::DepositRejection> for CustomerRejection {
 
 impl From<errlanes::Fail<upstream::DepositRejection>> for errlanes::Fail<CustomerRejection> {
     fn from(f: errlanes::Fail<upstream::DepositRejection>) -> Self {
-        f.widen()
+        f.lift()
     }
 }
 

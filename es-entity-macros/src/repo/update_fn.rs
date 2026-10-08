@@ -71,7 +71,7 @@ impl ToTokens for UpdateFn<'_> {
 
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
-                self.#f(op, &mut [&mut *entity]).await.map_err(errlanes::Fail::widen)?;
+                self.#f(op, &mut [&mut *entity]).await.map_err(errlanes::Fail::lift::<#constraint_violation, errlanes::lanes!(Transient, Fatal)>)?;
             }
         });
 

@@ -4,11 +4,11 @@ use errlanes::{
 use std::{convert::Infallible, error::Error};
 
 #[test]
-fn fault_results_widen_at_question_mark_boundaries() {
+fn fault_results_expand_at_question_mark_boundaries() {
     fn authorize_boundary(
         inner: Result<String, Fault<lanes!(Fatal)>>,
     ) -> Result<String, Fault<lanes!(Denied, Fatal)>> {
-        let value = inner.widen()?;
+        let value = inner?;
         Ok(value)
     }
 
@@ -25,14 +25,14 @@ fn fault_results_widen_at_question_mark_boundaries() {
 }
 
 #[test]
-fn widening_fault_results_preserves_transient_and_denied_payloads() {
+fn lane_expansion_fault_results_preserves_transient_and_denied_payloads() {
     let transient = Transient::new(TransientKind::Deadlock)
         .with_context("retry transaction")
         .with_source(std::io::Error::other("deadlock"));
     let original_source = transient.source_arc().unwrap().clone();
     let result: Result<(), Fault<lanes!(Transient)>> = Err(transient.into());
-    let widened: Result<(), Fault<lanes!(Transient, Fatal, Denied)>> = result.widen();
-    let Fault::Transient(error) = widened.unwrap_err() else {
+    let converted: Result<(), Fault<lanes!(Transient, Fatal, Denied)>> = result.map_err(Into::into);
+    let Fault::Transient(error) = converted.unwrap_err() else {
         panic!("expected transient");
     };
     assert_eq!(error.kind, TransientKind::Deadlock);
@@ -44,8 +44,8 @@ fn widening_fault_results_preserves_transient_and_denied_payloads() {
 
     let denied = errlanes::Denied::new().with_action("write");
     let result: Result<(), Fault<lanes!(Denied)>> = Err(denied.into());
-    let widened: Result<(), Fault<lanes!(Denied, Fatal)>> = result.widen();
-    let Fault::Denied(error) = widened.unwrap_err() else {
+    let converted: Result<(), Fault<lanes!(Denied, Fatal)>> = result.map_err(Into::into);
+    let Fault::Denied(error) = converted.unwrap_err() else {
         panic!("expected denied");
     };
     assert_eq!(error.action.as_deref(), Some("write"));
@@ -78,7 +78,7 @@ pub enum Partial {
 fn partial_lift_preserves_unmapped_source() {
     fn run() -> Result<(), Fail<Partial, lanes!(Fatal)>> {
         Err::<(), Fail<Child, lanes!()>>(Fail::Rejected(Child::Range { low: 2, high: 4 }))
-            .widen()?;
+            .lift()?;
         Ok(())
     }
     let Fail::Fatal(f) = run().unwrap_err() else {
@@ -94,7 +94,7 @@ fn partial_lift_preserves_unmapped_source() {
 fn strict_lift_needs_no_fatal_lane() {
     fn run() -> Result<(), Fail<Parent, lanes!()>> {
         Err::<(), Fail<Child, lanes!()>>(Fail::Rejected(Child::Range { low: 2, high: 4 }))
-            .widen()?;
+            .map_err(|e| e.lift::<Parent, lanes!()>())?;
         Ok(())
     }
     assert!(matches!(
@@ -102,7 +102,7 @@ fn strict_lift_needs_no_fatal_lane() {
         Err(Fail::Rejected(Parent::Range { low: 2, high: 4 }))
     ));
     let source: Fail<Child, lanes!()> = Fail::Rejected(Child::Unit);
-    let lifted: Fail<Parent, lanes!()> = source.widen();
+    let lifted: Fail<Parent, lanes!()> = source.lift();
     // Narrowing a profile with no transient lane is the identity on the value,
     // and its type is already a `Fail` -- there is nothing to convert back.
     let restored: Fail<Parent, lanes!()> = lifted.narrow_transient(1);
@@ -122,14 +122,14 @@ fn borrowed_narrowing_needs_no_uninhabited_arms() {
     assert!(narrowed.as_rejected().is_none());
 }
 #[test]
-fn widening_preserves_transient_details_and_boxed_marker() {
+fn lane_expansion_preserves_transient_details_and_boxed_marker() {
     let original: Fail<Child, lanes!(Transient)> =
         Transient::from_error(TransientKind::Deadlock, std::io::Error::other("source"))
             .with_context("operation")
             .into();
-    let widened: Fail<Parent, lanes!(Fatal, Transient)> = original.widen();
-    assert_eq!(errlanes::Lane::of(&widened), Some(Lane::Transient));
-    let narrowed: Fail<Parent, lanes!(Fatal)> = widened.narrow_transient(3);
+    let converted: Fail<Parent, lanes!(Fatal, Transient)> = original.lift();
+    assert_eq!(errlanes::Lane::of(&converted), Some(Lane::Transient));
+    let narrowed: Fail<Parent, lanes!(Fatal)> = converted.narrow_transient(3);
     let fatal = narrowed.as_fatal().expect("expected exhaustion");
     assert_eq!(fatal.kind, errlanes::FatalKind::Exhausted);
     let e = fatal

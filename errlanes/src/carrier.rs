@@ -3,7 +3,7 @@
 //! A carrier is declared with `#[derive(errlanes::Carrier)]` on a hand-written
 //! lane enum. It is a distinct
 //! nominal type, so two of them can sit in one enum behind separate `#[from]`s,
-//! but it converts, widens, narrows, records and retries the way its built-in
+//! but it converts, lifts, narrows, records and retries the way its built-in
 //! does. Everything in this module except [`Carrier`] and [`LaneRef`] is hidden
 //! plumbing for that derive and for errlanes' own blanket impls.
 //!
@@ -19,7 +19,7 @@ use std::{
 
 use crate::{
     classify::Classify,
-    fail::{Fail, Fault, Level, Lift, Rejection, UnmappedInto},
+    fail::{Fail, Fault, Level, Lift, Rejection},
     lane::{Denied, Exhausted, Fatal, FatalKind, Lane, Transient},
     profile::{LaneProfile, NoLanes, Profile},
 };
@@ -155,34 +155,9 @@ impl IntoLanes for Infallible {
     }
 }
 
-/// The built-in a lane source lands in when nothing names a destination:
-/// `Fault<L>` for a source that never rejects, `Fail<R, L>` for one that can.
-/// Keyed on the rejected slot, which is `Infallible` or a [`Rejection`] for
-/// every source errlanes knows. Hidden: it is the engine of
-/// [`ResultExt::widen_via_builtin`](crate::ResultExt::widen_via_builtin).
-#[doc(hidden)]
-pub trait BuiltinFor<L: LaneProfile>: Sized {
-    type Builtin: Error + Send + Sync + 'static;
-    fn builtin(f: Fail<Self, L>) -> Self::Builtin;
-}
-
-impl<L: LaneProfile> BuiltinFor<L> for Infallible {
-    type Builtin = Fault<L>;
-    fn builtin(f: Fail<Infallible, L>) -> Fault<L> {
-        fail_into_fault(f)
-    }
-}
-
-impl<R: Rejection, L: LaneProfile> BuiltinFor<L> for R {
-    type Builtin = Fail<R, L>;
-    fn builtin(f: Fail<R, L>) -> Fail<R, L> {
-        f
-    }
-}
-
 /// A fault-only value, as a `Fault<M>`. The shared body of every `?` into a
 /// `Fault`; the lane-subset bounds are what make it total.
-fn fail_into_fault<L: LaneProfile, M: LaneProfile>(f: Fail<Infallible, L>) -> Fault<M>
+pub(crate) fn fail_into_fault<L: LaneProfile, M: LaneProfile>(f: Fail<Infallible, L>) -> Fault<M>
 where
     L::Denied: Into<M::Denied>,
     L::Transient: Into<M::Transient>,
@@ -218,8 +193,8 @@ where
     }
 }
 
-/// `?` into a [`Fail`]: the rejected part must be absorbed totally by `D` (no
-/// decision left for the call site to make with `.widen()`); the source's
+/// `?` into a [`Fail`]: the rejected part must be absorbed totally by `D`;
+/// a partial conversion needs `.lift()?`. The source's
 /// lanes must fit the destination's profile.
 impl<W: IntoLanes, D: Lift<W::Rejected, Unmapped = Infallible>, M: LaneProfile> From<W>
     for Fail<D, M>
@@ -252,6 +227,54 @@ where
         Fail::Fatal(x) => Fail::Fatal(x.into()),
     }
 }
+
+/// Strict profile inclusions are explicit: a generic `From<Fault<L>> for
+/// Fault<M>` overlaps the standard reflexive `From<T> for T` when L = M.
+/// Rust cannot prove that a generic inclusion excludes equality.
+macro_rules! profile_inclusion {
+    (($sd:literal,$st:literal,$sf:literal) => ($dd:literal,$dt:literal,$df:literal)) => {
+        impl From<Fault<Profile<$sd, $st, $sf>>> for Fault<Profile<$dd, $dt, $df>> {
+            #[allow(unreachable_code)]
+            fn from(value: Fault<Profile<$sd, $st, $sf>>) -> Self {
+                match value {
+                    Fault::Denied(v) => Fault::Denied(v.into()),
+                    Fault::Transient(v) => Fault::Transient(v.into()),
+                    Fault::Fatal(v) => Fault::Fatal(v.into()),
+                }
+            }
+        }
+        impl<R> From<Fail<R, Profile<$sd, $st, $sf>>> for Fail<R, Profile<$dd, $dt, $df>> {
+            #[allow(unreachable_code)]
+            fn from(value: Fail<R, Profile<$sd, $st, $sf>>) -> Self {
+                match value {
+                    Fail::Rejected(v) => Fail::Rejected(v),
+                    Fail::Denied(v) => Fail::Denied(v.into()),
+                    Fail::Transient(v) => Fail::Transient(v.into()),
+                    Fail::Fatal(v) => Fail::Fatal(v.into()),
+                }
+            }
+        }
+    };
+}
+profile_inclusion!((false,false,false) => (true,false,false));
+profile_inclusion!((false,false,false) => (false,true,false));
+profile_inclusion!((false,false,false) => (false,false,true));
+profile_inclusion!((false,false,false) => (true,true,false));
+profile_inclusion!((false,false,false) => (true,false,true));
+profile_inclusion!((false,false,false) => (false,true,true));
+profile_inclusion!((false,false,false) => (true,true,true));
+profile_inclusion!((true,false,false) => (true,true,false));
+profile_inclusion!((true,false,false) => (true,false,true));
+profile_inclusion!((true,false,false) => (true,true,true));
+profile_inclusion!((false,true,false) => (true,true,false));
+profile_inclusion!((false,true,false) => (false,true,true));
+profile_inclusion!((false,true,false) => (true,true,true));
+profile_inclusion!((false,false,true) => (true,false,true));
+profile_inclusion!((false,false,true) => (false,true,true));
+profile_inclusion!((false,false,true) => (true,true,true));
+profile_inclusion!((true,true,false) => (true,true,true));
+profile_inclusion!((true,false,true) => (true,true,true));
+profile_inclusion!((false,true,true) => (true,true,true));
 
 /// A source that only ever ends in the fatal lane converts into that bare
 /// payload directly, so `-> Result<T, Fatal>` is a legal, narrowest signature
@@ -289,7 +312,7 @@ where
 /// A carrier's single blanket `From` is `Repr: Absorb<W>` plus
 /// `W: IntoLanes<Kind = Plain>`.
 ///
-/// Total only, the same rule as `?`: a rejection needs a total `Lift`, and a
+/// The rejection must match; a different rejection needs `.lift()?`. A
 /// lane the target does not declare must be narrowed first.
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
@@ -312,17 +335,57 @@ where
     }
 }
 
-impl<W: IntoLanes, P: Lift<W::Rejected, Unmapped = Infallible>, M: LaneProfile> Absorb<W>
-    for Fail<P, M>
+impl<P, W: IntoLanes, M: LaneProfile> Absorb<W> for Fail<P, M>
+where
+    W::Shape: AbsorbFailBy<W, P, M>,
+{
+    fn absorb(w: W) -> Self {
+        <W::Shape as AbsorbFailBy<W, P, M>>::absorb(w)
+    }
+}
+
+/// Shape dispatch keeps a built-in `Fail`'s rejection fixed while allowing
+/// fault-only and total plain sources into a carrier.
+#[doc(hidden)]
+pub trait AbsorbFailBy<W: IntoLanes, P, M: LaneProfile> {
+    fn absorb(w: W) -> Fail<P, M>;
+}
+
+impl<P, W: IntoLanes<Rejected = P>, M: LaneProfile> AbsorbFailBy<W, P, M> for kind::Fail
 where
     <W::Lanes as LaneProfile>::Denied: Into<M::Denied>,
     <W::Lanes as LaneProfile>::Transient: Into<M::Transient>,
     <W::Lanes as LaneProfile>::Fatal: Into<M::Fatal>,
 {
-    fn absorb(w: W) -> Self {
-        fail_absorb(w.into_lanes())
+    fn absorb(w: W) -> Fail<P, M> {
+        match w.into_lanes() {
+            Fail::Rejected(r) => Fail::Rejected(r),
+            Fail::Denied(d) => Fail::Denied(d.into()),
+            Fail::Transient(t) => Fail::Transient(t.into()),
+            Fail::Fatal(f) => Fail::Fatal(f.into()),
+        }
     }
 }
+
+macro_rules! absorb_other_shape {
+    ($shape:ty) => {
+        impl<P: Lift<W::Rejected, Unmapped = Infallible>, W: IntoLanes, M: LaneProfile>
+            AbsorbFailBy<W, P, M> for $shape
+        where
+            <W::Lanes as LaneProfile>::Denied: Into<M::Denied>,
+            <W::Lanes as LaneProfile>::Transient: Into<M::Transient>,
+            <W::Lanes as LaneProfile>::Fatal: Into<M::Fatal>,
+        {
+            fn absorb(w: W) -> Fail<P, M> {
+                fail_absorb(w.into_lanes())
+            }
+        }
+    };
+}
+absorb_other_shape!(kind::Source);
+absorb_other_shape!(kind::Payload);
+absorb_other_shape!(kind::Fault);
+absorb_other_shape!(kind::CarrierShape);
 
 /// A borrowed view of a carrier's current lane. `Fault::lanes`, `Fail::lanes`
 /// and `Carrier::lanes` all return one, so `record`, `message` and `lane` have
@@ -523,105 +586,4 @@ pub trait Carrier:
 
     /// A borrowed view of the current lane.
     fn lanes(&self) -> LaneRef<'_, <Self as IntoLanes>::Rejected>;
-}
-
-/// Carrier → carrier has no `?` (the reflexive `From<T> for T` makes it
-/// impossible), but a carrier widens exactly as its `Repr` does.
-#[doc(hidden)]
-pub trait WidenBy<S, E2> {
-    fn widen_err(s: S) -> E2;
-}
-
-impl<L: LaneProfile, M: LaneProfile> WidenBy<Fault<L>, Fault<M>> for kind::Fault
-where
-    L::Denied: Into<M::Denied>,
-    L::Transient: Into<M::Transient>,
-    L::Fatal: Into<M::Fatal>,
-{
-    fn widen_err(s: Fault<L>) -> Fault<M> {
-        s.widen()
-    }
-}
-
-/// One rule for every rejection remapping. `P: Lift<R>` is satisfied by a total
-/// `From<R>` (through errlanes' blanket, `Unmapped = Infallible`) and by a
-/// partial `#[lift(Source, unhandled = fatal)]` mapping (`Unmapped = Source`).
-/// The `UnmappedInto` bound then enforces, per destination, exactly what each
-/// mode needs: a total mapping works into any profile, while a partial one
-/// requires the destination to admit `Fatal`.
-impl<R, P: Lift<R>, L: LaneProfile, M: LaneProfile> WidenBy<Fail<R, L>, Fail<P, M>> for kind::Fail
-where
-    L::Denied: Into<M::Denied>,
-    L::Transient: Into<M::Transient>,
-    L::Fatal: Into<M::Fatal>,
-    P::Unmapped: UnmappedInto<M::Fatal>,
-{
-    fn widen_err(s: Fail<R, L>) -> Fail<P, M> {
-        s.widen()
-    }
-}
-
-/// The partial-absorption form for any [`Classify`] source — a bare rejection,
-/// a fault wrapper, or a mixed wrapper alike. `?` is the total form (the
-/// `From` impls above); `.widen()?` is this one, for when the destination's
-/// rejection only partially lifts the wrapper's rejected part.
-impl<C: IntoLanes, P: Lift<C::Rejected>, M: LaneProfile> WidenBy<C, Fail<P, M>> for kind::Source
-where
-    <C::Lanes as LaneProfile>::Denied: Into<M::Denied>,
-    <C::Lanes as LaneProfile>::Transient: Into<M::Transient>,
-    <C::Lanes as LaneProfile>::Fatal: Into<M::Fatal>,
-    P::Unmapped: UnmappedInto<M::Fatal>,
-{
-    fn widen_err(s: C) -> Fail<P, M> {
-        s.into_lanes().widen()
-    }
-}
-
-/// The same act for a destination with no rejected lane: a wrapper that never
-/// rejects widens straight into a [`Fault<M>`]. `?` already covers the case
-/// where the destination is the function's own return type; this is for the
-/// call site that must name the destination because nothing else will infer
-/// it — above all a `Box<dyn Error>` boundary, where `?` alone would box the
-/// wrapper *unlaned* and the receiving [`Fault::classify`] would then walk
-/// past it to whatever foreign error it wraps, reverting the very
-/// classification the wrapper exists to override.
-///
-/// ```
-/// use errlanes::{Fault, ResultExt, lanes};
-///
-/// #[derive(Debug, errlanes::Classify)]
-/// #[classify(fatal(CorruptState))]
-/// #[error("could not decode stored state")]
-/// struct Stored(#[source] std::io::Error);
-///
-/// fn decode() -> Result<u8, Stored> {
-///     Err(Stored(std::io::Error::other("bad bytes")))
-/// }
-///
-/// // A boxed boundary: the destination carrier is named, then boxed.
-/// fn boundary() -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
-///     Ok(decode().widen::<Fault<lanes!(Transient, Fatal)>>()?)
-/// }
-///
-/// let fault = errlanes::Fault::classify(&*boundary().unwrap_err());
-/// assert!(matches!(fault, Fault::Fatal(f) if f.kind == errlanes::FatalKind::CorruptState));
-/// ```
-impl<C: IntoLanes<Rejected = Infallible>, M: LaneProfile> WidenBy<C, Fault<M>> for kind::Source
-where
-    <C::Lanes as LaneProfile>::Denied: Into<M::Denied>,
-    <C::Lanes as LaneProfile>::Transient: Into<M::Transient>,
-    <C::Lanes as LaneProfile>::Fatal: Into<M::Fatal>,
-{
-    fn widen_err(s: C) -> Fault<M> {
-        fail_into_fault(s.into_lanes())
-    }
-}
-
-impl<C: Carrier, E2> WidenBy<C, E2> for kind::CarrierShape
-where
-    <C::Repr as IntoLanes>::Shape: WidenBy<C::Repr, E2>,
-{
-    fn widen_err(s: C) -> E2 {
-        <<C::Repr as IntoLanes>::Shape as WidenBy<C::Repr, E2>>::widen_err(s.into_repr())
-    }
 }

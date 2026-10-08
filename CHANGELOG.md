@@ -1213,3 +1213,12 @@ Superseded by [0.12.0](https://github.com/GaloyMoney/cala/releases/tag/0.12.0) (
 ### Miscellaneous Tasks
 
 - Bump flake
+# Unreleased
+
+### Breaking: errlanes API
+
+- Lane inclusion between built-in `Fault` or same-rejection `Fail` profiles now uses `?`.
+- Replace `ResultExt::widen()` with `.lift()?` when a `Fail` changes its rejection or a partial mapping handles a bare rejection. `ResultExt::lift()` enables `Fatal` in its result profile so unmapped cases can become `Fatal(Invariant)`; a destination without `Fatal` must use a total mapping through `?` (for a bare rejection) or the value-level `Fail::lift::<P, M>`.
+- Replace `widen_via_builtin()` with `.into_fault()?` for never-rejecting sources or `.into_fail()?` for rejecting sources at box and foreign-carrier boundaries. A rejection cannot enter `into_fault`.
+- Rename value-level `Fail::widen` and `Fail::widen_with` to `lift` and `lift_with`. Remove `Fault::widen`, `WidenResult`, `WidenBy`, and `BuiltinFor`.
+- Total `From` mappings from bare rejections and `Classify` wrappers into built-in `Fail` still use `?`. A `Fail<R, S>` with the same rejection widens to `Fail<R, D>` with `?` when `S ⊆ D`.

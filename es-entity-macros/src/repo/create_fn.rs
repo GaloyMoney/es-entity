@@ -58,7 +58,7 @@ impl ToTokens for CreateFn<'_> {
 
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
-                self.#f(op, &mut [&mut entity]).await.map_err(errlanes::Fail::widen)?;
+                self.#f(op, &mut [&mut entity]).await.map_err(errlanes::Fail::lift::<#constraint_violation, errlanes::lanes!(Transient, Fatal)>)?;
             }
         });
         let maybe_mut_entity = if self.nested_fn_names.is_empty() {
@@ -295,7 +295,7 @@ mod tests {
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: None,
-            constraint_violation,
+            constraint_violation: constraint_violation.clone(),
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_hydrate_hook: false,
@@ -412,7 +412,7 @@ mod tests {
             events_table_name: "entity_events",
             event_ctx: false,
             forgettable_table_name: None,
-            constraint_violation,
+            constraint_violation: constraint_violation.clone(),
             columns: &columns,
             nested_fn_names: Vec::new(),
             post_hydrate_hook: false,

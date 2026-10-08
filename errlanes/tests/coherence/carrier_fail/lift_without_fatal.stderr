@@ -1,0 +1,31 @@
+error[E0277]: `?` couldn't convert the error: `errlanes::kind::Fail: IntoFail` is not satisfied
+  --> tests/coherence/carrier_fail/lift_without_fatal.rs:11:17
+   |
+10 | fn outer(inner: Result<(), Child>) -> Result<(), Fail<Parent, lanes!()>> {
+   |                                       ---------------------------------- required `errlanes::kind::Fail: IntoFail` because of this
+11 |     inner.lift()?;
+   |     ----- ------^ the trait `IntoFail` is not implemented for `errlanes::kind::Fail`
+   |     |     |
+   |     |     this can't be annotated with `?` because it has type `Result<_, errlanes::Fail<_, Profile<false, false, true>>>`
+   |     this can't be annotated with `?` because it has type `Result<_, Child>`
+   |
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+   = note: required for `errlanes::Fail<Parent, Profile<false, false, false>>` to implement `From<errlanes::Fail<_, Profile<false, false, true>>>`
+
+error[E0277]: `?` couldn't convert the error to `Infallible`
+  --> tests/coherence/carrier_fail/lift_without_fatal.rs:11:17
+   |
+10 | fn outer(inner: Result<(), Child>) -> Result<(), Fail<Parent, lanes!()>> {
+   |                                       ---------------------------------- expected `Infallible` because of this
+11 |     inner.lift()?;
+   |     ----- ------^ the trait `From<errlanes::Fatal>` is not implemented for `Infallible`
+   |     |     |
+   |     |     this can't be annotated with `?` because it has type `Result<_, errlanes::Fail<_, Profile<false, false, true>>>`
+   |     this can't be annotated with `?` because it has type `Result<_, Child>`
+   |
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+   = help: the following other types implement trait `From<T>`:
+             `Infallible` implements `From<!>`
+             `Infallible` implements `From<AlignmentError<Src, Dst>>`
+   = note: required for `errlanes::Fatal` to implement `Into<Infallible>`
+   = note: required for `errlanes::Fail<Parent, Profile<false, false, false>>` to implement `From<errlanes::Fail<_, Profile<false, false, true>>>`

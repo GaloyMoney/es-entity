@@ -10,7 +10,7 @@ pub enum Api {
 pub fn propagate() -> Result<(), Fail<Api, lanes!(Transient, Fatal)>> {
     let child: Result<(), Fail<middle::Posting, lanes!(Fatal)>> =
         Err(Fail::Rejected(middle::limit()));
-    child.widen()?;
+    child.lift()?;
     Ok(())
 }
 pub fn bare() -> Result<(), Fail<Api, lanes!(Fatal)>> {

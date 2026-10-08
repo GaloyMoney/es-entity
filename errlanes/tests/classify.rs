@@ -1,7 +1,7 @@
 //! Smoke tests for `#[derive(errlanes::Classify)]`, covering the shapes from
 //! the design handoff's Appendix A: a fault-only wrapper, a mixed wrapper
 //! with a `delegate` to a pure rejection and a static lane, `narrow(Denied)`
-//! over a delegate, and composition across layers via `.widen()`.
+//! over a delegate, and composition across layers via `.lift()`.
 
 use std::convert::Infallible;
 
@@ -100,7 +100,7 @@ fn static_lane_variant_is_transient() {
 }
 
 #[test]
-fn delegate_through_a_fault_only_payload_widens_its_lanes() {
+fn delegate_through_a_fault_only_payload_expands_its_lanes() {
     let e = std::io::Error::other("disk full");
     let wrapped: DbWrite = e.into();
     match wrapped.classify() {
@@ -204,17 +204,17 @@ enum Api {
 }
 
 #[test]
-fn composition_across_layers_widens_through_each_hop() {
+fn composition_across_layers_expands_through_each_hop() {
     fn repo_insert() -> Result<u8, Fail<ConstraintViolation, Tf>> {
         let _ = insert().classify::<DbWrite>()?;
         Ok(0)
     }
     fn service() -> Result<u8, Fail<JobRejection, Tf>> {
-        let _ = repo_insert().widen()?;
+        let _ = repo_insert().lift()?;
         Ok(0)
     }
     fn api() -> Result<u8, Fail<Api, Tf>> {
-        let _ = service().widen()?;
+        let _ = service().lift()?;
         Ok(0)
     }
     match api() {
@@ -317,7 +317,7 @@ fn a_named_struct_field_converts_with_from() {
 ///
 /// `?` alone boxes the wrapper unlaned (std boxes any `Error`), which
 /// compiles, keeps the message, and silently reverts the one field the
-/// wrapper existed to set. `.widen::<Fault<_>>()?` is the short spelling that
+/// wrapper existed to set. `.into_fault()?` is the short spelling that
 /// does not.
 #[test]
 fn a_wrapper_keeps_its_override_across_a_box_only_once_laned() {
@@ -339,10 +339,9 @@ fn a_wrapper_keeps_its_override_across_a_box_only_once_laned() {
         other => panic!("expected Fatal, got {other:?}"),
     }
 
-    // Laned first, through the same `widen` verb every other relocation
-    // uses: the override survives, carried by the `Fault` one hop down.
+    // Converted to a Fault first: the override survives one hop into the box.
     fn boxed_laned() -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(decode().widen::<Fault<Tf>>()?)
+        Ok(decode().into_fault()?)
     }
     match Fault::classify(&*boxed_laned().unwrap_err()) {
         Fault::Fatal(f) => assert_eq!(f.kind, errlanes::FatalKind::CorruptState),
@@ -377,7 +376,7 @@ fn an_override_of_a_blessed_foreign_classification_needs_the_same_care() {
     }
 
     let laned: Box<dyn std::error::Error + Send + Sync> =
-        Box::new(decode().widen::<Fault<Tf>>().unwrap_err());
+        Box::new(decode().into_fault().unwrap_err());
     match Fault::classify(&*laned) {
         Fault::Fatal(f) => assert_eq!(f.kind, errlanes::FatalKind::CorruptState),
         other => panic!("expected Fatal(CorruptState), got {other:?}"),
