@@ -1,3 +1,15 @@
+# [cala release v0.17.4](https://github.com/GaloyMoney/cala/releases/tag/0.17.4)
+
+
+
+### Features
+
+- Catalogue descriptions come from doc comments; rejections default to warn (#271)
+
+### Miscellaneous Tasks
+
+- Bump the all-dependencies group across 1 directory with 4 updates (#266)
+
 # [cala release v0.17.3](https://github.com/GaloyMoney/cala/releases/tag/0.17.3)
 
 
