@@ -91,6 +91,15 @@ pub trait LaneProfile: sealed::Sealed + Debug + Clone + Send + Sync + 'static {
     /// `narrow_denied` returns through, spelled
     /// [`crate::profile::WithoutDenied`].
     type WithoutDenied: LaneProfile<Denied = Infallible, Transient = Self::Transient, Fatal = Self::Fatal>;
+
+    /// This profile with the denied lane enabled; see [`crate::WithDenied`].
+    type WithDenied: LaneProfile<Denied = Denied, Transient = Self::Transient, Fatal = Self::Fatal>;
+
+    /// This profile with the transient lane enabled; see [`crate::WithTransient`].
+    type WithTransient: LaneProfile<Denied = Self::Denied, Transient = Transient, Fatal = Self::Fatal>;
+
+    /// This profile with the fatal lane enabled; see [`crate::WithFatal`].
+    type WithFatal: LaneProfile<Denied = Self::Denied, Transient = Self::Transient, Fatal = Fatal>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -104,6 +113,16 @@ macro_rules! profile {
             type Fatal = $fatal;
             type WithoutTransient = Profile<$d, false, $f>;
             type WithoutDenied = Profile<false, $t, $f>;
+            type WithDenied = Profile<true, $t, $f>;
+            type WithTransient = Profile<$d, true, $f>;
+            type WithFatal = Profile<$d, $t, true>;
+        }
+        impl crate::Reshape for Profile<$d, $t, $f> {
+            type WithDenied = <Self as LaneProfile>::WithDenied;
+            type WithoutDenied = <Self as LaneProfile>::WithoutDenied;
+            type WithTransient = <Self as LaneProfile>::WithTransient;
+            type WithoutTransient = <Self as LaneProfile>::WithoutTransient;
+            type WithFatal = <Self as LaneProfile>::WithFatal;
         }
     };
 }

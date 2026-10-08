@@ -13,8 +13,10 @@ mod dynamic;
 mod fail;
 mod lane;
 pub mod profile;
+mod reshape;
 mod result_ext;
-pub use profile::{AllLanes, LaneProfile, NoLanes, WithoutDenied, WithoutTransient};
+pub use profile::{AllLanes, LaneProfile, NoLanes};
+pub use reshape::{Reshape, WithDenied, WithFatal, WithTransient, WithoutDenied, WithoutTransient};
 
 #[cfg(feature = "classify-sqlx")]
 pub mod sqlx;
