@@ -27,7 +27,7 @@ impl Lane {
     /// rejection overrides it through [`crate::Rejection::level`].
     pub fn level(self) -> Level {
         match self {
-            Lane::Rejected => Level::Info,
+            Lane::Rejected => Level::Warn,
             Lane::Denied => Level::Warn,
             Lane::Transient => Level::Info,
             Lane::Fatal => Level::Error,

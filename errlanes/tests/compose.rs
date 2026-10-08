@@ -59,7 +59,7 @@ fn whole_family_and_partial_mapping_keep_their_own_modes() {
         Into::<&'static str>::into(mapped.code()),
         "ACCOUNT_CODE_ALREADY_EXISTS"
     );
-    assert_eq!(mapped.level(), Level::Info);
+    assert_eq!(mapped.level(), Level::Warn);
 
     let unaccepted: Result<(), Fail<Constraint, lanes!(Fatal)>> =
         Err(Fail::Rejected(Constraint::Pkey));
@@ -158,7 +158,7 @@ enum ExplicitOnly {
 fn explicit_only_composition_generates_each_trait_once() {
     let value = ExplicitOnly::from(Constraint::Code("EUR".into()));
     assert!(matches!(value.clone(), ExplicitOnly::Code(code) if code == "EUR"));
-    assert_eq!(value.level(), Level::Info);
+    assert_eq!(value.level(), Level::Warn);
     assert!(matches!(
         ExplicitOnly::from(Constraint::Pkey),
         ExplicitOnly::Key
