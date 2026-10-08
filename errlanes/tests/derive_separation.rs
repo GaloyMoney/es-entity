@@ -66,7 +66,7 @@ fn simple_lift_forwards_metadata_unless_overridden() {
 
     let rejection = CodeOverride::from(Source::Value("payload".into()));
     assert_eq!(rejection.code().to_string(), "LOCAL_VALUE");
-    assert_eq!(rejection.level(), errlanes::Level::Info);
+    assert_eq!(rejection.level(), errlanes::Level::Warn);
 }
 
 #[derive(Debug, errlanes::Rejection)]

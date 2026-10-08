@@ -19,8 +19,8 @@ struct RejectionInput {
     code: Option<String>,
     #[darling(default)]
     level: Option<String>,
-    /// Overrides the catalogue description, which otherwise is the
-    /// `#[error("..")]` literal verbatim.
+    /// Overrides the catalogue description, which otherwise is the first
+    /// paragraph of the `///` doc comment, else `None`.
     #[darling(default)]
     description: Option<String>,
     /// Emits `From<Payload>`, with the payload also `source()`'s default.
@@ -49,8 +49,8 @@ fn level_expr(level: &Option<String>, span: &Ident) -> darling::Result<TokenStre
     Ok(match level.as_deref() {
         Some("trace") => quote! { errlanes::Level::Trace },
         Some("debug") => quote! { errlanes::Level::Debug },
-        Some("info") | None => quote! { errlanes::Level::Info },
-        Some("warn") => quote! { errlanes::Level::Warn },
+        Some("info") => quote! { errlanes::Level::Info },
+        Some("warn") | None => quote! { errlanes::Level::Warn },
         Some("error") => quote! { errlanes::Level::Error },
         Some(other) => {
             return Err(darling::Error::custom(format!(
@@ -78,7 +78,7 @@ struct RejectionVariant {
     #[darling(default)]
     level: Option<String>,
     /// Leaf only: overrides the catalogue description, which otherwise is the
-    /// `#[error("..")]` literal verbatim.
+    /// first paragraph of the `///` doc comment, else `None`.
     #[darling(default)]
     description: Option<String>,
     /// Emits `From<Payload>`, with the payload also `source()`'s default.
@@ -94,15 +94,41 @@ fn description_tokens(description: &Option<String>) -> TokenStream {
     }
 }
 
-/// §1.4: `description = ".."`, else the `#[error("..")]` literal verbatim
-/// (placeholders and all), else nothing.
-fn leaf_description(
-    description: &Option<String>,
-    error: &Option<std_error::ErrorSpec>,
-) -> Option<String> {
-    description
-        .clone()
-        .or_else(|| error.as_ref().map(|spec| spec.lit.value()))
+/// `description = ".."`, else the first paragraph of the leaf's `///` doc
+/// comment, else nothing. The `#[error("..")]` literal is a `Display`
+/// template, never catalogue prose.
+fn leaf_description(description: &Option<String>, attrs: &[syn::Attribute]) -> Option<String> {
+    description.clone().or_else(|| doc_summary(attrs))
+}
+
+/// The first paragraph of a `///` doc comment, its lines joined by a space.
+fn doc_summary(attrs: &[syn::Attribute]) -> Option<String> {
+    let mut lines = Vec::new();
+    for attr in attrs.iter().filter(|a| a.path().is_ident("doc")) {
+        let syn::Meta::NameValue(syn::MetaNameValue {
+            value:
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(s),
+                    ..
+                }),
+            ..
+        }) = &attr.meta
+        else {
+            continue;
+        };
+        // A bare `///` is `#[doc = ""]`, which has no `lines()` at all, so
+        // treat the empty value itself as one blank line.
+        let value = s.value();
+        for line in value.lines().chain(value.is_empty().then_some("")) {
+            let line = line.trim();
+            if !line.is_empty() {
+                lines.push(line.to_string());
+            } else if !lines.is_empty() {
+                return Some(lines.join(" "));
+            }
+        }
+    }
+    (!lines.is_empty()).then(|| lines.join(" "))
 }
 
 impl RejectionVariant {
@@ -118,8 +144,8 @@ impl RejectionVariant {
         match self.level.as_deref() {
             Some("trace") => quote! { errlanes::Level::Trace },
             Some("debug") => quote! { errlanes::Level::Debug },
-            Some("info") | None => quote! { errlanes::Level::Info },
-            Some("warn") => quote! { errlanes::Level::Warn },
+            Some("info") => quote! { errlanes::Level::Info },
+            Some("warn") | None => quote! { errlanes::Level::Warn },
             Some("error") => quote! { errlanes::Level::Error },
             Some(other) => {
                 let msg = format!(
@@ -175,7 +201,7 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             } else {
                 std_error::take_error_lit(&ast.attrs).map_err(darling::Error::from)?
             };
-            let description = description_tokens(&leaf_description(&input.description, &error));
+            let description = description_tokens(&leaf_description(&input.description, &ast.attrs));
 
             let mut out = TokenStream::new();
             let from_payload = if input.from {
@@ -495,7 +521,7 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             code_variants.push(quote!(#variant_ident));
             let leaf = v.leaf_code(&input.code_prefix);
             into_str_arms.push(quote!(#code_ident::#variant_ident => #leaf));
-            let description = description_tokens(&leaf_description(&v.description, &error));
+            let description = description_tokens(&leaf_description(&v.description, &raw.attrs));
             (
                 quote!(#code_ident::#variant_ident),
                 v.level_expr(),

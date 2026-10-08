@@ -30,16 +30,26 @@ fn assert_catalogued<R: Rejection>(value: &R) {
 
 // 1. struct leaf --------------------------------------------------------
 
+/// the doc
 #[derive(Debug, errlanes::Rejection)]
 #[rejection(code = "A_CODE")]
 #[error("the literal")]
 struct ALeaf;
 
+#[derive(Debug, errlanes::Rejection)]
+#[rejection(code = "UNDOCUMENTED")]
+#[error("the literal")]
+struct Undocumented;
+
 #[test]
-fn struct_leaf_carries_its_literal() {
+fn struct_leaf_carries_its_doc_and_never_its_literal() {
     assert_eq!(
         <ALeafCode as RejectionCode>::CODES,
-        &[entry("A_CODE", Some("the literal"))]
+        &[entry("A_CODE", Some("the doc"))]
+    );
+    assert_eq!(
+        <UndocumentedCode as RejectionCode>::CODES,
+        &[entry("UNDOCUMENTED", None)]
     );
     assert_eq!(ALeafCode::ALL, &["A_CODE"]);
     assert_catalogued(&ALeaf);
@@ -49,13 +59,24 @@ fn struct_leaf_carries_its_literal() {
 
 #[derive(Debug, errlanes::Rejection)]
 enum Mixed {
+    /// Loses to the override.
     #[rejection(description = "overridden")]
     #[error("ignored in favour of the override")]
     Over,
+    /// The field is
+    /// bad.
+    ///
+    /// Only the first paragraph is catalogued.
+    #[error("{field} is bad")]
+    Documented {
+        field: String,
+    },
     #[error("{field} is bad")]
     Interpolating {
         field: String,
     },
+    #[error("plain prose")]
+    Plain,
     Silent,
 }
 
@@ -65,6 +86,8 @@ enum Manual {
     Bare,
     #[rejection(description = "documented by hand")]
     Documented,
+    /// Documented by doc comment.
+    DocCommented,
 }
 impl std::fmt::Display for Manual {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -73,13 +96,21 @@ impl std::fmt::Display for Manual {
 }
 impl std::error::Error for Manual {}
 
+/// A struct leaf reads its own doc comment.
+#[derive(Debug, errlanes::Rejection)]
+#[rejection(code = "DOCUMENTED_STRUCT")]
+#[error("struct {0}")]
+struct DocumentedStruct(u64);
+
 #[test]
-fn descriptions_are_override_then_verbatim_literal_then_none() {
+fn descriptions_are_override_then_doc_then_none() {
     assert_eq!(
         <MixedCode as RejectionCode>::CODES,
         &[
             entry("OVER", Some("overridden")),
-            entry("INTERPOLATING", Some("{field} is bad")),
+            entry("DOCUMENTED", Some("The field is bad.")),
+            entry("INTERPOLATING", None),
+            entry("PLAIN", None),
             entry("SILENT", None),
         ]
     );
@@ -87,22 +118,36 @@ fn descriptions_are_override_then_verbatim_literal_then_none() {
         <ManualCode as RejectionCode>::CODES,
         &[
             entry("BARE", None),
-            entry("DOCUMENTED", Some("documented by hand"))
+            entry("DOCUMENTED", Some("documented by hand")),
+            entry("DOC_COMMENTED", Some("Documented by doc comment.")),
         ]
     );
+    assert_eq!(
+        <DocumentedStructCode as RejectionCode>::CODES,
+        &[entry(
+            "DOCUMENTED_STRUCT",
+            Some("A struct leaf reads its own doc comment.")
+        )]
+    );
     assert_catalogued(&Mixed::Over);
+    assert_catalogued(&Mixed::Documented { field: "x".into() });
     assert_catalogued(&Mixed::Interpolating { field: "x".into() });
+    assert_catalogued(&Mixed::Plain);
     assert_catalogued(&Mixed::Silent);
     assert_catalogued(&Manual::Bare);
     assert_catalogued(&Manual::Documented);
+    assert_catalogued(&Manual::DocCommented);
+    assert_catalogued(&DocumentedStruct(1));
 }
 
 // 3. delegation is complete, in order ------------------------------------
 
 #[derive(Debug, errlanes::Rejection)]
 enum LeafEnum {
+    /// first
     #[error("first")]
     First,
+    /// second
     #[error("second")]
     Second,
 }
@@ -120,7 +165,7 @@ fn delegation_lists_every_forwarded_code_in_order() {
     assert_eq!(
         <FamilyCode as RejectionCode>::CODES,
         &[
-            entry("A_CODE", Some("the literal")),
+            entry("A_CODE", Some("the doc")),
             entry("FIRST", Some("first")),
             entry("SECOND", Some("second")),
         ]
@@ -175,9 +220,11 @@ fn a_diamond_lists_each_code_once_at_its_first_path() {
 
 #[derive(Debug, errlanes::Rejection)]
 enum Source {
+    /// x
     #[rejection(code = "SX")]
     #[error("x")]
     X(u32),
+    /// y
     #[rejection(code = "SY")]
     #[error("y")]
     Y(u32),

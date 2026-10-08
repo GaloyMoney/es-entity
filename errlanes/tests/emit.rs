@@ -131,7 +131,7 @@ fn only(events: Vec<Event>) -> Event {
 #[test]
 fn each_lane_emits_at_its_own_event_level() {
     let event = only(events_of(|| assert!(plain().is_err())));
-    assert_eq!(event.level, Level::INFO);
+    assert_eq!(event.level, Level::WARN);
     assert_eq!(event.get("error"), Some("true"));
     assert_eq!(event.get("error.lane"), Some("rejected"));
     assert_eq!(event.get("error.code"), Some("PLAIN"));

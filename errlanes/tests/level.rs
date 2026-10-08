@@ -10,6 +10,8 @@ enum Levelled {
     Defaulted,
     #[rejection(code = "WARNED", level = "warn")]
     Warned,
+    #[rejection(code = "QUIET", level = "info")]
+    Quiet,
 }
 
 #[derive(Debug, errlanes::Carrier)]
@@ -22,7 +24,7 @@ enum Carried {
 
 #[test]
 fn each_lane_has_its_default_level() {
-    assert_eq!(Lane::Rejected.level(), Level::Info);
+    assert_eq!(Lane::Rejected.level(), Level::Warn);
     assert_eq!(Lane::Denied.level(), Level::Warn);
     assert_eq!(Lane::Transient.level(), Level::Info);
     assert_eq!(Lane::Fatal.level(), Level::Error);
@@ -48,10 +50,10 @@ fn a_rejection_overrides_the_lane_default_through_rejection_level() {
     let defaulted: Fail<Levelled> = Fail::Rejected(Levelled::Defaulted);
     assert_eq!(Laned::level(&defaulted), Lane::Rejected.level());
 
-    let warned: Fail<Levelled> = Fail::Rejected(Levelled::Warned);
-    assert_eq!(Laned::level(&warned), Level::Warn);
-    assert_ne!(Laned::level(&warned), Lane::Rejected.level());
-    assert_eq!(warned.lanes().level(), Level::Warn);
+    let quiet: Fail<Levelled> = Fail::Rejected(Levelled::Quiet);
+    assert_eq!(Laned::level(&quiet), Level::Info);
+    assert_ne!(Laned::level(&quiet), Lane::Rejected.level());
+    assert_eq!(quiet.lanes().level(), Level::Info);
 }
 
 #[test]

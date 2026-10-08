@@ -133,7 +133,7 @@ fn record_fills_every_field_per_lane() {
     assert_eq!(captured.get("error").as_deref(), Some("true"));
     assert_eq!(captured.get("error.lane").as_deref(), Some("rejected"));
     assert_eq!(captured.get("error.code").as_deref(), Some("SMALL"));
-    assert_eq!(captured.get("error.level").as_deref(), Some("INFO"));
+    assert_eq!(captured.get("error.level").as_deref(), Some("WARN"));
     assert!(
         captured.get("exception.message").is_none(),
         "a rejection's message may embed caller-supplied input"

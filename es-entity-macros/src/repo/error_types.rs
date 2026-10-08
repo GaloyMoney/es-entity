@@ -160,9 +160,10 @@ impl<'a> ErrorTypes<'a> {
             {
                 let ty = cols[0].ty();
                 taken.insert("Pkey".to_string());
+                let description = format!("Violates the `{name}` primary key constraint.");
                 variants.push(quote! {
                     #[error("{0}")]
-                    #[rejection(code = #name)]
+                    #[rejection(code = #name, description = #description)]
                     Pkey(#[source] es_entity::IdConflict<#ty>)
                 });
                 // `kind` is always `Unique` here: both sources that feed
@@ -210,9 +211,10 @@ impl<'a> ErrorTypes<'a> {
                 ConstraintKind::ForeignKey => quote!(ForeignKey),
                 ConstraintKind::Check => quote!(Check),
             };
+            let description = format!("Violates the `{name}` constraint.");
             variants.push(quote! {
                 #[error("{0}")]
-                #[rejection(code = #name)]
+                #[rejection(code = #name, description = #description)]
                 #variant(#[source] es_entity::ConstraintConflict<#ty>)
             });
             classifiers.push(quote! {

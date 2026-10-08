@@ -59,9 +59,9 @@ impl From<Level> for tracing::Level {
 pub struct CodeInfo {
     /// The wire identity, exactly what `Into<&'static str>` on the `Code` yields.
     pub code: &'static str,
-    /// From `#[rejection(description = "..")]`, else the leaf's `#[error("..")]`
-    /// literal verbatim (placeholders included), else `None` (`error = manual`
-    /// with no literal).
+    /// From `#[rejection(description = "..")]`, else the first paragraph of
+    /// the leaf's `///` doc comment, else `None`. Never the `#[error("..")]`
+    /// literal: that is a `Display` template, not prose.
     pub description: Option<&'static str>,
 }
 
@@ -70,6 +70,7 @@ pub struct CodeInfo {
 /// ```
 /// use errlanes::RejectionCode;
 ///
+/// /// The thing is missing.
 /// #[derive(errlanes::Rejection, Debug)]
 /// #[rejection(code = "NOT_FOUND")]
 /// #[error("the thing is missing")]
@@ -77,7 +78,7 @@ pub struct CodeInfo {
 ///
 /// for entry in <NotFoundCode as RejectionCode>::CODES {
 ///     assert_eq!(entry.code, "NOT_FOUND");
-///     assert_eq!(entry.description, Some("the thing is missing"));
+///     assert_eq!(entry.description, Some("The thing is missing."));
 /// }
 /// ```
 pub trait RejectionCode:
@@ -193,9 +194,9 @@ pub trait Rejection: Error + Send + Sync + 'static {
 
     fn code(&self) -> Self::Code;
 
-    /// Operator level for this outcome. Rejections default to `Info`.
+    /// Operator level for this outcome. Rejections default to `Warn`.
     fn level(&self) -> Level {
-        Level::Info
+        Level::Warn
     }
 }
 

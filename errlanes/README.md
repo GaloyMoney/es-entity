@@ -392,7 +392,7 @@ enum Validation {
 let rejection = Validation::InvalidAmount;
 let public_code: &'static str = rejection.code().into();
 assert_eq!(public_code, "INVALID_AMOUNT");
-assert_eq!(rejection.level(), Level::Info);
+assert_eq!(rejection.level(), Level::Warn);
 ```
 
 The enum variant lets Rust callers match the case. The code lets an API expose
@@ -402,9 +402,9 @@ application and can be converted to strings at the API boundary. Never build
 either from `Display`: a rejection's message may embed caller-supplied input.
 
 The level tells the recording boundary how severely to log the rejection.
-Info is the default because rejections are expected domain outcomes. A case
-that needs different operational visibility can override it with, for example,
-`#[rejection(code = "INVALID_AMOUNT", level = "warn")]`. Its lane is still Rejected.
+Warn is the default: a rejection is a refused request an operator should be
+able to see. A case that needs different operational visibility can override
+it with, for example, `#[rejection(code = "INVALID_AMOUNT", level = "info")]`. Its lane is still Rejected.
 
 ### Display and Error
 
@@ -1249,21 +1249,33 @@ list, one `CodeInfo { code, description }` per code:
 `FooCode::ALL` is the `code` of every entry of `CODES`, in the same order. It
 is complete, not leaves-only.
 
-A leaf's description is `#[rejection(description = "..")]` if present, else
-its `#[error("..")]` literal **verbatim** (placeholders left in), else `None`
-(for example under `error = manual`). `description` belongs on a leaf; on a
-variant that forwards to another type it is a compile error.
+A leaf's description resolves in order:
+
+1. `#[rejection(description = "..")]`, if present.
+2. Else the first paragraph of the leaf's `///` doc comment, its lines joined
+   by a space.
+3. Else `None`.
+
+The `#[error("..")]` literal is never used: it is a `Display` template, not
+prose, and may interpolate. `description` is for when the doc comment is
+aimed at developers and the catalogue needs different wording.
+
+`description` belongs on a leaf; on a variant that forwards to another type it
+is a compile error.
 
 ```rust
 use errlanes::{CodeInfo, Rejection, RejectionCode};
 
 #[derive(Debug, errlanes::Rejection)]
 pub enum CloseRejection {
+    /// The customer still has open facilities.
     #[error("customer {customer_id} still has open facilities")]
     HasOpenFacilities { customer_id: u64 },
     #[rejection(description = "The customer is already closed.")]
     #[error("customer {customer_id} is closed")]
     AlreadyClosed { customer_id: u64 },
+    #[error("customer {customer_id} is frozen")]
+    Frozen { customer_id: u64 },
 }
 
 assert_eq!(
@@ -1271,11 +1283,15 @@ assert_eq!(
     &[
         CodeInfo {
             code: "HAS_OPEN_FACILITIES",
-            description: Some("customer {customer_id} still has open facilities"),
+            description: Some("The customer still has open facilities."),
         },
         CodeInfo {
             code: "ALREADY_CLOSED",
             description: Some("The customer is already closed."),
+        },
+        CodeInfo {
+            code: "FROZEN",
+            description: None,
         },
     ]
 );
@@ -1292,7 +1308,7 @@ fn value<R: Rejection>(rejection: &R) -> &'static str {
 
 let mut published = Vec::new();
 publish::<CloseRejection>(&mut |code, _| published.push(code.to_owned()));
-assert_eq!(published, ["HAS_OPEN_FACILITIES", "ALREADY_CLOSED"]);
+assert_eq!(published, ["HAS_OPEN_FACILITIES", "ALREADY_CLOSED", "FROZEN"]);
 assert_eq!(
     value(&CloseRejection::AlreadyClosed { customer_id: 1 }),
     "ALREADY_CLOSED"
