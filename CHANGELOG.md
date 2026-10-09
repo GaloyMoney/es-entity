@@ -1,3 +1,11 @@
+# [cala release v0.18.1](https://github.com/GaloyMoney/cala/releases/tag/0.18.1)
+
+
+
+### Documentation
+
+- Trim README by ~40% (#273)
+
 # [cala release v0.18.0](https://github.com/GaloyMoney/cala/releases/tag/0.18.0)
 
 
