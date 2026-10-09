@@ -1,3 +1,11 @@
+# [cala release v0.18.0](https://github.com/GaloyMoney/cala/releases/tag/0.18.0)
+
+
+
+### Refactor
+
+- [**breaking**] Replace widen with lift and explicit boundary conversions (#272)
+
 # [cala release v0.17.4](https://github.com/GaloyMoney/cala/releases/tag/0.17.4)
 
 
