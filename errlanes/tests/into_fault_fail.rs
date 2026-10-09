@@ -1,4 +1,4 @@
-//! `ResultExt::widen_via_builtin`: every lane source lands in its own built-in
+//! `ResultExt::into_fault`: every lane source lands in its own built-in
 //! with no destination named, and nothing is lost on the way into a box.
 
 use errlanes::{Fail, FatalKind, Fault, Lane, ResultExt, Transient, TransientKind, lanes};
@@ -57,22 +57,22 @@ fn find<'a, T: Error + 'static>(e: &'a (dyn Error + 'static)) -> Option<&'a T> {
 
 #[test]
 fn the_built_in_is_the_sources_own_profile() {
-    let _: Result<u8, Fault<lanes!(Fatal)>> = decode().widen_via_builtin();
+    let _: Result<u8, Fault<lanes!(Fatal)>> = decode().into_fault();
     let _: Result<u8, Fault<lanes!(Transient, Fatal)>> =
-        Err::<u8, _>(HostFault::Fatal(errlanes::Fatal::invariant("x"))).widen_via_builtin();
+        Err::<u8, _>(HostFault::Fatal(errlanes::Fatal::invariant("x"))).into_fault();
     let _: Result<u8, Fail<AccountClosed, errlanes::NoLanes>> =
-        Err::<u8, _>(AccountClosed).widen_via_builtin();
+        Err::<u8, _>(AccountClosed).into_fail();
     let _: Result<u8, Fault<lanes!(Transient)>> =
-        Err::<u8, _>(Transient::new(TransientKind::Deadlock)).widen_via_builtin();
+        Err::<u8, _>(Transient::new(TransientKind::Deadlock)).into_fault();
     let _: Result<u8, Fault<lanes!(Denied, Fatal)>> =
         Err::<u8, Fault<lanes!(Denied, Fatal)>>(errlanes::Fatal::invariant("x").into())
-            .widen_via_builtin();
+            .into_fault();
 }
 
 #[test]
 fn a_wrapper_keeps_its_classification_and_its_whole_chain_across_a_box() {
     fn boundary() -> Result<u8, BoxError> {
-        Ok(decode().widen_via_builtin()?)
+        Ok(decode().into_fault()?)
     }
     let boxed = boundary().unwrap_err();
 
@@ -109,7 +109,7 @@ fn boxing_the_wrapper_raw_is_what_loses_the_kind() {
     let boxed = boundary().unwrap_err();
     assert!(
         !matches!(Fault::classify(&*boxed), Fault::Fatal(f) if f.kind == FatalKind::CorruptState),
-        "raw boxing skips the wrapper's classification; widen_via_builtin is the fix"
+        "raw boxing skips the wrapper's classification; into_fault is the fix"
     );
 }
 
@@ -123,7 +123,7 @@ fn a_carrier_reaches_a_carrier_it_cannot_convert_into_directly() {
         )))
     }
     fn party() -> Result<u8, PartyFault> {
-        let v = host().widen_via_builtin()?;
+        let v = host().into_fault()?;
         Ok(v)
     }
     assert!(matches!(party(), Err(PartyFault::Transient(t)) if t.kind == TransientKind::Deadlock));
@@ -131,7 +131,7 @@ fn a_carrier_reaches_a_carrier_it_cannot_convert_into_directly() {
 
 /// Into a carrier, a `Fail`, or a box. Into a built-in `Fault` it is not
 /// needed (and does not apply): a wrapper or carrier `?`s straight into any
-/// `Fault` whose lanes fit, while `Fault -> Fault` is never `?` (`.widen()` is).
+/// `Fault` whose lanes fit, including another built-in `Fault`.
 #[test]
 fn into_fail_by_question_mark_and_into_fault_needs_no_hop() {
     fn into_fault() -> Result<u8, Fault> {
@@ -139,7 +139,7 @@ fn into_fail_by_question_mark_and_into_fault_needs_no_hop() {
         Ok(0)
     }
     fn into_fail() -> Result<u8, Fail<AccountClosed, lanes!(Transient, Fatal)>> {
-        Err::<u8, _>(HostFault::Fatal(errlanes::Fatal::invariant("x"))).widen_via_builtin()?;
+        Err::<u8, _>(HostFault::Fatal(errlanes::Fatal::invariant("x"))).into_fault()?;
         Ok(0)
     }
     assert_eq!(into_fault().unwrap_err().lane(), Lane::Fatal);
@@ -155,8 +155,8 @@ fn into_fail_by_question_mark_and_into_fault_needs_no_hop() {
 fn recorded_metadata_survives_the_box_unchanged() {
     use errlanes::Laned;
 
-    let direct: Fault<lanes!(Fatal)> = decode().widen_via_builtin().unwrap_err();
-    let boxed: BoxError = Box::new(decode().widen_via_builtin().unwrap_err());
+    let direct: Fault<lanes!(Fatal)> = decode().into_fault().unwrap_err();
+    let boxed: BoxError = Box::new(decode().into_fault().unwrap_err());
     let recovered = Fault::classify(&*boxed);
 
     assert_eq!(recovered.lane(), direct.lane());
@@ -183,7 +183,7 @@ fn recorded_metadata_survives_the_box_unchanged() {
 /// first (`narrow_rejected`, or handle them in the body).
 #[test]
 fn a_rejection_is_not_recoverable_from_a_box_either_way() {
-    let via: BoxError = Box::new(Err::<(), _>(AccountClosed).widen_via_builtin().unwrap_err());
+    let via: BoxError = Box::new(Err::<(), _>(AccountClosed).into_fail().unwrap_err());
     let raw: BoxError = Box::new(AccountClosed);
     for boxed in [via, raw] {
         assert!(

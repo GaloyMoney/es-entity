@@ -1,0 +1,29 @@
+error[E0277]: `?` couldn't convert the error: `errlanes::kind::Fault: IntoFault` is not satisfied
+ --> tests/coherence/carrier_fail/fault_drops_lane.rs:5:10
+  |
+4 | fn outer(inner: Result<(), Fault<lanes!(Denied, Fatal)>>) -> Result<(), Fault<lanes!(Fatal)>> {
+  |                                                              -------------------------------- required `errlanes::kind::Fault: IntoFault` because of this
+5 |     inner?;
+  |     -----^ the trait `IntoFault` is not implemented for `errlanes::kind::Fault`
+  |     |
+  |     this can't be annotated with `?` because it has type `Result<_, errlanes::Fault<Profile<true, false, true>>>`
+  |
+  = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+  = note: required for `errlanes::Fault<Profile<false, false, true>>` to implement `From<errlanes::Fault<Profile<true, false, true>>>`
+
+error[E0277]: `?` couldn't convert the error to `Infallible`
+ --> tests/coherence/carrier_fail/fault_drops_lane.rs:5:10
+  |
+4 | fn outer(inner: Result<(), Fault<lanes!(Denied, Fatal)>>) -> Result<(), Fault<lanes!(Fatal)>> {
+  |                                                              -------------------------------- expected `Infallible` because of this
+5 |     inner?;
+  |     -----^ the trait `From<errlanes::Denied>` is not implemented for `Infallible`
+  |     |
+  |     this can't be annotated with `?` because it has type `Result<_, errlanes::Fault<Profile<true, false, true>>>`
+  |
+  = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+  = help: the following other types implement trait `From<T>`:
+            `Infallible` implements `From<!>`
+            `Infallible` implements `From<AlignmentError<Src, Dst>>`
+  = note: required for `errlanes::Denied` to implement `Into<Infallible>`
+  = note: required for `errlanes::Fault<Profile<false, false, true>>` to implement `From<errlanes::Fault<Profile<true, false, true>>>`

@@ -136,10 +136,10 @@ impl UpdateAllFn<'_> {
         } else {
             let nested_calls = self.nested_fn_names.iter().map(|f| match mode {
                 BatchMode::OwnedSlice => quote! {
-                    self.#f(op, &mut __nested_refs).await.map_err(errlanes::Fail::widen)?;
+                    self.#f(op, &mut __nested_refs).await.map_err(errlanes::Fail::lift::<#constraint_violation, errlanes::lanes!(Transient, Fatal)>)?;
                 },
                 BatchMode::RefVec => quote! {
-                    self.#f(op, &mut entities).await.map_err(errlanes::Fail::widen)?;
+                    self.#f(op, &mut entities).await.map_err(errlanes::Fail::lift::<#constraint_violation, errlanes::lanes!(Transient, Fatal)>)?;
                 },
             });
             let setup = matches!(mode, BatchMode::OwnedSlice).then(|| {

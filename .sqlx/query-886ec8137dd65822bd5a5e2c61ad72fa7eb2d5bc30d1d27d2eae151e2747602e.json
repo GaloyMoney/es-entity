@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH updated AS (UPDATE lane_parents SET deleted = TRUE WHERE id = $1 RETURNING id) INSERT INTO lane_parent_events (id, recorded_at, sequence, event_type, event, context) SELECT updated.id, COALESCE($2, NOW()), ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event, unnested.context FROM updated CROSS JOIN UNNEST($4::TEXT[], $5::JSONB[], $6::JSONB[]) AS unnested(event_type, event, context) RETURNING recorded_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "recorded_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Int8",
+        "TextArray",
+        "JsonbArray",
+        "JsonbArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "886ec8137dd65822bd5a5e2c61ad72fa7eb2d5bc30d1d27d2eae151e2747602e"
+}

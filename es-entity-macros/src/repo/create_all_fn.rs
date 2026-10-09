@@ -64,7 +64,7 @@ impl ToTokens for CreateAllFn<'_> {
         } else {
             let nested = self.nested_fn_names.iter().map(|f| {
                 quote! {
-                    self.#f(op, &mut entity_refs).await.map_err(errlanes::Fail::widen)?;
+                    self.#f(op, &mut entity_refs).await.map_err(errlanes::Fail::lift::<#constraint_violation, errlanes::lanes!(Transient, Fatal)>)?;
                 }
             });
             quote! {

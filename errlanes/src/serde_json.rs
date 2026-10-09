@@ -83,7 +83,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_serde_json_widens_into_any_rejection_type() {
+    fn classify_serde_json_expands_into_any_rejection_type() {
         #[derive(Debug)]
         struct NeverRejects;
         let f: Fail<NeverRejects> = parse_error().into();

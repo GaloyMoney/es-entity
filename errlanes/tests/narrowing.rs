@@ -3,7 +3,7 @@
 //! writing an adapter. The README covers the same ground.
 //!
 //! The `result_*` tests below exercise the same three narrowings, plus
-//! `rejected`/`widen`/`classify`/`record`, through `ResultExt` directly on a
+//! `rejected`/`expand`/`classify`/`record`, through `ResultExt` directly on a
 //! `Result` rather than on the bare error value.
 use errlanes::{Denied, Fail, Fatal, Fault, ResultExt, Transient, TransientKind, lanes};
 
@@ -251,16 +251,16 @@ fn result_narrow_denied_on_both_carriers() {
     }
 }
 
-/// Regression guard for the generic-method form: `.widen()?` must infer its
+/// Regression guard for the generic-method form: `.lift()?` must infer its
 /// destination from the return type alone, with no turbofish and no let
 /// binding's type annotation to lean on.
 #[test]
-fn result_widen_infers_destination_through_question_mark() {
+fn result_expand_infers_destination_through_question_mark() {
     fn inner() -> Result<u8, Fail<Small, lanes!(Fatal)>> {
         Err(Fail::Rejected(Small))
     }
     fn outer() -> Result<u8, Fail<Small, Tf>> {
-        let value = inner().widen()?;
+        let value = inner().lift()?;
         Ok(value)
     }
     match outer() {
@@ -270,10 +270,10 @@ fn result_widen_infers_destination_through_question_mark() {
 }
 
 #[test]
-fn result_widen_accepts_turbofish() {
+fn result_expand_accepts_turbofish() {
     let r: Result<u8, Fail<Small, lanes!(Fatal)>> = Err(Fail::Rejected(Small));
-    let widened = r.widen::<Fail<Small, Tf>>();
-    match widened {
+    let converted = r.lift::<Small>();
+    match converted {
         Err(Fail::Rejected(Small)) => {}
         other => panic!("expected Err(Fail::Rejected(Small)), got {other:?}"),
     }

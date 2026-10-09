@@ -35,7 +35,8 @@ enum Operation {
 fn whole_family_and_partial_mapping_keep_their_own_modes() {
     let source: Result<(), Fail<Enforcement, lanes!(Fatal)>> =
         Err(Fail::Rejected(Enforcement::Limit(42)));
-    let result: Result<(), Fail<Operation, lanes!(Transient, Fatal)>> = source.widen();
+    let result: Result<(), Fail<Operation, lanes!(Transient, Fatal)>> =
+        source.lift::<Operation>().map_err(Into::into);
     let mapped = result.unwrap_err().rejected().unwrap();
     assert!(matches!(mapped, Operation::VelocityLimit(42)));
     assert_eq!(Into::<&'static str>::into(mapped.code()), "ENFORCEMENT");
@@ -52,7 +53,7 @@ fn whole_family_and_partial_mapping_keep_their_own_modes() {
 
     let accepted: Result<(), Fail<Constraint, lanes!(Transient, Fatal)>> =
         Err(Fail::Rejected(Constraint::Code("USD".into())));
-    let result: Result<(), Fail<Operation, lanes!(Transient, Fatal)>> = accepted.widen();
+    let result: Result<(), Fail<Operation, lanes!(Transient, Fatal)>> = accepted.lift();
     let mapped = result.unwrap_err().rejected().unwrap();
     assert!(matches!(&mapped, Operation::CodeAlreadyExists(value) if value == "USD"));
     assert_eq!(
@@ -63,7 +64,7 @@ fn whole_family_and_partial_mapping_keep_their_own_modes() {
 
     let unaccepted: Result<(), Fail<Constraint, lanes!(Fatal)>> =
         Err(Fail::Rejected(Constraint::Pkey));
-    let result: Result<(), Fail<Operation, lanes!(Fatal)>> = unaccepted.widen();
+    let result: Result<(), Fail<Operation, lanes!(Fatal)>> = unaccepted.lift();
     let error = result.unwrap_err();
     assert!(matches!(error, Fail::Fatal(_)));
     let mut source: &dyn Error = &error;
@@ -80,9 +81,9 @@ fn whole_family_and_partial_mapping_keep_their_own_modes() {
 }
 
 // A validator that returns its bare rejection has no `From` path under a
-// partial mapping; `.widen()` lifts it directly, mapped or demoted.
+// partial mapping; `.lift()` lifts it directly, mapped or demoted.
 #[test]
-fn bare_rejection_widens_through_a_partial_mapping() {
+fn bare_rejection_expands_through_a_partial_mapping() {
     fn check(code: &str) -> Result<(), Constraint> {
         match code {
             "USD" => Err(Constraint::Code(code.into())),
@@ -92,7 +93,7 @@ fn bare_rejection_widens_through_a_partial_mapping() {
     }
 
     fn outer(code: &str) -> Result<(), Fail<Operation, lanes!(Fatal)>> {
-        check(code).widen()?;
+        check(code).lift()?;
         Ok(())
     }
 

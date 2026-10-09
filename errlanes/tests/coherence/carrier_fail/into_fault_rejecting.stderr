@@ -1,0 +1,15 @@
+error[E0271]: type mismatch resolving `<Rejected as IntoLanes>::Rejected == Infallible`
+ --> tests/coherence/carrier_fail/into_fault_rejecting.rs:8:36
+  |
+8 |     let _ = Err::<(), _>(Rejected).into_fault();
+  |                                    ^^^^^^^^^^ expected `Infallible`, found `Rejected`
+  |
+  = note: required for `Rejected` to implement `FaultSource`
+note: required by a bound in `into_fault`
+ --> src/result_ext.rs
+  |
+  |     fn into_fault(self) -> Result<T, Fault<E::Lanes>>
+  |        ---------- required by a bound in this associated function
+  |     where
+  |         E: FaultSource;
+  |            ^^^^^^^^^^^ required by this bound in `ResultExt::into_fault`

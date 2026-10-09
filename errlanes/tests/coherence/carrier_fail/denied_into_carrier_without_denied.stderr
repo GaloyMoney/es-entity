@@ -1,24 +1,24 @@
 error[E0277]: `?` couldn't convert the error to `Infallible`
- --> tests/coherence/carrier_fail/denied_into_carrier_without_denied.rs:9:33
-  |
-8 | fn f() -> Result<(), HostFault> {
-  |           --------------------- expected `Infallible` because of this
-9 |     Err(errlanes::Denied::new())?;
-  |     ----------------------------^ the trait `From<errlanes::Denied>` is not implemented for `Infallible`
-  |     |
-  |     this can't be annotated with `?` because it has type `Result<_, errlanes::Denied>`
-  |
-  = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
-  = help: the following other types implement trait `From<T>`:
-            `Infallible` implements `From<!>`
-            `Infallible` implements `From<zerocopy::error::AlignmentError<Src, Dst>>`
-  = note: required for `errlanes::Denied` to implement `Into<Infallible>`
-  = note: required for `errlanes::Fault<Profile<false, true, true>>` to implement `Absorb<errlanes::Denied>`
+  --> tests/coherence/carrier_fail/denied_into_carrier_without_denied.rs:11:33
+   |
+10 | fn f() -> Result<(), HostFault> {
+   |           --------------------- expected `Infallible` because of this
+11 |     Err(errlanes::Denied::new())?;
+   |     ----------------------------^ the trait `From<errlanes::Denied>` is not implemented for `Infallible`
+   |     |
+   |     this can't be annotated with `?` because it has type `Result<_, errlanes::Denied>`
+   |
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+   = help: the following other types implement trait `From<T>`:
+             `Infallible` implements `From<!>`
+             `Infallible` implements `From<AlignmentError<Src, Dst>>`
+   = note: required for `errlanes::Denied` to implement `Into<Infallible>`
+   = note: required for `errlanes::Fault<Profile<false, true, true>>` to implement `Absorb<errlanes::Denied>`
 note: required for `HostFault` to implement `From<errlanes::Denied>`
- --> tests/coherence/carrier_fail/denied_into_carrier_without_denied.rs:2:17
-  |
-2 | #[derive(Debug, errlanes::Carrier)]
-  |                 ^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced in this `derive` macro
-3 | enum HostFault {
-  |      ^^^^^^^^^
-  = note: this error originates in the derive macro `errlanes::Carrier` (in Nightly builds, run with -Z macro-backtrace for more info)
+  --> tests/coherence/carrier_fail/denied_into_carrier_without_denied.rs:4:17
+   |
+ 4 | #[derive(Debug, errlanes::Carrier)]
+   |                 ^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced in this `derive` macro
+ 5 | enum HostFault {
+   |      ^^^^^^^^^
+   = note: this error originates in the derive macro `errlanes::Carrier` (in Nightly builds, run with -Z macro-backtrace for more info)

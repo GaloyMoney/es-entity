@@ -102,7 +102,7 @@ fn inner() -> Result<u64, Fault<lanes!(Fatal)>> {
 
 fn outer(subject: &str) -> Result<u64, Fault<lanes!(Fatal, Denied)>> {
     authorize(subject)?;
-    let value = inner().widen()?;
+    let value = inner()?;
     Ok(value)
 }
 
@@ -111,9 +111,8 @@ assert!(matches!(outer("guest"), Err(Fault::Denied(_))));
 ```
 
 The authorization failure enters the Denied lane through `?`. The inner
-operation's result uses `.widen()?` to fit the outer function's larger set of
-lanes. This method comes from `ResultExt`, and its destination is inferred
-from the return type. An inner Fatal remains Fatal, with its kind, context and
+operation's result uses `?` to fit the outer function's larger set of
+lanes. An inner Fatal remains Fatal, with its kind, context and
 source intact.
 
 ### Example: Retrying handles a lane
@@ -194,7 +193,7 @@ worth splitting for, which is why it is transient but not contention.
 
 ## Narrowing a lane
 
-`widen` has a dual. Where `widen` adds lanes losslessly and never drops one,
+Adding lanes through `?` has a dual. Where `?` adds lanes losslessly and never drops one,
 `narrow_<lane>` removes exactly one lane and turns its value into a `Fatal` —
 the only lane left standing once nobody can act on the removed one. There is
 one narrowing per lane that can reach a boundary with nobody left to help it:
@@ -208,7 +207,7 @@ one narrowing per lane that can reach a boundary with nobody left to help it:
 Each `FatalKind` names what the value truly *is* afterwards, never a guessed
 cause — the same rule `Exhausted` already followed before it had two
 siblings. A narrowing is always a method call, never a `From`: a `?` that
-silently dropped a lane is exactly what the widening rule already forbids, so
+silently dropped a lane is exactly what the lane inclusion rule already forbids, so
 narrowing cannot happen by accident either. The same three verbs are also
 available directly on a `Result` through `ResultExt`, so a call site that is
 already holding one does not have to `.map_err()` into the value-level form.
@@ -318,9 +317,8 @@ classification the wrapper exists to override. Nothing warns: `?` compiles
 only the `kind` is wrong, which is the one field the wrapper was written to
 set.
 
-`.widen_via_builtin()` is that step. It lands the wrapper in its *own*
-built-in (`Fault<L>` with exactly the wrapper's lanes, or `Fail<R, L>` if it
-can reject), so nothing has to be named even though `?` into a box leaves the
+`.into_fault()` is that step. It lands a never-rejecting wrapper in its *own*
+`Fault<L>`, so nothing has to be named even though `?` into a box leaves the
 destination unconstrained. The box then holds the lane payload, and the
 wrapper and the foreign error under it stay in the `source()` chain:
 
@@ -338,16 +336,19 @@ fn decode() -> Result<u8, StoredRow> {
 
 // Inside a boundary whose own trait returns a box:
 fn run() -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
-    Ok(decode().widen_via_builtin()?)
+    Ok(decode().into_fault()?)
 }
 
 let fault = Fault::classify(&*run().unwrap_err());
 assert!(matches!(fault, Fault::Fatal(f) if f.kind == errlanes::FatalKind::CorruptState));
 ```
 
-`.widen::<Fault<M>>()?` does the same with a named, possibly wider, profile.
-A carrier needs neither on its way into a box: its `source()` is already the
-lane payload, so plain `?` keeps its lane.
+The following `?` can expand that `Fault` if the destination enables more lanes.
+A rejection cannot cross a box as a rejection: `Fault::classify` finds fault
+payloads in the source chain, and otherwise treats the boxed error as a
+dependency failure. Handle the rejection or narrow it explicitly first.
+A carrier needs no conversion on its way into a box: its `source()` is already
+the lane payload, so plain `?` keeps its lane.
 
 ## Local errors
 
@@ -673,7 +674,7 @@ fn validate(amount: u64) -> Result<(), Validation> {
 }
 
 fn outer() -> Result<(), Fail<Payment, lanes!(Denied, Fatal)>> {
-    validate(0).widen()?;
+    validate(0)?;
     Ok(())
 }
 
@@ -682,10 +683,9 @@ assert!(matches!(rejection, Payment::AmountNotPositive));
 assert_eq!(Into::<&'static str>::into(rejection.code()), "INVALID_AMOUNT");
 ```
 
-`.widen()?` converts the validation rejection into the payment rejection and
-places it in the Rejected lane of the outer result. `ResultExt::widen` accepts a
-bare rejection, as here, or a `Fail` or `Fault` result; faults retain their
-payloads, and successful values pass through unchanged.
+The total `From<Validation>` conversion lets `?` place the validation
+rejection in the outer result's Rejected lane. A partial mapping instead uses
+`.lift()?`, which can turn unmapped cases into `Fatal(Invariant)`.
 
 By default, a lift must account for every source case. The derive generates
 an exhaustive mapping and a `From` implementation. If Validation gains another
@@ -781,7 +781,7 @@ destination domain. If the remaining cases would indicate a violated invariant,
 rejection becomes Fatal with the original rejection as its source, so the
 destination must permit Fatal, which the compiler checks. Whether a mapping is
 total or partial is declared once, on the destination type; the call site is
-the same `.widen()?` either way. A partial mapping does not generate `From`,
+`.lift()?` for a partial mapping. A partial mapping does not generate `From`,
 because there is no infallible conversion to be had.
 
 A named-field **destination struct** can select one source enum variant with
@@ -815,13 +815,13 @@ let result: Result<(), Fail<EcCaughtUpTimeout, lanes!(Fatal)>> =
         checkpoint: 3,
         target: 8,
         waited: Duration::from_secs(2),
-    }).widen();
+    }).lift();
 let Fail::Rejected(timeout) = result.unwrap_err() else { panic!("expected timeout") };
 assert_eq!((timeout.applied, timeout.frontier), (3, 8));
 ```
 
 This generates a partial `Lift<SubscriptionRejection>` implementation; other
-variants are returned unchanged and `.widen()` turns them into `Fatal(Invariant)`
+variants are returned unchanged and `.lift()` turns them into `Fatal(Invariant)`
 with the original rejection as the source. Without `unhandled = fatal` (or with
 explicit `strict`), it generates an exhaustive `From<Source>` implementation,
 so any unhandled variant is a compile error and no Fatal lane is required.
@@ -904,44 +904,36 @@ assert!(matches!(rejection, JobRejection::InvalidPayload(_)));
 
 A failure changes shape as it travels: the lane set grows when a caller can
 produce outcomes the callee could not, and the rejection type changes when a
-failure crosses into a domain with its own vocabulary. Two operations cover
-every case:
+failure crosses into a domain with its own vocabulary. The appropriate
+conversion depends on what changes:
 
 | From | To | Use |
 |---|---|---|
-| the same carrier | itself | `?` |
-| a lane marker (`Transient`, `Fatal`, `Denied`) | any carrier enabling it | `?` |
-| `Fault<S>` | `Fail<R, D>` | `?` |
-| a bare rejection `C` | `Fail<R, D>`, given `R: From<C>` | `?` |
-| a bare rejection `C` | `Fail<R, D>`, given a partial `#[lift(C)]` on `R` | `.widen()?` |
-| `Fail<C, S>` | `Fail<R, D>` | `.widen()?` |
-| `Fault<S>` | `Fault<D>` | `.widen()?` |
+| the same error type | itself | `?` |
+| a lane payload (`Transient`, `Fatal`, `Denied`) | a built-in or carrier enabling it | `?` |
+| `Fault<S>` | `Fault<D>` or `Fail<R, D>`, `S ⊆ D` | `?` |
+| `Fail<R, S>` | `Fail<R, D>`, `S ⊆ D` | `?` |
+| a bare rejection `C` | `Fail<R, D>`, given a total `R: From<C>` | `?` |
+| `W: Classify` | `Fail<R, D>`, given a total `R: From<W::Rejected>` and `W::Lanes ⊆ D` | `?` |
+| `W: Classify<Rejected = Infallible>` | `Fault<D>`, `W::Lanes ⊆ D` | `?` |
+| a rejecting result (`Fail`, bare rejection, wrapper, carrier) | `Fail<P, D>` or a `Fail`-like carrier, with `Fatal` enabled and a total or partial `P: Lift<R>` | `.lift()?` |
+| a never-rejecting result | its own `Fault<W::Lanes>` at a box or foreign carrier boundary | `.into_fault()?` |
+| a rejecting result | its own `Fail<R, W::Lanes>` at a foreign carrier boundary | `.into_fail()?` |
 | `Result<T, Foreign>` | `Result<T, W>` | `.classify::<W>()`, given `W: Classify + From<Foreign>` |
-| `W: Classify` | `Fail<D, M>` | `?`, given `D` lifts `W::Rejected` totally and `W::Lanes ⊆ M` |
-| `W: Classify` | `Fail<D, M>` | `.widen()?`, if `D` only lifts `W::Rejected` partially |
-| `W: Classify<Rejected = Infallible>` | `Fault<M>` | `?`, given `W::Lanes ⊆ M` |
-| `Result<T, W: Classify<Rejected = Infallible>>` | `Result<T, Fault<M>>` | `.widen::<Fault<M>>()?` — when no signature infers the destination |
-| `Result<T, W>`, any lane source (wrapper, carrier, rejection, payload) | its own built-in: `Fault<W::Lanes>`, or `Fail<R, W::Lanes>` if it can reject | `.widen_via_builtin()?` — into a `Box<dyn Error>`, or into a carrier from another crate |
-| `W: Classify<Rejected = Infallible, Lanes = lanes!(Fatal)>` | bare `Fatal` | `?` (same for a lone `Transient`) |
-| `Result<T, Fail<D, L>>` | `Result<T, Fault<L>>` | `.narrow_rejected()` |
-| `Result<T, R>`, a bare rejection | `Result<T, Fatal>`, then `?` into any `Fault`/`Fail` with a `Fatal` lane | `.narrow_rejected()?` — an internal frame consuming a public method's rejection after proving the precondition |
-| `Result<T, Fail<D, L>>` | `Result<Result<T, D>, Fault<L>>` | `.rejected()`, to handle the rejection at the call site |
-| `Result<T, Fail<D, L>>` | `Result<T, Fail<D2, L>>` | `.map_rejected(f)`, to enrich a rejection with call-site data; a type-level remap is `.widen()` |
-| `Result<T, Fault<L>>` or `Result<T, Fail<D, L>>` | lanes narrowed, `WithoutTransient<L>` | `.narrow_transient(attempts)` |
-| `Result<T, Fault<L>>` or `Result<T, Fail<D, L>>` | lanes narrowed, `WithoutDenied<L>` | `.narrow_denied()` |
-| `Fault<L>` | `Fault<WithoutTransient<L>>` | `.narrow_transient(attempts)` (on the value itself, e.g. a retry loop's match arm) |
-| `Fault<L>` | `Fault<WithoutDenied<L>>` | `.narrow_denied()` (on the value itself) |
-| `Fail<D, L>` | `Fault<L>` | `.narrow_rejected()` (on the value itself) |
+| `Result<T, Fail<R, L>>` | `Result<T, Fault<L>>` | `.narrow_rejected()` |
+| `Result<T, R>`, a bare rejection | `Result<T, Fatal>` after the precondition is proven | `.narrow_rejected()?` |
+| `Result<T, Fail<R, L>>` | `Result<Result<T, R>, Fault<L>>` | `.rejected()` |
+| `Result<T, Fail<R, L>>` | `Result<T, Fail<P, L>>` | `.map_rejected(f)` for call-site data |
+| a `Fault` or `Fail` result | lanes narrowed | `.narrow_transient(attempts)` or `.narrow_denied()` |
 
-`?` handles anything that needs no decision. `.widen()` is for the one case that
-does, changing the rejection type, and its destination is inferred from the
-return type. A total `#[lift(C)]` supplies the `R: From<C>` that lets a bare
-rejection propagate with `?`; a partial lift does not, so a bare rejection
-crosses it with `.widen()?` like any other source. Widening only ever adds
-lanes: dropping one that the source can still produce is a compile error,
-because somebody has to handle it. A narrowing goes the other way on purpose:
-each removes exactly one lane by name, never by inference, which is why it is
-always a method call and not a `From` (see "Narrowing a lane" above).
+`?` expands lanes without dropping one. It also carries a *total* mapping from
+a bare rejection or `Classify` wrapper into `Fail`; a partial mapping requires
+`.lift()?`. A `Fail<R, S>` changing its rejection to `P` also uses `.lift()?`,
+whether the lift is total or partial. `ResultExt::lift` enables `Fatal` before
+the following `?`, so an unmapped case has a place to go. Consequently its
+destination must enable `Fatal`. For a total `Fail` lift into a signature
+without `Fatal`, use the value-level `Fail::lift::<P, D>` explicitly. Narrowing
+removes a lane by name after its outcome has been handled.
 
 ## Carriers: your own `Fault` / `Fail`
 
@@ -1004,13 +996,13 @@ fn page(e: HostFault) -> &'static str {
 What `?` does, in and out of a carrier `E`:
 
 - **In:** any lane payload `E` declares; a `Fault<S>` with `S ⊆ E`'s lanes; for
-  a `Fail`-like carrier, a `Fail<R', S>` whose rejection lifts totally; any
+  a `Fail`-like carrier, a `Fail<R, S>` with the same rejection; any
   `Classify` wrapper whose lanes fit; a bare `Rejection` that lifts totally
   (`Fail`-like only); and each carrier listed in `from(..)`.
 - **Out:** into `Fault<M>` (`Fault`-like carriers, `S ⊆ M`), into `Fail<D, M>`, into
   a bare `Fatal` / `Transient` when it has just that lane, and into a foreign
   enum with `#[from] E`.
-- `.widen()`, `narrow_transient`, `narrow_denied`, `narrow_rejected`,
+- `.lift()`, `into_fault`, `into_fail`, `narrow_transient`, `narrow_denied`, `narrow_rejected`,
   `rejected` and `map_rejected` work on `Result<T, E>`. A narrowing returns the
   narrowed **built-in** (`Fault<..>` / `Fail<..>`), which `?` carries on.
   `E: Laned` for retry, `record` and `#[errlanes::instrument]`.
@@ -1041,7 +1033,7 @@ fn host() -> Result<u8, HostFault> {
 }
 
 fn party() -> Result<u8, PartyFault> {
-    let v = host().widen_via_builtin()?;
+    let v = host().into_fault()?;
     Ok(v)
 }
 # assert_eq!(party().unwrap(), 1);
@@ -1056,7 +1048,7 @@ and `Debug` is yours to derive.
 and neither can a hand-written `impl From<OtherCrate::Carrier> for E`: the
 carrier's one blanket inbound `From` overlaps it, because rustc cannot know
 the other crate's carrier is not a plain lane source. Use
-`.widen_via_builtin()?` across crates, and in generic code over a foreign
+`.into_fault()?` or `.into_fail()?` across crates, and in generic code over a foreign
 carrier, bound on its built-in (`E: From<Fault<lanes!(Transient, Fatal)>>`)
 rather than on the carrier.
 
@@ -1096,7 +1088,7 @@ assert_eq!(Into::<&'static str>::into(payment.code()), "INVALID_AMOUNT");
 `AmountInvalidAmount`. The imported cases keep their payloads, codes, levels,
 formatting, and sources. The attribute supplies both `Rejection` and `Lift`,
 including total `From` conversions, so the resulting family supports
-`.widen()?` just like the explicit mapping above, and it can sit alongside
+`?` for bare rejections and `.lift()?` for failures, and it can sit alongside
 explicit lifts from other sources.
 
 Composition includes new source cases automatically. Explicit lifts are
@@ -1166,7 +1158,7 @@ it must supply `#[rejection(code = "...")]` or `#[rejection(delegate)]`.
 No source wins by import order. Rust checks that each source variant's
 field shape and types fit the destination without payload conversion.
 The generated total `From` and `Lift` implementations support `?` for
-bare rejections and `.widen()?` for failures, as with prefixed composition.
+bare rejections and `.lift()?` for failures, as with prefixed composition.
 
 To merge differently named cases, or limit a merge to reviewed participants,
 list them explicitly:

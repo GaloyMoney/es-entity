@@ -82,7 +82,7 @@ fn bare_sources_share_leaf_outcomes_and_import_every_other_shape() {
 }
 
 #[test]
-fn composition_supports_bare_question_mark_and_widening_without_changing_faults() {
+fn composition_supports_bare_question_mark_and_lane_expansion_without_changing_faults() {
     fn bare() -> Result<(), Fail<AddMember, lanes!(Fatal)>> {
         Err::<(), _>(Accounts::AccountMissing(3))?;
         Ok(())
@@ -92,16 +92,18 @@ fn composition_supports_bare_question_mark_and_widening_without_changing_faults(
         Err(Fail::Rejected(AddMember::AccountMissing(3)))
     ));
     let source: Result<(), Fail<Sets, lanes!(Fatal)>> = Err(Sets::JournalMismatch.into());
-    let widened: Result<(), Fail<AddMember, lanes!(Transient, Fatal)>> = source.widen();
+    let converted: Result<(), Fail<AddMember, lanes!(Transient, Fatal)>> =
+        source.lift::<AddMember>().map_err(Into::into);
     assert!(matches!(
-        widened,
+        converted,
         Err(Fail::Rejected(AddMember::JournalMismatch))
     ));
     let source: Result<(), Fail<Accounts, lanes!(Fatal)>> =
         Err(errlanes::Fatal::invariant("broken graph").into());
-    let widened: Result<(), Fail<AddMember, lanes!(Transient, Fatal)>> = source.widen();
+    let converted: Result<(), Fail<AddMember, lanes!(Transient, Fatal)>> =
+        source.lift::<AddMember>().map_err(Into::into);
     assert!(
-        matches!(widened, Err(Fail::Fatal(ref fatal)) if fatal.kind == errlanes::FatalKind::Invariant)
+        matches!(converted, Err(Fail::Fatal(ref fatal)) if fatal.kind == errlanes::FatalKind::Invariant)
     );
 }
 

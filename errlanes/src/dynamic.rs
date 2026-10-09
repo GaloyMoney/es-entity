@@ -131,7 +131,7 @@ impl Fault {
             let mut cur: Option<&(dyn Error + 'static)> = Some(e);
             while let Some(x) = cur {
                 if let Some(sql) = x.downcast_ref::<::sqlx::Error>() {
-                    return crate::sqlx::classify_sqlx_ref(sql).widen();
+                    return crate::sqlx::classify_sqlx_ref(sql).into();
                 }
                 cur = x.source();
             }
@@ -141,7 +141,7 @@ impl Fault {
             let mut cur: Option<&(dyn Error + 'static)> = Some(e);
             while let Some(x) = cur {
                 if let Some(json) = x.downcast_ref::<::serde_json::Error>() {
-                    return crate::serde_json::classify_serde_json_ref(json).widen();
+                    return crate::serde_json::classify_serde_json_ref(json).into();
                 }
                 cur = x.source();
             }
@@ -151,7 +151,7 @@ impl Fault {
             let mut cur: Option<&(dyn Error + 'static)> = Some(e);
             while let Some(x) = cur {
                 if let Some(req) = x.downcast_ref::<::reqwest::Error>() {
-                    return crate::reqwest::classify_reqwest_ref(req).widen();
+                    return crate::reqwest::classify_reqwest_ref(req);
                 }
                 cur = x.source();
             }

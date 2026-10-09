@@ -218,7 +218,7 @@ impl ToTokens for DeleteFn<'_> {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or_else(|| errlanes::Fail::from(
+                            .ok_or_else(|| errlanes::Fail::<#constraint_violation, errlanes::lanes!(Transient, Fatal)>::from(
                                 errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
                                     .with_context(format!("{} row vanished", #table_name))
                             ))?;
@@ -320,7 +320,7 @@ mod tests {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or_else(|| errlanes::Fail::from(
+                            .ok_or_else(|| errlanes::Fail::<EntityConstraintViolation, errlanes::lanes!(Transient, Fatal)>::from(
                                 errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
                                     .with_context(format!("{} row vanished", "entities"))
                             ))?;
@@ -422,7 +422,7 @@ mod tests {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or_else(|| errlanes::Fail::from(
+                            .ok_or_else(|| errlanes::Fail::<EntityConstraintViolation, errlanes::lanes!(Transient, Fatal)>::from(
                                 errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
                                     .with_context(format!("{} row vanished", "entities"))
                             ))?;
@@ -546,7 +546,7 @@ mod tests {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or_else(|| errlanes::Fail::from(
+                            .ok_or_else(|| errlanes::Fail::<EntityConstraintViolation, errlanes::lanes!(Transient, Fatal)>::from(
                                 errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
                                     .with_context(format!("{} row vanished", "entities"))
                             ))?;

@@ -52,6 +52,35 @@ async fn flag(pool: &PgPool, account_id: VfAccountId) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn list_all_ids(
+    accounts: &VfAccountsFlagOnly,
+    flagged: Option<bool>,
+) -> anyhow::Result<HashSet<VfAccountId>> {
+    let mut ids = HashSet::new();
+    let mut query = PaginatedQueryArgs {
+        first: 100,
+        after: None,
+    };
+    loop {
+        let page = accounts
+            .list_for_filters(
+                VfAccountFilters { flagged },
+                Sort {
+                    by: VfAccountSortBy::Id,
+                    direction: ListDirection::Ascending,
+                },
+                query,
+            )
+            .await?;
+        ids.extend(page.entities().iter().map(|e| e.id));
+        match page.into_next_query() {
+            Some(next) => query = next,
+            None => break,
+        }
+    }
+    Ok(ids)
+}
+
 #[tokio::test]
 async fn virtual_only_none_returns_both() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -62,21 +91,7 @@ async fn virtual_only_none_returns_both() -> anyhow::Result<()> {
     flag(&pool, flagged_account.id).await?;
     let plain_account = create_account(&accounts, &unique_status).await?;
 
-    let result = accounts
-        .list_for_filters(
-            VfAccountFilters { flagged: None },
-            Sort {
-                by: VfAccountSortBy::Id,
-                direction: ListDirection::Ascending,
-            },
-            PaginatedQueryArgs {
-                first: 100,
-                after: None,
-            },
-        )
-        .await?;
-
-    let ids: HashSet<_> = result.entities().iter().map(|e| e.id).collect();
+    let ids = list_all_ids(&accounts, None).await?;
     assert!(ids.contains(&flagged_account.id));
     assert!(ids.contains(&plain_account.id));
 
@@ -93,23 +108,7 @@ async fn virtual_only_true_returns_only_flagged() -> anyhow::Result<()> {
     flag(&pool, flagged_account.id).await?;
     let plain_account = create_account(&accounts, &unique_status).await?;
 
-    let result = accounts
-        .list_for_filters(
-            VfAccountFilters {
-                flagged: Some(true),
-            },
-            Sort {
-                by: VfAccountSortBy::Id,
-                direction: ListDirection::Ascending,
-            },
-            PaginatedQueryArgs {
-                first: 100,
-                after: None,
-            },
-        )
-        .await?;
-
-    let ids: HashSet<_> = result.entities().iter().map(|e| e.id).collect();
+    let ids = list_all_ids(&accounts, Some(true)).await?;
     assert!(ids.contains(&flagged_account.id));
     assert!(!ids.contains(&plain_account.id));
 
@@ -126,23 +125,7 @@ async fn virtual_only_false_returns_only_unflagged() -> anyhow::Result<()> {
     flag(&pool, flagged_account.id).await?;
     let plain_account = create_account(&accounts, &unique_status).await?;
 
-    let result = accounts
-        .list_for_filters(
-            VfAccountFilters {
-                flagged: Some(false),
-            },
-            Sort {
-                by: VfAccountSortBy::Id,
-                direction: ListDirection::Ascending,
-            },
-            PaginatedQueryArgs {
-                first: 100,
-                after: None,
-            },
-        )
-        .await?;
-
-    let ids: HashSet<_> = result.entities().iter().map(|e| e.id).collect();
+    let ids = list_all_ids(&accounts, Some(false)).await?;
     assert!(!ids.contains(&flagged_account.id));
     assert!(ids.contains(&plain_account.id));
 

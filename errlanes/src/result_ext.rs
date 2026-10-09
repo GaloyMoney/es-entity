@@ -1,19 +1,21 @@
 //! `ResultExt` — the one trait a consumer imports to move a `Result` from one
-//! error signature to another. `widen`, the three `narrow_*`, `rejected`,
-//! `classify`, and (under `tracing`) `record` are all the same act —
-//! relocating a `Result`'s error — so they live on one blanket-impl'd trait
+//! error signature to another. `lift`, `into_fault`, `into_fail`, the three
+//! `narrow_*`, `rejected`, `classify`, and (under `tracing`) `record` all
+//! relocate a `Result`'s error, so they live on one blanket-implemented trait
 //! rather than one import per verb.
 
+use std::convert::Infallible;
+
 use crate::{
-    carrier::{BuiltinFor, Carrier, IntoLanes, kind},
+    carrier::{Carrier, IntoLanes, fail_into_fault, kind},
     classify::Classify,
-    fail::{Fail, Fault, Laned, Rejection, WidenResult},
+    fail::{Fail, Fault, Laned, Lift, Rejection, UnmappedInto},
     lane::{Denied, Fatal},
     profile::{LaneProfile, NarrowDenied, WithoutDenied},
 };
 
 /// Sealed. The error-level engine for [`ResultExt::narrow_rejected`] — keyed
-/// on the source shape the same way [`WidenResult`] is: a `Fail` narrows to
+/// on the source shape: a `Fail` narrows to
 /// the `Fault` of its own profile, a bare `Rejection` to the bare `Fatal`, a
 /// carrier through its built-in. Both outputs are associated types, read off
 /// the source, so `.narrow_rejected()?` never needs a destination named at the
@@ -141,38 +143,54 @@ where
     }
 }
 
+/// A source that can enter its own `Fault` without losing a rejection.
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` can reject and cannot enter `Fault`",
+    note = "handle the rejection, call `.narrow_rejected()` when justified, or use `.into_fail()`"
+)]
+pub trait FaultSource: IntoLanes {
+    fn own_fault(self) -> Fault<Self::Lanes>;
+}
+impl<W: IntoLanes<Rejected = Infallible>> FaultSource for W {
+    fn own_fault(self) -> Fault<Self::Lanes> {
+        fail_into_fault(self.into_lanes())
+    }
+}
+
+/// A source whose built-in has a rejected lane.
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` never rejects",
+    note = "use `.into_fault()` instead"
+)]
+pub trait FailSource: IntoLanes {
+    fn own_fail(self) -> Fail<Self::Rejected, Self::Lanes>;
+}
+impl<W: IntoLanes> FailSource for W
+where
+    W::Rejected: Rejection,
+{
+    fn own_fail(self) -> Fail<Self::Rejected, Self::Lanes> {
+        self.into_lanes()
+    }
+}
+
 /// The one trait a consumer imports to move a `Result` between error
-/// signatures: widen it to a bigger profile, narrow away a lane that is no
+/// signatures: lift its rejection, narrow away a lane that is no
 /// longer live at this boundary, hand the rejection to the caller as a value,
 /// classify a foreign error into a local wrapper, or (under `tracing`) record
 /// it onto the current span.
 pub trait ResultExt<T, E>: Sized {
-    /// Target-inferred widening for `Fault` or `Fail` results.
-    ///
-    /// `Fault` results widen to `Fault`; `Fail` results widen to `Fail`,
-    /// converting the rejection through [`crate::Lift`]. Success values and
-    /// fault payloads are preserved. Widening can add lanes, but cannot
-    /// silently discard an enabled lane:
-    ///
-    /// ```compile_fail
-    /// use errlanes::{Fault, ResultExt, lanes};
-    /// fn discard_denied(value: Result<(), Fault<lanes!(Denied, Fatal)>>)
-    ///     -> Result<(), Fault<lanes!(Fatal)>>
-    /// {
-    ///     value.widen()
-    /// }
-    /// ```
-    ///
-    /// A [`Classify`] wrapper widens too — into a `Fail` as usual, or
-    /// straight into a `Fault` when it never rejects. That last form is how a
-    /// wrapper enters the lanes at a call site with no signature to infer the
-    /// destination from, above all on the way into a `Box<dyn Error>`, where
-    /// `?` on the bare wrapper would box it unlaned and lose its
-    /// classification (see `classify.rs` and the README's box-boundary
-    /// section).
-    fn widen<E2>(self) -> Result<T, E2>
+    /// Lift a rejection into a new vocabulary and enable `Fatal` for any
+    /// unmapped case. `?` subsequently expands the resulting lanes.
+    fn lift<P>(self) -> Result<T, Fail<P, <E::Lanes as LaneProfile>::WithFatal>>
     where
-        Self: WidenResult<T, E2>;
+        E: IntoLanes,
+        E::Rejected: Rejection,
+        P: Rejection + Lift<E::Rejected>,
+        <E::Lanes as LaneProfile>::Fatal: Into<Fatal>,
+        P::Unmapped: UnmappedInto<Fatal>;
 
     /// Narrows away the `Rejected` lane: a rejection with no caller left to
     /// correct it becomes `Fatal(Invariant)`, carrying the rejection as its
@@ -292,7 +310,7 @@ pub trait ResultExt<T, E>: Sized {
 
     /// Maps the rejection with a closure and leaves every other lane as it
     /// is: the `Result`-level form of [`Fail::map_rejected`]. For a
-    /// type-level remap use [`widen`](Self::widen); this is for enriching a
+    /// type-level remap use [`lift`](Self::lift); this is for enriching a
     /// rejection with data only the call site has, such as the input that
     /// was attempted: `repo.create(new).await.map_rejected(|r| r.with_attempted(id))?`.
     fn map_rejected<D2>(self, f: impl FnOnce(E::Rejected) -> D2) -> Result<T, Fail<D2, E::Lanes>>
@@ -300,58 +318,15 @@ pub trait ResultExt<T, E>: Sized {
         E: IntoLanes,
         E::Rejected: Rejection;
 
-    /// Lands the error in its *own* built-in, with no destination named:
-    /// `Fault<L>` for a source that never rejects, `Fail<R, L>` for one that
-    /// can, where `L` is exactly the source's lanes. Works on every lane
-    /// source: a carrier (its `Repr`), a [`Classify`] wrapper, a bare
-    /// `Rejection`, a lane payload, or a `Fault` / `Fail` (identity).
-    ///
-    /// Two uses:
-    ///
-    /// - **Into a `Box<dyn Error>`.** A wrapper's classification lives in its
-    ///   `impl Classify`, not in the value, so `?` on the bare wrapper boxes it
-    ///   unlaned and the receiving [`Fault::classify`] walks past it to the
-    ///   foreign error underneath. Through its built-in, the box holds the lane
-    ///   payload, with the wrapper and its own source still in the chain, so
-    ///   what the boundary records (kind as `error.code`, `error.level`,
-    ///   `exception.message`) is exactly what recording the built-in directly
-    ///   gives. A *rejection* does not survive a box this way or any other:
-    ///   `Fault::classify` has no rejected arm. Resolve rejections before
-    ///   boxing.
-    /// - **Into a carrier from another crate.** `?` cannot convert one crate's
-    ///   carrier into another crate's carrier, but every carrier absorbs a
-    ///   built-in, so `.widen_via_builtin()?` reaches it in two hops.
-    ///
-    /// The built-in has exactly the source's lanes, the narrowest it can
-    /// become, so any destination that would accept a wider one accepts it.
-    /// It is not needed for a built-in `Fault` destination: a wrapper or a
-    /// carrier already `?`s straight into one, and `Fault` to `Fault` is never
-    /// a `?` (that is `.widen()`).
-    ///
-    /// ```
-    /// use errlanes::{Fault, FatalKind, ResultExt};
-    ///
-    /// #[derive(Debug, errlanes::Classify)]
-    /// #[classify(fatal(CorruptState))]
-    /// #[error("stored bytes do not decode")]
-    /// struct Undecodable(#[source] std::io::Error);
-    ///
-    /// fn decode() -> Result<u8, Undecodable> {
-    ///     Err(Undecodable(std::io::Error::other("bad bytes")))
-    /// }
-    ///
-    /// fn boundary() -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
-    ///     Ok(decode().widen_via_builtin()?)
-    /// }
-    ///
-    /// let boxed = boundary().unwrap_err();
-    /// assert!(matches!(Fault::classify(&*boxed), Fault::Fatal(f) if f.kind == FatalKind::CorruptState));
-    /// ```
-    #[allow(clippy::type_complexity)]
-    fn widen_via_builtin(self) -> Result<T, <E::Rejected as BuiltinFor<E::Lanes>>::Builtin>
+    /// Convert a never-rejecting source to its own `Fault` at a box or carrier boundary.
+    fn into_fault(self) -> Result<T, Fault<E::Lanes>>
     where
-        E: IntoLanes,
-        E::Rejected: BuiltinFor<E::Lanes>;
+        E: FaultSource;
+
+    /// Convert a rejecting source to its own `Fail` at a foreign carrier boundary.
+    fn into_fail(self) -> Result<T, Fail<E::Rejected, E::Lanes>>
+    where
+        E: FailSource;
 
     /// `.classify::<W>()` — the verb that turns a foreign error into a local
     /// [`Classify`] wrapper at a one-off call site, so a function that does
@@ -370,11 +345,15 @@ pub trait ResultExt<T, E>: Sized {
 }
 
 impl<T, E> ResultExt<T, E> for Result<T, E> {
-    fn widen<E2>(self) -> Result<T, E2>
+    fn lift<P>(self) -> Result<T, Fail<P, <E::Lanes as LaneProfile>::WithFatal>>
     where
-        Self: WidenResult<T, E2>,
+        E: IntoLanes,
+        E::Rejected: Rejection,
+        P: Rejection + Lift<E::Rejected>,
+        <E::Lanes as LaneProfile>::Fatal: Into<Fatal>,
+        P::Unmapped: UnmappedInto<Fatal>,
     {
-        WidenResult::widen(self)
+        self.map_err(|e| e.into_lanes().lift())
     }
 
     fn narrow_rejected(self) -> Result<T, E::Narrowed>
@@ -417,12 +396,18 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
         self.map_err(|e| e.into_lanes().map_rejected(f))
     }
 
-    fn widen_via_builtin(self) -> Result<T, <E::Rejected as BuiltinFor<E::Lanes>>::Builtin>
+    fn into_fault(self) -> Result<T, Fault<E::Lanes>>
     where
-        E: IntoLanes,
-        E::Rejected: BuiltinFor<E::Lanes>,
+        E: FaultSource,
     {
-        self.map_err(|e| BuiltinFor::builtin(e.into_lanes()))
+        self.map_err(FaultSource::own_fault)
+    }
+
+    fn into_fail(self) -> Result<T, Fail<E::Rejected, E::Lanes>>
+    where
+        E: FailSource,
+    {
+        self.map_err(FailSource::own_fail)
     }
 
     fn classify<W: Classify + From<E>>(self) -> Result<T, W> {

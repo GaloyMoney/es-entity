@@ -1,0 +1,15 @@
+error[E0277]: the trait bound `Infallible: Rejection` is not satisfied
+ --> tests/coherence/carrier_fail/into_fail_fault.rs:5:20
+  |
+5 |     let _ = source.into_fail();
+  |                    ^^^^^^^^^ the trait `Rejection` is not implemented for `Infallible`
+  |
+  = note: required for `errlanes::Fault<Profile<false, false, true>>` to implement `FailSource`
+note: required by a bound in `into_fail`
+ --> src/result_ext.rs
+  |
+  |     fn into_fail(self) -> Result<T, Fail<E::Rejected, E::Lanes>>
+  |        --------- required by a bound in this associated function
+  |     where
+  |         E: FailSource;
+  |            ^^^^^^^^^^ required by this bound in `ResultExt::into_fail`

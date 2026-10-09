@@ -31,19 +31,19 @@ pub mod reqwest;
 mod record;
 
 #[doc(hidden)]
-pub use carrier::{Absorb, BuiltinFor, IntoLanes, LaneRejected, WidenBy, kind};
+pub use carrier::{Absorb, IntoLanes, LaneRejected, kind};
 pub use carrier::{Carrier, LaneRef, Repr};
 pub use classify::{Classify, RejectedSlot, RejectedUnion};
 #[doc(hidden)]
 pub use fail::__catalogue;
-#[doc(hidden)]
-pub use fail::WidenResult;
 pub use fail::{
     CodeInfo, Fail, Fault, Laned, Level, Lift, Rejection, RejectionCode, RejectionField,
     RejectionMetadata, UnmappedInto,
 };
 pub use lane::{Denied, Exhausted, Fatal, FatalKind, Lane, Transient, TransientKind};
 pub use result_ext::ResultExt;
+#[doc(hidden)]
+pub use result_ext::{FailSource, FaultSource};
 #[doc(hidden)]
 pub use result_ext::{NarrowDeniedLane, NarrowRejectedBy, NarrowRejectedLane};
 

@@ -1,22 +1,10 @@
-error[E0277]: the trait bound `Source: UnmappedInto<Infallible>` is not satisfied
-  --> tests/v2/lift_struct_partial_without_fatal.rs:12:12
+error[E0308]: mismatched types
+  --> tests/v2/lift_struct_partial_without_fatal.rs:12:5
    |
-12 |     result.widen()
-   |            ^^^^^ unsatisfied trait bound
+11 | fn boundary(result: Result<(), Source>) -> Result<(), Fail<Destination, lanes!()>> {
+   |                                            --------------------------------------- expected `Result<(), errlanes::Fail<Destination, Profile<false, false, false>>>` because of return type
+12 |     result.lift()
+   |     ^^^^^^^^^^^^^ expected `false`, found `true`
    |
-help: the trait `UnmappedInto<Infallible>` is not implemented for `Source`
-  --> tests/v2/lift_struct_partial_without_fatal.rs:4:1
-   |
- 4 | enum Source { Value { value: u32 }, Other }
-   | ^^^^^^^^^^^
-   = help: the trait `UnmappedInto<F>` is implemented for `Infallible`
-   = note: required for `errlanes::kind::Source` to implement `WidenBy<Source, errlanes::Fail<Destination, Profile<false, false, false>>>`
-   = note: required for `Result<(), Source>` to implement `WidenResult<(), errlanes::Fail<Destination, Profile<false, false, false>>>`
-note: required by a bound in `errlanes::ResultExt::widen`
-  --> $WORKSPACE/errlanes/src/result_ext.rs
-   |
-   |     fn widen<E2>(self) -> Result<T, E2>
-   |        ----- required by a bound in this associated function
-   |     where
-   |         Self: WidenResult<T, E2>;
-   |               ^^^^^^^^^^^^^^^^^^ required by this bound in `ResultExt::widen`
+   = note: expected enum `Result<(), errlanes::Fail<Destination, Profile<false, false, false>>>`
+              found enum `Result<(), errlanes::Fail<_, Profile<false, false, true>>>`
