@@ -12,8 +12,7 @@ each with a distinct meaning for the caller. The layer that understands an error
 assigns its lane; callers can then handle or propagate it without having to
 interpret the original error again.
 
-The lanes are represented by two carrier enums. Leaving lane selection aside
-for a moment, their structure looks like this:
+The lanes are represented by two carrier enums. Their structure looks like this:
 
 ```rust
 use errlanes::{Denied, Fatal, Transient};
@@ -74,15 +73,6 @@ fn unwrap_fatal(failure: Fault<lanes!(Fatal)>) -> errlanes::Fatal {
 # let _ = unwrap_fatal(errlanes::Fatal::invariant("x").into());
 ```
 
-Lane order does not matter, and `lanes!()` with no names disables all fault
-lanes. `lanes!` names only the three fault lanes; the Rejected lane is selected
-by which carrier a function uses, `Fail` or `Fault`.
-
-Matching a borrowed failure still requires an arm for every variant, so use an
-accessor instead. `as_denied`, `as_transient`, and `as_fatal` are available
-only when the profile enables that lane, `Fail` adds `as_rejected`, and
-`lane()` works on any profile.
-
 ### Example: Authorization adds a lane
 
 Consider an inner operation that can only fail fatally. An outer function
@@ -100,7 +90,7 @@ fn inner() -> Result<u64, Fault<lanes!(Fatal)>> {
     Ok(42)
 }
 
-fn outer(subject: &str) -> Result<u64, Fault<lanes!(Fatal, Denied)>> {
+fn outer(subject: &str) -> Result<u64, Fault<lanes!(Denied, Fatal)>> {
     authorize(subject)?;
     let value = inner()?;
     Ok(value)
@@ -164,39 +154,15 @@ assert_eq!(fatal.kind, errlanes::FatalKind::Exhausted);
 Here, `execute` takes the inner operation as a closure so it can call it again.
 Its return type omits Transient because the loop handles that case: narrowing
 consumed the lane, so `lanes!(Transient, Fatal)` went in and `lanes!(Fatal)`
-came out. Widening alone cannot remove a lane; the caller must account for the
-outcome. Because a narrowed profile needs somewhere to put an exhaustion,
-`lanes!(Transient)` on its own is neither narrowable nor retryable.
-
-The loop illustrates who handles Transient. In practice, that owner also
-decides whether repeating the operation is safe and when to stop retrying.
-Widening only ever adds lanes and keeps every value; narrowing removes one
-lane and says what its value becomes.
-
-### Transient, and the narrower question
-
-`is_transient()` answers "is this unit of work safe to re-run, later, from the
-outside?" — every `TransientKind` says yes, a lost connection or a pool
-timeout as much as a deadlock. `is_contention()` answers a narrower one: "did
-Postgres confirm this attempt lost a race?" — `Deadlock` (`40P01`) or
-`SerializationFailure` (`40001`), and nothing else. Both predicates exist on
-`TransientKind`, `Transient`, `Fault` and `Fail`.
-
-The narrow one is for the two places the broad one is wrong. Retrying at
-`COMMIT`: only a server-confirmed abort guarantees the transaction rolled
-back; any other error there is ambiguous, since the server may have committed
-before the client saw it. And a batch search deciding whether to split a
-failing range: contention says nothing about the data, only about the
-interleaving, so splitting cannot isolate anything and may provoke the same
-cycle again — whereas an `OptimisticConflict` names one stale row and *is*
-worth splitting for, which is why it is transient but not contention.
+came out.
 
 ## Narrowing a lane
 
-Adding lanes through `?` has a dual. Where `?` adds lanes losslessly and never drops one,
-`narrow_<lane>` removes exactly one lane and turns its value into a `Fatal` —
-the only lane left standing once nobody can act on the removed one. There is
-one narrowing per lane that can reach a boundary with nobody left to help it:
+As in the retry example, any lane can be narrowed once its owner has handled
+it. `narrow_<lane>` removes exactly one lane and turns its value into a
+`Fatal`, the only lane left once nobody can act on the removed one. A
+narrowing is always a method call, never a `From`, so `?` cannot drop a lane
+by accident. The same methods are available on a `Result` through `ResultExt`.
 
 | narrowed lane | what the value is afterwards | method | `FatalKind` |
 |---|---|---|---|
@@ -204,28 +170,13 @@ one narrowing per lane that can reach a boundary with nobody left to help it:
 | `Denied` | still a denial, fatal only because nobody can be told | `narrow_denied()` | `Denied` |
 | `Rejected(D)` | a caller-correctable outcome with no caller, which is a bug | `narrow_rejected()` | `Invariant` |
 
-Each `FatalKind` names what the value truly *is* afterwards, never a guessed
-cause — the same rule `Exhausted` already followed before it had two
-siblings. A narrowing is always a method call, never a `From`: a `?` that
-silently dropped a lane is exactly what the lane inclusion rule already forbids, so
-narrowing cannot happen by accident either. The same three verbs are also
-available directly on a `Result` through `ResultExt`, so a call site that is
-already holding one does not have to `.map_err()` into the value-level form.
+## Handling the Rejected lane
 
-`narrow_rejected` also takes a *bare* rejection. A public method returns just
-`R` when its caller can act on it; an internal frame that calls it having
-already proved the precondition has no caller left, so the rejection is an
-invariant there. With no profile to keep, the narrowed value is the bare
-`Fatal`, and `?` carries it into whatever `Fault`/`Fail` the frame returns:
-`outbox.listen::<L>(from).narrow_rejected()?`.
-
-### Handling a rejection where it occurs
-
-`narrow_rejected` is for a boundary with no caller left to correct the
-rejection. Where the caller is right there, `rejected()` hands it the
-rejection as a value instead: `Result<T, Fail<D, L>>` becomes
-`Result<Result<T, D>, Fault<L>>`. The outer `?` keeps the faults propagating;
-the inner `Result` is the domain outcome, matched on the spot.
+A rejection is a domain outcome the caller can act on, so it is usually
+handled rather than narrowed. `rejected()` hands the caller the rejection as
+a value: `Result<T, Fail<D, L>>` becomes `Result<Result<T, D>, Fault<L>>`.
+The outer `?` keeps the faults propagating; the inner `Result` is the domain
+outcome, matched on the spot.
 
 ```rust
 use errlanes::{Fail, Fault, ResultExt, lanes};
@@ -248,79 +199,114 @@ fn poll_once() -> Result<Option<u64>, Fault<lanes!(Transient, Fatal)>> {
 assert!(poll_once().unwrap().is_none());
 ```
 
-There is deliberately no `Option`-returning `as_rejected()` on a `Result`: it
-would answer `None` for both a success and a fault, the one place a lane could
-be dropped without being named. On the error value itself, where there is no
-success to conflate, `Fail::as_rejected` and `Fail::rejected` remain.
+`narrow_rejected()` is for the opposite situation: a frame that has already
+proved the precondition has no caller left to correct the rejection, so the
+rejection is an invariant there.
+
+### Rejections across domain boundaries
+
+As an error moves up the call stack, it may cross into a domain with its own
+rejection enum. The fault lanes already have shared meanings, but two domain
+enums need an explicit conversion. `derive(Lift)` generates it: the enum-level
+`#[lift(Validation)]` names the source, and an annotation on each destination
+variant says which source case it represents:
+
+```rust
+use errlanes::{Fail, Rejection, ResultExt, lanes};
+
+#[derive(Debug, errlanes::Rejection)]
+enum Validation {
+    #[rejection(code = "INVALID_AMOUNT")]
+    InvalidAmount,
+}
+
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+#[lift(Validation)]
+enum Payment {
+    #[lift(Validation::InvalidAmount)]
+    AmountNotPositive,
+}
+
+fn validate(amount: u64) -> Result<(), Validation> {
+    if amount == 0 { Err(Validation::InvalidAmount) } else { Ok(()) }
+}
+
+fn outer() -> Result<(), Fail<Payment, lanes!(Denied, Fatal)>> {
+    validate(0)?;
+    Ok(())
+}
+
+let rejection = outer().unwrap_err().rejected().unwrap();
+assert!(matches!(rejection, Payment::AmountNotPositive));
+assert_eq!(Into::<&'static str>::into(rejection.code()), "INVALID_AMOUNT");
+```
+
+By default a lift is exhaustive. The derive emits `From<Validation>`, so `?`
+places the rejection in the outer Rejected lane, and if `Validation` gains a
+case the mapping must be updated before it compiles. Unit, tuple and named
+payloads forward automatically; `#[lift(Source::Variant, with = mapper)]`
+transforms a payload, `into` converts it through `Into`, and `field = name`
+keeps one named field of it. A plain lift arm also forwards the source case's
+code and level, which is why `AmountNotPositive` above still reports
+`INVALID_AMOUNT`; a `with`, `into` or `field` arm declares its own
+`#[rejection(code = "...")]` instead, or `#[rejection(delegate)]` to take
+them from the converted payload.
+
+Sometimes only a subset of the source cases makes sense in the destination
+domain. `#[lift(Source, unhandled = fatal)]` allows a partial mapping: an
+unmapped rejection becomes `Fatal(Invariant)` with the original as its source,
+so the destination must enable Fatal and the call site is `.lift()?` rather
+than `?`. A named-field struct can select one source variant this way with
+`variant = Case`, renaming fields with `#[lift(from = source_field)]`:
+
+```rust
+use errlanes::{Fail, ResultExt, lanes};
+use std::time::Duration;
+
+#[derive(Debug, errlanes::Rejection)]
+enum SubscriptionRejection {
+    CaughtUpTimeout { checkpoint: u64, target: u64, waited: Duration },
+    NoSuchJob { key: String },
+}
+
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+#[rejection(code = "EC_CAUGHT_UP_TIMEOUT")]
+#[error("checkpoint {applied} had not reached {frontier} after {waited:?}")]
+#[lift(SubscriptionRejection, variant = CaughtUpTimeout, unhandled = fatal)]
+struct EcCaughtUpTimeout {
+    #[lift(from = checkpoint)]
+    applied: u64,
+    #[lift(from = target)]
+    frontier: u64,
+    waited: Duration,
+}
+
+let result: Result<(), Fail<EcCaughtUpTimeout, lanes!(Fatal)>> =
+    Err(SubscriptionRejection::CaughtUpTimeout {
+        checkpoint: 3,
+        target: 8,
+        waited: Duration::from_secs(2),
+    }).lift();
+let Fail::Rejected(timeout) = result.unwrap_err() else { panic!("expected timeout") };
+assert_eq!((timeout.applied, timeout.frontier), (3, 8));
+```
+
+A struct source lifts as a whole value: `#[lift(Payload)]` with no variant
+suffix, on both the enum and the variant that receives it.
 
 ## At a `Box<dyn Error>` boundary
 
-`Fatal` and `Transient` store their source as `Arc<dyn Error + Send + Sync>`
-so a `Fault` or `Fail` can cross a thread or task spawn — this is load-bearing
-and not a bound to work around. A boundary that only has a plain `Box<dyn
-Error>` (a trait object with no `Send`/`Sync` bound, e.g. from a caller whose
-own trait does not require it) therefore cannot move that error into a lane
-payload's source. `Fault::classify` is the one call for that case: it only
-ever borrows the error, so no `Send`/`Sync` bound is needed to call it.
-
-```rust
-use errlanes::Fault;
-
-let boxed: Box<dyn std::error::Error> = Box::new(std::io::Error::other("disk full"));
-let fault: Fault = Fault::classify(&*boxed);
-assert!(matches!(fault, Fault::Fatal(_)));
-```
-
-`Fault::classify` tries, in order: a lane payload anywhere in the error's
-`source()` chain, carried through with its kind, context and (now cloned out,
-so `Send + Sync` again) its own source intact; then, for each blessed foreign
-type whose `classify-*` feature is enabled (`sqlx::Error`, `serde_json::Error`,
-`reqwest::Error`, in that order), the first one found anywhere in the chain,
-classified exactly as that feature's `impl Classify` would; then
-`Fatal(Dependency)`, with the error's `Display` chain as its context, so an
-error this function cannot otherwise classify still surfaces as something a
-boundary pages on, never silently as nothing.
-
-Call `Fault::classify` before the error crosses an `.await` or a spawn, not
-after — a `Box<dyn Error>` with no `Send` bound on its trait object cannot be
-held across either:
-
-```rust,ignore
-// Inside a boundary whose own trait returns `Box<dyn Error>`, not
-// `Box<dyn Error + Send + Sync>`:
-let fault: errlanes::Fault<errlanes::lanes!(Transient, Fatal)> = match runner.run(job).await {
-    Ok(done) => return Ok(done),
-    // `e` is dropped here. A job is not an authorization boundary — nobody
-    // is on the other end of it to be told no — so a `Denied` anywhere in
-    // the chain is narrowed away into `Fatal(Denied)` on the spot.
-    Err(e) => errlanes::Fault::classify(&*e).narrow_denied(),
-};
-// `fault` is `Send + Sync` from here on, and can cross a spawn.
-persist(fault).await?;
-```
-
-### Sending an error *into* a box
-
-The rule has two halves, and they are not symmetric.
-
-A **raw foreign error** needs no conversion on its way in: plain `?` boxes it,
-and the boundary's `Fault::classify` reads the lane back out of the chain from
-the very same table `From<sqlx::Error>` uses. An eager conversion there is
-ceremony.
-
-A **`Classify` wrapper** must reach a carrier *before* it reaches the box. Its
-classification lives in its `impl Classify`, not in the value, and a
-half-entered wrapper is neither a lane payload nor a blessed foreign type — so
-the walk steps straight past it to whatever it wraps, reverting the very
-classification the wrapper exists to override. Nothing warns: `?` compiles
-(std boxes any `Error`), the wrapper's message still appears in the chain, and
-only the `kind` is wrong, which is the one field the wrapper was written to
-set.
-
-`.into_fault()` is that step. It lands a never-rejecting wrapper in its *own*
-`Fault<L>`, so nothing has to be named even though `?` into a box leaves the
-destination unconstrained. The box then holds the lane payload, and the
-wrapper and the foreign error under it stay in the `source()` chain:
+A `Classify` wrapper (see "Local errors" below) carries its lane in its
+`impl Classify`, not in the value, so it must reach a carrier *before* it is
+boxed; a boundary reading the box afterwards would only see the foreign error
+underneath it. `.into_fault()?` lands a never-rejecting wrapper in its own
+`Fault<W::Lanes>`, and `.into_fail()?` lands a rejecting one in its own
+`Fail<W::Rejected, W::Lanes>`, so nothing has to be named even though `?`
+into a box leaves the destination unconstrained. Raw foreign errors and
+carriers need no such step. On the way back out, `Fault::classify(&*boxed)`
+borrows the error and returns the first lane payload or blessed foreign error
+in its `source()` chain, or `Fatal(Dependency)` if it finds neither. A
+rejection cannot cross a box as a rejection: handle or narrow it first.
 
 ```rust
 use errlanes::{Fault, ResultExt};
@@ -342,13 +328,6 @@ fn run() -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
 let fault = Fault::classify(&*run().unwrap_err());
 assert!(matches!(fault, Fault::Fatal(f) if f.kind == errlanes::FatalKind::CorruptState));
 ```
-
-The following `?` can expand that `Fault` if the destination enables more lanes.
-A rejection cannot cross a box as a rejection: `Fault::classify` finds fault
-payloads in the source chain, and otherwise treats the boxed error as a
-dependency failure. Handle the rejection or narrow it explicitly first.
-A carrier needs no conversion on its way into a box: its `source()` is already
-the lane payload, so plain `?` keeps its lane.
 
 ## Local errors
 
@@ -406,154 +385,6 @@ The level tells the recording boundary how severely to log the rejection.
 Warn is the default: a rejection is a refused request an operator should be
 able to see. A case that needs different operational visibility can override
 it with, for example, `#[rejection(code = "INVALID_AMOUNT", level = "info")]`. Its lane is still Rejected.
-
-### Display and Error
-
-`#[derive(errlanes::Rejection)]` and `#[derive(errlanes::Classify)]` emit
-`std::fmt::Display` and `std::error::Error` themselves — no `thiserror`, no
-second derive. A rejection's `Display` defaults to its code (the one thing
-above that is never caller-supplied input); a laned wrapper's `Display`
-defaults to its type or variant name in `snake_case`. `source()` is the
-`#[source]`-marked field, a field named `source`, or a `delegate`/`from`
-payload — never a bare field, since that would need guessing.
-
-```rust
-use errlanes::Rejection;
-
-#[derive(Debug, errlanes::Rejection)]
-enum Validation {
-    // No #[error(..)]: Display is the code, "INVALID_AMOUNT".
-    #[rejection(code = "INVALID_AMOUNT")]
-    InvalidAmount,
-    // An explicit override, same grammar as thiserror's: positional `{0}`,
-    // named `{field}`, both with `:?`.
-    #[rejection(code = "RANGE")]
-    #[error("amount {min}..{max}")]
-    Range { min: u64, max: u64 },
-}
-
-assert_eq!(Validation::InvalidAmount.to_string(), "INVALID_AMOUNT");
-assert_eq!(Validation::Range { min: 1, max: 9 }.to_string(), "amount 1..9");
-```
-
-A type that already has `Display`/`Error` from elsewhere — `thiserror`, or a
-hand-written impl — keeps them with `error = manual`: errlanes then emits
-neither, and ignores any `#[error]`/`#[source]` it finds.
-
-```rust
-#[derive(Debug, thiserror::Error, errlanes::Rejection)]
-#[rejection(code = "INVALID_AMOUNT", error = manual)]
-#[error("amount must be positive")]
-struct Legacy;
-
-assert_eq!(Legacy.to_string(), "amount must be positive");
-```
-
-### Fault wrappers and mixed wrappers
-
-The other two shapes are written with `#[derive(errlanes::Classify)]` instead.
-A fault wrapper names exactly one lane and never rejects — a struct wrapping a
-foreign error is the common case:
-
-```rust
-use errlanes::{Classify, Fatal, FatalKind, ResultExt};
-
-#[derive(Debug, errlanes::Classify)]
-#[classify(fatal(CorruptState), from)]
-struct Stored(std::io::Error);
-
-fn decode() -> Result<u8, std::io::Error> { Err(std::io::Error::other("x")) }
-
-fn hydrate() -> Result<u8, errlanes::Fault<errlanes::lanes!(Fatal)>> {
-    let _ = decode().classify::<Stored>()?;
-    Ok(0)
-}
-
-assert!(matches!(hydrate(), Err(errlanes::Fault::Fatal(f)) if f.kind == FatalKind::CorruptState));
-```
-
-`#[classify(fatal(CorruptState), from)]` gives `Stored` one static lane — every
-value is `Fatal(CorruptState)`, with the whole `Stored` value as its source —
-and `from` emits `impl From<std::io::Error> for Stored` for the single tuple
-field. `.classify::<Stored>()` is how a one-off call site wraps a foreign
-error without the enclosing function itself returning `Stored` (see "Errors
-from other crates" below).
-
-A mixed wrapper combines both: some variants `delegate` to a payload that is
-itself `Classify` (a `Rejection`, a fault wrapper, or another mixed wrapper),
-others name a static lane directly. `Rejected` and `Lanes` are inferred from
-whichever variants are present — never named by hand:
-
-```rust
-use errlanes::{Classify, Fail, ResultExt};
-
-#[derive(Debug, errlanes::Rejection)]
-#[rejection(code = "CONSTRAINT")]
-struct Constraint(&'static str);
-
-#[derive(Debug, errlanes::Classify)]
-enum DbWrite {
-    #[classify(delegate)]                      // Rejected = Constraint, inferred
-    Constraint(Constraint),
-    #[classify(transient(OptimisticConflict))]  // Lanes include Transient, inferred
-    Conflict(std::io::Error),
-}
-
-impl From<std::io::Error> for DbWrite {
-    fn from(e: std::io::Error) -> Self {
-        match e.kind() {
-            std::io::ErrorKind::AlreadyExists => DbWrite::Constraint(Constraint("users_email_key")),
-            _ => DbWrite::Conflict(e),
-        }
-    }
-}
-
-fn insert() -> Result<u8, std::io::Error> { Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists)) }
-
-fn write() -> Result<u8, Fail<Constraint, errlanes::lanes!(Transient, Fatal)>> {
-    let _ = insert().classify::<DbWrite>()?;
-    Ok(0)
-}
-
-assert!(matches!(write(), Err(Fail::Rejected(Constraint("users_email_key")))));
-```
-
-### Rejections alongside faults
-
-An operation can reject a request for a domain reason and also encounter a
-fault while carrying it out. `Fail<R, L>` expresses both: `R` names the domain
-rejections, and `L` selects the fault lanes.
-
-For example, paying can reject an invalid amount before reaching storage,
-while storage can fail fatally:
-
-```rust
-use errlanes::{Fail, Fault, lanes};
-
-#[derive(Debug, errlanes::Rejection)]
-enum Validation {
-    InvalidAmount,
-}
-
-fn save() -> Result<(), Fault<lanes!(Fatal)>> { Ok(()) }
-
-fn pay(amount: u64) -> Result<(), Fail<Validation, lanes!(Fatal)>> {
-    if amount == 0 {
-        return Err(Validation::InvalidAmount.into());
-    }
-    save()?;
-    Ok(())
-}
-
-assert!(matches!(pay(0), Err(Fail::Rejected(Validation::InvalidAmount))));
-assert!(pay(1).is_ok());
-```
-
-The validation case converts into `Fail::Rejected`. The storage function
-returns a `Fault`, which `?` converts into the compatible `Fail` while
-retaining its lane. A function that only validates input can return
-`Result<T, Validation>` directly; it has no fault lanes to combine with its
-rejections, and the caller's `?` places it in the Rejected lane.
 
 ## Errors from other crates
 
@@ -641,264 +472,6 @@ caller's — narrow it with `#[classify(delegate, narrow(Denied))]` (→
 `Fatal(Denied)`), or match the status in a hand-written wrapper to get
 `Fatal(Config)` instead. A proxy forwarding the caller's own token to upstream
 is the case that keeps `Denied` as-is.
-
-## Rejections across domain boundaries
-
-As an error moves up the call stack, it may cross into a domain with its own
-rejection enum. A payment operation, for example, may need to expose a
-validation rejection as one of its own cases. The fault lanes already have
-shared meanings, but the two domain enums need an explicit conversion.
-
-`derive(Lift)` generates that conversion. The enum-level `#[lift(Validation)]`
-names the source, and an annotation on each destination variant says which
-source case it represents:
-
-```rust
-use errlanes::{Fail, Rejection, ResultExt, lanes};
-
-#[derive(Debug, errlanes::Rejection)]
-enum Validation {
-    #[rejection(code = "INVALID_AMOUNT")]
-    InvalidAmount,
-}
-
-#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
-#[lift(Validation)]
-enum Payment {
-    #[lift(Validation::InvalidAmount)]
-    AmountNotPositive,
-}
-
-fn validate(amount: u64) -> Result<(), Validation> {
-    if amount == 0 { Err(Validation::InvalidAmount) } else { Ok(()) }
-}
-
-fn outer() -> Result<(), Fail<Payment, lanes!(Denied, Fatal)>> {
-    validate(0)?;
-    Ok(())
-}
-
-let rejection = outer().unwrap_err().rejected().unwrap();
-assert!(matches!(rejection, Payment::AmountNotPositive));
-assert_eq!(Into::<&'static str>::into(rejection.code()), "INVALID_AMOUNT");
-```
-
-The total `From<Validation>` conversion lets `?` place the validation
-rejection in the outer result's Rejected lane. A partial mapping instead uses
-`.lift()?`, which can turn unmapped cases into `Fatal(Invariant)`.
-
-By default, a lift must account for every source case. The derive generates
-an exhaustive mapping and a `From` implementation. If Validation gains another
-case, this mapping must be updated before it compiles. Unit, tuple and named
-payloads forward automatically; `#[lift(Source::Variant, with = mapper)]`
-handles a genuine payload transformation.
-
-`#[lift(Source::Variant, into)]` converts a single payload using its `Into`
-implementation, then wraps it in the destination variant. For example, a batch
-operation can reuse the single operation's phases while extending preparation:
-
-```rust
-use errlanes::Rejection;
-
-#[derive(Debug, errlanes::Rejection)]
-enum Prepare {
-    MissingArgument(String),
-}
-
-#[errlanes::compose(Prepare as Posting)]
-#[derive(Debug)]
-enum BatchPrepare {
-    DuplicateInput,
-}
-
-#[derive(Debug, errlanes::Rejection)]
-enum Posting {
-    #[error("{0}")]
-    #[rejection(delegate, from)]
-    Prepare(Prepare),
-    Validate,
-    Apply,
-}
-
-#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
-#[lift(Posting)]
-enum BatchPosting {
-    #[lift(Posting::Prepare, into)]
-    #[error("{0}")]
-    #[rejection(delegate, from)]
-    Prepare(BatchPrepare),
-    #[lift(Posting::Validate)]
-    Validate,
-    #[lift(Posting::Apply)]
-    Apply,
-}
-
-let error = BatchPosting::from(Posting::Prepare(
-    Prepare::MissingArgument("amount".into()),
-));
-assert!(matches!(
-    error,
-    BatchPosting::Prepare(BatchPrepare::PostingMissingArgument(name)) if name == "amount"
-));
-```
-
-The `into` arm generates the equivalent of
-`Posting::Prepare(e) => Self::Prepare(e.into())`. The destination field determines
-the conversion's target type; there must be a direct `Into` implementation
-(usually supplied by `From`). The source must be a single-field tuple variant,
-and the destination must have exactly one tuple or named field. `into` cannot
-be combined with `field` or `with`, and does not apply to whole-value struct
-lifts. It works with both exhaustive and partial lifts.
-
-Since the converted payload has a different type, `Rejection` cannot implicitly
-forward the original variant's metadata. Use `#[rejection(delegate)]` to obtain
-code and level from the converted payload, as above, or declare an explicit
-`#[rejection(code = "...")]`. `Lift` alone does not require rejection metadata.
-
-`#[lift(Source::Variant, field = name)]` is the narrower case in between:
-the source variant is a single-field tuple variant, and the destination keeps
-only one named field out of its payload rather than the whole thing —
-`Case(payload) => Ok(Self::Dest(payload.name))`. Prefer it over `with` when
-the destination is a straight projection of one field (an attributed id out
-of a constraint-violation payload is the motivating case); reach for `with`
-once the mapping needs to inspect more than one field, change shape, or
-compute something the source didn't carry directly. `field` and `with` are
-mutually exclusive on the same arm. Because the destination no longer mirrors
-the source variant's fields, there is nothing of the right shape to forward
-code/level from automatically — same as `with` — so a `field` lift always
-needs its own `#[rejection(code = "...")]`.
-
-Conversion and metadata are separate concerns. `Lift` generates the conversion;
-`Rejection` generates the code and level. Either derive can be used alone.
-When both are present, a simple lift annotation also identifies where to get
-the metadata. The renamed `AmountNotPositive` case therefore keeps the source
-code `INVALID_AMOUNT` and its level. A destination can declare its own
-`#[rejection(code = "...")]` when the mapping gives the error a new domain meaning.
-
-Sometimes only a subset of the source cases makes sense as a rejection in the
-destination domain. If the remaining cases would indicate a violated invariant,
-`#[lift(Source, unhandled = fatal)]` allows a partial mapping. An unmapped
-rejection becomes Fatal with the original rejection as its source, so the
-destination must permit Fatal, which the compiler checks. Whether a mapping is
-total or partial is declared once, on the destination type; the call site is
-`.lift()?` for a partial mapping. A partial mapping does not generate `From`,
-because there is no infallible conversion to be had.
-
-A named-field **destination struct** can select one source enum variant with
-`#[lift(Source, variant = Case)]`. Fields move directly by name; use
-`#[lift(from = source_field)]` on a destination field to rename it:
-
-```rust
-use errlanes::{Fail, ResultExt, lanes};
-use std::time::Duration;
-
-#[derive(Debug, errlanes::Rejection)]
-enum SubscriptionRejection {
-    CaughtUpTimeout { checkpoint: u64, target: u64, waited: Duration },
-    NoSuchJob { key: String },
-}
-
-#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
-#[rejection(code = "EC_CAUGHT_UP_TIMEOUT")]
-#[error("checkpoint {applied} had not reached {frontier} after {waited:?}")]
-#[lift(SubscriptionRejection, variant = CaughtUpTimeout, unhandled = fatal)]
-struct EcCaughtUpTimeout {
-    #[lift(from = checkpoint)]
-    applied: u64,
-    #[lift(from = target)]
-    frontier: u64,
-    waited: Duration,
-}
-
-let result: Result<(), Fail<EcCaughtUpTimeout, lanes!(Fatal)>> =
-    Err(SubscriptionRejection::CaughtUpTimeout {
-        checkpoint: 3,
-        target: 8,
-        waited: Duration::from_secs(2),
-    }).lift();
-let Fail::Rejected(timeout) = result.unwrap_err() else { panic!("expected timeout") };
-assert_eq!((timeout.applied, timeout.frontier), (3, 8));
-```
-
-This generates a partial `Lift<SubscriptionRejection>` implementation; other
-variants are returned unchanged and `.lift()` turns them into `Fatal(Invariant)`
-with the original rejection as the source. Without `unhandled = fatal` (or with
-explicit `strict`), it generates an exhaustive `From<Source>` implementation,
-so any unhandled variant is a compile error and no Fatal lane is required.
-
-A struct accepts one source registration and uses named-field destructuring.
-Every source field must be mapped exactly once, and Rust checks names, types,
-and exhaustiveness. This form does not discard payload fields, run mappers,
-or infer rejection metadata: `Rejection` structs still declare their own
-`#[rejection(code = "...")]`. Enum destination syntax is unchanged.
-
-A **single-field tuple struct** can instead project one named field from a
-source struct with `#[lift(Source, field = name)]`. This generates
-`From<Source>` using `Self(source.name)`; the blanket `Lift` implementation
-then supplies a total lift. The projection explicitly discards the other
-source fields. For example, a shared domain rejection can retain an attempted
-value from a constraint payload:
-
-```rust
-use errlanes::{Lift, Rejection};
-
-struct ConstraintConflict<T> {
-    attempted: Option<T>,
-    diagnostic: String,
-}
-
-#[derive(Debug, Rejection, Lift)]
-#[rejection(code = "ACCOUNT_EXTERNAL_ID_ALREADY_EXISTS")]
-#[error("External id already exists: {0:?}")]
-#[lift(ConstraintConflict<Option<String>>, field = attempted)]
-struct AccountExternalIdAlreadyExists(Option<Option<String>>);
-
-let rejection = AccountExternalIdAlreadyExists::from(ConstraintConflict {
-    attempted: Some(Some("external-id".into())),
-    diagnostic: "unique constraint".into(),
-});
-assert_eq!(rejection.0, Some(Some("external-id".into())));
-```
-
-An operation enum can use `#[lift(Constraints::ExternalIdKey, into)]` to
-convert that variant's payload into this shared leaf, then use
-`#[rejection(delegate)]` to obtain metadata from the contained leaf. No
-handwritten payload `From` implementation is needed. The operation's mapping
-still decides which constraint represents that domain outcome.
-
-Tuple-struct projection accepts exactly one source registration and requires
-`field = name`. It does not accept `variant`, `strict`, `unhandled`, `into`,
-`with`, or field-level lift attributes. The selected field moves directly,
-without cloning or implicit conversion. Rust checks its accessibility and
-type; ordinary move rules apply, including restrictions on moving fields out
-of types that implement `Drop`. Generics, lifetimes, and where clauses are
-preserved. The source need not implement `Rejection` for the generated
-`From`; rejection metadata remains independently owned by the destination.
-
-A source need not be an enum. A struct rejection — the shape a wrapped foreign
-error naturally takes (see "Errors from other crates" above) — lifts as a
-whole value: `#[lift(Payload)]` with no variant suffix names the registered
-struct directly, and the entire value becomes the one field of the
-destination variant that also writes `#[lift(Payload)]`:
-
-```rust
-use errlanes::{Lift, Rejection};
-
-#[derive(Debug, errlanes::Rejection)]
-#[rejection(code = "INVALID_PAYLOAD")]
-struct Payload(std::num::ParseIntError);
-
-#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
-#[lift(Payload)]
-enum JobRejection {
-    #[lift(Payload)]
-    InvalidPayload(Payload),
-}
-
-let bad = "x".parse::<u32>().unwrap_err();
-let rejection: JobRejection = Payload(bad).into();
-assert!(matches!(rejection, JobRejection::InvalidPayload(_)));
-```
 
 ## Moving between signatures
 
@@ -1095,134 +668,6 @@ Composition includes new source cases automatically. Explicit lifts are
 useful when each addition needs review or individual cases need different
 names. When an outer layer adds no semantics of its own, it can simply reuse
 the inner rejection type.
-
-### Shared outcomes across sources
-
-A source listed without `as` imports its cases under their original variant
-names, which is what lets several families share one outcome. Unique
-variants keep their payloads, codes, levels, display, and error sources.
-When names overlap, declare a local `#[compose(merge)]` variant to receive
-every source case with that name:
-
-```rust
-use errlanes::Rejection;
-
-#[derive(Debug, errlanes::Rejection)]
-#[error("member already added")]
-#[rejection(code = "MEMBER_ALREADY_ADDED")]
-pub struct MemberAlreadyAdded;
-
-#[derive(Debug, errlanes::Rejection)]
-pub enum AddAccountMembersRejection {
-    #[error("{0}")]
-    #[rejection(delegate, from)]
-    MemberAlreadyAdded(MemberAlreadyAdded),
-}
-
-#[derive(Debug, errlanes::Rejection)]
-pub enum AddSetMembersRejection {
-    #[error("{0}")]
-    #[rejection(delegate, from)]
-    MemberAlreadyAdded(MemberAlreadyAdded),
-    #[error("account sets must belong to the same journal")]
-    #[rejection(code = "JOURNAL_ID_MISMATCH")]
-    JournalIdMismatch,
-}
-
-#[errlanes::compose(AddAccountMembersRejection, AddSetMembersRejection)]
-#[derive(Debug)]
-pub enum AddMemberRejection {
-    #[compose(merge)]
-    #[error("{0}")]
-    #[rejection(delegate, from)]
-    MemberAlreadyAdded(MemberAlreadyAdded),
-}
-
-let account = AddMemberRejection::from(
-    AddAccountMembersRejection::MemberAlreadyAdded(MemberAlreadyAdded),
-);
-let set = AddMemberRejection::from(
-    AddSetMembersRejection::MemberAlreadyAdded(MemberAlreadyAdded),
-);
-assert!(matches!(account, AddMemberRejection::MemberAlreadyAdded(_)));
-assert!(matches!(set, AddMemberRejection::MemberAlreadyAdded(_)));
-assert_eq!(Into::<&'static str>::into(set.code()), "MEMBER_ALREADY_ADDED");
-assert!(matches!(
-    AddMemberRejection::from(AddSetMembersRejection::JournalIdMismatch),
-    AddMemberRejection::JournalIdMismatch,
-));
-```
-
-The merged declaration owns its code, level, display, and source behavior;
-it must supply `#[rejection(code = "...")]` or `#[rejection(delegate)]`.
-No source wins by import order. Rust checks that each source variant's
-field shape and types fit the destination without payload conversion.
-The generated total `From` and `Lift` implementations support `?` for
-bare rejections and `.lift()?` for failures, as with prefixed composition.
-
-To merge differently named cases, or limit a merge to reviewed participants,
-list them explicitly:
-
-```rust
-# #[derive(Debug, errlanes::Rejection)]
-# pub enum Accounts { Missing { id: u64 } }
-# #[derive(Debug, errlanes::Rejection)]
-# pub enum Sets { NotFound { id: u64 } }
-#[errlanes::compose(Accounts, Sets)]
-#[derive(Debug)]
-pub enum LookupRejection {
-    #[compose(merge(Accounts::Missing, Sets::NotFound))]
-    #[error("member {id} not found")]
-    #[rejection(code = "MEMBER_NOT_FOUND")]
-    MemberNotFound { id: u64 },
-}
-
-assert!(matches!(
-    LookupRejection::from(Sets::NotFound { id: 42 }),
-    LookupRejection::MemberNotFound { id: 42 },
-));
-```
-
-Explicit participants must name actual variants of the sources listed on the
-attribute. A source case cannot target two merged variants. Unresolved name
-collisions, empty or unmatched merges, duplicate sources, and incompatible
-payloads are compile errors. A shared composition origin arriving along
-multiple paths must resolve to one canonical destination.
-
-New unique source cases are included automatically. A name-based merge also
-accepts new source cases with that name, subject to Rust's type checks; an
-explicit participant list does not absorb them. Use explicit exhaustive
-`#[lift]` mappings when every source addition needs review. A prefix exists
-to keep a family's cases distinct, so a prefixed source never joins a
-name-based merge, though an explicit participant list can still pull one of
-its cases to a canonical destination.
-
-### Mixing both forms
-
-One attribute takes any number of sources in either form, alongside local
-cases and lifts from other families:
-
-```rust
-# use errlanes::Rejection;
-# #[derive(Debug, errlanes::Rejection)]
-# pub enum Accounts { Missing { id: u64 } }
-# #[derive(Debug, errlanes::Rejection)]
-# pub enum Ledger { Closed }
-#[errlanes::compose(Accounts, Ledger as Ledger)]
-#[derive(Debug)]
-pub enum Posting {
-    Unbalanced,
-}
-
-assert!(matches!(
-    Posting::from(Accounts::Missing { id: 1 }),
-    Posting::Missing { id: 1 },
-));
-assert!(matches!(Posting::from(Ledger::Closed), Posting::LedgerClosed));
-```
-
-Source enums remain independently usable with their original, narrower
-contracts.
 
 ### The code catalogue
 
