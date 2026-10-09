@@ -294,42 +294,7 @@ assert_eq!((timeout.applied, timeout.frontier), (3, 8));
 A struct source lifts as a whole value: `#[lift(Payload)]` with no variant
 suffix, on both the enum and the variant that receives it.
 
-## At a `Box<dyn Error>` boundary
-
-A `Classify` wrapper (see "Local errors" below) carries its lane in its
-`impl Classify`, not in the value, so it must reach a carrier *before* it is
-boxed; a boundary reading the box afterwards would only see the foreign error
-underneath it. `.into_fault()?` lands a never-rejecting wrapper in its own
-`Fault<W::Lanes>`, and `.into_fail()?` lands a rejecting one in its own
-`Fail<W::Rejected, W::Lanes>`, so nothing has to be named even though `?`
-into a box leaves the destination unconstrained. Raw foreign errors and
-carriers need no such step. On the way back out, `Fault::classify(&*boxed)`
-borrows the error and returns the first lane payload or blessed foreign error
-in its `source()` chain, or `Fatal(Dependency)` if it finds neither. A
-rejection cannot cross a box as a rejection: handle or narrow it first.
-
-```rust
-use errlanes::{Fault, ResultExt};
-
-#[derive(Debug, errlanes::Classify)]
-#[classify(fatal(CorruptState), from)]
-#[error("could not decode a stored row")]
-struct StoredRow(#[source] std::io::Error);
-
-fn decode() -> Result<u8, StoredRow> {
-    Err(StoredRow(std::io::Error::other("bad bytes")))
-}
-
-// Inside a boundary whose own trait returns a box:
-fn run() -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
-    Ok(decode().into_fault()?)
-}
-
-let fault = Fault::classify(&*run().unwrap_err());
-assert!(matches!(fault, Fault::Fatal(f) if f.kind == errlanes::FatalKind::CorruptState));
-```
-
-## Local errors
+## Errors from other crates
 
 Every local error type says, through one trait, how it enters the lanes:
 
@@ -341,52 +306,9 @@ pub trait Classify: Error + Send + Sync + 'static {
 }
 ```
 
-A type is one of three shapes, never more than one:
-
-| type | `Rejected` | `Lanes` | how it is written |
-|---|---|---|---|
-| a domain outcome | itself | none | `#[derive(errlanes::Rejection)]` |
-| a fault wrapper | `Infallible` | the lane(s) it names | `#[derive(errlanes::Classify)] #[classify(fatal(Kind))]` |
-| a mixed wrapper | a domain outcome | the lane(s) its faulty variants name | `#[derive(errlanes::Classify)]`, variant by variant |
-
-**A type is a `Rejection` or it implements `Classify` directly, never both** —
-the blanket `impl<R: Rejection> Classify for R` makes a second, direct impl
-conflict (`E0119`). The split is principled: a rejection's `Display` may embed
-caller input and is never operator-facing; a fault's `Display` is exactly what
-an operator-facing message must show.
-
-A pure domain outcome — one that is never a fault, only ever rejected — is the
-common case and the one most code writes. `derive(Rejection)` gives each
-outcome a stable `code()` and a recording `level()`; `Classify` then comes
-from the blanket above, not from a second derive:
-
-```rust
-use errlanes::{Level, Rejection};
-
-#[derive(Debug, errlanes::Rejection)]
-enum Validation {
-    #[rejection(code = "INVALID_AMOUNT")]
-    InvalidAmount,
-}
-
-let rejection = Validation::InvalidAmount;
-let public_code: &'static str = rejection.code().into();
-assert_eq!(public_code, "INVALID_AMOUNT");
-assert_eq!(rejection.level(), Level::Warn);
-```
-
-The enum variant lets Rust callers match the case. The code lets an API expose
-a stable identity and lets telemetry group occurrences of the same outcome,
-even if its human-readable message changes. Codes remain typed inside the
-application and can be converted to strings at the API boundary. Never build
-either from `Display`: a rejection's message may embed caller-supplied input.
-
-The level tells the recording boundary how severely to log the rejection.
-Warn is the default: a rejection is a refused request an operator should be
-able to see. A case that needs different operational visibility can override
-it with, for example, `#[rejection(code = "INVALID_AMOUNT", level = "info")]`. Its lane is still Rejected.
-
-## Errors from other crates
+A `Rejection` gets `Classify` from a blanket impl, so a pure domain outcome
+needs only `#[derive(errlanes::Rejection)]`. Everything else is written with
+`#[derive(errlanes::Classify)]`, and a type is one or the other, never both.
 
 `sqlx::Error`, `serde_json::Error`, and anything else outside this crate never
 implements `Classify` directly — errlanes cannot know what a `404` from one
@@ -472,6 +394,41 @@ caller's — narrow it with `#[classify(delegate, narrow(Denied))]` (→
 `Fatal(Denied)`), or match the status in a hand-written wrapper to get
 `Fatal(Config)` instead. A proxy forwarding the caller's own token to upstream
 is the case that keeps `Denied` as-is.
+
+## At a `Box<dyn Error>` boundary
+
+A `Classify` wrapper carries its lane in its
+`impl Classify`, not in the value, so it must reach a carrier *before* it is
+boxed; a boundary reading the box afterwards would only see the foreign error
+underneath it. `.into_fault()?` lands a never-rejecting wrapper in its own
+`Fault<W::Lanes>`, and `.into_fail()?` lands a rejecting one in its own
+`Fail<W::Rejected, W::Lanes>`, so nothing has to be named even though `?`
+into a box leaves the destination unconstrained. Raw foreign errors and
+carriers need no such step. On the way back out, `Fault::classify(&*boxed)`
+borrows the error and returns the first lane payload or blessed foreign error
+in its `source()` chain, or `Fatal(Dependency)` if it finds neither. A
+rejection cannot cross a box as a rejection: handle or narrow it first.
+
+```rust
+use errlanes::{Fault, ResultExt};
+
+#[derive(Debug, errlanes::Classify)]
+#[classify(fatal(CorruptState), from)]
+#[error("could not decode a stored row")]
+struct StoredRow(#[source] std::io::Error);
+
+fn decode() -> Result<u8, StoredRow> {
+    Err(StoredRow(std::io::Error::other("bad bytes")))
+}
+
+// Inside a boundary whose own trait returns a box:
+fn run() -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
+    Ok(decode().into_fault()?)
+}
+
+let fault = Fault::classify(&*run().unwrap_err());
+assert!(matches!(fault, Fault::Fatal(f) if f.kind == errlanes::FatalKind::CorruptState));
+```
 
 ## Moving between signatures
 
@@ -668,99 +625,3 @@ Composition includes new source cases automatically. Explicit lifts are
 useful when each addition needs review or individual cases need different
 names. When an outer layer adds no semantics of its own, it can simply reuse
 the inner rejection type.
-
-### The code catalogue
-
-A boundary that speaks a schema (a GraphQL enum, an OpenAPI `enum`) needs
-every code a family can resolve to, without a hand-written copy. Every
-`Rejection::Code` implements `errlanes::RejectionCode`, whose `CODES` is that
-list, one `CodeInfo { code, description }` per code:
-
-- **Complete.** It follows `delegate`, `code_and_level_from`, `#[lift(..)]`
-  and `compose`, however deeply nested. A variant that lifts *one* source
-  variant contributes only that variant's codes, not all of the source's.
-- **Deduplicated.** A code reached along several paths (a diamond) appears
-  once, at its first occurrence.
-- **Ordered.** Declaration order, depth-first.
-
-`FooCode::ALL` is the `code` of every entry of `CODES`, in the same order. It
-is complete, not leaves-only.
-
-A leaf's description resolves in order:
-
-1. `#[rejection(description = "..")]`, if present.
-2. Else the first paragraph of the leaf's `///` doc comment, its lines joined
-   by a space.
-3. Else `None`.
-
-The `#[error("..")]` literal is never used: it is a `Display` template, not
-prose, and may interpolate. `description` is for when the doc comment is
-aimed at developers and the catalogue needs different wording.
-
-`description` belongs on a leaf; on a variant that forwards to another type it
-is a compile error.
-
-```rust
-use errlanes::{CodeInfo, Rejection, RejectionCode};
-
-#[derive(Debug, errlanes::Rejection)]
-pub enum CloseRejection {
-    /// The customer still has open facilities.
-    #[error("customer {customer_id} still has open facilities")]
-    HasOpenFacilities { customer_id: u64 },
-    #[rejection(description = "The customer is already closed.")]
-    #[error("customer {customer_id} is closed")]
-    AlreadyClosed { customer_id: u64 },
-    #[error("customer {customer_id} is frozen")]
-    Frozen { customer_id: u64 },
-}
-
-assert_eq!(
-    <CloseRejectionCode as RejectionCode>::CODES,
-    &[
-        CodeInfo {
-            code: "HAS_OPEN_FACILITIES",
-            description: Some("The customer still has open facilities."),
-        },
-        CodeInfo {
-            code: "ALREADY_CLOSED",
-            description: Some("The customer is already closed."),
-        },
-        CodeInfo {
-            code: "FROZEN",
-            description: None,
-        },
-    ]
-);
-
-// A boundary is generic over the family and never names a `*Code` type:
-fn publish<R: Rejection>(add_value: &mut impl FnMut(&str, Option<&str>)) {
-    for entry in <R::Code as RejectionCode>::CODES {
-        add_value(entry.code, entry.description);
-    }
-}
-fn value<R: Rejection>(rejection: &R) -> &'static str {
-    rejection.code().into()
-}
-
-let mut published = Vec::new();
-publish::<CloseRejection>(&mut |code, _| published.push(code.to_owned()));
-assert_eq!(published, ["HAS_OPEN_FACILITIES", "ALREADY_CLOSED", "FROZEN"]);
-assert_eq!(
-    value(&CloseRejection::AlreadyClosed { customer_id: 1 }),
-    "ALREADY_CLOSED"
-);
-```
-
-errlanes exposes data only: the schema shape and type names stay with the
-consumer. A hand-written `Rejection` impl must also implement
-`RejectionCode` for its `Code` type.
-
----
-
-The Rust snippets above are checked by the crate's doctests. The opening enum
-sketch compiles, and the examples execute their assertions:
-
-```sh
-nix develop -c cargo test --profile mdbook-test -p errlanes --doc
-```
