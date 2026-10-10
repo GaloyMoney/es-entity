@@ -195,7 +195,7 @@ async fn scoped_list_by_paginates_within_scope() -> anyhow::Result<()> {
         if !ret.has_next_page() {
             break;
         }
-        after = ret.into_end_cursor();
+        after = ret.into_next_cursor();
     }
     assert!(pages >= 3, "expected pagination across pages, got {pages}");
     assert_eq!(collected.len(), 5);
@@ -317,7 +317,7 @@ async fn foreign_cursor_cannot_leak_rows() -> anyhow::Result<()> {
             ListDirection::Descending,
         )
         .await?;
-    let cursor_from_a = page_a.into_end_cursor();
+    let cursor_from_a = page_a.into_next_cursor();
 
     let ret = contacts
         .list_by_created_at(
@@ -598,7 +598,7 @@ async fn scope_column_filter_combinations() -> anyhow::Result<()> {
         .await?;
     assert!(ret.entities().is_empty());
     assert!(!ret.has_next_page());
-    assert!(ret.end_cursor().is_none());
+    assert!(ret.next_cursor().is_none());
 
     // dedicated single-filter fn composes the same way
     let ret = contacts
@@ -712,7 +712,7 @@ async fn scope_column_filter_cursor_pagination() -> anyhow::Result<()> {
         if !ret.has_next_page() {
             break;
         }
-        after = ret.into_end_cursor();
+        after = ret.into_next_cursor();
     }
     assert!(pages >= 3, "expected pagination across pages, got {pages}");
     let expected: std::collections::HashSet<_> = ids_a.into_iter().collect();
@@ -737,7 +737,7 @@ async fn scope_column_filter_cursor_pagination() -> anyhow::Result<()> {
             partner_a,
             PaginatedQueryArgs {
                 first: 100,
-                after: cursor_page.into_end_cursor(),
+                after: cursor_page.into_next_cursor(),
             },
             ListDirection::Descending,
         )

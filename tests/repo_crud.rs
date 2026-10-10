@@ -180,7 +180,7 @@ async fn list_for_filters() -> anyhow::Result<()> {
             },
             PaginatedQueryArgs {
                 first: 1,
-                after: paginated_result.into_end_cursor(),
+                after: paginated_result.into_next_cursor(),
             },
         )
         .await?;
@@ -266,8 +266,11 @@ async fn collecting_pages_preserves_requested_size() -> anyhow::Result<()> {
         .await?;
     assert_eq!(zero_page.requested_size(), 0);
     assert!(zero_page.entities().is_empty());
-    assert!(zero_page.has_next_page());
-    assert!(zero_page.end_cursor().is_none());
+    assert!(
+        !zero_page.has_next_page(),
+        "a page that fetched no rows has no continuation"
+    );
+    assert!(zero_page.next_cursor().is_none());
     assert!(zero_page.into_next_query().is_none());
 
     Ok(())

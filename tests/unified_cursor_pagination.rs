@@ -115,7 +115,7 @@ async fn paginate(
         }
         if let Some(query) = &next {
             assert_eq!(query.first, first);
-            assert!(query.after.is_some(), "has_next_page without end_cursor");
+            assert!(query.after.is_some(), "has_next_page without next_cursor");
         }
     }
     out.retain(|id| ours.contains(id));
