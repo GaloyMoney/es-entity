@@ -105,6 +105,14 @@ impl UpdateAllFn<'_> {
         } else {
             quote! { es_entity::RepoFault }
         };
+        let (narrow_import, narrow_call) = if self.update_can_reject {
+            (quote! {}, quote! {})
+        } else {
+            (
+                quote! { use es_entity::errlanes::ResultExt as _; },
+                quote! { .narrow_rejected() },
+            )
+        };
 
         let (fn_name, entities_param, entities_prelude, iter_ref, iter_mut_ref) = match mode {
             BatchMode::OwnedSlice => (
@@ -248,6 +256,7 @@ impl UpdateAllFn<'_> {
                 Some(vecs),
                 Some(pushes),
                 quote! {
+                    #narrow_import
                     let expected_events = all_ids.len();
                     let rows = sqlx::query(#query)
                         #(#bind_tokens)*
@@ -255,7 +264,8 @@ impl UpdateAllFn<'_> {
                         #snap_binds
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_update_write(e, format!("{} batch conflict", #table_name)))?;
+                        .map_err(|e| Self::classify_update_write(e, format!("{} batch conflict", #table_name)))
+                        #narrow_call?;
 
                     #forgettable_insert
 

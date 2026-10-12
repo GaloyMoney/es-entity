@@ -303,7 +303,7 @@ async fn post_persist_hook_error_propagates_through_update() -> anyhow::Result<(
 
     match result {
         Err(ref e) => {
-            let msg = fatal_source_message(e);
+            let msg = fault_source_message(e);
             assert!(
                 msg.contains("blocked name"),
                 "expected blocked name message, got: {msg}"
