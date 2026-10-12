@@ -1,3 +1,11 @@
+# [cala release v0.18.2](https://github.com/GaloyMoney/cala/releases/tag/0.18.2)
+
+
+
+### Bug Fixes
+
+- Catalog is authoritative for update_can_reject (#274)
+
 # [cala release v0.18.1](https://github.com/GaloyMoney/cala/releases/tag/0.18.1)
 
 
