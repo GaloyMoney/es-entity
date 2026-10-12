@@ -69,6 +69,15 @@ impl ToTokens for UpdateFn<'_> {
             quote! { es_entity::RepoFault }
         };
 
+        let (constraint_values_binding, reject_handling) = if self.update_can_reject {
+            (
+                constraint_values,
+                quote! { .map_rejected(|r| r.with_attempted(__constraint_values)) },
+            )
+        } else {
+            (quote! {}, quote! { .narrow_rejected() })
+        };
+
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
                 self.#f(op, &mut [&mut *entity]).await.map_err(errlanes::Fail::lift::<#constraint_violation, errlanes::lanes!(Transient, Fatal)>)?;
@@ -174,7 +183,7 @@ impl ToTokens for UpdateFn<'_> {
                 use es_entity::errlanes::ResultExt as _;
 
                 #assignments
-                    #constraint_values
+                #constraint_values_binding
                 #gather
                 #snap_gather
 
@@ -187,7 +196,7 @@ impl ToTokens for UpdateFn<'_> {
                     .fetch_all(op.as_executor())
                     .await
                     .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)))
-                    .map_rejected(|r| r.with_attempted(__constraint_values))?;
+                    #reject_handling?;
 
                 #forgettable_code
 

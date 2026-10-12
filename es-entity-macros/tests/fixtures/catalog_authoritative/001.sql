@@ -1,0 +1,5 @@
+CREATE TABLE gadgets (
+    id UUID PRIMARY KEY,
+    name VARCHAR NOT NULL UNIQUE,
+    note VARCHAR
+);

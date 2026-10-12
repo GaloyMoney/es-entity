@@ -435,16 +435,15 @@ impl RepositoryOptions {
         if self.index_catalog().table_constraints(table).is_empty() {
             return self.columns.updates_needed();
         }
+        let updatable = |name: &String| {
+            self.columns
+                .column_enum_columns()
+                .find(|c| c.name() == name)
+                .is_some_and(|c| c.persist_on_update() && !c.is_id())
+        };
         crate::repo::error_types::enumerate_constraints(self)
             .iter()
-            .any(|(_, _, col_names)| {
-                col_names.iter().any(|name| {
-                    self.columns
-                        .column_enum_columns()
-                        .find(|c| c.name() == name)
-                        .is_some_and(Column::persist_on_update)
-                })
-            })
+            .any(|(_, _, col_names)| col_names.iter().any(updatable))
     }
 
     pub fn query_fn_generics() -> proc_macro2::TokenStream {
@@ -682,5 +681,38 @@ mod tests {
             opts.update_can_reject(),
             "a nested child can reject on its own constraints even if the parent cannot"
         );
+    }
+
+    #[test]
+    fn update_cannot_reject_when_the_catalog_only_constrains_update_skipped_columns() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Gadget",
+                migrations_dir = "tests/fixtures/catalog_authoritative",
+                columns(name(ty = "String", update(persist = false)), note(ty = "String"))
+            )]
+            struct Gadgets {
+                pool: sqlx::PgPool,
+            }
+        };
+        let opts = RepositoryOptions::from_derive_input(&input).unwrap();
+        assert!(!opts.index_catalog().table_constraints("gadgets").is_empty());
+        assert!(!opts.update_can_reject());
+    }
+
+    #[test]
+    fn update_can_reject_when_the_catalog_constrains_an_update_persisted_column() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Gadget",
+                migrations_dir = "tests/fixtures/catalog_authoritative",
+                columns(name(ty = "String"), note(ty = "String"))
+            )]
+            struct Gadgets {
+                pool: sqlx::PgPool,
+            }
+        };
+        let opts = RepositoryOptions::from_derive_input(&input).unwrap();
+        assert!(opts.update_can_reject());
     }
 }

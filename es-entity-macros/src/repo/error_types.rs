@@ -57,7 +57,10 @@ fn constraint_variant_ident(
 }
 
 /// Every constraint on the entity's table, enumerated once: `(name, kind,
-/// matched column names)`. `matched` is the catalog's own columns when it
+/// matched column names)`. When the catalog has an entry for the table it is
+/// authoritative: declared columns it does not constrain get no synthesized
+/// `{table}_{col}_key`. Only without one is that convention assumed.
+/// `matched` is the catalog's own columns when it
 /// has an entry for `name`, the conventional single-column match otherwise,
 /// and empty for an opaque CHECK expression the catalog cannot resolve to
 /// columns. The id column contributes exactly one entry, under the pkey's
@@ -77,10 +80,13 @@ pub(crate) fn enumerate_constraints(
     let catalog = opts.index_catalog();
     let columns: Vec<_> = opts.columns.column_enum_columns().collect();
     let mut constraints = catalog.table_constraints(table);
+    let catalog_has_table = !constraints.is_empty();
     for col in &columns {
         let name = col.name().to_string();
         let name = if col.is_id() {
             catalog.pkey_constraint_name(table, &name)
+        } else if catalog_has_table {
+            continue;
         } else {
             format!("{table}_{name}_key")
         };
@@ -428,5 +434,52 @@ mod tests {
             let ty = &fields.unnamed[0].ty;
             assert!(quote!(#ty).to_string().contains("ConstraintConflict"));
         }
+    }
+
+    fn violation_variants(input: syn::DeriveInput, enum_name: &str) -> Vec<String> {
+        use darling::FromDeriveInput;
+        let opts = RepositoryOptions::from_derive_input(&input).unwrap();
+        let generated: syn::File = syn::parse2(ErrorTypes::new(&opts).generate()).unwrap();
+        let mut names: Vec<_> = generated
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Enum(item) if item.ident == enum_name => {
+                    Some(item.variants.iter().map(|v| v.ident.to_string()))
+                }
+                _ => None,
+            })
+            .expect("generated rejection enum")
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn declared_column_absent_from_a_present_catalog_gets_no_key_variant() {
+        let names = violation_variants(
+            syn::parse_quote! {
+                #[es_repo(
+                    entity = "Gadget",
+                    migrations_dir = "tests/fixtures/catalog_authoritative",
+                    columns(name(ty = "String"), note(ty = "String"))
+                )]
+                struct Gadgets { pool: sqlx::PgPool }
+            },
+            "GadgetConstraintViolation",
+        );
+        assert_eq!(names, ["NameKey", "Pkey"]);
+    }
+
+    #[test]
+    fn declared_column_without_a_catalog_keeps_the_synthesized_key_variant() {
+        let names = violation_variants(
+            syn::parse_quote! {
+                #[es_repo(entity = "Gizmo", columns(note(ty = "String")))]
+                struct Gizmos { pool: sqlx::PgPool }
+            },
+            "GizmoConstraintViolation",
+        );
+        assert!(names.contains(&"NoteKey".to_string()), "{names:?}");
     }
 }
