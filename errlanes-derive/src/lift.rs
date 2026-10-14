@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
-use syn::{Fields, Path, Token, parse::Parse};
+use syn::{Fields, Path, Token, parse::Parse, spanned::Spanned};
 
 pub(crate) struct Registration {
     pub(crate) source: Path,
@@ -483,11 +483,12 @@ fn conversion_impl(
     // so one call-site method (`lift`) covers strict and partial alike.
     // Emitting both here would collide with that blanket (E0119).
     if partial {
+        let unhandled = syn::Ident::new("unhandled", source.span());
         quote! {
             impl #impl_generics errlanes::Lift<#source> for #name #ty_generics #where_clause {
                 type Unmapped = #source;
                 fn lift(source: #source) -> Result<Self, Self::Unmapped> {
-                    match source { #(#arms,)* unhandled => Err(unhandled) }
+                    match source { #(#arms,)* #unhandled => Err(#unhandled) }
                 }
             }
         }
