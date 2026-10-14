@@ -96,7 +96,14 @@ fn index_violation_arm(constraint_violation: &syn::Ident, events_table: &str) ->
             let name = db_err.constraint().unwrap_or("unknown").to_owned();
             match #constraint_violation::from_database(e, &name) {
                 Ok(rejection) => errlanes::Fail::Rejected(rejection),
-                Err(source) => errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, source).with_context(name).into(),
+                Err(source) => {
+                    let context: std::borrow::Cow<'static, str> =
+                        match #constraint_violation::foreign_key_context(&name) {
+                            Some(context) => std::borrow::Cow::Borrowed(context),
+                            None => std::borrow::Cow::Owned(name),
+                        };
+                    errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, source).with_context(context).into()
+                }
             }
         }
     }

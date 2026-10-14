@@ -23,16 +23,18 @@ Writes return `RepoWriteError<C>`, where `C` is the repository's typed
 constraint enum described next — unless the write's own statement can hit no
 constraint *and* the repository has no nested children, in which case it
 returns the plain `RepoFault` instead: there is nothing left in the
-`Rejected` lane for it to ever construct. `update`/`update_all` narrow this
-way whenever every column they persist on update is otherwise unconstrained
-and nothing is nested (a repo of only scope/reference columns written once on
-create, say); `delete` and `forget` keep `RepoWriteError` unconditionally.
+`Rejected` lane for it to ever construct. `update`/`update_all`, `forget` and
+soft `delete` narrow this way whenever every column `update` persists has no
+unique, primary-key or check constraint and nothing is nested (a repo of only
+scope/reference columns written once on create, or columns that only carry a
+foreign key, say).
 
 ## Typed constraint violations
 
 `#[derive(EsRepo)]` reads the migration catalog and generates a rejection enum
 with one case per constraint on the entity's tables — primary key, unique
-indexes (partial and composite included), foreign keys and checks:
+indexes (partial and composite included) and checks. Foreign keys get no case,
+see [What becomes a fault](#what-becomes-a-fault):
 
 ```rust,ignore
 pub enum UserConstraintViolation {
@@ -98,6 +100,14 @@ to expect the other way round:
   not own, say — is `Fatal(Invariant)`, with the constraint name as context and
   the `sqlx::Error` as source. The generated enum names every constraint the
   repository can reject on; anything else is a bug in the schema or the query.
+- **A foreign key violation** is `Fatal(Invariant)`, with the table, the
+  constraint and its column as context and the `sqlx::Error` as source — never
+  a typed rejection and never carrying the offending value. A unique violation
+  can come from legitimate caller input; a foreign key violation means a row the
+  write references is absent, which holds only if referenced rows are never
+  hard-deleted. Check a caller-supplied foreign id up front (`maybe_find_by_*`)
+  and reject it as a typed not-found; if a table ever gains hard deletes, give
+  that call site the same pre-check or its own race classification.
 - **A required `find_by_*` on a missing row** is `Fatal(Invariant)` with
   `NotFound` as its source. `find_by_*` asserts the row exists. For a key the
   caller supplied, use `maybe_find_by_*` and name the not-found case where the

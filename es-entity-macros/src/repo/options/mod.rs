@@ -414,8 +414,10 @@ impl RepositoryOptions {
     /// `RepoWriteError<CV>` — there is nothing left in the `Rejected` lane
     /// for them to ever construct.
     ///
-    /// 1. No constraint on the entity's table has a column that persists on
-    ///    update — reusing [`crate::repo::error_types::enumerate_constraints`],
+    /// 1. No unique, primary-key or check constraint on the entity's table has
+    ///    a column that persists on update. Foreign keys do not count: a
+    ///    violation is an invariant fault, never a rejection, on the
+    ///    precondition that referenced rows are not hard-deleted. Reusing [`crate::repo::error_types::enumerate_constraints`],
     ///    the same enumeration `ErrorTypes` builds the violation enum from,
     ///    so this sees exactly the same constraint set (id-only pkey
     ///    resolution via the catalog included). When the catalog has no
@@ -443,6 +445,9 @@ impl RepositoryOptions {
         };
         crate::repo::error_types::enumerate_constraints(self)
             .iter()
+            .filter(|(_, kind, _)| {
+                !matches!(kind, crate::index_catalog::ConstraintKind::ForeignKey)
+            })
             .any(|(_, _, col_names)| col_names.iter().any(updatable))
     }
 
@@ -714,5 +719,56 @@ mod tests {
         };
         let opts = RepositoryOptions::from_derive_input(&input).unwrap();
         assert!(opts.update_can_reject());
+    }
+}
+
+#[cfg(test)]
+mod foreign_key_tests {
+    use darling::FromDeriveInput;
+    use syn::parse_quote;
+
+    use super::*;
+
+    fn opts(columns: &str) -> RepositoryOptions {
+        let columns: proc_macro2::TokenStream = columns.parse().unwrap();
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "FkWidget", migrations_dir = "tests/fixtures/fk_unique", columns(#columns))]
+            struct FkWidgets {
+                pool: sqlx::PgPool,
+            }
+        };
+        RepositoryOptions::from_derive_input(&input).unwrap()
+    }
+
+    #[test]
+    fn update_cannot_reject_when_only_a_foreign_key_column_persists() {
+        let opts =
+            opts(r#"owner_id(ty = "OwnerId"), name(ty = "String", update(persist = false))"#);
+        assert!(!opts.update_can_reject());
+    }
+
+    #[test]
+    fn update_can_reject_when_a_unique_column_persists_next_to_a_foreign_key() {
+        let opts = opts(r#"owner_id(ty = "OwnerId"), name(ty = "String")"#);
+        assert!(opts.update_can_reject());
+    }
+
+    #[test]
+    fn foreign_key_has_no_violation_variant_but_is_classified_at_runtime() {
+        let opts = opts(r#"owner_id(ty = "OwnerId"), name(ty = "String")"#);
+        let generated = crate::repo::error_types::ErrorTypes::new(&opts)
+            .generate()
+            .to_string();
+        assert!(!generated.contains("OwnerIdFkey"), "{generated}");
+        assert!(
+            generated.contains("FkWidgetNameKey") || generated.contains("NameKey"),
+            "{generated}"
+        );
+        assert!(
+            generated.contains(
+                "\"foreign key violation on fk_widgets.fk_widgets_owner_id_fkey (owner_id)\""
+            ),
+            "{generated}"
+        );
     }
 }

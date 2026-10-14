@@ -81,15 +81,6 @@ fn rejected_user(
     }
 }
 
-fn rejected_order_item(
-    err: es_entity::RepoWriteError<OrderItemConstraintViolation>,
-) -> OrderItemConstraintViolation {
-    match err {
-        Fail::Rejected(cv) => cv,
-        other => panic!("expected Rejected, got {other:?}"),
-    }
-}
-
 // ===========================================================================
 // Constraint violation tests
 // ===========================================================================
@@ -299,7 +290,7 @@ async fn update_to_duplicate_email_returns_constraint_violation_with_value() -> 
 // ===========================================================================
 
 #[tokio::test]
-async fn create_fk_violation_returns_constraint_violation() -> anyhow::Result<()> {
+async fn create_fk_violation_is_a_fatal_invariant() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let order_items = OrderItems::new(pool);
 
@@ -314,23 +305,28 @@ async fn create_fk_violation_returns_constraint_violation() -> anyhow::Result<()
         .unwrap();
     let err = match order_items.create(item).await {
         Err(e) => e,
-        Ok(_) => panic!("expected constraint violation"),
+        Ok(_) => panic!("expected foreign key violation"),
     };
-    let cv = rejected_order_item(err);
-
-    assert_eq!(cv.constraint_name(), "order_items_order_id_fkey");
-    assert!(matches!(&cv, OrderItemConstraintViolation::OrderIdFkey(_)));
-    assert_eq!(cv.kind(), ConstraintKind::ForeignKey);
-
-    assert!(cv.is_foreign_key());
-    assert!(!cv.is_unique());
-    assert!(!cv.is_check());
+    assert_foreign_key_invariant(err);
 
     Ok(())
 }
 
+fn assert_foreign_key_invariant(err: es_entity::RepoWriteError<OrderItemConstraintViolation>) {
+    let Fail::Fatal(fatal) = err else {
+        panic!("expected Fatal(Invariant), got {err:?}")
+    };
+    assert_eq!(fatal.kind, FatalKind::Invariant);
+    assert_eq!(
+        fatal.context.as_deref(),
+        Some("foreign key violation on order_items.order_items_order_id_fkey (order_id)")
+    );
+    let source = std::error::Error::source(&fatal).expect("sqlx error as source");
+    assert!(source.is::<sqlx::Error>());
+}
+
 #[tokio::test]
-async fn create_all_fk_violation_returns_constraint_violation() -> anyhow::Result<()> {
+async fn create_all_fk_violation_is_a_fatal_invariant() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let order_items = OrderItems::new(pool);
 
@@ -344,12 +340,9 @@ async fn create_all_fk_violation_returns_constraint_violation() -> anyhow::Resul
         .unwrap();
     let err = match order_items.create_all(vec![item]).await {
         Err(e) => e,
-        Ok(_) => panic!("expected constraint violation"),
+        Ok(_) => panic!("expected foreign key violation"),
     };
-    let cv = rejected_order_item(err);
-
-    assert_eq!(cv.constraint_name(), "order_items_order_id_fkey");
-    assert!(matches!(&cv, OrderItemConstraintViolation::OrderIdFkey(_)));
+    assert_foreign_key_invariant(err);
 
     Ok(())
 }

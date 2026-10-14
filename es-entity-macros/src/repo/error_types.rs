@@ -133,6 +133,7 @@ impl<'a> ErrorTypes<'a> {
         let mut classifiers = Vec::new();
         let mut set_values = Vec::new();
         let mut payloads = Vec::new();
+        let mut foreign_keys = Vec::new();
         // A nested repository imports its whole constraint family under a
         // prefix, which the compose attribute lists as `Source as Prefix`.
         let mut imports = Vec::new();
@@ -190,6 +191,14 @@ impl<'a> ErrorTypes<'a> {
                 // `set_values` arm either: the id is already always
                 // present, so `with_attempted` is the identity on `Pkey`
                 // via the catch-all below.
+                continue;
+            }
+            if matches!(kind, ConstraintKind::ForeignKey) {
+                let context = format!(
+                    "foreign key violation on {table}.{name} ({})",
+                    col_names.join(", ")
+                );
+                foreign_keys.push(quote! { #name => Some(#context) });
                 continue;
             }
             let variant = constraint_variant_ident(table, &name, &mut taken);
@@ -275,6 +284,10 @@ impl<'a> ErrorTypes<'a> {
                 #[doc(hidden)]
                 pub fn from_database(source: sqlx::Error, name: &str) -> Result<Self, sqlx::Error> {
                     match name { #(#classifiers,)* _ => Err(source) }
+                }
+                #[doc(hidden)]
+                pub fn foreign_key_context(name: &str) -> Option<&'static str> {
+                    match name { #(#foreign_keys,)* _ => None }
                 }
                 #[doc(hidden)]
                 pub fn with_attempted(self, values: #values) -> Self {
@@ -423,7 +436,8 @@ mod tests {
         let generated_tokens = quote!(#generated).to_string();
         assert!(generated_tokens.contains("fn pkey_from_database"));
         assert!(generated_tokens.contains("\"shared_ids_actual_pk\""));
-        for expected in ["IdFkey", "IdCheck", "IdKey"] {
+        assert!(variants.iter().all(|v| v.ident != "IdFkey"));
+        for expected in ["IdCheck", "IdKey"] {
             let variant = variants
                 .iter()
                 .find(|v| v.ident == expected)
