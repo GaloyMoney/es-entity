@@ -1,3 +1,11 @@
+# [cala release v0.18.3](https://github.com/GaloyMoney/cala/releases/tag/0.18.3)
+
+
+
+### Features
+
+- Guarded and nested lift arms (#275)
+
 # [cala release v0.18.2](https://github.com/GaloyMoney/cala/releases/tag/0.18.2)
 
 
