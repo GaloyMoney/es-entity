@@ -308,6 +308,45 @@ pub trait ResultExt<T, E>: Sized {
         E: IntoLanes,
         E::Rejected: Rejection;
 
+    /// Ends a call site on the faults alone: `on_ok` maps the success value,
+    /// `on_rejected` receives the rejection by value and answers with the
+    /// success value to continue with or a [`Fault`] of its own. Faults
+    /// already on the result pass through untouched.
+    ///
+    /// The closure's `match` is the exhaustiveness proof. When every member
+    /// of the rejection is handled there is nothing left to narrow, so no
+    /// `narrow_rejected()` is needed, and a member added later is a compile
+    /// error in the closure instead of a silent `Fatal(Invariant)`:
+    ///
+    /// ```
+    /// use errlanes::{Fail, Fault, ResultExt, lanes};
+    ///
+    /// #[derive(Debug, errlanes::Rejection)]
+    /// #[rejection(code = "ALREADY_ADDED")]
+    /// struct AlreadyAdded;
+    ///
+    /// fn add() -> Result<u32, Fail<AlreadyAdded, lanes!(Transient, Fatal)>> {
+    ///     Err(Fail::Rejected(AlreadyAdded))
+    /// }
+    ///
+    /// fn ensure_added() -> Result<(), Fault<lanes!(Transient, Fatal)>> {
+    ///     add().absorb(|_| (), |AlreadyAdded| Ok(()))
+    /// }
+    ///
+    /// assert!(ensure_added().is_ok());
+    /// ```
+    ///
+    /// Where some members are invariants, the closure names each as a fault
+    /// explicitly: `Err(Fatal::from_error(FatalKind::Invariant, r).into())`.
+    fn absorb<U>(
+        self,
+        on_ok: impl FnOnce(T) -> U,
+        on_rejected: impl FnOnce(E::Rejected) -> Result<U, Fault<E::Lanes>>,
+    ) -> Result<U, Fault<E::Lanes>>
+    where
+        E: IntoLanes,
+        E::Rejected: Rejection;
+
     /// Maps the rejection with a closure and leaves every other lane as it
     /// is: the `Result`-level form of [`Fail::map_rejected`]. For a
     /// type-level remap use [`lift`](Self::lift); this is for enriching a
@@ -385,6 +424,24 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
         match self {
             Ok(value) => Ok(Ok(value)),
             Err(e) => e.into_lanes().rejected().map(Err),
+        }
+    }
+
+    fn absorb<U>(
+        self,
+        on_ok: impl FnOnce(T) -> U,
+        on_rejected: impl FnOnce(E::Rejected) -> Result<U, Fault<E::Lanes>>,
+    ) -> Result<U, Fault<E::Lanes>>
+    where
+        E: IntoLanes,
+        E::Rejected: Rejection,
+    {
+        match self {
+            Ok(value) => Ok(on_ok(value)),
+            Err(e) => match e.into_lanes().rejected() {
+                Ok(rejected) => on_rejected(rejected),
+                Err(fault) => Err(fault),
+            },
         }
     }
 
