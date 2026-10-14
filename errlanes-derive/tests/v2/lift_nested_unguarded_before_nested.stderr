@@ -1,0 +1,5 @@
+error: unguarded arm for `Outer::A` must come after its guarded arms
+  --> tests/v2/lift_nested_unguarded_before_nested.rs:14:5
+   |
+14 |     #[lift(Outer::A(Mid::B))]
+   |     ^

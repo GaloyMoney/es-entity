@@ -1,0 +1,5 @@
+error: a nested lift case takes exactly one inner case
+  --> tests/v2/lift_nested_two_inner.rs:13:20
+   |
+13 |     #[lift(Outer::A(Mid::B, Mid::Y))]
+   |                    ^^^^^^^^^^^^^^^^

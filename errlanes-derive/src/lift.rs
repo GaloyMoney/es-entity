@@ -30,11 +30,93 @@ impl Parse for Registration {
         Ok(Self { source, partial })
     }
 }
+pub(crate) struct Case {
+    path: Path,
+    inner: Option<Box<Case>>,
+}
+impl Case {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn leaf_path(&self) -> &Path {
+        match &self.inner {
+            Some(inner) => inner.leaf_path(),
+            None => &self.path,
+        }
+    }
+
+    fn is_nested(&self) -> bool {
+        self.inner.is_some()
+    }
+
+    fn key(&self) -> String {
+        let path = self.path.to_token_stream().to_string();
+        match &self.inner {
+            Some(inner) => format!("{path}({})", inner.key()),
+            None => path,
+        }
+    }
+
+    fn ancestor_keys(&self) -> Vec<String> {
+        let mut paths = Vec::new();
+        let mut level = self;
+        loop {
+            paths.push(level.path.to_token_stream().to_string());
+            match &level.inner {
+                Some(inner) => level = inner,
+                None => break,
+            }
+        }
+        (1..paths.len())
+            .map(|depth| {
+                paths[..depth - 1]
+                    .iter()
+                    .rev()
+                    .fold(paths[depth - 1].clone(), |key, path| {
+                        format!("{path}({key})")
+                    })
+            })
+            .collect()
+    }
+
+    fn nest(&self, leaf: &dyn Fn(&Path) -> TokenStream) -> TokenStream {
+        match &self.inner {
+            Some(inner) => {
+                let path = &self.path;
+                let inner = inner.nest(leaf);
+                quote! { #path(#inner) }
+            }
+            None => leaf(&self.path),
+        }
+    }
+}
+impl Parse for Case {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let path = input.parse()?;
+        let inner = if input.peek(syn::token::Paren) {
+            let content;
+            let paren = syn::parenthesized!(content in input);
+            let inner: Case = content.parse()?;
+            if !content.is_empty() {
+                return Err(syn::Error::new(
+                    paren.span.join(),
+                    "a nested lift case takes exactly one inner case",
+                ));
+            }
+            Some(Box::new(inner))
+        } else {
+            None
+        };
+        Ok(Self { path, inner })
+    }
+}
 pub(crate) struct Mapping {
-    pub case: Path,
+    pub case: Case,
     pub with: Option<Path>,
     pub field: Option<syn::Ident>,
     pub into: bool,
+    pub when: Option<Path>,
 }
 impl Parse for Mapping {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
@@ -42,9 +124,18 @@ impl Parse for Mapping {
         let mut with = None;
         let mut field = None;
         let mut into = false;
+        let mut when = None;
         while input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
             let key: syn::Ident = input.parse()?;
+            if key == "when" {
+                if when.is_some() {
+                    return Err(syn::Error::new_spanned(key, "duplicate `when`"));
+                }
+                input.parse::<Token![=]>()?;
+                when = Some(input.parse()?);
+                continue;
+            }
             if key == "into" {
                 if into {
                     return Err(syn::Error::new_spanned(key, "duplicate `into`"));
@@ -84,7 +175,7 @@ impl Parse for Mapping {
             } else {
                 return Err(syn::Error::new_spanned(
                     key,
-                    "expected `with = mapper`, `field = name`, or `into`",
+                    "expected `with = mapper`, `field = name`, `into`, or `when = predicate`",
                 ));
             }
         }
@@ -93,6 +184,7 @@ impl Parse for Mapping {
             with,
             field,
             into,
+            when,
         })
     }
 }
@@ -113,7 +205,7 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         }
     }
     let mut mappings = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut unguarded: Vec<String> = Vec::new();
     for variant in &data.variants {
         for field in &variant.fields {
             if let Some(attr) = field.attrs.iter().find(|a| a.path().is_ident("lift")) {
@@ -128,11 +220,33 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 continue;
             }
             let mapping = attr.parse_args::<Mapping>()?;
-            if !seen.insert(mapping.case.to_token_stream().to_string()) {
-                return Err(syn::Error::new_spanned(
+            let key = mapping.case.key();
+            let must_follow = |unguarded_key: &str| {
+                syn::Error::new_spanned(
                     attr,
-                    "source variant mapped more than once",
-                ));
+                    format!(
+                        "unguarded arm for `{}` must come after its guarded arms",
+                        unguarded_key.replace(' ', "")
+                    ),
+                )
+            };
+            if unguarded.contains(&key) {
+                return Err(if mapping.when.is_some() {
+                    must_follow(&key)
+                } else {
+                    syn::Error::new_spanned(attr, "source variant mapped more than once")
+                });
+            }
+            if let Some(ancestor) = mapping
+                .case
+                .ancestor_keys()
+                .into_iter()
+                .find(|ancestor| unguarded.contains(ancestor))
+            {
+                return Err(must_follow(&ancestor));
+            }
+            if mapping.when.is_none() {
+                unguarded.push(key);
             }
             // `#[lift(Payload)]` (the registered source itself, no variant
             // suffix) is a whole-value arm: `Payload` is a struct source,
@@ -141,14 +255,20 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             // forwarding arm. A bare source matching a registration wins the
             // whole-value reading; otherwise the last segment is popped off
             // and matched as a variant, as before.
-            let case_key = mapping.case.to_token_stream().to_string();
+            let case_key = mapping.case.path().to_token_stream().to_string();
             let whole_value = registrations
                 .iter()
                 .any(|r| r.source.to_token_stream().to_string() == case_key);
+            if whole_value && mapping.case.is_nested() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "a whole-value lift cannot be nested",
+                ));
+            }
             let owner = if whole_value {
-                mapping.case.clone()
+                mapping.case.path().clone()
             } else {
-                let mut owner = mapping.case.clone();
+                let mut owner = mapping.case.path().clone();
                 owner.segments.pop();
                 owner.segments.pop_punct();
                 owner
@@ -161,7 +281,7 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                     "source family requires enum-level #[lift(Source)] registration",
                 ));
             }
-            mappings.push((owner, whole_value, variant, mapping));
+            mappings.push((owner, whole_value, variant, mapping, attr));
         }
     }
     let mut out = TokenStream::new();
@@ -173,7 +293,45 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             return Err(syn::Error::new_spanned(source, "duplicate lift source"));
         }
         let mut arms = Vec::new();
-        for (owner, whole_value, variant, mapping) in &mappings {
+        for (owner, _, _, mapping, attr) in &mappings {
+            if owner.to_token_stream().to_string() != key {
+                continue;
+            }
+            if mapping.case.is_nested() && !registration.partial {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    format!(
+                        "a nested lift case leaves `{}` partially mapped; register \
+                         `#[lift({}, unhandled = fatal)]`",
+                        mapping
+                            .case
+                            .path()
+                            .to_token_stream()
+                            .to_string()
+                            .replace(' ', ""),
+                        key.replace(' ', ""),
+                    ),
+                ));
+            }
+            if let Some(when) = &mapping.when {
+                let case_key = mapping.case.key();
+                let caught = mappings.iter().any(|(_, _, _, other, _)| {
+                    other.when.is_none() && other.case.key() == case_key
+                });
+                if !registration.partial && !caught {
+                    return Err(syn::Error::new_spanned(
+                        when,
+                        format!(
+                            "guards leave `{0}` partially mapped; add an unguarded arm for it \
+                             or register `#[lift({1}, unhandled = fatal)]`",
+                            case_key.replace(' ', ""),
+                            key.replace(' ', ""),
+                        ),
+                    ));
+                }
+            }
+        }
+        for (owner, whole_value, variant, mapping, _) in &mappings {
             if owner.to_token_stream().to_string() != key {
                 continue;
             }
@@ -184,13 +342,24 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 .iter()
                 .filter(|a| a.path().is_ident("cfg"))
                 .collect();
+            let guard = mapping.when.as_ref().map(|pred| quote!(if #pred(&payload)));
+            let bound = case.nest(&|leaf| quote!(#leaf(payload)));
             let arm = if let Some(mapper) = &mapping.with {
                 // The mapper consumes the whole selected source; supports genuine shape changes.
-                quote! { value @ #case { .. } => Ok(#mapper(value)) }
+                let whole = case.nest(&|leaf| quote!(#leaf { .. }));
+                match &mapping.when {
+                    Some(pred) if *whole_value => {
+                        quote! { value @ #whole if #pred(&value) => Ok(#mapper(value)) }
+                    }
+                    Some(pred) => {
+                        quote! { #bound if #pred(&payload) => Ok(#mapper(#bound)) }
+                    }
+                    None => quote! { value @ #whole => Ok(#mapper(value)) },
+                }
             } else if mapping.into {
                 if *whole_value {
                     return Err(syn::Error::new_spanned(
-                        case,
+                        case.path(),
                         "an `into` lift requires a source variant (`Source::Variant`)",
                     ));
                 }
@@ -199,11 +368,11 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 let converted = quote!(::core::convert::Into::into(payload));
                 match &variant.fields {
                     Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
-                        quote! { #case(payload) => Ok(Self::#dest(#converted)) }
+                        quote! { #bound #guard => Ok(Self::#dest(#converted)) }
                     }
                     Fields::Named(fields) if fields.named.len() == 1 => {
                         let field = &fields.named[0].ident;
-                        quote! { #case(payload) => Ok(Self::#dest { #field: #converted }) }
+                        quote! { #bound #guard => Ok(Self::#dest { #field: #converted }) }
                     }
                     _ => {
                         return Err(syn::Error::new_spanned(
@@ -222,12 +391,12 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 // names, so it cannot validate the shape ahead of time.
                 match &variant.fields {
                     Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
-                        quote! { #case(payload) => Ok(Self::#dest(payload.#field)) }
+                        quote! { #bound #guard => Ok(Self::#dest(payload.#field)) }
                     }
                     Fields::Named(fields) if fields.named.len() == 1 => {
                         let dest_field = &fields.named[0].ident;
                         quote! {
-                            #case(payload) => Ok(Self::#dest { #dest_field: payload.#field })
+                            #bound #guard => Ok(Self::#dest { #dest_field: payload.#field })
                         }
                     }
                     _ => {
@@ -240,13 +409,15 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             } else if *whole_value {
                 // `Payload` is a struct source: the whole value becomes the
                 // one field of the destination variant.
+                let case = case.path();
+                let guard = mapping.when.as_ref().map(|pred| quote!(if #pred(&value)));
                 match &variant.fields {
                     Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
-                        quote! { value @ #case { .. } => Ok(Self::#dest(value)) }
+                        quote! { value @ #case { .. } #guard => Ok(Self::#dest(value)) }
                     }
                     Fields::Named(fields) if fields.named.len() == 1 => {
                         let field = &fields.named[0].ident;
-                        quote! { value @ #case { .. } => Ok(Self::#dest { #field: value }) }
+                        quote! { value @ #case { .. } #guard => Ok(Self::#dest { #field: value }) }
                     }
                     _ => {
                         return Err(syn::Error::new_spanned(
@@ -256,18 +427,39 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                         ));
                     }
                 }
+            } else if mapping.when.is_some() {
+                match &variant.fields {
+                    Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
+                        quote! { #bound #guard => Ok(Self::#dest(payload)) }
+                    }
+                    Fields::Named(fields) if fields.named.len() == 1 => {
+                        let field = &fields.named[0].ident;
+                        quote! { #bound #guard => Ok(Self::#dest { #field: payload }) }
+                    }
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            &variant.ident,
+                            "a guarded plain arm needs exactly one destination field",
+                        ));
+                    }
+                }
             } else {
                 match &variant.fields {
-                    Fields::Unit => quote! { #case => Ok(Self::#dest) },
+                    Fields::Unit => {
+                        let pattern = case.nest(&|leaf| quote!(#leaf));
+                        quote! { #pattern => Ok(Self::#dest) }
+                    }
                     Fields::Unnamed(fields) => {
                         let args: Vec<_> = (0..fields.unnamed.len())
                             .map(|i| format_ident!("field_{i}"))
                             .collect();
-                        quote! { #case(#(#args),*) => Ok(Self::#dest(#(#args),*)) }
+                        let pattern = case.nest(&|leaf| quote!(#leaf(#(#args),*)));
+                        quote! { #pattern => Ok(Self::#dest(#(#args),*)) }
                     }
                     Fields::Named(fields) => {
                         let args: Vec<_> = fields.named.iter().map(|f| &f.ident).collect();
-                        quote! { #case { #(#args),* } => Ok(Self::#dest { #(#args),* }) }
+                        let pattern = case.nest(&|leaf| quote!(#leaf { #(#args),* }));
+                        quote! { #pattern => Ok(Self::#dest { #(#args),* }) }
                     }
                 }
             };
