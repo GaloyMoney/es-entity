@@ -20,6 +20,9 @@ pub struct ForgetFn<'a> {
     forgettable_columns: Vec<&'a syn::Ident>,
     snapshot_table_name: Option<&'a str>,
     post_persist_hook: bool,
+    /// `RepositoryOptions::update_can_reject`: `false` narrows the generated
+    /// signatures from `RepoWriteError<CV>` to `es_entity::RepoFault`.
+    can_reject: bool,
 }
 
 impl<'a> ForgetFn<'a> {
@@ -39,6 +42,7 @@ impl<'a> ForgetFn<'a> {
             forgettable_columns: opts.columns.forgettable_column_names(),
             snapshot_table_name: opts.snapshot_table_name(),
             post_persist_hook: opts.post_persist_hook.is_some(),
+            can_reject: opts.update_can_reject(),
         }
     }
 }
@@ -132,12 +136,23 @@ impl ToTokens for ForgetFn<'_> {
             let gather = events_insert.gather_per_entity(quote! { entity.events() });
             let event_args = events_insert.arg_exprs(&source);
 
+            let (rejection_prelude, rejection_tail) = if self.can_reject {
+                (
+                    quote! { use es_entity::errlanes::ResultExt as _; },
+                    quote! { .map_rejected(|r| r.with_attempted(#constraint_values { id: Some((*id).clone()), ..Default::default() }))? },
+                )
+            } else {
+                (
+                    quote! { use es_entity::errlanes::ResultExt as _; },
+                    quote! { .narrow_rejected()? },
+                )
+            };
             let persist = quote! {
                 let has_new_events = entity.events().any_new();
                 #gather
 
                 let rows = {
-                    use es_entity::errlanes::ResultExt as _;
+                    #rejection_prelude
 
                     let id = &entity.id;
                     sqlx::query!(
@@ -148,7 +163,7 @@ impl ToTokens for ForgetFn<'_> {
                     .fetch_all(op.as_executor())
                     .await
                     .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)))
-                    .map_rejected(|r| r.with_attempted(#constraint_values { id: Some((*id).clone()), ..Default::default() }))?
+                    #rejection_tail
                 };
             };
 
@@ -160,10 +175,9 @@ impl ToTokens for ForgetFn<'_> {
                 let recorded_at = rows
                     .first()
                     .map(|row| row.recorded_at)
-                    .ok_or_else(|| errlanes::Fail::<#constraint_violation, errlanes::lanes!(Transient, Fatal)>::from(
-                        errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
-                            .with_context(format!("{} row vanished", #table_name))
-                    ))?;
+                    .ok_or_else(|| errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                        .with_context(format!("{} row vanished", #table_name))
+                    )?;
             };
             let count = if wants_hook {
                 quote! {
@@ -219,10 +233,11 @@ impl ToTokens for ForgetFn<'_> {
                         {
                             Ok(e) => e,
                             Err(es_entity::RepoFault::Fatal(fatal)) if es_entity::fatal_is_not_found(&fatal) => {
-                                return Err(errlanes::Fail::from(
+                                return Err(
                                     errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
                                         .with_context(format!("{} vanished during forget", #table_name))
-                                ));
+                                        .into()
+                                );
                             }
                             Err(other) => return Err(other.into()),
                         };
@@ -244,6 +259,12 @@ impl ToTokens for ForgetFn<'_> {
             ),
         };
 
+        let write_error_ty = if self.can_reject {
+            quote! { es_entity::RepoWriteError<#constraint_violation> }
+        } else {
+            quote! { es_entity::RepoFault }
+        };
+
         let standalone = (!self.in_op_only).then(|| {
             quote! {
                 /// Permanently forgets the entity's forgettable data. Consumes the
@@ -252,7 +273,7 @@ impl ToTokens for ForgetFn<'_> {
                 pub async fn forget(
                     &self,
                     entity: #entity_type
-                ) -> Result<#entity_type, es_entity::RepoWriteError<#constraint_violation>> {
+                ) -> Result<#entity_type, #write_error_ty> {
                     let mut op = self.begin_op().await?;
                     let entity = self.forget_in_op(&mut op, entity).await?;
                     op.commit().await?;
@@ -300,7 +321,7 @@ impl ToTokens for ForgetFn<'_> {
                 &self,
                 op: &mut OP,
                 mut entity: #entity_type
-            ) -> Result<#entity_type, es_entity::RepoWriteError<#constraint_violation>>
+            ) -> Result<#entity_type, #write_error_ty>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
@@ -350,6 +371,7 @@ mod tests {
             forgettable_columns: Vec::new(),
             snapshot_table_name: None,
             post_persist_hook: false,
+            can_reject: true,
         };
 
         let mut tokens = TokenStream::new();
@@ -359,7 +381,7 @@ mod tests {
         // Consume-and-return: forget takes the entity by value and returns the
         // rebuilt (forgotten) entity — no `&mut`, no in-place assignment.
         assert!(output.contains(
-            "entity : Entity) -> Result < Entity , es_entity :: RepoWriteError < EntityConstraintViolation >>"
+            "entity : Entity) -> Result < Entity , es_entity :: RepoWriteError < EntityConstraintViolation > >"
         ));
         assert!(!output.contains("& mut Entity"));
         assert!(!output.contains("* entity ="));
@@ -402,6 +424,7 @@ mod tests {
             forgettable_columns: vec![&email],
             snapshot_table_name: None,
             post_persist_hook: false,
+            can_reject: true,
         };
 
         let mut tokens = TokenStream::new();
@@ -447,6 +470,7 @@ mod tests {
             forgettable_columns: Vec::new(),
             snapshot_table_name: None,
             post_persist_hook: true,
+            can_reject: true,
         };
 
         let mut tokens = TokenStream::new();
@@ -493,6 +517,7 @@ mod tests {
             forgettable_columns: vec![&email],
             snapshot_table_name: None,
             post_persist_hook: true,
+            can_reject: true,
         };
 
         let mut tokens = TokenStream::new();

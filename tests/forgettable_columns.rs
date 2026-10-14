@@ -317,3 +317,70 @@ async fn soft_delete_auto_forgets_the_index_column() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// No column persists on update, so `update_can_reject()` is false:
+/// `forget` and soft `delete` narrow to `RepoFault` like `update` does.
+mod frozen {
+    use es_entity::*;
+    use sqlx::PgPool;
+
+    use super::{NewSubscriber, Subscriber, SubscriberEvent, SubscriberId};
+
+    #[derive(EsRepo, Debug)]
+    #[es_repo(
+        entity = "Subscriber",
+        forgettable,
+        delete = "soft",
+        columns(
+            email(ty = "Forgettable<String>", update(persist = false)),
+            plan(ty = "String", update(persist = false))
+        )
+    )]
+    pub struct FrozenSubscribers {
+        pool: PgPool,
+    }
+
+    impl FrozenSubscribers {
+        pub fn new(pool: PgPool) -> Self {
+            Self { pool }
+        }
+    }
+}
+use frozen::FrozenSubscribers;
+
+fn takes_fault<T>(res: Result<T, es_entity::RepoFault>) -> Result<T, es_entity::RepoFault> {
+    res
+}
+
+#[tokio::test]
+async fn forget_and_delete_return_repo_fault_when_the_repo_cannot_reject() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let subscribers = Subscribers::new(pool.clone());
+    let frozen = FrozenSubscribers::new(pool.clone());
+
+    let (subscriber, _email) = new_subscriber(&subscribers).await?;
+    let id = subscriber.id;
+    let forgotten = takes_fault(frozen.forget(subscriber).await)?;
+    assert!(forgotten.email.is_forgotten());
+
+    let row = sqlx::query!(
+        "SELECT email FROM subscribers WHERE id = $1",
+        id as SubscriberId
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(row.email, None);
+
+    let (subscriber, _email) = new_subscriber(&subscribers).await?;
+    let id = subscriber.id;
+    takes_fault(frozen.delete(subscriber).await)?;
+    let row = sqlx::query!(
+        "SELECT deleted FROM subscribers WHERE id = $1",
+        id as SubscriberId
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert!(row.deleted);
+
+    Ok(())
+}
