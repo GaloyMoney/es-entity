@@ -261,29 +261,10 @@ impl<'a> ErrorTypes<'a> {
             set_values.push(quote! { Self::#variant(mut conflict) => { conflict.attempted = #attempted; Self::#variant(conflict) } });
         }
         for nested in opts.all_nested() {
-            let mut path = if let syn::Type::Path(p) = &nested.ty {
-                p.path.clone()
-            } else {
-                return syn::Error::new_spanned(
-                    &nested.ty,
-                    "nested repository must have a named type",
-                )
-                .to_compile_error();
+            let path = match nested_constraint_violation_path(nested) {
+                Ok(path) => path,
+                Err(error) => return error.to_compile_error(),
             };
-            let entity = nested
-                .entity
-                .clone()
-                .or_else(|| derive_entity_from_repo_type(&nested.ty));
-            let Some(entity) = entity else {
-                return syn::Error::new_spanned(
-                    &nested.ty,
-                    "cannot infer nested entity; specify entity explicitly",
-                )
-                .to_compile_error();
-            };
-            let last = path.segments.last_mut().unwrap();
-            last.ident = format_ident!("{entity}ConstraintViolation");
-            last.arguments = syn::PathArguments::None;
             let name = nested.nested_variant_name();
             imports.push(quote! { #path as #name });
         }
@@ -379,6 +360,36 @@ fn write_error_type(opts: &RepositoryOptions, constraint_violation: &syn::Ident)
         }
     }
 }
+/// The path of a nested child's generated `{Entity}ConstraintViolation`: the
+/// child repo's own path with its last segment replaced. The violation enum is
+/// always `pub`, so it can be named in a public signature even when the child
+/// repo type is not.
+pub(crate) fn nested_constraint_violation_path(
+    nested: &super::options::RepoField,
+) -> Result<syn::Path, syn::Error> {
+    let syn::Type::Path(type_path) = &nested.ty else {
+        return Err(syn::Error::new_spanned(
+            &nested.ty,
+            "nested repository must have a named type",
+        ));
+    };
+    let mut path = type_path.path.clone();
+    let entity = nested
+        .entity
+        .clone()
+        .or_else(|| derive_entity_from_repo_type(&nested.ty))
+        .ok_or_else(|| {
+            syn::Error::new_spanned(
+                &nested.ty,
+                "cannot infer nested entity; specify entity explicitly",
+            )
+        })?;
+    let last = path.segments.last_mut().unwrap();
+    last.ident = format_ident!("{entity}ConstraintViolation");
+    last.arguments = syn::PathArguments::None;
+    Ok(path)
+}
+
 fn derive_entity_from_repo_type(ty: &syn::Type) -> Option<syn::Ident> {
     if let syn::Type::Path(type_path) = ty
         && let Some(segment) = type_path.path.segments.last()

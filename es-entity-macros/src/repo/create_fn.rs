@@ -25,6 +25,9 @@ pub struct CreateFn<'a> {
     /// `RepositoryOptions::create_can_reject`: `false` narrows every
     /// generated signature from `RepoWriteError<CV>` to `RepoFault`.
     can_reject: bool,
+    /// The generated signatures' error type, see
+    /// `RepositoryOptions::create_error_ty`.
+    write_error_ty: TokenStream,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -34,6 +37,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
         Self {
             id_policy: opts.id_policy(),
             can_reject: opts.create_can_reject(),
+            write_error_ty: opts.create_error_ty(),
             in_op_only: opts.in_op_only(),
             table_name: opts.table_name(),
             entity: opts.entity(),
@@ -65,11 +69,7 @@ impl ToTokens for CreateFn<'_> {
             quote! {}
         };
         let constraint_violation = &self.constraint_violation;
-        let write_error_ty = if self.can_reject {
-            quote! { es_entity::RepoWriteError<#constraint_violation> }
-        } else {
-            quote! { es_entity::RepoFault }
-        };
+        let write_error_ty = &self.write_error_ty;
         let (rejection_prelude, rejection_tail) = if self.can_reject {
             (
                 quote! { use es_entity::errlanes::ResultExt as _; },
@@ -117,7 +117,7 @@ impl ToTokens for CreateFn<'_> {
 
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
-                self.#f(op, &mut [&mut entity]).await.map_err(errlanes::Fail::lift::<#constraint_violation, errlanes::lanes!(Transient, Fatal)>)?;
+                self.#f(op, &mut [&mut entity]).await.map_err(es_entity::LiftNestedWrite::<#constraint_violation>::lift_nested)?;
             }
         });
         let maybe_mut_entity = if self.nested_fn_names.is_empty() {
@@ -360,6 +360,7 @@ mod tests {
             post_persist_hook: false,
             id_policy: IdPolicyOpt::Supplied,
             can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -478,6 +479,7 @@ mod tests {
             post_persist_hook: false,
             id_policy: IdPolicyOpt::default(),
             can_reject: false,
+            write_error_ty: quote! { es_entity::RepoFault },
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -540,6 +542,7 @@ mod tests {
             post_persist_hook: false,
             id_policy: IdPolicyOpt::Supplied,
             can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

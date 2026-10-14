@@ -43,6 +43,7 @@ pub mod snapshot;
 pub mod sql_commenter;
 pub mod traits;
 pub mod tree_query;
+pub mod write_shape;
 
 pub mod prelude {
     //! Convenience re-export of crates that the derive macros reference in generated code.
@@ -100,6 +101,8 @@ pub use snapshot::*;
 pub use traits::*;
 #[doc(inline)]
 pub use tree_query::*;
+#[doc(inline)]
+pub use write_shape::{Faults, LiftNestedWrite, Rejects, WriteShape, WriteShapes};
 
 #[cfg(feature = "graphql")]
 pub mod graphql {

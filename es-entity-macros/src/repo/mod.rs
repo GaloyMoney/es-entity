@@ -263,6 +263,8 @@ impl ToTokens for EsRepo<'_> {
 
         let constraint_violation = self.opts.constraint_violation();
         let write_error = self.opts.write_error();
+        let create_shape = self.opts.create_shape();
+        let update_shape = self.opts.update_shape();
         let error_types = self.error_types.generate();
 
         let scope_type = scope::ScopeType::new(self.opts);
@@ -443,6 +445,11 @@ impl ToTokens for EsRepo<'_> {
             }
 
             #hydrate_nested
+
+            impl es_entity::WriteShapes for #constraint_violation {
+                type Create = #create_shape;
+                type Update = #update_shape;
+            }
 
             impl #impl_generics es_entity::EsRepo for #repo #ty_generics #where_clause {
                 type Entity = #entity;

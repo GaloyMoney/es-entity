@@ -20,14 +20,17 @@ pub type RepoWriteError<C> = Fail<C, lanes!(Transient, Fatal)>;
 
 Reads return `RepoFault`.
 Writes return `RepoWriteError<C>`, where `C` is the repository's typed
-constraint enum described next — unless the write's own statement can hit no
-constraint *and* the repository has no nested children, in which case it
-returns the plain `RepoFault` instead: there is nothing left in the
-`Rejected` lane for it to ever construct. `update`/`update_all`, `forget` and
-soft `delete` narrow this way whenever every column `update` persists has no
-unique, primary-key or check constraint and nothing is nested (a repo of only
-scope/reference columns written once on create, or columns that only carry a
-foreign key, say).
+constraint enum described next — unless neither the write's own statement nor
+any nested child's write can hit a constraint, in which case it returns the
+plain `RepoFault` instead: there is nothing left in the `Rejected` lane for it
+to ever construct. `update`/`update_all`, `forget` and soft `delete` narrow
+this way whenever every column `update` persists has no unique, primary-key or
+check constraint (a repo of only scope/reference columns written once on
+create, or columns that only carry a foreign key, say). `create`/`create_all`
+narrow the same way for a repo that [generates its own ids](./entity-ids.md)
+and has no other constraint. A nested child counts only if *its own* create or
+update can reject: a child with minted ids and only a parent foreign key does
+not make its parent reject.
 
 ## Typed constraint violations
 

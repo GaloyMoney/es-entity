@@ -21,12 +21,14 @@ pub struct UpdateAllFn<'a> {
     constraint_violation: syn::Ident,
     nested_fn_names: Vec<syn::Ident>,
     post_persist_hook: bool,
-    /// Whether the generated `update_all`/`update_all_in_op`/
-    /// `update_all_mut_in_op` can ever reject — see
-    /// `RepositoryOptions::update_can_reject`. `false` narrows every
-    /// generated signature (and the inner `__result` annotation) from
-    /// `RepoWriteError<CV>` to the plain `es_entity::RepoFault`.
+    /// Whether the repo's own batch statement can reject — see
+    /// `RepositoryOptions::update_can_reject`. `false` narrows the
+    /// statement's classification with `narrow_rejected()`.
     update_can_reject: bool,
+    /// The generated signatures' error type (and the inner `__result`
+    /// annotation) of `update_all`/`update_all_in_op`/`update_all_mut_in_op`,
+    /// see `RepositoryOptions::update_error_ty`.
+    write_error_ty: TokenStream,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -51,6 +53,7 @@ impl<'a> From<&'a RepositoryOptions> for UpdateAllFn<'a> {
                 .collect(),
             post_persist_hook: opts.post_persist_hook.is_some(),
             update_can_reject: opts.update_can_reject(),
+            write_error_ty: opts.update_error_ty(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -100,11 +103,7 @@ impl UpdateAllFn<'_> {
         let constraint_violation = &self.constraint_violation;
         let table_name = self.table_name;
         let events_table_name = self.events_table_name;
-        let write_error_ty = if self.update_can_reject {
-            quote! { es_entity::RepoWriteError<#constraint_violation> }
-        } else {
-            quote! { es_entity::RepoFault }
-        };
+        let write_error_ty = &self.write_error_ty;
         let (narrow_import, narrow_call) = if self.update_can_reject {
             (quote! {}, quote! {})
         } else {
@@ -144,10 +143,10 @@ impl UpdateAllFn<'_> {
         } else {
             let nested_calls = self.nested_fn_names.iter().map(|f| match mode {
                 BatchMode::OwnedSlice => quote! {
-                    self.#f(op, &mut __nested_refs).await.map_err(errlanes::Fail::lift::<#constraint_violation, errlanes::lanes!(Transient, Fatal)>)?;
+                    self.#f(op, &mut __nested_refs).await.map_err(es_entity::LiftNestedWrite::<#constraint_violation>::lift_nested)?;
                 },
                 BatchMode::RefVec => quote! {
-                    self.#f(op, &mut entities).await.map_err(errlanes::Fail::lift::<#constraint_violation, errlanes::lanes!(Transient, Fatal)>)?;
+                    self.#f(op, &mut entities).await.map_err(es_entity::LiftNestedWrite::<#constraint_violation>::lift_nested)?;
                 },
             });
             let setup = matches!(mode, BatchMode::OwnedSlice).then(|| {
@@ -542,6 +541,7 @@ mod tests {
             nested_fn_names: Vec::new(),
             post_persist_hook: false,
             update_can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -793,6 +793,7 @@ mod tests {
             nested_fn_names: Vec::new(),
             post_persist_hook: false,
             update_can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -956,6 +957,7 @@ mod tests {
             nested_fn_names: Vec::new(),
             post_persist_hook: false,
             update_can_reject: false,
+            write_error_ty: quote! { es_entity::RepoFault },
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -1002,6 +1004,7 @@ mod tests {
             nested_fn_names: Vec::new(),
             post_persist_hook: false,
             update_can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

@@ -12,7 +12,6 @@ pub struct ForgetFn<'a> {
     id: &'a syn::Ident,
     entity: &'a syn::Ident,
     event: &'a syn::Ident,
-    constraint_violation: syn::Ident,
     table_name: &'a str,
     events_table_name: &'a str,
     event_ctx: bool,
@@ -23,6 +22,9 @@ pub struct ForgetFn<'a> {
     /// `RepositoryOptions::update_can_reject`: `false` narrows the generated
     /// signatures from `RepoWriteError<CV>` to `es_entity::RepoFault`.
     can_reject: bool,
+    /// The generated signatures' error type, see
+    /// `RepositoryOptions::update_error_ty`.
+    write_error_ty: TokenStream,
 }
 
 impl<'a> ForgetFn<'a> {
@@ -32,7 +34,6 @@ impl<'a> ForgetFn<'a> {
             id: opts.id(),
             entity: opts.entity(),
             event: opts.event(),
-            constraint_violation: opts.constraint_violation(),
             table_name: opts.table_name(),
             events_table_name: opts.events_table_name(),
             event_ctx: opts.event_context_enabled(),
@@ -43,6 +44,7 @@ impl<'a> ForgetFn<'a> {
             snapshot_table_name: opts.snapshot_table_name(),
             post_persist_hook: opts.post_persist_hook.is_some(),
             can_reject: opts.update_can_reject(),
+            write_error_ty: opts.update_error_ty(),
         }
     }
 }
@@ -52,7 +54,6 @@ impl ToTokens for ForgetFn<'_> {
         let id_type = &self.id;
         let entity_type = self.entity;
         let event_type = self.event;
-        let constraint_violation = &self.constraint_violation;
         let constraint_values = quote::format_ident!("{}ConstraintValues", entity_type);
         let table_name = self.table_name;
         let events_table_name = self.events_table_name;
@@ -259,11 +260,7 @@ impl ToTokens for ForgetFn<'_> {
             ),
         };
 
-        let write_error_ty = if self.can_reject {
-            quote! { es_entity::RepoWriteError<#constraint_violation> }
-        } else {
-            quote! { es_entity::RepoFault }
-        };
+        let write_error_ty = &self.write_error_ty;
 
         let standalone = (!self.in_op_only).then(|| {
             quote! {
@@ -363,7 +360,6 @@ mod tests {
             id: &id,
             entity: &entity,
             event: &event,
-            constraint_violation: Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -372,6 +368,7 @@ mod tests {
             snapshot_table_name: None,
             post_persist_hook: false,
             can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
         };
 
         let mut tokens = TokenStream::new();
@@ -416,7 +413,6 @@ mod tests {
             id: &id,
             entity: &entity,
             event: &event,
-            constraint_violation: Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -425,6 +421,7 @@ mod tests {
             snapshot_table_name: None,
             post_persist_hook: false,
             can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
         };
 
         let mut tokens = TokenStream::new();
@@ -462,7 +459,6 @@ mod tests {
             id: &id,
             entity: &entity,
             event: &event,
-            constraint_violation: Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -471,6 +467,7 @@ mod tests {
             snapshot_table_name: None,
             post_persist_hook: true,
             can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
         };
 
         let mut tokens = TokenStream::new();
@@ -509,7 +506,6 @@ mod tests {
             id: &id,
             entity: &entity,
             event: &event,
-            constraint_violation: Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -518,6 +514,7 @@ mod tests {
             snapshot_table_name: None,
             post_persist_hook: true,
             can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
         };
 
         let mut tokens = TokenStream::new();

@@ -19,6 +19,7 @@ impl ToTokens for Nested<'_> {
         let repo_field = self.field.ident();
 
         let nested_repo_ty = &self.field.ty;
+        let child_shapes = RepositoryOptions::child_shapes(self.field);
         let create_fn_name = self.field.create_nested_fn_name();
         let update_fn_name = self.field.update_nested_fn_name();
         let hydrate_fn_name = self.field.hydrate_nested_fn_name();
@@ -31,13 +32,13 @@ impl ToTokens for Nested<'_> {
             // the hydrated children back to their owning parent by count.
             // Returns the child repo's own `ConstraintViolation`, unwidened —
             // the caller (one level up the nesting) widens it into its own via
-            // `errlanes::Fail::lift`.
+            // `es_entity::LiftNestedWrite`.
             //
             // Takes `&mut [&mut P]` rather than `&mut [P]` so a caller that
             // already holds scattered `&mut P` borrows (this same fn one
             // level up the nesting, recursing into grandchildren) can pass
             // them straight through without needing contiguous storage.
-            async fn #create_fn_name<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), es_entity::RepoWriteError<<#nested_repo_ty as es_entity::EsRepo>::ConstraintViolation>>
+            async fn #create_fn_name<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), <<#child_shapes>::Create as es_entity::WriteShape>::Error<<#nested_repo_ty as es_entity::EsRepo>::ConstraintViolation>>
                 where
                     P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation + ?Sized
@@ -73,7 +74,7 @@ impl ToTokens for Nested<'_> {
             // for the whole parent batch, not one per child per parent — then
             // batches new children via `#create_fn_name`. Returns the child
             // repo's own `ConstraintViolation`, unwidened.
-            async fn #update_fn_name<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), es_entity::RepoWriteError<<#nested_repo_ty as es_entity::EsRepo>::ConstraintViolation>>
+            async fn #update_fn_name<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), <<<#child_shapes>::Update as es_entity::WriteShape>::Or<<#child_shapes>::Create> as es_entity::WriteShape>::Error<<#nested_repo_ty as es_entity::EsRepo>::ConstraintViolation>>
                 where
                     P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation + ?Sized
@@ -139,7 +140,7 @@ mod tests {
         cursor.to_tokens(&mut tokens);
 
         let expected = quote! {
-            async fn create_nested_users_in_op<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), es_entity::RepoWriteError<<UserRepo as es_entity::EsRepo>::ConstraintViolation>>
+            async fn create_nested_users_in_op<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), <<UserConstraintViolation as es_entity::WriteShapes>::Create as es_entity::WriteShape>::Error<<UserRepo as es_entity::EsRepo>::ConstraintViolation>>
                 where
                     P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation + ?Sized
@@ -164,7 +165,7 @@ mod tests {
                 Ok(())
             }
 
-            async fn update_nested_users_in_op<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), es_entity::RepoWriteError<<UserRepo as es_entity::EsRepo>::ConstraintViolation>>
+            async fn update_nested_users_in_op<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), <<<UserConstraintViolation as es_entity::WriteShapes>::Update as es_entity::WriteShape>::Or<<UserConstraintViolation as es_entity::WriteShapes>::Create> as es_entity::WriteShape>::Error<<UserRepo as es_entity::EsRepo>::ConstraintViolation>>
                 where
                     P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
                     OP: es_entity::AtomicOperation + ?Sized

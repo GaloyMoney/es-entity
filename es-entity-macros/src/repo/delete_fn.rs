@@ -11,7 +11,6 @@ pub struct DeleteFn<'a> {
     in_op_only: bool,
     id: &'a syn::Ident,
     event: &'a syn::Ident,
-    constraint_violation: syn::Ident,
     entity: &'a syn::Ident,
     table_name: &'a str,
     events_table_name: &'a str,
@@ -24,6 +23,9 @@ pub struct DeleteFn<'a> {
     /// `RepositoryOptions::update_can_reject`: `false` narrows the generated
     /// signatures from `RepoWriteError<CV>` to `es_entity::RepoFault`.
     can_reject: bool,
+    /// The generated signatures' error type, see
+    /// `RepositoryOptions::update_error_ty`.
+    write_error_ty: TokenStream,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -35,7 +37,6 @@ impl<'a> DeleteFn<'a> {
             id: opts.id(),
             event: opts.event(),
             entity: opts.entity(),
-            constraint_violation: opts.constraint_violation(),
             columns: &opts.columns,
             table_name: opts.table_name(),
             events_table_name: opts.events_table_name(),
@@ -48,6 +49,7 @@ impl<'a> DeleteFn<'a> {
             post_persist_hook: opts.post_persist_hook.is_some(),
             forgettable_table_name: opts.forgettable_table_name(),
             can_reject: opts.update_can_reject(),
+            write_error_ty: opts.update_error_ty(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -61,7 +63,6 @@ impl ToTokens for DeleteFn<'_> {
         }
 
         let entity = self.entity;
-        let constraint_violation = &self.constraint_violation;
         let table_name = self.table_name;
 
         let nested_deletes = self.nested_delete_fn_names.iter().map(|f| {
@@ -165,22 +166,20 @@ impl ToTokens for DeleteFn<'_> {
             None => quote! {},
         };
 
-        let (write_error_ty, rejection_prelude, rejection_tail, constraint_values) =
-            if self.can_reject {
-                (
-                    quote! { es_entity::RepoWriteError<#constraint_violation> },
-                    quote! { use es_entity::errlanes::ResultExt as _; },
-                    quote! { .map_rejected(|r| r.with_attempted(__constraint_values))? },
-                    constraint_values,
-                )
-            } else {
-                (
-                    quote! { es_entity::RepoFault },
-                    quote! { use es_entity::errlanes::ResultExt as _; },
-                    quote! { .narrow_rejected()? },
-                    quote! {},
-                )
-            };
+        let write_error_ty = &self.write_error_ty;
+        let (rejection_prelude, rejection_tail, constraint_values) = if self.can_reject {
+            (
+                quote! { use es_entity::errlanes::ResultExt as _; },
+                quote! { .map_rejected(|r| r.with_attempted(__constraint_values))? },
+                constraint_values,
+            )
+        } else {
+            (
+                quote! { use es_entity::errlanes::ResultExt as _; },
+                quote! { .narrow_rejected()? },
+                quote! {},
+            )
+        };
 
         let standalone = (!self.in_op_only).then(|| {
             quote! {
@@ -277,7 +276,6 @@ mod tests {
             id: &id,
             event: &event,
             entity: &entity,
-            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -286,6 +284,7 @@ mod tests {
             nested_delete_fn_names: Vec::new(),
             post_persist_hook: false,
             can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -377,7 +376,6 @@ mod tests {
             id: &id,
             event: &event,
             entity: &entity,
-            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -386,6 +384,7 @@ mod tests {
             nested_delete_fn_names: Vec::new(),
             post_persist_hook: false,
             can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -473,7 +472,6 @@ mod tests {
             id: &id,
             event: &event,
             entity: &entity,
-            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -482,6 +480,7 @@ mod tests {
             nested_delete_fn_names: Vec::new(),
             post_persist_hook: false,
             can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             forgettable_table_name: Some("entities_forgettable_payloads"),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
