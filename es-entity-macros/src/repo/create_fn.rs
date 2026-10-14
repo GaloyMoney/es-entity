@@ -28,6 +28,10 @@ pub struct CreateFn<'a> {
     /// The generated signatures' error type, see
     /// `RepositoryOptions::create_error_ty`.
     write_error_ty: TokenStream,
+    /// Whether `create_or_find_by_id_in_op` is generated, and whether it can
+    /// reject, see `RepositoryOptions::create_or_find_enabled`.
+    create_or_find: bool,
+    create_or_find_can_reject: bool,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -38,6 +42,8 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
             id_policy: opts.id_policy(),
             can_reject: opts.create_can_reject(),
             write_error_ty: opts.create_error_ty(),
+            create_or_find: opts.create_or_find_enabled(),
+            create_or_find_can_reject: opts.create_or_find_can_reject(),
             in_op_only: opts.in_op_only(),
             table_name: opts.table_name(),
             entity: opts.entity(),
@@ -246,6 +252,58 @@ impl ToTokens for CreateFn<'_> {
             }
         });
 
+        // The conflict on the id's primary key becomes `Found`; every other
+        // outcome of the create is the create's own. The create runs on a
+        // savepoint so the conflict does not poison the caller's operation.
+        let create_or_find = if self.create_or_find {
+            let (ensure_error_ty, other_error) = if self.create_or_find_can_reject {
+                (
+                    quote! { es_entity::RepoWriteError<#constraint_violation> },
+                    quote! { other },
+                )
+            } else {
+                (
+                    quote! { es_entity::RepoFault },
+                    quote! { other.narrow_rejected() },
+                )
+            };
+            quote! {
+                /// Creates the entity, or — when an entity with this id
+                /// already exists — returns the stored one. The conflict on the
+                /// primary key is the only outcome that is not an error; every
+                /// other constraint still rejects.
+                pub async fn create_or_find_by_id_in_op<OP>(
+                    &self,
+                    op: &mut OP,
+                    new_entity: <#entity as es_entity::EsEntity>::New
+                ) -> Result<es_entity::Ensured<#entity>, #ensure_error_ty>
+                where
+                    OP: es_entity::AtomicOperation + ?Sized
+                {
+                    use es_entity::SavepointOperation as _;
+
+                    let mut __savepoint = op.begin_savepoint().await?;
+                    match self.create_in_op(&mut __savepoint, new_entity).await {
+                        Ok(entity) => {
+                            __savepoint.release().await?;
+                            Ok(es_entity::Ensured::Created(entity))
+                        }
+                        Err(es_entity::Fail::Rejected(#constraint_violation::Pkey(conflict))) => {
+                            __savepoint.rollback().await?;
+                            let entity = self.find_by_id_in_op(&mut *op, conflict.attempted).await?;
+                            Ok(es_entity::Ensured::Found(entity))
+                        }
+                        Err(other) => {
+                            __savepoint.rollback().await?;
+                            Err(#other_error)
+                        }
+                    }
+                }
+            }
+        } else {
+            quote! {}
+        };
+
         tokens.append_all(quote! {
             #[inline(always)]
             fn convert_new<Entity, Event, Snapshot>(
@@ -325,6 +383,8 @@ impl ToTokens for CreateFn<'_> {
                 #error_recording
                 __result
             }
+
+            #create_or_find
         });
     }
 }
@@ -361,6 +421,8 @@ mod tests {
             id_policy: IdPolicyOpt::Supplied,
             can_reject: true,
             write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
+            create_or_find: false,
+            create_or_find_can_reject: false,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -480,6 +542,8 @@ mod tests {
             id_policy: IdPolicyOpt::default(),
             can_reject: false,
             write_error_ty: quote! { es_entity::RepoFault },
+            create_or_find: false,
+            create_or_find_can_reject: false,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -543,6 +607,8 @@ mod tests {
             id_policy: IdPolicyOpt::Supplied,
             can_reject: true,
             write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
+            create_or_find: false,
+            create_or_find_can_reject: false,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

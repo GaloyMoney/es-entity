@@ -82,7 +82,7 @@ pub use events::*;
 #[doc(inline)]
 pub use forgettable::{Forgettable, ForgettableRef};
 #[doc(inline)]
-pub use id_policy::{EntityEventsBuilder, Generated, IdPolicy, Supplied};
+pub use id_policy::{Ensured, EntityEventsBuilder, Generated, IdPolicy, Supplied};
 #[doc(inline)]
 pub use idempotent::*;
 #[doc(inline)]

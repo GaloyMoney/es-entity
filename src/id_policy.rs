@@ -83,3 +83,26 @@ impl<E: EsEvent> EntityEventsBuilder<E, Supplied> {
         EntityEvents::init(id, events)
     }
 }
+
+/// What `create_or_find_by_id_in_op` did for a repo with deterministic ids.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ensured<E> {
+    /// This call inserted the entity.
+    Created(E),
+    /// The id already existed (a concurrent or earlier create won); this is
+    /// the stored entity.
+    Found(E),
+}
+
+impl<E> Ensured<E> {
+    /// The entity, however it came about.
+    pub fn into_inner(self) -> E {
+        match self {
+            Self::Created(entity) | Self::Found(entity) => entity,
+        }
+    }
+
+    pub fn is_created(&self) -> bool {
+        matches!(self, Self::Created(_))
+    }
+}

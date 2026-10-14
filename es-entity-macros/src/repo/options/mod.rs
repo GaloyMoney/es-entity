@@ -487,6 +487,35 @@ impl RepositoryOptions {
             })
     }
 
+    /// Whether `create_or_find_by_id_in_op` is generated: on a repo whose
+    /// `New*` types bring their own id, with a primary key on the id column
+    /// to catch the conflict on, and no scope columns (a scoped repo's
+    /// `find_by_id_in_op` needs a scope the create has no way to name).
+    pub fn create_or_find_enabled(&self) -> bool {
+        !self.id_policy().is_generated()
+            && self.columns.scope_columns().is_empty()
+            && crate::repo::error_types::enumerate_constraints(self)
+                .iter()
+                .any(|(name, kind, col_names)| {
+                    crate::repo::error_types::is_id_pkey(self, name, kind, col_names)
+                })
+    }
+
+    /// Whether `create_or_find_by_id_in_op` can reject: the create family
+    /// minus the primary key (which the method turns into `Found`), or any
+    /// nested child.
+    pub fn create_or_find_can_reject(&self) -> bool {
+        self.any_nested()
+            || crate::repo::error_types::enumerate_constraints(self)
+                .iter()
+                .filter(|(_, kind, _)| {
+                    !matches!(kind, crate::index_catalog::ConstraintKind::ForeignKey)
+                })
+                .any(|(name, kind, col_names)| {
+                    !crate::repo::error_types::is_id_pkey(self, name, kind, col_names)
+                })
+    }
+
     fn own_shape(can_reject: bool) -> proc_macro2::TokenStream {
         if can_reject {
             quote! { es_entity::Rejects }

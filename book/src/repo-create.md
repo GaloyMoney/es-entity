@@ -207,3 +207,26 @@ pub struct Users {
     pool: sqlx::PgPool
 }
 ```
+
+## create_or_find_by_id_in_op
+
+A repo with `id = supplied` (see [Entity ids](./entity-ids.md)) also gets
+`create_or_find_by_id_in_op`, for entities whose id is deterministic and which
+may already exist:
+
+```rust,ignore
+pub enum Ensured<E> { Created(E), Found(E) }
+
+pub async fn create_or_find_by_id_in_op<OP>(&self, op: &mut OP, new: NewUser)
+    -> Result<Ensured<User>, es_entity::RepoWriteError<UserConstraintViolation>>
+```
+
+The create runs on a savepoint. A conflict on the id's primary key rolls the
+savepoint back and the stored entity is read in the same operation and returned
+as `Found`; every other constraint still rejects, and the primary key is never
+among the cases this method returns. When no other constraint remains (and
+nothing is nested) the error type is the plain `RepoFault`. Concurrent calls for
+one id in separate operations yield exactly one `Created`; the others wait for
+its commit and return `Found`.
+
+The method is not generated for a repo with scope columns.
