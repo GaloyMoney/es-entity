@@ -492,6 +492,16 @@ fn conversion_impl(
                 }
             }
         }
+    } else if arms.is_empty() {
+        // A source without members: nothing to map, and the empty match
+        // diverges, so the code after it would be unreachable.
+        quote! {
+            impl #impl_generics From<#source> for #name #ty_generics #where_clause {
+                fn from(source: #source) -> Self {
+                    match source {}
+                }
+            }
+        }
     } else {
         quote! {
             impl #impl_generics From<#source> for #name #ty_generics #where_clause {

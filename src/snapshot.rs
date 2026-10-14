@@ -186,8 +186,9 @@ impl GuardWithoutSnapshotClause for SnapshotRecord<NoSnapshot> {
 /// # }
 /// # pub struct NewSnapGuardMeter { id: SnapGuardMeterId }
 /// # impl IntoEvents<SnapGuardMeterEvent> for NewSnapGuardMeter {
-/// #     fn into_events(self) -> EntityEvents<SnapGuardMeterEvent> {
-/// #         EntityEvents::init(self.id, [SnapGuardMeterEvent::Initialized { id: self.id }])
+/// #     type Id = Supplied;
+/// #     fn into_events(self, builder: EntityEventsBuilder<SnapGuardMeterEvent, Supplied>) -> EntityEvents<SnapGuardMeterEvent> {
+/// #         builder.initial_events(self.id, [SnapGuardMeterEvent::Initialized { id: self.id }])
 /// #     }
 /// # }
 /// // Missing: a real `Snapshot` — `events` stays
@@ -209,6 +210,7 @@ impl GuardWithoutSnapshotClause for SnapshotRecord<NoSnapshot> {
 /// #[derive(EsRepo, Debug)]
 /// #[es_repo(
 ///     entity = "SnapGuardMeter",
+///     id = supplied,
 ///     tbl = "meters",
 ///     events_tbl = "meter_events",
 ///     snapshot,
@@ -241,8 +243,9 @@ impl GuardWithoutSnapshotClause for SnapshotRecord<NoSnapshot> {
 /// }
 /// # pub struct NewSnapGuardClient { id: SnapGuardClientId, email: String }
 /// # impl IntoEvents<SnapGuardClientEvent> for NewSnapGuardClient {
-/// #     fn into_events(self) -> EntityEvents<SnapGuardClientEvent> {
-/// #         EntityEvents::init(
+/// #     type Id = Supplied;
+/// #     fn into_events(self, builder: EntityEventsBuilder<SnapGuardClientEvent, Supplied>) -> EntityEvents<SnapGuardClientEvent> {
+/// #         builder.initial_events(
 /// #             self.id,
 /// #             [SnapGuardClientEvent::Initialized { id: self.id, email: Forgettable::new(self.email) }],
 /// #         )
@@ -266,6 +269,7 @@ impl GuardWithoutSnapshotClause for SnapshotRecord<NoSnapshot> {
 /// #[derive(EsRepo, Debug)]
 /// #[es_repo(
 ///     entity = "SnapGuardClient",
+///     id = supplied,
 ///     tbl = "clients",
 ///     events_tbl = "client_events",
 ///     snapshot,

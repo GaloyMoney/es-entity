@@ -23,8 +23,9 @@ Other than the `events` field additional fields can be exposed and populated dur
 # }
 # pub struct NewUser { id: UserId, name: String }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#         builder.initial_events(
 #             self.id,
 #             [UserEvent::Initialized {
 #                 id: self.id,
@@ -95,13 +96,9 @@ impl TryFromEvents<UserEvent> for User {
 mod tests {
     fn fresh_user() -> User {
         let id = UserId::new();
-        let initial_events = EntityEvents::init(
-            id,
-            [UserEvent::Initialized {
-                id, 
-                name: "Willson"
-            }],
-        );
+        // Repositories hand `into_events` its builder; a unit test builds one itself.
+        let initial_events = NewUser { id, name: "Willson".to_string() }
+            .into_events(EntityEventsBuilder::__supplied());
         User::try_from_events(initial_events).expect("Could not create user");
     }
 

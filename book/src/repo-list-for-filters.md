@@ -120,7 +120,7 @@ column with `virtual = "<sql>"` plus bare `list_for`:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Order",
+    entity = "Order", id = supplied,
     columns(
         status(ty = "OrderStatus", list_for),
         has_open_ticket(
@@ -170,7 +170,7 @@ SQL text:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Order",
+    entity = "Order", id = supplied,
     columns(
         status(ty = "OrderStatus", list_for),
         min_open_tickets(
@@ -241,8 +241,9 @@ custom `entity_id!` type) works here too.
 #     NameUpdated { name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#         builder.initial_events(
 #             self.id,
 #             [UserEvent::Initialized { id: self.id, name: self.name }],
 #         )
@@ -271,7 +272,7 @@ use es_entity::*;
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User",
+    entity = "User", id = supplied,
     columns(
         name(ty = "String", list_for(by(id, created_at)))
     )

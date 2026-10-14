@@ -141,8 +141,10 @@
 ///
 /// pub struct NewMeter { id: MeterId }
 /// impl IntoEvents<MeterEvent> for NewMeter {
-///     fn into_events(self) -> EntityEvents<MeterEvent> {
-///         EntityEvents::init(self.id, [MeterEvent::Initialized { id: self.id }])
+///     type Id = Supplied;
+///
+///     fn into_events(self, builder: EntityEventsBuilder<MeterEvent, Supplied>) -> EntityEvents<MeterEvent> {
+///         builder.initial_events(self.id, [MeterEvent::Initialized { id: self.id }])
 ///     }
 /// }
 ///
@@ -181,7 +183,9 @@
 /// }
 ///
 /// let id = MeterId::new();
-/// let events = EntityEvents::init(id, [MeterEvent::Initialized { id }]).widen_snapshot();
+/// let events = NewMeter { id }
+///     .into_events(EntityEventsBuilder::__supplied())
+///     .widen_snapshot();
 /// let mut meter = <Meter as TryFromEvents<_, _>>::try_from_events(events).unwrap();
 /// assert!(meter.record(10).did_execute());
 /// assert!(meter.record(10).was_already_applied());
@@ -202,8 +206,9 @@
 /// # pub enum MeterEvent { Initialized { id: MeterId }, ReadingRecorded { value: i64 } }
 /// # pub struct NewMeter { id: MeterId }
 /// # impl IntoEvents<MeterEvent> for NewMeter {
-/// #     fn into_events(self) -> EntityEvents<MeterEvent> {
-/// #         EntityEvents::init(self.id, [MeterEvent::Initialized { id: self.id }])
+/// #     type Id = Supplied;
+/// #     fn into_events(self, builder: EntityEventsBuilder<MeterEvent, Supplied>) -> EntityEvents<MeterEvent> {
+/// #         builder.initial_events(self.id, [MeterEvent::Initialized { id: self.id }])
 /// #     }
 /// # }
 /// # #[derive(EsEntity)]

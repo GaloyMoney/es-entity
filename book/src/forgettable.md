@@ -169,8 +169,9 @@ impl TryFromEvents<CustomerEvent> for Customer {
     }
 }
 # impl IntoEvents<CustomerEvent> for NewCustomer {
-#     fn into_events(self) -> EntityEvents<CustomerEvent> {
-#         EntityEvents::init(self.id, [CustomerEvent::Initialized {
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<CustomerEvent, Supplied>) -> EntityEvents<CustomerEvent> {
+#         builder.initial_events(self.id, [CustomerEvent::Initialized {
 #             id: self.id, name: Forgettable::new(self.name), email: self.email,
 #         }])
 #     }
@@ -186,7 +187,7 @@ Enable forgettable on the repository with the `forgettable` attribute:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Customer",
+    entity = "Customer", id = supplied,
     // `name` is a forgettable index column (queryable, NULLed on forget);
     // `email` is a normal column.
     columns(name = "Forgettable<String>", email = "String"),
@@ -272,7 +273,7 @@ When `forgettable` is enabled and `delete = "soft"` is configured, calling `dele
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Customer",
+    entity = "Customer", id = supplied,
     columns(name = "Forgettable<String>", email = "String"),
     delete = "soft",
     forgettable,

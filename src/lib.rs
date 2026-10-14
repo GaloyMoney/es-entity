@@ -31,6 +31,7 @@ pub mod error;
 pub use constraint::*;
 pub mod events;
 pub mod forgettable;
+pub mod id_policy;
 pub mod idempotent;
 mod macros;
 pub mod nested;
@@ -79,6 +80,8 @@ pub use es_entity_macros::expand_es_query;
 pub use events::*;
 #[doc(inline)]
 pub use forgettable::{Forgettable, ForgettableRef};
+#[doc(inline)]
+pub use id_policy::{EntityEventsBuilder, Generated, IdPolicy, Supplied};
 #[doc(inline)]
 pub use idempotent::*;
 #[doc(inline)]

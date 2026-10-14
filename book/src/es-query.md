@@ -22,7 +22,8 @@ Given the query we arrived at in the previous section - this is what a `find_by_
 # }
 # pub struct NewUser { id: UserId, name: String }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
+#     type Id = Supplied;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -103,7 +104,8 @@ This simplifies the above implementation into:
 # }
 # pub struct NewUser { id: UserId, name: String }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
+#     type Id = Supplied;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -121,7 +123,7 @@ use sqlx::PgPool;
 use es_entity::*;
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User")]
+#[es_repo(entity = "User", id = supplied)]
 pub struct Users {
     pool: PgPool
 }

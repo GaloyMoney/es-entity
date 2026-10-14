@@ -37,8 +37,10 @@ impl EsEvent for FuzzEvent {
 struct NewFuzzEntity;
 
 impl IntoEvents<FuzzEvent> for NewFuzzEntity {
-    fn into_events(self) -> EntityEvents<FuzzEvent> {
-        EntityEvents::init(Uuid::nil(), [FuzzEvent::Created("seed".to_string())])
+    type Id = Supplied;
+
+    fn into_events(self, builder: EntityEventsBuilder<FuzzEvent, Supplied>) -> EntityEvents<FuzzEvent> {
+        builder.initial_events(Uuid::nil(), [FuzzEvent::Created("seed".to_string())])
     }
 }
 
@@ -52,6 +54,10 @@ impl EsEntity for FuzzEntity {
     type Event = FuzzEvent;
     type New = NewFuzzEntity;
     type Snapshot = es_entity::NoSnapshot;
+
+    fn __entity_id(&self) -> &Uuid {
+        &self.events.entity_id
+    }
 
     fn events(&self) -> &EntityEvents<FuzzEvent> {
         &self.events

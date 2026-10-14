@@ -9,6 +9,7 @@
 - [Entity Pattern](./entity-pattern.md)
   - [Entity Event](./entity-event.md)
   - [New Entity](./new-entity.md)
+  - [Entity ids](./entity-ids.md)
   - [Entity Type](./entity-type.md)
 
 - [Idempotency](./idempotency.md)

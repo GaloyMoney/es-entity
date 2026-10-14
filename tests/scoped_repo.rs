@@ -20,7 +20,7 @@ use es_entity::*;
 /// predicate returning an empty result.
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Contact",
+    entity = "Contact", id = supplied,
     columns(
         partner_id(ty = "PartnerId", scope, find_by = true, list_for(by(created_at))),
         email(ty = "String"),

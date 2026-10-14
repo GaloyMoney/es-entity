@@ -1,5 +1,6 @@
 mod columns;
 mod delete;
+mod id_policy;
 
 use convert_case::{Case, Casing};
 use darling::{FromDeriveInput, FromField};
@@ -8,6 +9,7 @@ use quote::quote;
 
 pub use columns::*;
 pub use delete::*;
+pub use id_policy::*;
 
 /// Information about the clock field in a repository
 #[derive(Debug, Clone)]
@@ -120,6 +122,9 @@ pub struct RepositoryOptions {
     #[darling(default, rename = "event")]
     event_ident: Option<syn::Ident>,
     #[darling(default, rename = "id")]
+    id_attr: Option<IdAttr>,
+    /// The id type when `id` selects a policy instead of naming the type.
+    #[darling(default, rename = "id_type")]
     id_ty: Option<syn::Ident>,
     #[darling(default, rename = "tbl_prefix")]
     prefix: Option<syn::LitStr>,
@@ -158,6 +163,11 @@ impl RepositoryOptions {
                 &format!("{entity_name}Event"),
                 proc_macro2::Span::call_site(),
             ));
+        }
+        if self.id_ty.is_none()
+            && let Some(IdAttr::Type(ty)) = &self.id_attr
+        {
+            self.id_ty = Some(ty.clone());
         }
         if self.id_ty.is_none() {
             self.id_ty = Some(syn::Ident::new(
@@ -217,6 +227,14 @@ impl RepositoryOptions {
 
     pub fn id(&self) -> &syn::Ident {
         self.id_ty.as_ref().expect("ID identifier is not set")
+    }
+
+    /// How this repo resolves the id of an entity it creates.
+    pub fn id_policy(&self) -> IdPolicyOpt {
+        match &self.id_attr {
+            Some(IdAttr::Policy(policy)) => policy.clone(),
+            _ => IdPolicyOpt::default(),
+        }
     }
 
     pub fn event(&self) -> &syn::Ident {
@@ -449,6 +467,28 @@ impl RepositoryOptions {
                 !matches!(kind, crate::index_catalog::ConstraintKind::ForeignKey)
             })
             .any(|(_, _, col_names)| col_names.iter().any(updatable))
+    }
+
+    /// Whether the generated `create`/`create_all` can ever reject: `true`
+    /// unless the repo has no nested children and every constraint in the
+    /// family is one a create cannot hit. Foreign keys never count (a
+    /// violation is a fault), and neither does the primary key when the repo
+    /// generates its own ids, since a collision of a fresh id is a fault.
+    pub fn create_can_reject(&self) -> bool {
+        if self.any_nested() {
+            return true;
+        }
+        let generated = self.id_policy().is_generated();
+        crate::repo::error_types::enumerate_constraints(self)
+            .iter()
+            .filter(|(_, kind, _)| {
+                !matches!(kind, crate::index_catalog::ConstraintKind::ForeignKey)
+            })
+            .any(|(name, kind, col_names)| {
+                let unreachable_pkey =
+                    generated && crate::repo::error_types::is_id_pkey(self, name, kind, col_names);
+                !unreachable_pkey
+            })
     }
 
     pub fn query_fn_generics() -> proc_macro2::TokenStream {

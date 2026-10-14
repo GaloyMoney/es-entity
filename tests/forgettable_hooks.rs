@@ -48,7 +48,7 @@ pub struct HookCall {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Customer",
+    entity = "Customer", id = supplied,
     forgettable,
     columns(email(ty = "String")),
     post_persist_hook = "publish"
@@ -228,7 +228,7 @@ async fn hook_error_rolls_back_the_entire_erasure() -> anyhow::Result<()> {
         Ok(_) => panic!("hook failure must fail the forget"),
     };
     match err {
-        Fail::Fatal(fatal) => {
+        Fault::Fatal(fatal) => {
             assert_eq!(fatal.kind, FatalKind::Invariant);
             let source = std::error::Error::source(&fatal).expect("hook error as source");
             assert!(source.to_string().contains("rejected forgot event"));

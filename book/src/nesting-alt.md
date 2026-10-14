@@ -205,8 +205,9 @@ This leverages the rust module system to enforce that the children cannot be acc
 # }
 # 
 # impl IntoEvents<SubscriptionEvent> for NewSubscription {
-#     fn into_events(self) -> EntityEvents<SubscriptionEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, Supplied>) -> EntityEvents<SubscriptionEvent> {
+#         builder.initial_events(
 #             self.id,
 #             vec![SubscriptionEvent::Initialized { id: self.id }],
 #         )
@@ -218,7 +219,7 @@ struct BillingPeriods {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Subscription")]
+#[es_repo(entity = "Subscription", id = supplied)]
 pub struct Subscriptions {
     pool: sqlx::PgPool,
     
@@ -351,8 +352,9 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     pub subscription_id: SubscriptionId,
 # }
 # impl IntoEvents<BillingPeriodEvent> for NewBillingPeriod {
-#     fn into_events(self) -> EntityEvents<BillingPeriodEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, Supplied>) -> EntityEvents<BillingPeriodEvent> {
+#         builder.initial_events(
 #             self.id,
 #             vec![BillingPeriodEvent::Initialized {
 #                 id: self.id,
@@ -436,8 +438,9 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     pub id: SubscriptionId,
 # }
 # impl IntoEvents<SubscriptionEvent> for NewSubscription {
-#     fn into_events(self) -> EntityEvents<SubscriptionEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, Supplied>) -> EntityEvents<SubscriptionEvent> {
+#         builder.initial_events(
 #             self.id,
 #             vec![SubscriptionEvent::Initialized { id: self.id }],
 #         )
@@ -445,7 +448,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 # }
 # #[derive(EsRepo, Debug)]
 # #[es_repo(
-#     entity = "BillingPeriod",
+#     entity = "BillingPeriod", id = supplied,
 #     columns(
 #         subscription_id(ty = "SubscriptionId", update(persist = false), list_for, parent)
 #     )
@@ -454,7 +457,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     pool: sqlx::PgPool,
 # }
 # #[derive(EsRepo, Debug)]
-# #[es_repo(entity = "Subscription")]
+# #[es_repo(entity = "Subscription", id = supplied)]
 # pub struct Subscriptions {
 #     pool: sqlx::PgPool,
 #     #[es_repo(nested)]

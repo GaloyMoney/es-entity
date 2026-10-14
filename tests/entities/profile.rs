@@ -119,8 +119,13 @@ impl NewProfile {
 }
 
 impl IntoEvents<ProfileEvent> for NewProfile {
-    fn into_events(self) -> EntityEvents<ProfileEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<ProfileEvent, Supplied>,
+    ) -> EntityEvents<ProfileEvent> {
+        builder.initial_events(
             self.id,
             [ProfileEvent::Initialized {
                 id: self.id,

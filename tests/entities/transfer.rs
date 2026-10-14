@@ -85,8 +85,13 @@ impl NewTransfer {
 }
 
 impl IntoEvents<TransferEvent> for NewTransfer {
-    fn into_events(self) -> EntityEvents<TransferEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<TransferEvent, Supplied>,
+    ) -> EntityEvents<TransferEvent> {
+        builder.initial_events(
             self.id,
             [TransferEvent::Initialized {
                 id: self.id,

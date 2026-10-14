@@ -140,8 +140,13 @@ impl NewSite {
 }
 
 impl IntoEvents<SiteEvent> for NewSite {
-    fn into_events(self) -> EntityEvents<SiteEvent> {
-        EntityEvents::init(self.id, [SiteEvent::Initialized { id: self.id }])
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<SiteEvent, Supplied>,
+    ) -> EntityEvents<SiteEvent> {
+        builder.initial_events(self.id, [SiteEvent::Initialized { id: self.id }])
     }
 }
 

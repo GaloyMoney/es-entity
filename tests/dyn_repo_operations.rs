@@ -21,7 +21,7 @@ use es_entity::{AtomicOperation, DbOp, *};
 use sqlx::PgPool;
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
+#[es_repo(entity = "User", id = supplied, columns(name(ty = "String", list_for)))]
 pub struct Users {
     pool: PgPool,
 }
@@ -96,7 +96,7 @@ use entities::task::*;
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Task",
+    entity = "Task", id = supplied,
     columns(status(ty = "String", create(accessor = "status"))),
     post_persist_hook = "on_persist"
 )]

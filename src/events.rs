@@ -171,13 +171,37 @@ impl<T: Clone + EsEvent, S: EsSnapshot + Clone> Clone for EntityEvents<T, S> {
     }
 }
 
+/// Rebuilds an entity from its container and checks that the entity's own
+/// id is the container's. An `Initialized { id }` payload is user data on
+/// every path, so nothing else ties it to the id the events are stored
+/// under; a mismatch is corrupt state.
+#[doc(hidden)]
+pub fn hydrate_checked<E>(
+    events: EntityEvents<E::Event, E::Snapshot>,
+) -> Result<E, EntityHydrationError>
+where
+    E: EsEntity,
+{
+    let container_id = events.entity_id.clone();
+    let entity = E::try_from_events(events)?;
+    if *entity.__entity_id() != container_id {
+        return Err(EntityHydrationError::IdMismatch);
+    }
+    Ok(entity)
+}
+
 impl<T, S> EntityEvents<T, S>
 where
     T: EsEvent,
     S: EsSnapshot,
 {
-    /// Initializes a new `EntityEvents` instance with the given entity ID and initial events which is returned by [`IntoEvents`] method
-    pub fn init(id: <T as EsEvent>::EntityId, initial_events: impl IntoIterator<Item = T>) -> Self {
+    /// Builds a container for a brand-new entity. Only
+    /// [`EntityEventsBuilder`](crate::EntityEventsBuilder) reaches it, so the
+    /// container's id is always the one the repo's id policy resolved.
+    pub(crate) fn init(
+        id: <T as EsEvent>::EntityId,
+        initial_events: impl IntoIterator<Item = T>,
+    ) -> Self {
         let context = if <T as EsEvent>::event_context() {
             Some(crate::EventContext::data_for_storing())
         } else {
@@ -418,7 +442,7 @@ where
             cur.apply_hydration_row(row)?;
         }
         if let Some(current) = current {
-            Ok(Some(E::try_from_events(current)?))
+            Ok(Some(hydrate_checked(current)?))
         } else {
             Ok(None)
         }
@@ -451,7 +475,7 @@ where
             let row: HydrationRow<<T as EsEvent>::EntityId> = e.into();
             if current_id.as_ref() != Some(&row.entity_id) {
                 if let Some(current) = current.take() {
-                    ret.push(E::try_from_events(current)?);
+                    ret.push(hydrate_checked(current)?);
                     if ret.len() == n {
                         return Ok((ret, true));
                     }
@@ -470,7 +494,7 @@ where
             cur.apply_hydration_row(row)?;
         }
         if let Some(current) = current.take() {
-            ret.push(E::try_from_events(current)?);
+            ret.push(hydrate_checked(current)?);
         }
         Ok((ret, false))
     }
@@ -701,6 +725,9 @@ mod tests {
         fn events(&self) -> &EntityEvents<DummyEntityEvent> {
             &self.events
         }
+        fn __entity_id(&self) -> &Uuid {
+            &self.events.entity_id
+        }
     }
 
     impl TryFromEvents<DummyEntityEvent> for DummyEntity {
@@ -721,8 +748,13 @@ mod tests {
     struct NewDummyEntity {}
 
     impl IntoEvents<DummyEntityEvent> for NewDummyEntity {
-        fn into_events(self) -> EntityEvents<DummyEntityEvent> {
-            EntityEvents::init(
+        type Id = crate::Supplied;
+
+        fn into_events(
+            self,
+            builder: crate::EntityEventsBuilder<DummyEntityEvent, crate::Supplied>,
+        ) -> EntityEvents<DummyEntityEvent> {
+            builder.initial_events(
                 Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap(),
                 vec![DummyEntityEvent::Created("".to_owned())],
             )

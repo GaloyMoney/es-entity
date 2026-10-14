@@ -121,8 +121,13 @@ impl NewClient {
 }
 
 impl IntoEvents<ClientEvent> for NewClient {
-    fn into_events(self) -> EntityEvents<ClientEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<ClientEvent, Supplied>,
+    ) -> EntityEvents<ClientEvent> {
+        builder.initial_events(
             self.id,
             [ClientEvent::Initialized {
                 id: self.id,

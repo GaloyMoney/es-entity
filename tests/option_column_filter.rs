@@ -19,7 +19,7 @@ use sqlx::PgPool;
 /// - Some(None)          → filter by NULL rows only
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Task",
+    entity = "Task", id = supplied,
     columns(
         workspace_id(ty = "Option<WorkspaceId>", list_for),
         status(ty = "String", list_for(by(created_at)))

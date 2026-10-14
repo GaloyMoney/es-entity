@@ -78,8 +78,13 @@ impl NewFacility {
 }
 
 impl IntoEvents<FacilityEvent> for NewFacility {
-    fn into_events(self) -> EntityEvents<FacilityEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<FacilityEvent, Supplied>,
+    ) -> EntityEvents<FacilityEvent> {
+        builder.initial_events(
             self.id,
             [FacilityEvent::Initialized {
                 id: self.id,

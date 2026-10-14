@@ -83,8 +83,13 @@ impl NewAccountHolder {
 }
 
 impl IntoEvents<AccountHolderEvent> for NewAccountHolder {
-    fn into_events(self) -> EntityEvents<AccountHolderEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<AccountHolderEvent, Supplied>,
+    ) -> EntityEvents<AccountHolderEvent> {
+        builder.initial_events(
             self.id,
             [AccountHolderEvent::Initialized {
                 id: self.id,
@@ -149,13 +154,18 @@ impl NewAccount {
 }
 
 impl IntoEvents<AccountEvent> for NewAccount {
-    fn into_events(self) -> EntityEvents<AccountEvent> {
-        EntityEvents::init(self.id, [AccountEvent::Initialized { id: self.id }])
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<AccountEvent, Supplied>,
+    ) -> EntityEvents<AccountEvent> {
+        builder.initial_events(self.id, [AccountEvent::Initialized { id: self.id }])
     }
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Account", delete = "soft")]
+#[es_repo(entity = "Account", id = supplied, delete = "soft")]
 pub struct Accounts {
     pool: PgPool,
 
@@ -174,7 +184,7 @@ impl Accounts {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "AccountHolder",
+    entity = "AccountHolder", id = supplied,
     forgettable,
     delete = "soft",
     columns(

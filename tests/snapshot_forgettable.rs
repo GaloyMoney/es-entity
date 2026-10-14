@@ -9,7 +9,7 @@ use sqlx::PgPool;
 /// live in the same `<tbl>_forgettable_payloads` table, at the reserved
 /// `sequence = 0` row.
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Client", snapshot, forgettable)]
+#[es_repo(entity = "Client", id = supplied, snapshot, forgettable)]
 pub struct ClientRepo {
     pool: PgPool,
 }

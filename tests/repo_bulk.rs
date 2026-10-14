@@ -11,7 +11,7 @@ use sqlx::PgPool;
 /// - `email`: direct field access — no custom accessor
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Profile",
+    entity = "Profile", id = supplied,
     columns(
         name(ty = "String", update(accessor = "data.name")),
         display_name(

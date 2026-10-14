@@ -1,0 +1,13 @@
+error[E0624]: associated function `init` is private
+  --> tests/ui/init_is_private.rs:15:48
+   |
+15 |       let _events = EntityEvents::<GadgetEvent>::init(id, [GadgetEvent::Initialized { id }]);
+   |                                                  ^^^^ private associated function
+   |
+  ::: src/events.rs
+   |
+   | /     pub(crate) fn init(
+   | |         id: <T as EsEvent>::EntityId,
+   | |         initial_events: impl IntoIterator<Item = T>,
+   | |     ) -> Self {
+   | |_____________- private associated function defined here

@@ -95,8 +95,13 @@ impl NewGcGrandchild {
 }
 
 impl IntoEvents<GcGrandchildEvent> for NewGcGrandchild {
-    fn into_events(self) -> EntityEvents<GcGrandchildEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<GcGrandchildEvent, Supplied>,
+    ) -> EntityEvents<GcGrandchildEvent> {
+        builder.initial_events(
             self.id,
             vec![GcGrandchildEvent::Initialized {
                 id: self.id,
@@ -171,8 +176,13 @@ pub struct NewGcChild {
 }
 
 impl IntoEvents<GcChildEvent> for NewGcChild {
-    fn into_events(self) -> EntityEvents<GcChildEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<GcChildEvent, Supplied>,
+    ) -> EntityEvents<GcChildEvent> {
+        builder.initial_events(
             self.id,
             vec![GcChildEvent::Initialized {
                 id: self.id,
@@ -231,15 +241,20 @@ pub struct NewGcParent {
 }
 
 impl IntoEvents<GcParentEvent> for NewGcParent {
-    fn into_events(self) -> EntityEvents<GcParentEvent> {
-        EntityEvents::init(self.id, vec![GcParentEvent::Initialized { id: self.id }])
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<GcParentEvent, Supplied>,
+    ) -> EntityEvents<GcParentEvent> {
+        builder.initial_events(self.id, vec![GcParentEvent::Initialized { id: self.id }])
     }
 }
 
 // ─── Repos ──────────────────────────────────────────────────────────────
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "GcGrandchild",
+    entity = "GcGrandchild", id = supplied,
     tbl = "gc_grandchildren",
     events_tbl = "gc_grandchild_events",
     delete = "soft",
@@ -257,7 +272,7 @@ impl GcGrandchildren {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "GcChild",
+    entity = "GcChild", id = supplied,
     tbl = "gc_children",
     events_tbl = "gc_child_events",
     delete = "soft",
@@ -281,7 +296,7 @@ impl GcChildren {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "GcParent",
+    entity = "GcParent", id = supplied,
     tbl = "gc_parents",
     events_tbl = "gc_parent_events",
     delete = "soft"

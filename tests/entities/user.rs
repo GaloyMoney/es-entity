@@ -72,8 +72,13 @@ impl NewUser {
 }
 
 impl IntoEvents<UserEvent> for NewUser {
-    fn into_events(self) -> EntityEvents<UserEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<UserEvent, Supplied>,
+    ) -> EntityEvents<UserEvent> {
+        builder.initial_events(
             self.id,
             [UserEvent::Initialized {
                 id: self.id,

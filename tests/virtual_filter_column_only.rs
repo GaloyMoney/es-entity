@@ -15,7 +15,7 @@ use sqlx::PgPool;
 /// unified path).
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "VfAccount",
+    entity = "VfAccount", id = supplied,
     columns(flagged(
         ty = "bool",
         virtual = "EXISTS (SELECT 1 FROM vf_account_flags f WHERE f.account_id = vf_accounts.id)",

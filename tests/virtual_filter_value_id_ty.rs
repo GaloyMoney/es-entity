@@ -16,7 +16,7 @@ use sqlx::PgPool;
 /// struct would otherwise collide at module scope.
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "VfAccount",
+    entity = "VfAccount", id = supplied,
     columns(flagged_by(
         ty = "VfAccountId",
         virtual = "EXISTS (SELECT 1 FROM vf_account_flags f WHERE f.account_id = vf_accounts.id AND f.account_id = {value})",

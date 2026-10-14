@@ -24,8 +24,9 @@ It is assumed that your database schema has a relevant `INDEX` on `<column>` to 
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#         builder.initial_events(
 #             self.id,
 #             [UserEvent::Initialized {
 #                 id: self.id,
@@ -50,7 +51,7 @@ pub struct User {
 }
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User", columns(name = "String"))]
+#[es_repo(entity = "User", id = supplied, columns(name = "String"))]
 pub struct Users {
     pool: sqlx::PgPool
 }

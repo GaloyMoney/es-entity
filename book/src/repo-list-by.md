@@ -21,8 +21,9 @@ This will generate the `list_by_<column>` `fn`s and appropriate `cursor` structs
 #     Deleted
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#         builder.initial_events(
 #             self.id,
 #             [UserEvent::Initialized {
 #                 id: self.id,
@@ -47,7 +48,7 @@ use es_entity::*;
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User",
+    entity = "User", id = supplied,
     // list_by will generate the UserByNameCursor
     columns(name(ty = "String", list_by))
 )]

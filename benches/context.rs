@@ -51,7 +51,7 @@ use std::{
     time::Duration,
 };
 
-use es_entity::{ContextData, EntityEvents, EventContext, WithEventContext, *};
+use es_entity::{ContextData, EventContext, WithEventContext, *};
 
 es_entity::entity_id! { BenchEntityId }
 
@@ -203,7 +203,10 @@ fn persist_path(c: &mut Criterion) {
     // One `data_for_storing()` per pushed event — ~10M calls in the stress run.
     g.bench_function("entity_events_push/3_ambient_entries", |b| {
         b.iter_batched(
-            || EntityEvents::<BenchEvent>::init(BenchEntityId::new(), std::iter::empty()),
+            || {
+                EntityEventsBuilder::<BenchEvent, Generated>::__generated(BenchEntityId::new())
+                    .initial_events(std::iter::empty())
+            },
             |mut events| {
                 events.push(BenchEvent::Happened { value: 42 });
                 events

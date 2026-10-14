@@ -356,12 +356,21 @@ impl Columns {
         }
     }
 
-    pub fn variable_assignments_for_create(&self, ident: syn::Ident) -> proc_macro2::TokenStream {
+    /// `generated_id`: the id column reads the id the repo resolved
+    /// (`__id`) instead of a field of the `New*` type, which has none.
+    pub fn variable_assignments_for_create(
+        &self,
+        ident: syn::Ident,
+        generated_id: bool,
+    ) -> proc_macro2::TokenStream {
         let assignments = self.all.iter().filter_map(|c| {
-            if c.opts.persist_on_create() {
-                Some(c.variable_assignment_for_create(&ident))
-            } else {
+            if !c.opts.persist_on_create() {
                 None
+            } else if generated_id && c.opts.is_id {
+                let name = &c.name;
+                Some(quote! { let #name = &__id; })
+            } else {
+                Some(c.variable_assignment_for_create(&ident))
             }
         });
         quote! {
@@ -372,12 +381,17 @@ impl Columns {
     pub fn variable_assignments_for_create_all(
         &self,
         ident: syn::Ident,
+        generated_id: bool,
     ) -> proc_macro2::TokenStream {
         let assignments = self.all.iter().filter_map(|c| {
-            if c.opts.persist_on_create() {
-                Some(c.variable_assignment_for_create_all(&ident))
-            } else {
+            if !c.opts.persist_on_create() {
                 None
+            } else if generated_id && c.opts.is_id {
+                let name = &c.name;
+                let ty = &c.opts.ty;
+                Some(quote! { let #name: &#ty = __id; })
+            } else {
+                Some(c.variable_assignment_for_create_all(&ident))
             }
         });
         quote! {
@@ -411,8 +425,9 @@ impl Columns {
     pub fn create_all_arg_collection(
         &self,
         ident: syn::Ident,
+        generated_id: bool,
     ) -> (proc_macro2::TokenStream, Vec<proc_macro2::TokenStream>) {
-        let assignments = self.variable_assignments_for_create_all(ident.clone());
+        let assignments = self.variable_assignments_for_create_all(ident.clone(), generated_id);
         let (vecs, pushes, bindings) = self
             .all
             .iter()
@@ -444,10 +459,15 @@ impl Columns {
                     (v1, v2, v3)
                 },
             );
+        let loop_head = if generated_id {
+            quote! { for (#ident, __id) in new_entities.iter().zip(__ids.iter()) }
+        } else {
+            quote! { for #ident in new_entities.iter() }
+        };
         (
             quote! {
                 #(#vecs)*
-                for #ident in new_entities.iter() {
+                #loop_head {
                     #assignments
 
                     #(#pushes)*

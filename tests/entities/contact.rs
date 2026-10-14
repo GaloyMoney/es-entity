@@ -76,8 +76,13 @@ impl NewContact {
 }
 
 impl IntoEvents<ContactEvent> for NewContact {
-    fn into_events(self) -> EntityEvents<ContactEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<ContactEvent, Supplied>,
+    ) -> EntityEvents<ContactEvent> {
+        builder.initial_events(
             self.id,
             [ContactEvent::Initialized {
                 id: self.id,

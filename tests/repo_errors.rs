@@ -6,7 +6,7 @@ use es_entity::*;
 use sqlx::PgPool;
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
+#[es_repo(entity = "User", id = supplied, columns(name(ty = "String", list_for)))]
 pub struct Users {
     pool: PgPool,
 }
@@ -23,7 +23,7 @@ impl Users {
 /// - `email`: direct field access — no custom accessor
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Profile",
+    entity = "Profile", id = supplied,
     columns(
         name(ty = "String", update(accessor = "data.name")),
         display_name(
@@ -49,7 +49,7 @@ impl Profiles {
 /// key through generated ops.
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "OrderItem",
+    entity = "OrderItem", id = supplied,
     delete = "soft",
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
@@ -508,7 +508,7 @@ mod composite {
     use sqlx::PgPool;
     #[derive(EsRepo)]
     #[es_repo(
-        entity = "Profile",
+        entity = "Profile", id = supplied,
         tbl = "v2_profiles",
         events_tbl = "v2_profile_events",
         columns(
@@ -574,7 +574,7 @@ mod custom_pkey {
     use sqlx::PgPool;
     #[derive(EsRepo, Debug)]
     #[es_repo(
-        entity = "User",
+        entity = "User", id = supplied,
         tbl = "v2_widgets",
         events_tbl = "v2_widget_events",
         columns(name(ty = "String"))

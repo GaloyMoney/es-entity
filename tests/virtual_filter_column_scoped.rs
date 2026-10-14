@@ -13,7 +13,7 @@ use sqlx::PgPool;
 /// rides in `trailing`, alongside every scope-column arm's conjunct).
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Contact",
+    entity = "Contact", id = supplied,
     columns(
         partner_id(ty = "PartnerId", scope),
         email(ty = "String"),

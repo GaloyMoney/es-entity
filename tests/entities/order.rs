@@ -100,8 +100,13 @@ impl NewOrderItem {
 }
 
 impl IntoEvents<OrderItemEvent> for NewOrderItem {
-    fn into_events(self) -> EntityEvents<OrderItemEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<OrderItemEvent, Supplied>,
+    ) -> EntityEvents<OrderItemEvent> {
+        builder.initial_events(
             self.id,
             vec![OrderItemEvent::Initialized {
                 id: self.id,
@@ -185,7 +190,12 @@ impl NewOrder {
 }
 
 impl IntoEvents<OrderEvent> for NewOrder {
-    fn into_events(self) -> EntityEvents<OrderEvent> {
-        EntityEvents::init(self.id, vec![OrderEvent::Initialized { id: self.id }])
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<OrderEvent, Supplied>,
+    ) -> EntityEvents<OrderEvent> {
+        builder.initial_events(self.id, vec![OrderEvent::Initialized { id: self.id }])
     }
 }

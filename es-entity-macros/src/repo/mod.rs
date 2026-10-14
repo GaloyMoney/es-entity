@@ -601,7 +601,7 @@ mod tests {
     #[test]
     fn pkey_constraint_gets_id_conflict_variant_and_no_from_database_arm() {
         let input: syn::DeriveInput = parse_quote! {
-            #[es_repo(entity = "User", columns(name(ty = "String")))]
+            #[es_repo(entity = "User", id = supplied, columns(name(ty = "String")))]
             struct Users {
                 pool: sqlx::PgPool,
             }
@@ -620,6 +620,28 @@ mod tests {
             "the pkey name must have no from_database match arm of its own \
              -- it falls through to the catch-all Err(source), got: {out}"
         );
+    }
+
+    /// A repo that generates its own ids can never reject on the primary
+    /// key: a collision of a fresh id is a fault, so the family has no
+    /// `Pkey` variant and no `pkey_from_database` constructor.
+    #[test]
+    fn generated_id_repo_has_no_pkey_variant() {
+        for attr in [
+            quote! { #[es_repo(entity = "User", columns(name(ty = "String")))] },
+            quote! { #[es_repo(entity = "User", id = generated, columns(name(ty = "String")))] },
+            quote! { #[es_repo(entity = "User", id = generated(by = "Self::next_id"), columns(name(ty = "String")))] },
+        ] {
+            let input: syn::DeriveInput = parse_quote! {
+                #attr
+                struct Users {
+                    pool: sqlx::PgPool,
+                }
+            };
+            let out = derive(input).unwrap().to_string();
+            assert!(!out.contains("Pkey"), "no Pkey variant expected: {out}");
+            assert!(!out.contains("pkey_from_database"), "{out}");
+        }
     }
 
     // Guard 1 (event has Forgettable fields but the repo omits `forgettable`)

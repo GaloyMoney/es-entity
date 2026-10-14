@@ -145,10 +145,9 @@ impl TryFromEvents<UserEvent> for User {
 
 // The `NewEntity` - this represents the data of an entity in a pre-persisted state.
 // Using derive_builder is not mandatory - any type can be used for the `NewEntity` state.
+// It has no `id`: by default the repository generates one.
 #[derive(Debug, Builder)]
 pub struct NewUser {
-    #[builder(setter(into))]
-    pub id: UserId,
     #[builder(setter(into))]
     pub name: String,
 }
@@ -161,14 +160,15 @@ impl NewUser {
 
 // The `NewEntity` type must implement `IntoEvents` to get the initial events that require persisting.
 impl IntoEvents<UserEvent> for NewUser {
-    fn into_events(self) -> EntityEvents<UserEvent> {
-        EntityEvents::init(
-            self.id,
-            [UserEvent::Initialized {
-                id: self.id,
-                name: self.name,
-            }],
-        )
+    // The repository generates the id and hands it over through the builder.
+    type Id = Generated;
+
+    fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+        let id = builder.id();
+        builder.initial_events([UserEvent::Initialized {
+            id,
+            name: self.name,
+        }])
     }
 }
 
@@ -197,7 +197,6 @@ async fn main() -> anyhow::Result<()> {
     let users = Users { pool };
 
     let new_user = NewUser::builder()
-        .id(UserId::new())
         .name("Frank")
         .build()
         .unwrap();

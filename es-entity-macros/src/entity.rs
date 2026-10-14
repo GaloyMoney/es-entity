@@ -142,6 +142,9 @@ impl ToTokens for EsEntity {
                 fn events(&self) -> &es_entity::EntityEvents<#event, #snapshot> {
                     &self.#events_field
                 }
+                fn __entity_id(&self) -> &<#event as es_entity::EsEvent>::EntityId {
+                    &self.id
+                }
             }
 
             #(#nested)*
@@ -179,6 +182,9 @@ mod tests {
                 fn events(&self) -> &es_entity::EntityEvents<UserEvent, es_entity::NoSnapshot> {
                     &self.the_events
                 }
+                fn __entity_id(&self) -> &<UserEvent as es_entity::EsEvent>::EntityId {
+                    &self.id
+                }
             }
         };
 
@@ -206,6 +212,9 @@ mod tests {
                 }
                 fn events(&self) -> &es_entity::EntityEvents<UserEvent, es_entity::NoSnapshot> {
                     &self.events
+                }
+                fn __entity_id(&self) -> &<UserEvent as es_entity::EsEvent>::EntityId {
+                    &self.id
                 }
             }
         };
@@ -236,6 +245,9 @@ mod tests {
                 }
                 fn events(&self) -> &es_entity::EntityEvents<UserEvent, es_entity::NoSnapshot> {
                     &self.events
+                }
+                fn __entity_id(&self) -> &<UserEvent as es_entity::EsEvent>::EntityId {
+                    &self.id
                 }
             }
 

@@ -110,8 +110,13 @@ impl NewSubscriber {
 }
 
 impl IntoEvents<SubscriberEvent> for NewSubscriber {
-    fn into_events(self) -> EntityEvents<SubscriberEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<SubscriberEvent, Supplied>,
+    ) -> EntityEvents<SubscriberEvent> {
+        builder.initial_events(
             self.id,
             [SubscriberEvent::Initialized {
                 id: self.id,
@@ -124,7 +129,7 @@ impl IntoEvents<SubscriberEvent> for NewSubscriber {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Subscriber",
+    entity = "Subscriber", id = supplied,
     forgettable,
     delete = "soft",
     columns(email(ty = "Forgettable<String>", list_by), plan(ty = "String"))
@@ -328,7 +333,7 @@ mod frozen {
 
     #[derive(EsRepo, Debug)]
     #[es_repo(
-        entity = "Subscriber",
+        entity = "Subscriber", id = supplied,
         forgettable,
         delete = "soft",
         columns(

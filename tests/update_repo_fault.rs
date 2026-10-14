@@ -13,7 +13,7 @@ use sqlx::PgPool;
 /// scope/reference columns written once on create and never again.
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "User",
+    entity = "User", id = supplied,
     tbl = "users",
     columns(name(ty = "String", update(persist = false)))
 )]
@@ -95,7 +95,7 @@ async fn stale_sequence_update_is_transient_optimistic_conflict_through_repo_fau
 /// `update_can_reject()` is false and `update`/`update_in_op` narrow to
 /// `RepoFault` even though the combined index+events statement is used.
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "OrderItem", columns(order_id(ty = "OrderId")))]
+#[es_repo(entity = "OrderItem", id = supplied, columns(order_id(ty = "OrderId")))]
 pub struct ForeignKeyOnlyOrderItems {
     pool: PgPool,
 }

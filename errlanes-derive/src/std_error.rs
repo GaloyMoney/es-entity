@@ -511,12 +511,17 @@ pub(crate) fn emit(
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let display_where_tokens = merge_where(where_clause, &extra);
     let error_where_tokens = merge_where(where_clause, &error_extra);
+    let scrutinee = if display_arms.is_empty() {
+        quote!(*self)
+    } else {
+        quote!(self)
+    };
     let tokens = quote! {
         #[automatically_derived]
         impl #impl_generics std::fmt::Display for #target #ty_generics #display_where_tokens {
             #[allow(unused_variables)]
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                match self {
+                match #scrutinee {
                     #(#display_arms,)*
                 }
             }
@@ -525,7 +530,7 @@ pub(crate) fn emit(
         impl #impl_generics std::error::Error for #target #ty_generics #error_where_tokens {
             #[allow(unused_variables)]
             fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                match self {
+                match #scrutinee {
                     #(#source_arms,)*
                 }
             }

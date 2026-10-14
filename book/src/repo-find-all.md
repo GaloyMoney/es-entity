@@ -26,8 +26,9 @@ Unlike `find_by_id`, `find_all` does **not** return a `NotFound` error for missi
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#         builder.initial_events(
 #             self.id,
 #             [UserEvent::Initialized {
 #                 id: self.id,
@@ -52,7 +53,7 @@ pub struct User {
 }
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User")]
+#[es_repo(entity = "User", id = supplied)]
 pub struct Users {
     pool: sqlx::PgPool
 }

@@ -153,8 +153,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let users = Users { pool };
     
     // Create a new user
+    // (the repository generates the id, `NewUser` has no id field)
     let user = users.create(NewUser {
-        id: UserId::new(),
         name: "Alice".to_string(),
     }).await?;
     
@@ -216,7 +216,7 @@ pub struct Order {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "OrderItem",
+    entity = "OrderItem", id = supplied,
     // Child repo marks the parent foreign key
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
@@ -226,7 +226,7 @@ struct OrderItems {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Order",
+    entity = "Order", id = supplied,
 )]
 pub struct Orders {
     pool: PgPool,
@@ -276,21 +276,17 @@ The entity style is easily testable. Hydrate from events, mutate, assert.
 mod tests {
     use super::*;
     
-    fn test_user(id: UserId) -> User {
-        let events = EntityEvents::init(
-            id,
-            [UserEvent::Initialized { 
-                id,
-                name: "Alice".to_string() 
-            }],
-        );
-        
+    fn test_user() -> User {
+        // Repositories hand `into_events` its builder; a unit test builds one itself.
+        let events = NewUser { name: "Alice".to_string() }
+            .into_events(EntityEventsBuilder::__generated(UserId::new()));
+
         User::try_from_events(events).unwrap();
     }
 
     #[test]
     fn test_user_update() {
-        let mut user = test_user(UserId::new());
+        let mut user = test_user();
         assert_eq!(user.update_name("Bob"), Idempotent::Executed(()));
         assert_eq!(user.update_name("Bob"), Idempotent::AlreadyApplied(()));
     }

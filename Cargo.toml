@@ -64,6 +64,7 @@ repo-composition-source = { path = "tests/composition/source" }
 repo-composition-middle = { path = "tests/composition/middle" }
 tokio = { workspace = true }
 anyhow = { workspace = true }
+trybuild = "1"
 async-trait = { workspace = true }
 futures = { workspace = true }
 tracing-subscriber = { workspace = true }

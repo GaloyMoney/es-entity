@@ -6,6 +6,12 @@ It gets passed to the `Repository::create` function where the `IntoEvents` trait
 It is also recommended that any validation of the initial attributes is performed on this type to ensure that the `Entity` will be in a legal state once it gets hydrated for the first time.
 Using the [derive_builder](https://docs.rs/derive_builder/latest/derive_builder/) crate is recommended for this purpose.
 
+By default the repository generates the id of every entity it creates, so the
+`NewEntity` has no id field and `IntoEvents` reads the resolved id from the
+builder it receives. An entity whose id is deterministic (derived from another
+aggregate, a well-known constant) opts out with `id = supplied`, see
+[Entity ids](./entity-ids.md).
+
 ```rust
 # extern crate es_entity;
 # extern crate sqlx;
@@ -28,8 +34,6 @@ const MAX_NAME_LENGTH: usize = 100;
 #[builder(build_fn(validate = "Self::validate"))]
 pub struct NewUser {
     #[builder(setter(into))]
-    pub id: UserId,
-    #[builder(setter(into))]
     pub name: String,
 }
 
@@ -49,15 +53,16 @@ impl NewUserBuilder {
 }
 
 impl IntoEvents<UserEvent> for NewUser {
+    // The repository generates the id; `NewUser` has no id field.
+    type Id = Generated;
+
     // This `fn` returns the first `Events` of the `Entity`
-    fn into_events(self) -> EntityEvents<UserEvent> {
-        EntityEvents::init(
-            self.id,
-            [UserEvent::Initialized {
-                id: self.id,
-                name: self.name,
-            }],
-        )
+    fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+        let id = builder.id();
+        builder.initial_events([UserEvent::Initialized {
+            id,
+            name: self.name,
+        }])
     }
 }
 
@@ -65,7 +70,7 @@ impl IntoEvents<UserEvent> for NewUser {
 mod tests {
     #[test]
     fn user_creation() {
-        let new_user = NewUser::builder().id("user-id").name("Steven").build();
+        let new_user = NewUser::builder().name("Steven").build();
         assert!(new_user.is_ok());
     }
 }

@@ -68,8 +68,13 @@ impl NewTask {
 }
 
 impl IntoEvents<TaskEvent> for NewTask {
-    fn into_events(self) -> EntityEvents<TaskEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<TaskEvent, Supplied>,
+    ) -> EntityEvents<TaskEvent> {
+        builder.initial_events(
             self.id,
             [TaskEvent::Initialized {
                 id: self.id,

@@ -41,7 +41,7 @@ impl RunJob for TestJob {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Order")]
+#[es_repo(entity = "Order", id = supplied)]
 pub struct Orders {
     pool: PgPool,
     #[es_repo(nested)]
@@ -59,7 +59,7 @@ impl Orders {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "OrderItem",
+    entity = "OrderItem", id = supplied,
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
 pub struct OrderItems {

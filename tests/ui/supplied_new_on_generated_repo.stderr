@@ -1,0 +1,17 @@
+error[E0271]: type mismatch resolving `<NewGadget as IntoEvents<GadgetEvent>>::Id == Generated`
+  --> tests/ui/supplied_new_on_generated_repo.rs:45:10
+   |
+45 | #[derive(EsRepo)]
+   |          ^^^^^^ type mismatch resolving `<NewGadget as IntoEvents<GadgetEvent>>::Id == Generated`
+   |
+note: expected this to be `Generated`
+  --> tests/ui/supplied_new_on_generated_repo.rs:34:15
+   |
+34 |     type Id = Supplied;
+   |               ^^^^^^^^
+note: required by a bound in `Gadgets::convert_new`
+  --> tests/ui/supplied_new_on_generated_repo.rs:45:10
+   |
+45 | #[derive(EsRepo)]
+   |          ^^^^^^ required by this bound in `Gadgets::convert_new`
+   = note: this error originates in the derive macro `EsRepo` (in Nightly builds, run with -Z macro-backtrace for more info)

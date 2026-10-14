@@ -21,8 +21,9 @@ In the code below we want to include a `name` column in the `index` table that r
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#         builder.initial_events(
 #             self.id,
 #             [UserEvent::Initialized {
 #                 id: self.id,
@@ -55,7 +56,7 @@ pub struct User {
 }
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User", columns(name = "String"))]
+#[es_repo(entity = "User", id = supplied, columns(name = "String"))]
 pub struct Users {
     pool: sqlx::PgPool
 }
@@ -117,7 +118,8 @@ The `create(accessor = "<>")` option modifies how the field is accessed on the `
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
+#     type Id = Supplied;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -143,7 +145,7 @@ impl NewUser {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User",
+    entity = "User", id = supplied,
     columns(
         // Instead of using the `name` field on the `NewEntity` struct
         // the generated code will use: `new_entity.my_name()`
@@ -173,7 +175,8 @@ This is useful for dynamic values that don't become known until later on in the 
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
+#     type Id = Supplied;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -195,7 +198,7 @@ pub struct NewUser { id: UserId }
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User",
+    entity = "User", id = supplied,
     columns(
         name(ty = "String", create(persist = false)),
     )

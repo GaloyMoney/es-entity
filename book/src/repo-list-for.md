@@ -21,7 +21,8 @@ This is useful for situations where you have a `1-to-n` relationship between 2 e
 #     NameUpdated { name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
+#     type Id = Supplied;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -48,8 +49,9 @@ pub enum UserDocumentEvent {
 }
 
 # impl IntoEvents<UserDocumentEvent> for NewUserDocument {
-#     fn into_events(self) -> EntityEvents<UserDocumentEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<UserDocumentEvent, Supplied>) -> EntityEvents<UserDocumentEvent> {
+#         builder.initial_events(
 #             self.id,
 #             [UserDocumentEvent::Initialized {
 #                 id: self.id,
@@ -74,7 +76,7 @@ pub struct UserDocument {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "UserDocument",
+    entity = "UserDocument", id = supplied,
     columns(
         // The column name in the schema
         user_id(

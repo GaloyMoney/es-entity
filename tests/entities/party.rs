@@ -69,8 +69,13 @@ impl NewParty {
 }
 
 impl IntoEvents<PartyEvent> for NewParty {
-    fn into_events(self) -> EntityEvents<PartyEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<PartyEvent, Supplied>,
+    ) -> EntityEvents<PartyEvent> {
+        builder.initial_events(
             self.id,
             [PartyEvent::Initialized {
                 id: self.id,

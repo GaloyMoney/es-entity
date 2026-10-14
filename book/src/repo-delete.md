@@ -16,7 +16,7 @@ fn list_for_<column>_by_<cursor>_include_deleted
 
 If you don't need the `_include_deleted` query variants, use `delete = "soft_without_queries"` instead:
 ```rust,ignore
-#[es_repo(entity = "User", columns(name = "String"), delete = "soft_without_queries")]
+#[es_repo(entity = "User", id = supplied, columns(name = "String"), delete = "soft_without_queries")]
 ```
 
 As a prerequisite the `index` table must include a `deleted` column:
@@ -39,8 +39,9 @@ CREATE TABLE users (
 # use serde::{Deserialize, Serialize};
 # es_entity::entity_id! { UserId }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#         builder.initial_events(
 #             self.id,
 #             [UserEvent::Initialized {
 #                 id: self.id,
@@ -85,7 +86,7 @@ impl User {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User",
+    entity = "User", id = supplied,
     columns(name = "String"),
     delete = "soft",
 )]

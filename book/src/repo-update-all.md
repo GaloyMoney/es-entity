@@ -20,8 +20,9 @@ Returns the total number of events persisted. Entities without new events are sk
 #     NameUpdated { name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#         builder.initial_events(
 #             self.id,
 #             [UserEvent::Initialized {
 #                 id: self.id,
@@ -64,7 +65,7 @@ impl User {
 }
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User", columns(name = "String"))]
+#[es_repo(entity = "User", id = supplied, columns(name = "String"))]
 pub struct Users {
     pool: sqlx::PgPool
 }

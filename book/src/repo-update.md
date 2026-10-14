@@ -21,8 +21,9 @@ In the code below we have a `name` column in the `index` table that needs to be 
 #     NameUpdated { name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#         builder.initial_events(
 #             self.id,
 #             [UserEvent::Initialized {
 #                 id: self.id,
@@ -66,7 +67,7 @@ impl User {
 }
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User", columns(name = "String"))]
+#[es_repo(entity = "User", id = supplied, columns(name = "String"))]
 pub struct Users {
     pool: sqlx::PgPool
 }
@@ -140,7 +141,8 @@ The `update(accessor = "<>")` option modifies how the field is accessed on the `
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
+#     type Id = Supplied;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -167,7 +169,7 @@ impl User {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User",
+    entity = "User", id = supplied,
     columns(
         // Instead of using the `name` field on the `Entity` struct
         // the generated code will use: `entity.display_name()`
@@ -197,7 +199,8 @@ This is useful for columns that should never change after creation.
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
+#     type Id = Supplied;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -222,7 +225,7 @@ pub struct User {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User",
+    entity = "User", id = supplied,
     columns(
         name(ty = "String", update(persist = false))
     )

@@ -55,8 +55,13 @@ impl NewPartner {
 }
 
 impl IntoEvents<PartnerEvent> for NewPartner {
-    fn into_events(self) -> EntityEvents<PartnerEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<PartnerEvent, Supplied>,
+    ) -> EntityEvents<PartnerEvent> {
+        builder.initial_events(
             self.id,
             [PartnerEvent::Initialized {
                 id: self.id,

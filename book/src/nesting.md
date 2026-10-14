@@ -166,8 +166,10 @@ pub struct NewBillingPeriod {
 }
 
 impl IntoEvents<BillingPeriodEvent> for NewBillingPeriod {
-    fn into_events(self) -> EntityEvents<BillingPeriodEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, Supplied>) -> EntityEvents<BillingPeriodEvent> {
+        builder.initial_events(
             self.id,
             vec![BillingPeriodEvent::Initialized {
                 id: self.id,
@@ -299,8 +301,9 @@ Now let's implement the `Subscription` entity that will contain the nested `Bill
 # }
 #
 # impl IntoEvents<BillingPeriodEvent> for NewBillingPeriod {
-#     fn into_events(self) -> EntityEvents<BillingPeriodEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, Supplied>) -> EntityEvents<BillingPeriodEvent> {
+#         builder.initial_events(
 #             self.id,
 #             vec![BillingPeriodEvent::Initialized {
 #                 id: self.id,
@@ -397,8 +400,10 @@ pub struct NewSubscription {
 }
 
 impl IntoEvents<SubscriptionEvent> for NewSubscription {
-    fn into_events(self) -> EntityEvents<SubscriptionEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, Supplied>) -> EntityEvents<SubscriptionEvent> {
+        builder.initial_events(
             self.id,
             vec![SubscriptionEvent::Initialized { id: self.id }],
         )
@@ -550,8 +555,9 @@ This leverages the rust module system to enforce that the children cannot be acc
 # }
 #
 # impl IntoEvents<BillingPeriodEvent> for NewBillingPeriod {
-#     fn into_events(self) -> EntityEvents<BillingPeriodEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, Supplied>) -> EntityEvents<BillingPeriodEvent> {
+#         builder.initial_events(
 #             self.id,
 #             vec![BillingPeriodEvent::Initialized {
 #                 id: self.id,
@@ -607,8 +613,9 @@ This leverages the rust module system to enforce that the children cannot be acc
 # }
 #
 # impl IntoEvents<SubscriptionEvent> for NewSubscription {
-#     fn into_events(self) -> EntityEvents<SubscriptionEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, Supplied>) -> EntityEvents<SubscriptionEvent> {
+#         builder.initial_events(
 #             self.id,
 #             vec![SubscriptionEvent::Initialized { id: self.id }],
 #         )
@@ -617,7 +624,7 @@ This leverages the rust module system to enforce that the children cannot be acc
 # fn main() {}
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "BillingPeriod",
+    entity = "BillingPeriod", id = supplied,
     columns(
         // The foreign key of the parent marked by `parent`.
         subscription_id(ty = "SubscriptionId", update(persist = false), parent)
@@ -629,7 +636,7 @@ struct BillingPeriods {
 }
 
 #[derive(EsRepo)]
-#[es_repo(entity = "Subscription")]
+#[es_repo(entity = "Subscription", id = supplied)]
 pub struct Subscriptions {
     pool: sqlx::PgPool,
 
@@ -762,8 +769,9 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     pub subscription_id: SubscriptionId,
 # }
 # impl IntoEvents<BillingPeriodEvent> for NewBillingPeriod {
-#     fn into_events(self) -> EntityEvents<BillingPeriodEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, Supplied>) -> EntityEvents<BillingPeriodEvent> {
+#         builder.initial_events(
 #             self.id,
 #             vec![BillingPeriodEvent::Initialized {
 #                 id: self.id,
@@ -844,8 +852,9 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     pub id: SubscriptionId,
 # }
 # impl IntoEvents<SubscriptionEvent> for NewSubscription {
-#     fn into_events(self) -> EntityEvents<SubscriptionEvent> {
-#         EntityEvents::init(
+#     type Id = Supplied;
+#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, Supplied>) -> EntityEvents<SubscriptionEvent> {
+#         builder.initial_events(
 #             self.id,
 #             vec![SubscriptionEvent::Initialized { id: self.id }],
 #         )
@@ -853,7 +862,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 # }
 # #[derive(EsRepo)]
 # #[es_repo(
-#     entity = "BillingPeriod",
+#     entity = "BillingPeriod", id = supplied,
 #     columns(
 #         subscription_id(ty = "SubscriptionId", update(persist = false), parent)
 #     )
@@ -862,7 +871,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     pool: sqlx::PgPool,
 # }
 # #[derive(EsRepo)]
-# #[es_repo(entity = "Subscription")]
+# #[es_repo(entity = "Subscription", id = supplied)]
 # pub struct Subscriptions {
 #     pool: sqlx::PgPool,
 #     #[es_repo(nested)]

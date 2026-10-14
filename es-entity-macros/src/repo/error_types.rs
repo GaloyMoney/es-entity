@@ -117,6 +117,26 @@ pub(crate) fn enumerate_constraints(
         .collect()
 }
 
+/// Whether a constraint of [`enumerate_constraints`] is the primary key on
+/// nothing but the id column, the one constraint a repo that generates its
+/// own ids can never reject on.
+pub(crate) fn is_id_pkey(
+    opts: &RepositoryOptions,
+    name: &str,
+    kind: &ConstraintKind,
+    col_names: &[String],
+) -> bool {
+    let Some(id) = opts.columns.column_enum_columns().find(|c| c.is_id()) else {
+        return false;
+    };
+    matches!(kind, ConstraintKind::Unique)
+        && col_names == [id.name().to_string()]
+        && name
+            == opts
+                .index_catalog()
+                .pkey_constraint_name(opts.table_name(), &id.name().to_string())
+}
+
 impl<'a> ErrorTypes<'a> {
     pub fn new(opts: &'a RepositoryOptions) -> Self {
         Self { opts }
@@ -165,6 +185,9 @@ impl<'a> ErrorTypes<'a> {
                         .index_catalog()
                         .pkey_constraint_name(table, &cols[0].name().to_string())
             {
+                if opts.id_policy().is_generated() {
+                    continue;
+                }
                 let ty = cols[0].ty();
                 taken.insert("Pkey".to_string());
                 let description = format!("Violates the `{name}` primary key constraint.");
@@ -415,7 +438,7 @@ mod tests {
     fn id_foreign_key_and_redundant_unique_are_not_primary_keys() {
         use darling::FromDeriveInput;
         let input: syn::DeriveInput = syn::parse_quote! {
-            #[es_repo(entity = "SharedId", migrations_dir = "tests/fixtures/shared_id")]
+            #[es_repo(entity = "SharedId", id = supplied, migrations_dir = "tests/fixtures/shared_id")]
             struct SharedIds { pool: sqlx::PgPool }
         };
         let opts = RepositoryOptions::from_derive_input(&input).unwrap();
@@ -475,6 +498,7 @@ mod tests {
             syn::parse_quote! {
                 #[es_repo(
                     entity = "Gadget",
+                    id = supplied,
                     migrations_dir = "tests/fixtures/catalog_authoritative",
                     columns(name(ty = "String"), note(ty = "String"))
                 )]

@@ -163,8 +163,13 @@ impl NewMeter {
 }
 
 impl IntoEvents<MeterEvent> for NewMeter {
-    fn into_events(self) -> EntityEvents<MeterEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<MeterEvent, Supplied>,
+    ) -> EntityEvents<MeterEvent> {
+        builder.initial_events(
             self.id,
             [MeterEvent::Initialized {
                 id: self.id,

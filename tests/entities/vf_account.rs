@@ -52,8 +52,13 @@ impl NewVfAccount {
 }
 
 impl IntoEvents<VfAccountEvent> for NewVfAccount {
-    fn into_events(self) -> EntityEvents<VfAccountEvent> {
-        EntityEvents::init(
+    type Id = Supplied;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<VfAccountEvent, Supplied>,
+    ) -> EntityEvents<VfAccountEvent> {
+        builder.initial_events(
             self.id,
             [VfAccountEvent::Initialized {
                 id: self.id,
