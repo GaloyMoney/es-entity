@@ -1,0 +1,5 @@
+error: unguarded arm for `Source::Value` must come after its guarded arms
+  --> tests/v2/lift_when_unguarded_before_guarded.rs:14:5
+   |
+14 |     #[lift(Source::Value, when = is_even)]
+   |     ^

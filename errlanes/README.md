@@ -245,7 +245,8 @@ By default a lift is exhaustive. The derive emits `From<Validation>`, so `?`
 places the rejection in the outer Rejected lane, and if `Validation` gains a
 case the mapping must be updated before it compiles. Unit, tuple and named
 payloads forward automatically; `#[lift(Source::Variant, with = mapper)]`
-transforms a payload, `into` converts it through `Into`, and `field = name`
+hands the mapper the whole source value and returns the destination,
+`into` converts the payload through `Into`, and `field = name`
 keeps one named field of it. A plain lift arm also forwards the source case's
 code and level, which is why `AmountNotPositive` above still reports
 `INVALID_AMOUNT`; a `with`, `into` or `field` arm declares its own
@@ -293,6 +294,49 @@ assert_eq!((timeout.applied, timeout.frontier), (3, 8));
 
 A struct source lifts as a whole value: `#[lift(Payload)]` with no variant
 suffix, on both the enum and the variant that receives it.
+
+When one source variant carries several cases, `when = predicate` guards an
+arm: the predicate is a path to a `fn(&Payload) -> bool` over the variant's
+single payload, and a payload no guard accepts falls through to the next arm
+for that variant, then to `unhandled = fatal`. A guarded source must be a
+single-field tuple variant, guarded arms must precede the one unguarded arm
+for the same variant, and a strict registration needs that unguarded arm as a
+catch-all. A guarded plain arm forwards the source's code and level, and
+`into`, `field` and `with` arms take a guard too.
+
+```rust
+use errlanes::{Fail, ResultExt, lanes};
+
+#[derive(Debug)]
+struct LimitExceeded { limit: &'static str }
+
+#[derive(Debug, errlanes::Rejection)]
+enum Limit {
+    #[rejection(code = "LIMIT_EXCEEDED")]
+    Exceeded(LimitExceeded),
+}
+
+fn is_overdraft(exceeded: &LimitExceeded) -> bool {
+    exceeded.limit == "overdraft"
+}
+
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+#[lift(Limit, unhandled = fatal)]
+enum Checkout {
+    #[lift(Limit::Exceeded, when = is_overdraft)]
+    InsufficientFunds(LimitExceeded),
+}
+
+fn check(limit: &'static str) -> Result<(), Fail<Checkout, lanes!(Fatal)>> {
+    Err::<(), _>(Limit::Exceeded(LimitExceeded { limit })).lift()
+}
+
+assert!(matches!(
+    check("overdraft"),
+    Err(Fail::Rejected(Checkout::InsufficientFunds(_)))
+));
+assert!(matches!(check("velocity"), Err(Fail::Fatal(_))));
+```
 
 ## Errors from other crates
 

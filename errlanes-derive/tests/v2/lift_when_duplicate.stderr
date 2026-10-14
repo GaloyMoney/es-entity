@@ -1,0 +1,5 @@
+error: duplicate `when`
+  --> tests/v2/lift_when_duplicate.rs:12:43
+   |
+12 |     #[lift(Source::Value, when = is_even, when = is_even)]
+   |                                           ^^^^
