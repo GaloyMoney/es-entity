@@ -450,10 +450,10 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                 // `code_and_level_from` with — same restriction, same message family.
                 if v.level.is_none() {
                     if mapping.with.is_none() && mapping.field.is_none() {
-                        if mapping.case.segments.len() >= 2 {
-                            code_and_level_from = Some(mapping.case);
+                        if mapping.case.leaf_path().segments.len() >= 2 {
+                            code_and_level_from = Some(mapping.case.leaf_path().clone());
                         } else {
-                            whole_value_source = Some(mapping.case);
+                            whole_value_source = Some(mapping.case.leaf_path().clone());
                         }
                     } else {
                         return Err(darling::Error::custom(

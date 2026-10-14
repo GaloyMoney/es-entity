@@ -338,6 +338,36 @@ assert!(matches!(
 assert!(matches!(check("velocity"), Err(Fail::Fatal(_))));
 ```
 
+A source case can reach into nested enums by wrapping each level in
+parentheses: `#[lift(Outer::A(Mid::B(Leaf::C)))]`. The leaf takes every form
+above, including `when`, and its payload is what the guard sees; every level
+above the leaf must be a single-field tuple variant. A nested pattern never
+covers the other variants of the intermediate enums, so nested arms require
+`unhandled = fatal`.
+
+```rust
+use errlanes::Lift;
+
+enum Batch { Apply(Apply), Other }
+enum Apply { Velocity(Velocity), Locked }
+enum Velocity { Exceeded(u8) }
+
+fn is_floor(level: &u8) -> bool {
+    *level < 10
+}
+
+#[derive(errlanes::Lift)]
+#[lift(Batch, unhandled = fatal)]
+enum Settlement {
+    #[lift(Batch::Apply(Apply::Velocity(Velocity::Exceeded)), when = is_floor)]
+    BelowFloor(u8),
+}
+
+let exceeded = Batch::Apply(Apply::Velocity(Velocity::Exceeded(3)));
+assert!(matches!(Settlement::lift(exceeded), Ok(Settlement::BelowFloor(3))));
+assert!(Settlement::lift(Batch::Apply(Apply::Locked)).is_err());
+```
+
 ## Errors from other crates
 
 Every local error type says, through one trait, how it enters the lanes:

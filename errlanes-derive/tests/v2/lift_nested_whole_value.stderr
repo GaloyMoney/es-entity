@@ -1,0 +1,5 @@
+error: a whole-value lift cannot be nested
+ --> tests/v2/lift_nested_whole_value.rs:8:5
+  |
+8 |     #[lift(Payload(Payload))]
+  |     ^
