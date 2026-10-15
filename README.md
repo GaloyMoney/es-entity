@@ -285,9 +285,9 @@ mod tests {
     #[test]
     fn test_user_update() {
         // From a `New*` value; the id comes first when the repo generates it.
-        let mut user = User::hydrate_new(UserId::new(), NewUser { name: "Alice".to_string() }).unwrap();
+        let mut user = User::hydrate_from_new(UserId::new(), NewUser { name: "Alice".to_string() }).unwrap();
         // Or from any event stream:
-        // let user = User::hydrate(id, [UserEvent::Initialized { id, name: "Alice".to_string() }]).unwrap();
+        // let user = User::hydrate_from_events(id, [UserEvent::Initialized { id, name: "Alice".to_string() }]).unwrap();
         assert_eq!(user.update_name("Bob"), Idempotent::Executed(()));
         assert_eq!(user.update_name("Bob"), Idempotent::AlreadyApplied(()));
     }

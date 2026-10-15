@@ -13,13 +13,13 @@ es-entity = { version = "...", features = ["testing"] }
 
 | Call | Builds the entity from |
 |---|---|
-| `User::hydrate(id, [events..])` | any event stream, stored under `id` |
-| `User::hydrate_new(id, new_user)` | a `NewUser` whose repo generates the id; the test picks it |
-| `User::hydrate_new(new_user)` | a `NewUser` that supplies its own id |
+| `User::hydrate_from_events(id, [events..])` | any event stream, stored under `id` |
+| `User::hydrate_from_new(id, new_user)` | a `NewUser` whose repo generates the id; the test picks it |
+| `User::hydrate_from_new(new_user)` | a `NewUser` that supplies its own id |
 
-Each returns `Result<User, EntityHydrationError>` and applies the same
-[id check](./entity-type.md#hydration-checks-the-id) as a repository load. The
-events of the returned entity are new (not yet persisted).
+Each returns `Result<User, EntityHydrationError>` holding the entity a
+repository load would return: its events are all persisted, recorded at
+`Clock::now()`. Only the events a command pushes afterwards are new.
 
 With the `User` from [Entity Type](./entity-type.md) and the `NewUser` from
 [New Entity](./new-entity.md), the body of a `#[test]` in a `#[cfg(test)]`
@@ -90,10 +90,11 @@ use es_entity::testing::*;
 # fn main() {
 let id = UserId::new();
 // `NewUser`'s repo generates the id, so the test picks it.
-let mut user = User::hydrate_new(id, NewUser { name: "Willson".to_string() }).unwrap();
+let mut user = User::hydrate_from_new(id, NewUser { name: "Willson".to_string() }).unwrap();
 // Any event stream can be hydrated directly too.
-let same = User::hydrate(id, [UserEvent::Initialized { id, name: "Willson".to_string() }]).unwrap();
+let same = User::hydrate_from_events(id, [UserEvent::Initialized { id, name: "Willson".to_string() }]).unwrap();
 assert_eq!(user.name, same.name);
+assert!(!user.events().any_new());
 
 let new_name = "Gavin".to_string();
 assert!(user.update_name(new_name.clone()).did_execute());

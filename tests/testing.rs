@@ -107,9 +107,9 @@ impl IntoEvents<WidgetEvent> for NewWidget {
 }
 
 #[test]
-fn hydrate_replays_an_event_stream() {
+fn hydrate_from_events_replays_an_event_stream_as_persisted() {
     let id = GadgetId::new();
-    let gadget = Gadget::hydrate(
+    let gadget = Gadget::hydrate_from_events(
         id,
         [
             GadgetEvent::Initialized {
@@ -124,12 +124,21 @@ fn hydrate_replays_an_event_stream() {
     .unwrap();
     assert_eq!(gadget.id, id);
     assert_eq!(gadget.name, "b");
-    assert_eq!(gadget.events().len_new(), 2);
+    assert_eq!(gadget.events().len_persisted(), 2);
+    assert_eq!(gadget.events().len_new(), 0);
+    assert_eq!(
+        gadget
+            .events()
+            .iter_persisted()
+            .map(|e| e.sequence)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
 }
 
 #[test]
-fn hydrate_rejects_a_payload_id_that_is_not_the_stream_id() {
-    let result = Gadget::hydrate(
+fn hydrate_from_events_rejects_a_payload_id_that_is_not_the_stream_id() {
+    let result = Gadget::hydrate_from_events(
         GadgetId::new(),
         [GadgetEvent::Initialized {
             id: GadgetId::new(),
@@ -140,9 +149,9 @@ fn hydrate_rejects_a_payload_id_that_is_not_the_stream_id() {
 }
 
 #[test]
-fn hydrate_new_takes_the_id_when_the_repo_generates_it() {
+fn hydrate_from_new_takes_the_id_when_the_repo_generates_it() {
     let id = GadgetId::new();
-    let mut gadget = Gadget::hydrate_new(
+    let mut gadget = Gadget::hydrate_from_new(
         id,
         NewGadget {
             name: "a".to_string(),
@@ -152,13 +161,19 @@ fn hydrate_new_takes_the_id_when_the_repo_generates_it() {
     assert_eq!(gadget.id, id);
     assert_eq!(gadget.name, "a");
 
+    assert_eq!(gadget.events().len_persisted(), 1);
+    assert_eq!(gadget.events().len_new(), 0);
+
     gadget.rename("b");
-    assert_eq!(gadget.events().len_new(), 2);
+    assert_eq!(gadget.events().len_persisted(), 1);
+    assert_eq!(gadget.events().len_new(), 1);
 }
 
 #[test]
-fn hydrate_new_takes_only_the_new_value_when_it_supplies_the_id() {
+fn hydrate_from_new_takes_only_the_new_value_when_it_supplies_the_id() {
     let id = WidgetId::new();
-    let widget = Widget::hydrate_new(NewWidget { id }).unwrap();
+    let widget = Widget::hydrate_from_new(NewWidget { id }).unwrap();
     assert_eq!(widget.id, id);
+    assert_eq!(widget.events().len_persisted(), 1);
+    assert_eq!(widget.events().len_new(), 0);
 }

@@ -59,7 +59,7 @@
 //! }
 //!
 //! let id = UserId::new();
-//! let user = User::hydrate(
+//! let user = User::hydrate_from_events(
 //!     id,
 //!     [
 //!         UserEvent::Initialized { id, name: "Alice".to_string() },
@@ -69,76 +69,78 @@
 //! .unwrap();
 //! assert_eq!(user.name, "Bob");
 //!
-//! let user = User::hydrate_new(UserId::new(), NewUser { name: "Alice".to_string() }).unwrap();
+//! let user = User::hydrate_from_new(UserId::new(), NewUser { name: "Alice".to_string() }).unwrap();
 //! assert_eq!(user.name, "Alice");
+//! assert!(!user.events().any_new());
 //! ```
 //!
-//! The events of an entity built this way are all new (not yet persisted),
-//! and its `id` field is checked against the id the events are stored under,
-//! as on every repository load.
+//! An entity built this way is what a repository load returns: its events
+//! are all persisted, recorded at [`Clock::now`].
 
 use crate::{
+    clock::Clock,
     error::EntityHydrationError,
     events::{EntityEvents, hydrate_checked},
     id_policy::{EntityEventsBuilder, Generated, Supplied},
     traits::{EsEntity, EsEvent, IntoEvents},
 };
 
+fn hydrate_persisted<E: EsEntity>(
+    mut events: EntityEvents<E::Event>,
+) -> Result<E, EntityHydrationError> {
+    events.mark_new_events_persisted_at(Clock::now());
+    hydrate_checked(events.widen_snapshot())
+}
+
 /// Rebuilds an entity from an arbitrary event stream.
-pub trait Hydrate: EsEntity + Sized {
+pub trait HydrateFromEvents: EsEntity + Sized {
     /// The entity whose events are `events`, stored under `id`.
-    fn hydrate(
+    fn hydrate_from_events(
         id: <Self::Event as EsEvent>::EntityId,
         events: impl IntoIterator<Item = Self::Event>,
     ) -> Result<Self, EntityHydrationError> {
-        hydrate_checked(EntityEvents::init(id, events).widen_snapshot())
+        hydrate_persisted(EntityEvents::init(id, events))
     }
 }
 
-impl<T: EsEntity> Hydrate for T {}
+impl<T: EsEntity> HydrateFromEvents for T {}
 
 /// Builds an entity from its `New*` type when the repository generates the
 /// id: the test picks it.
-pub trait HydrateNewGenerated: EsEntity + Sized {
+pub trait HydrateFromNewGenerated: EsEntity + Sized {
     /// The entity `new` creates under `id`.
-    fn hydrate_new(
+    fn hydrate_from_new(
         id: <Self::Event as EsEvent>::EntityId,
         new: Self::New,
     ) -> Result<Self, EntityHydrationError>;
 }
 
-impl<T> HydrateNewGenerated for T
+impl<T> HydrateFromNewGenerated for T
 where
     T: EsEntity,
     T::New: IntoEvents<T::Event, Id = Generated>,
 {
-    fn hydrate_new(
+    fn hydrate_from_new(
         id: <Self::Event as EsEvent>::EntityId,
         new: Self::New,
     ) -> Result<Self, EntityHydrationError> {
-        hydrate_checked(
-            new.into_events(EntityEventsBuilder::__generated(id))
-                .widen_snapshot(),
-        )
+        hydrate_persisted(new.into_events(EntityEventsBuilder::__generated(id)))
     }
 }
 
 /// Builds an entity from its `New*` type when the `New*` type brings its
 /// own id.
-pub trait HydrateNewSupplied: EsEntity + Sized {
+pub trait HydrateFromNewSupplied: EsEntity + Sized {
     /// The entity `new` creates.
-    fn hydrate_new(new: Self::New) -> Result<Self, EntityHydrationError>;
+    fn hydrate_from_new(new: Self::New) -> Result<Self, EntityHydrationError>;
 }
 
-impl<T> HydrateNewSupplied for T
+impl<T> HydrateFromNewSupplied for T
 where
     T: EsEntity,
     T::New: IntoEvents<T::Event, Id = Supplied>,
 {
-    fn hydrate_new(new: Self::New) -> Result<Self, EntityHydrationError> {
-        hydrate_checked(
-            new.into_events(EntityEventsBuilder::__supplied())
-                .widen_snapshot(),
-        )
+    fn hydrate_from_new(new: Self::New) -> Result<Self, EntityHydrationError> {
+        hydrate_persisted(new.into_events(EntityEventsBuilder::__supplied()))
     }
 }

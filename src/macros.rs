@@ -185,7 +185,7 @@
 ///
 /// use es_entity::testing::*;
 ///
-/// let mut meter = Meter::hydrate_new(MeterId::new(), NewMeter).unwrap();
+/// let mut meter = Meter::hydrate_from_new(MeterId::new(), NewMeter).unwrap();
 /// assert!(meter.record(10).did_execute());
 /// assert!(meter.record(10).was_already_applied());
 /// ```

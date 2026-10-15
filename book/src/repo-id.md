@@ -92,3 +92,9 @@ entities that may already exist.
 The repo's policy and the `NewEntity`'s `type Id` must agree: a `Supplied`
 `NewEntity` used with a default (generated) repo, and the other way round, are
 both compile errors.
+
+## Hydration checks the id
+
+After `TryFromEvents` rebuilds an entity, its `id` field is compared with the id
+its events are stored under. A mismatch (an `Initialized { id }` payload that
+disagrees with the stream) is `Fatal(CorruptState)`.
