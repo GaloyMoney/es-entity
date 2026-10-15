@@ -1,0 +1,5 @@
+error: one code, one description: this variant takes the enum's shared `code`, so its description is the enum-level one
+ --> tests/trybuild/shared_code_variant_description.rs:5:5
+  |
+5 |     A,
+  |     ^
