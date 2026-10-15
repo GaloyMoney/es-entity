@@ -867,6 +867,12 @@ impl Column {
         self.opts.is_id
     }
 
+    /// Whether the column's value is known to the create statement and
+    /// stored as-is, so a conflict on it can be targeted and looked up.
+    pub fn is_ensurable(&self) -> bool {
+        self.opts.persist_on_create() && !self.opts.forgettable
+    }
+
     /// Whether this column's own update statement can ever hit a constraint
     /// — `false` for an `update(persist = false)` column, since an update
     /// that never writes a column can never violate a constraint on it.

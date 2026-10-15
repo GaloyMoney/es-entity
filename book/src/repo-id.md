@@ -85,7 +85,7 @@ is the one it inserts under; if they differ the create fails with
 `Fatal(Invariant)`.
 
 A caller-sourced repo also gets
-[`create_or_find_by_id_in_op`](./repo-create.md#create_or_find_by_id_in_op), for
+[`create_or_find_by_id_in_op`](./repo-create.md#create_or_find_by_key_in_op), for
 entities that may already exist.
 
 ## A mismatch does not compile

@@ -216,6 +216,79 @@ async fn a_conflict_on_another_constraint_still_rejects() -> anyhow::Result<()> 
     let Fail::Rejected(violation) = err else {
         panic!("expected a rejection, got {err:?}");
     };
-    assert!(matches!(violation, KnobConstraintViolation::SerialKey(_)));
+    assert!(matches!(violation, KnobEnsureByIdRejection::SerialKey(_)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn ensure_by_id_residual_has_no_pkey() {
+    fn exhaustive(rejection: KnobEnsureByIdRejection) {
+        match rejection {
+            KnobEnsureByIdRejection::SerialKey(_) => {}
+        }
+    }
+    let _ = exhaustive;
+    assert_eq!(
+        <KnobEnsureByIdRejectionCode as es_entity::errlanes::RejectionCode>::CODES.len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn ensure_by_serial_keeps_the_caller_chosen_pkey_in_the_residual() -> anyhow::Result<()> {
+    fn exhaustive(rejection: KnobEnsureBySerialRejection) {
+        match rejection {
+            KnobEnsureBySerialRejection::Pkey(_) => {}
+        }
+    }
+    let _ = exhaustive;
+
+    let pool = helpers::init_pool().await?;
+    let repo = Knobs { pool: pool.clone() };
+    let serial = format!("serial-{}", KnobId::new());
+    let id = KnobId::new();
+
+    let mut op = DbOp::init(&pool).await?;
+    let first = repo
+        .create_or_find_by_serial_in_op(
+            &mut op,
+            NewKnob {
+                id,
+                serial: serial.clone(),
+            },
+        )
+        .await?;
+    let second = repo
+        .create_or_find_by_serial_in_op(
+            &mut op,
+            NewKnob {
+                id: KnobId::new(),
+                serial: serial.clone(),
+            },
+        )
+        .await?;
+    op.commit().await?;
+    assert!(first.is_created());
+    let Ensured::Found(found) = second else {
+        panic!("the same serial under another id must find")
+    };
+    assert_eq!(found.id, id);
+
+    let mut op = DbOp::init(&pool).await?;
+    let err = repo
+        .create_or_find_by_serial_in_op(
+            &mut op,
+            NewKnob {
+                id,
+                serial: format!("serial-{}", KnobId::new()),
+            },
+        )
+        .await
+        .err()
+        .expect("a taken id with a new serial must reject");
+    let Fail::Rejected(violation) = err else {
+        panic!("expected a rejection, got {err:?}");
+    };
+    assert!(matches!(violation, KnobEnsureBySerialRejection::Pkey(_)));
     Ok(())
 }
