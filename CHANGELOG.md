@@ -1,3 +1,12 @@
+# [cala release v0.19.0](https://github.com/GaloyMoney/cala/releases/tag/0.19.0)
+
+
+
+### Features
+
+- [**breaking**] Structural id policy and truthful update_can_reject (retire narrow_rejected classes) (#277)
+- ResultExt::narrow_rejected_with and unreachable_patterns on total `unhandled = fatal` lifts (#276)
+
 # [cala release v0.18.3](https://github.com/GaloyMoney/cala/releases/tag/0.18.3)
 
 
