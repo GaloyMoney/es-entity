@@ -50,9 +50,9 @@
 //! }
 //!
 //! impl IntoEvents<UserEvent> for NewUser {
-//!     type Id = Generated;
+//!     type IdSource = FromRepo;
 //!
-//!     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+//!     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 //!         let id = builder.id();
 //!         builder.initial_events([UserEvent::Initialized { id, name: self.name }])
 //!     }
@@ -81,7 +81,7 @@ use crate::{
     clock::Clock,
     error::EntityHydrationError,
     events::{EntityEvents, hydrate_checked},
-    id_policy::{EntityEventsBuilder, Generated, Supplied},
+    id_source::{EntityEventsBuilder, FromCaller, FromRepo},
     traits::{EsEntity, EsEvent, IntoEvents},
 };
 
@@ -105,9 +105,9 @@ pub trait HydrateFromEvents: EsEntity + Sized {
 
 impl<T: EsEntity> HydrateFromEvents for T {}
 
-/// Builds an entity from its `New*` type when the repository generates the
-/// id: the test picks it.
-pub trait HydrateFromNewGenerated: EsEntity + Sized {
+/// Builds an entity from its `New*` type when the repository is the id
+/// source: the test picks the id.
+pub trait HydrateFromNewRepoSourced: EsEntity + Sized {
     /// The entity `new` creates under `id`.
     fn hydrate_from_new(
         id: <Self::Event as EsEvent>::EntityId,
@@ -115,32 +115,32 @@ pub trait HydrateFromNewGenerated: EsEntity + Sized {
     ) -> Result<Self, EntityHydrationError>;
 }
 
-impl<T> HydrateFromNewGenerated for T
+impl<T> HydrateFromNewRepoSourced for T
 where
     T: EsEntity,
-    T::New: IntoEvents<T::Event, Id = Generated>,
+    T::New: IntoEvents<T::Event, IdSource = FromRepo>,
 {
     fn hydrate_from_new(
         id: <Self::Event as EsEvent>::EntityId,
         new: Self::New,
     ) -> Result<Self, EntityHydrationError> {
-        hydrate_persisted(new.into_events(EntityEventsBuilder::__generated(id)))
+        hydrate_persisted(new.into_events(EntityEventsBuilder::__from_repo(id)))
     }
 }
 
-/// Builds an entity from its `New*` type when the `New*` type brings its
-/// own id.
-pub trait HydrateFromNewSupplied: EsEntity + Sized {
+/// Builds an entity from its `New*` type when the caller is the id source:
+/// the id is in the `New*` value.
+pub trait HydrateFromNewCallerSourced: EsEntity + Sized {
     /// The entity `new` creates.
     fn hydrate_from_new(new: Self::New) -> Result<Self, EntityHydrationError>;
 }
 
-impl<T> HydrateFromNewSupplied for T
+impl<T> HydrateFromNewCallerSourced for T
 where
     T: EsEntity,
-    T::New: IntoEvents<T::Event, Id = Supplied>,
+    T::New: IntoEvents<T::Event, IdSource = FromCaller>,
 {
     fn hydrate_from_new(new: Self::New) -> Result<Self, EntityHydrationError> {
-        hydrate_persisted(new.into_events(EntityEventsBuilder::__supplied()))
+        hydrate_persisted(new.into_events(EntityEventsBuilder::__from_caller()))
     }
 }

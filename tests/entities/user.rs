@@ -70,11 +70,11 @@ impl NewUser {
 }
 
 impl IntoEvents<UserEvent> for NewUser {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<UserEvent, Generated>,
+        builder: EntityEventsBuilder<UserEvent, FromRepo>,
     ) -> EntityEvents<UserEvent> {
         let id = builder.id();
         builder.initial_events([UserEvent::Initialized {

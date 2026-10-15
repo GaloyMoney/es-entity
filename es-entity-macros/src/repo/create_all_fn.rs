@@ -21,7 +21,7 @@ pub struct CreateAllFn<'a> {
     nested_fn_names: Vec<syn::Ident>,
     post_hydrate_hook: bool,
     post_persist_hook: bool,
-    id_policy: IdPolicyOpt,
+    id_source: IdSourceOpt,
     /// Whether the repo's own batch statement can reject — see
     /// `RepositoryOptions::create_can_reject`. `false` narrows the
     /// statement's classification with `narrow_rejected()`.
@@ -36,7 +36,7 @@ pub struct CreateAllFn<'a> {
 impl<'a> From<&'a RepositoryOptions> for CreateAllFn<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
-            id_policy: opts.id_policy(),
+            id_source: opts.id_source(),
             can_reject: opts.create_can_reject(),
             write_error_ty: opts.create_error_ty(),
             in_op_only: opts.in_op_only(),
@@ -89,10 +89,9 @@ impl ToTokens for CreateAllFn<'_> {
 
         let column_names = self.columns.insert_column_names();
         let placeholders = self.columns.insert_placeholders(1);
-        let (arg_collection, arg_adds) = self.columns.create_all_arg_collection(
-            syn::parse_quote! { new_entity },
-            self.id_policy.is_generated(),
-        );
+        let (arg_collection, arg_adds) = self
+            .columns
+            .create_all_arg_collection(syn::parse_quote! { new_entity }, self.id_source.is_repo());
 
         // Both inserts in one statement. The events insert joins the `new_rows`
         // CTE, which reveals index rows that vanished (a short RETURNING
@@ -119,9 +118,9 @@ impl ToTokens for CreateAllFn<'_> {
         );
 
         let id_type = self.id;
-        let generated = self.id_policy.is_generated();
+        let generated = self.id_source.is_repo();
         let resolve_ids = if generated {
-            let resolved = self.id_policy.resolve(id_type);
+            let resolved = self.id_source.resolve(id_type);
             quote! {
                 let mut __ids: Vec<#id_type> = Vec::with_capacity(new_entities.len());
                 for _ in 0..new_entities.len() {
@@ -131,22 +130,22 @@ impl ToTokens for CreateAllFn<'_> {
         } else {
             quote! {}
         };
-        let (capture_supplied_ids, supplied_ids_check) = if generated {
+        let (capture_caller_ids, caller_ids_check) = if generated {
             (quote! {}, quote! {})
         } else {
             (
                 quote! {
-                    let __supplied_ids: Vec<#id_type> = id_collection.iter().map(|id: &&#id_type| <#id_type as Clone>::clone(*id)).collect();
+                    let __caller_ids: Vec<#id_type> = id_collection.iter().map(|id: &&#id_type| <#id_type as Clone>::clone(*id)).collect();
                 },
                 quote! {
-                    if all_events.iter().zip(__supplied_ids.iter()).any(|(events, id): (&es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event, <#entity as es_entity::EsEntity>::Snapshot>, &#id_type)| events.id() != id) {
-                        return Err(errlanes::Fatal::invariant("supplied id differs from the id the entity was built under").into());
+                    if all_events.iter().zip(__caller_ids.iter()).any(|(events, id): (&es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event, <#entity as es_entity::EsEntity>::Snapshot>, &#id_type)| events.id() != id) {
+                        return Err(errlanes::Fatal::invariant("caller's id differs from the id the entity was built under").into());
                     }
                 },
             )
         };
         let convert_all = if generated {
-            let builder = self.id_policy.builder(quote! { id.clone() });
+            let builder = self.id_source.builder(quote! { id.clone() });
             quote! {
                 new_entities
                     .into_iter()
@@ -155,7 +154,7 @@ impl ToTokens for CreateAllFn<'_> {
                     .collect()
             }
         } else {
-            let builder = self.id_policy.builder(quote! {});
+            let builder = self.id_source.builder(quote! {});
             quote! {
                 new_entities
                     .into_iter()
@@ -347,11 +346,11 @@ impl ToTokens for CreateAllFn<'_> {
                     // they hold on `new_entities` end here, freeing it to be
                     // consumed into the event stream below.
                     #arg_collection
-                    #capture_supplied_ids
+                    #capture_caller_ids
                     #(#arg_adds)*
 
                     let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event, <#entity as es_entity::EsEntity>::Snapshot>> = #convert_all;
-                    #supplied_ids_check
+                    #caller_ids_check
 
                     #batch_declarations
                     let mut n_persisted: Vec<usize> = Vec::new();
@@ -441,7 +440,7 @@ mod tests {
             nested_fn_names: Vec::new(),
             post_hydrate_hook: false,
             post_persist_hook: false,
-            id_policy: IdPolicyOpt::Supplied,
+            id_source: IdSourceOpt::Caller,
             can_reject: true,
             write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             #[cfg(feature = "instrument")]
@@ -492,13 +491,13 @@ mod tests {
                         name_collection.push(name);
                     }
 
-                    let __supplied_ids: Vec<EntityId> = id_collection.iter().map(|id: &&EntityId| <EntityId as Clone>::clone(*id)).collect();
+                    let __caller_ids: Vec<EntityId> = id_collection.iter().map(|id: &&EntityId| <EntityId as Clone>::clone(*id)).collect();
                     __query_args.add(id_collection).map_err(sqlx::Error::Encode)?;
                     __query_args.add(name_collection).map_err(sqlx::Error::Encode)?;
 
-                    let mut all_events: Vec<es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event, <Entity as es_entity::EsEntity>::Snapshot>> = new_entities.into_iter().map(|new_entity| Self::convert_new(new_entity, es_entity::EntityEventsBuilder::__supplied())).collect();
-                    if all_events.iter().zip(__supplied_ids.iter()).any(|(events, id): (&es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event, <Entity as es_entity::EsEntity>::Snapshot>, &EntityId)| events.id() != id) {
-                        return Err(errlanes::Fatal::invariant("supplied id differs from the id the entity was built under").into());
+                    let mut all_events: Vec<es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event, <Entity as es_entity::EsEntity>::Snapshot>> = new_entities.into_iter().map(|new_entity| Self::convert_new(new_entity, es_entity::EntityEventsBuilder::__from_caller())).collect();
+                    if all_events.iter().zip(__caller_ids.iter()).any(|(events, id): (&es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event, <Entity as es_entity::EsEntity>::Snapshot>, &EntityId)| events.id() != id) {
+                        return Err(errlanes::Fatal::invariant("caller's id differs from the id the entity was built under").into());
                     }
 
                     let mut all_ids: Vec<&EntityId> = Vec::new();

@@ -50,11 +50,11 @@ pub struct NewPalletItem {
 }
 
 impl IntoEvents<PalletItemEvent> for NewPalletItem {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<PalletItemEvent, Generated>,
+        builder: EntityEventsBuilder<PalletItemEvent, FromRepo>,
     ) -> EntityEvents<PalletItemEvent> {
         let id = builder.id();
         builder.initial_events([PalletItemEvent::Initialized {
@@ -108,11 +108,11 @@ impl TryFromEvents<PalletEvent> for Pallet {
 pub struct NewPallet;
 
 impl IntoEvents<PalletEvent> for NewPallet {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<PalletEvent, Generated>,
+        builder: EntityEventsBuilder<PalletEvent, FromRepo>,
     ) -> EntityEvents<PalletEvent> {
         let id = builder.id();
         builder.initial_events([PalletEvent::Initialized { id }])
@@ -190,11 +190,11 @@ pub struct NewRackItem {
 }
 
 impl IntoEvents<RackItemEvent> for NewRackItem {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<RackItemEvent, Generated>,
+        builder: EntityEventsBuilder<RackItemEvent, FromRepo>,
     ) -> EntityEvents<RackItemEvent> {
         let id = builder.id();
         builder.initial_events([RackItemEvent::Initialized {
@@ -248,11 +248,11 @@ impl TryFromEvents<RackEvent> for Rack {
 pub struct NewRack;
 
 impl IntoEvents<RackEvent> for NewRack {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<RackEvent, Generated>,
+        builder: EntityEventsBuilder<RackEvent, FromRepo>,
     ) -> EntityEvents<RackEvent> {
         let id = builder.id();
         builder.initial_events([RackEvent::Initialized { id }])

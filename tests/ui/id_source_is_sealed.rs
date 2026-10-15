@@ -2,7 +2,7 @@ use es_entity::*;
 
 pub struct Mine;
 
-impl IdPolicy for Mine {
+impl IdSource for Mine {
     type Slot<Id> = Id;
 }
 

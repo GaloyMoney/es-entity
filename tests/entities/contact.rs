@@ -74,11 +74,11 @@ impl NewContact {
 }
 
 impl IntoEvents<ContactEvent> for NewContact {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<ContactEvent, Generated>,
+        builder: EntityEventsBuilder<ContactEvent, FromRepo>,
     ) -> EntityEvents<ContactEvent> {
         let id = builder.id();
         builder.initial_events([ContactEvent::Initialized {

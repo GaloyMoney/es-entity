@@ -50,11 +50,11 @@ impl NewVfAccount {
 }
 
 impl IntoEvents<VfAccountEvent> for NewVfAccount {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<VfAccountEvent, Generated>,
+        builder: EntityEventsBuilder<VfAccountEvent, FromRepo>,
     ) -> EntityEvents<VfAccountEvent> {
         let id = builder.id();
         builder.initial_events([VfAccountEvent::Initialized {

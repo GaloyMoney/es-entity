@@ -82,11 +82,11 @@ impl NewAccountHolder {
 }
 
 impl IntoEvents<AccountHolderEvent> for NewAccountHolder {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<AccountHolderEvent, Generated>,
+        builder: EntityEventsBuilder<AccountHolderEvent, FromRepo>,
     ) -> EntityEvents<AccountHolderEvent> {
         let id = builder.id();
         builder.initial_events([AccountHolderEvent::Initialized {
@@ -149,11 +149,11 @@ impl NewAccount {
 }
 
 impl IntoEvents<AccountEvent> for NewAccount {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<AccountEvent, Generated>,
+        builder: EntityEventsBuilder<AccountEvent, FromRepo>,
     ) -> EntityEvents<AccountEvent> {
         let id = builder.id();
         builder.initial_events([AccountEvent::Initialized { id }])

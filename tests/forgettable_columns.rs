@@ -108,11 +108,11 @@ impl NewSubscriber {
 }
 
 impl IntoEvents<SubscriberEvent> for NewSubscriber {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<SubscriberEvent, Generated>,
+        builder: EntityEventsBuilder<SubscriberEvent, FromRepo>,
     ) -> EntityEvents<SubscriberEvent> {
         let id = builder.id();
         builder.initial_events([SubscriberEvent::Initialized {

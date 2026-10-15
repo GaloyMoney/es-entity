@@ -26,8 +26,8 @@ Unlike `find_by_id`, `find_all` does **not** return a `NotFound` error for missi
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Generated;
-#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         let id = builder.id();
 #         builder.initial_events([UserEvent::Initialized {
 #             id,

@@ -99,11 +99,11 @@ impl NewOrderItem {
 }
 
 impl IntoEvents<OrderItemEvent> for NewOrderItem {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<OrderItemEvent, Generated>,
+        builder: EntityEventsBuilder<OrderItemEvent, FromRepo>,
     ) -> EntityEvents<OrderItemEvent> {
         let id = builder.id();
         builder.initial_events(vec![OrderItemEvent::Initialized {
@@ -185,11 +185,11 @@ impl NewOrder {
 }
 
 impl IntoEvents<OrderEvent> for NewOrder {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<OrderEvent, Generated>,
+        builder: EntityEventsBuilder<OrderEvent, FromRepo>,
     ) -> EntityEvents<OrderEvent> {
         let id = builder.id();
         builder.initial_events(vec![OrderEvent::Initialized { id }])

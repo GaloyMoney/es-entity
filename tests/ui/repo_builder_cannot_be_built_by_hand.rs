@@ -11,7 +11,7 @@ pub enum GadgetEvent {
 }
 
 fn main() {
-    let _builder = EntityEventsBuilder::<GadgetEvent, Generated> {
+    let _builder = EntityEventsBuilder::<GadgetEvent, FromRepo> {
         id: GadgetId::new(),
     };
 }

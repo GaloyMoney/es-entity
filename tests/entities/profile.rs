@@ -117,11 +117,11 @@ impl NewProfile {
 }
 
 impl IntoEvents<ProfileEvent> for NewProfile {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<ProfileEvent, Generated>,
+        builder: EntityEventsBuilder<ProfileEvent, FromRepo>,
     ) -> EntityEvents<ProfileEvent> {
         let id = builder.id();
         builder.initial_events([ProfileEvent::Initialized {

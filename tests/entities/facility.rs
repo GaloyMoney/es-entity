@@ -76,11 +76,11 @@ impl NewFacility {
 }
 
 impl IntoEvents<FacilityEvent> for NewFacility {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<FacilityEvent, Generated>,
+        builder: EntityEventsBuilder<FacilityEvent, FromRepo>,
     ) -> EntityEvents<FacilityEvent> {
         let id = builder.id();
         builder.initial_events([FacilityEvent::Initialized {

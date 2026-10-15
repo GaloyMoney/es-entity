@@ -1,9 +1,9 @@
 # id
 
-Every entity an `EsRepo` creates gets its id from the repository's *id policy*.
-The policy is also the type parameter of the builder that `IntoEvents` receives
-(see [New Entity](./new-entity.md)), so what a `NewEntity` can do with the id is
-checked by the compiler.
+Every entity an `EsRepo` creates gets its id from the repository's *id source*:
+the repo itself, or the caller. The source is also the type parameter of the
+builder that `IntoEvents` receives (see [New Entity](./new-entity.md)), so what
+a `NewEntity` can do with the id is checked by the compiler.
 
 ## The `id` attribute
 
@@ -12,30 +12,30 @@ attribute. `id = "CustomId"` names the type and keeps every default, and the
 list form spells the options out:
 
 ```rust,ignore
-#[es_repo(entity = "Partner", id(ty = "PartnerId", scope), columns(...))]
+#[es_repo(entity = "Partner", id(ty = "PartnerId", source = caller, scope), columns(...))]
 ```
 
 | option | meaning |
 | --- | --- |
 | `ty = "..."` | the id type; defaults to `{Entity}Id` |
-| `generated` | the repository mints the id (the default) |
-| `generated(by = "path")` | the repository mints the id with `path` |
-| `supplied` | the `NewEntity` brings the id |
+| `source = repo` | the repository generates the id (the default) |
+| `generator = "path"` | the repository generates the id with `path` |
+| `source = caller` | the caller puts the id in the `NewEntity` |
 | `scope`, `scope(variant = "...")` | the id is the repo's scope column, see [Scoped repositories](./scoped-repositories.md) |
 
 It differs from an ordinary column in three ways: `ty` is optional, `find_by`
-and `list_by` are always on, and only the id takes a policy (`generated` or
-`supplied`). The id is never declared inside `columns(...)`.
+and `list_by` are always on, and only the id takes a `source`. The id is never
+declared inside `columns(...)`.
 
-## Generated ids (the default)
+## Source: the repo (the default)
 
-By default the repository mints the id: `<IdType>::new()`, or the function named
-by `generated(by = "...")`. The `NewEntity` declares `type Id = Generated` and
-reads the id from the builder:
+By default the repository generates the id: `<IdType>::new()`, or the function
+named by `generator = "..."`. The `NewEntity` declares
+`type IdSource = FromRepo` and reads the id from the builder:
 
 ```rust,ignore
 #[derive(EsRepo)]
-#[es_repo(entity = "User")] // same as `id(generated)`
+#[es_repo(entity = "User")] // same as `id(source = repo)`
 pub struct Users { pool: sqlx::PgPool }
 ```
 
@@ -50,7 +50,7 @@ the operation:
 
 ```rust,ignore
 #[derive(EsRepo)]
-#[es_repo(entity = "PublicId", id(generated(by = "Self::next_id")))]
+#[es_repo(entity = "PublicId", id(generator = "Self::next_id"))]
 pub struct PublicIds { pool: sqlx::PgPool }
 
 impl PublicIds {
@@ -63,35 +63,36 @@ impl PublicIds {
 }
 ```
 
-## Supplied ids
+## Source: the caller
 
 An entity with a deterministic id (derived from another aggregate, a
-well-known constant) opts out with `id(supplied)`. Its `NewEntity` declares
-`type Id = Supplied` and passes its own id to `initial_events`:
+well-known constant) takes it from the caller with `id(source = caller)`. Its
+`NewEntity` declares `type IdSource = FromCaller`, carries the id and passes it
+to `initial_events`:
 
 ```rust,ignore
 #[derive(EsRepo)]
-#[es_repo(entity = "Customer", id(supplied))]
+#[es_repo(entity = "Customer", id(source = caller))]
 pub struct Customers { pool: sqlx::PgPool }
 ```
 
-A supplied id is a uniqueness claim made by the caller, so `Pkey` stays a case of
-the constraint violation. A repo that names its id type explicitly writes
-`id(ty = "CustomId", supplied)`.
+An id from the caller is a uniqueness claim, so `Pkey` stays a case of the
+constraint violation. A repo that names its id type explicitly writes
+`id(ty = "CustomId", source = caller)`. `generator` needs `source = repo`.
 
 The repository checks that the id the `NewEntity` handed to `initial_events`
 is the one it inserts under; if they differ the create fails with
 `Fatal(Invariant)`.
 
-A supplied-id repo also gets
+A caller-sourced repo also gets
 [`create_or_find_by_id_in_op`](./repo-create.md#create_or_find_by_id_in_op), for
 entities that may already exist.
 
 ## A mismatch does not compile
 
-The repo's policy and the `NewEntity`'s `type Id` must agree: a `Supplied`
-`NewEntity` used with a default (generated) repo, and the other way round, are
-both compile errors.
+The repo's `source` and the `NewEntity`'s `type IdSource` must agree: a
+`FromCaller` `NewEntity` used with a default (repo-sourced) repo, and the other
+way round, are both compile errors.
 
 ## Hydration checks the id
 

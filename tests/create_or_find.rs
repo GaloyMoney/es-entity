@@ -38,18 +38,18 @@ pub struct NewDoohickey {
 }
 
 impl IntoEvents<DoohickeyEvent> for NewDoohickey {
-    type Id = Supplied;
+    type IdSource = FromCaller;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<DoohickeyEvent, Supplied>,
+        builder: EntityEventsBuilder<DoohickeyEvent, FromCaller>,
     ) -> EntityEvents<DoohickeyEvent> {
         builder.initial_events(self.id, [DoohickeyEvent::Initialized { id: self.id }])
     }
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Doohickey", id(supplied))]
+#[es_repo(entity = "Doohickey", id(source = caller))]
 pub struct Doohickeys {
     pool: PgPool,
 }
@@ -89,11 +89,11 @@ pub struct NewKnob {
 }
 
 impl IntoEvents<KnobEvent> for NewKnob {
-    type Id = Supplied;
+    type IdSource = FromCaller;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<KnobEvent, Supplied>,
+        builder: EntityEventsBuilder<KnobEvent, FromCaller>,
     ) -> EntityEvents<KnobEvent> {
         builder.initial_events(
             self.id,
@@ -106,7 +106,7 @@ impl IntoEvents<KnobEvent> for NewKnob {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Knob", id(supplied), columns(serial(ty = "String")))]
+#[es_repo(entity = "Knob", id(source = caller), columns(serial(ty = "String")))]
 pub struct Knobs {
     pool: PgPool,
 }

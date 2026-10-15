@@ -94,11 +94,11 @@ impl NewGcGrandchild {
 }
 
 impl IntoEvents<GcGrandchildEvent> for NewGcGrandchild {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<GcGrandchildEvent, Generated>,
+        builder: EntityEventsBuilder<GcGrandchildEvent, FromRepo>,
     ) -> EntityEvents<GcGrandchildEvent> {
         let id = builder.id();
         builder.initial_events(vec![GcGrandchildEvent::Initialized {
@@ -172,11 +172,11 @@ pub struct NewGcChild {
 }
 
 impl IntoEvents<GcChildEvent> for NewGcChild {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<GcChildEvent, Generated>,
+        builder: EntityEventsBuilder<GcChildEvent, FromRepo>,
     ) -> EntityEvents<GcChildEvent> {
         let id = builder.id();
         builder.initial_events(vec![GcChildEvent::Initialized {
@@ -233,11 +233,11 @@ impl TryFromEvents<GcParentEvent> for GcParent {
 pub struct NewGcParent {}
 
 impl IntoEvents<GcParentEvent> for NewGcParent {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<GcParentEvent, Generated>,
+        builder: EntityEventsBuilder<GcParentEvent, FromRepo>,
     ) -> EntityEvents<GcParentEvent> {
         let id = builder.id();
         builder.initial_events(vec![GcParentEvent::Initialized { id }])

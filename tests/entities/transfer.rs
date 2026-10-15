@@ -83,11 +83,11 @@ impl NewTransfer {
 }
 
 impl IntoEvents<TransferEvent> for NewTransfer {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<TransferEvent, Generated>,
+        builder: EntityEventsBuilder<TransferEvent, FromRepo>,
     ) -> EntityEvents<TransferEvent> {
         let id = builder.id();
         builder.initial_events([TransferEvent::Initialized {

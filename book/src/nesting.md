@@ -166,9 +166,9 @@ pub struct NewBillingPeriod {
 }
 
 impl IntoEvents<BillingPeriodEvent> for NewBillingPeriod {
-    type Id = Supplied;
+    type IdSource = FromCaller;
 
-    fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, Supplied>) -> EntityEvents<BillingPeriodEvent> {
+    fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, FromCaller>) -> EntityEvents<BillingPeriodEvent> {
         builder.initial_events(
             self.id,
             vec![BillingPeriodEvent::Initialized {
@@ -301,8 +301,8 @@ Now let's implement the `Subscription` entity that will contain the nested `Bill
 # }
 #
 # impl IntoEvents<BillingPeriodEvent> for NewBillingPeriod {
-#     type Id = Supplied;
-#     fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, Supplied>) -> EntityEvents<BillingPeriodEvent> {
+#     type IdSource = FromCaller;
+#     fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, FromCaller>) -> EntityEvents<BillingPeriodEvent> {
 #         builder.initial_events(
 #             self.id,
 #             vec![BillingPeriodEvent::Initialized {
@@ -398,9 +398,9 @@ impl TryFromEvents<SubscriptionEvent> for Subscription {
 pub struct NewSubscription {}
 
 impl IntoEvents<SubscriptionEvent> for NewSubscription {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
-    fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, Generated>) -> EntityEvents<SubscriptionEvent> {
+    fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, FromRepo>) -> EntityEvents<SubscriptionEvent> {
         let id = builder.id();
         builder.initial_events(vec![SubscriptionEvent::Initialized { id }])
     }
@@ -412,7 +412,7 @@ The key points to note:
 2. The field type is `Nested<BillingPeriod>` which is a special container for nested entities
 3. We use `add_new()` to add new nested entities
 4. We mutate the children via `get_persisted_mut()`.
-5. `BillingPeriods` uses `id(supplied)` because the parent picks the child's id and records it in its own `BillingPeriodStarted` event.
+5. `BillingPeriods` uses `id(source = caller)` because the parent picks the child's id and records it in its own `BillingPeriodStarted` event.
 
 Under the hood the `EsEntity` macro will create an implementation of the `Parent` trait:
 ```rust,ignore
@@ -552,8 +552,8 @@ This leverages the rust module system to enforce that the children cannot be acc
 # }
 #
 # impl IntoEvents<BillingPeriodEvent> for NewBillingPeriod {
-#     type Id = Supplied;
-#     fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, Supplied>) -> EntityEvents<BillingPeriodEvent> {
+#     type IdSource = FromCaller;
+#     fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, FromCaller>) -> EntityEvents<BillingPeriodEvent> {
 #         builder.initial_events(
 #             self.id,
 #             vec![BillingPeriodEvent::Initialized {
@@ -608,8 +608,8 @@ This leverages the rust module system to enforce that the children cannot be acc
 # pub struct NewSubscription {}
 #
 # impl IntoEvents<SubscriptionEvent> for NewSubscription {
-#     type Id = Generated;
-#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, Generated>) -> EntityEvents<SubscriptionEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, FromRepo>) -> EntityEvents<SubscriptionEvent> {
 #         let id = builder.id();
 #         builder.initial_events(vec![SubscriptionEvent::Initialized { id }])
 #     }
@@ -617,7 +617,7 @@ This leverages the rust module system to enforce that the children cannot be acc
 # fn main() {}
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "BillingPeriod", id(supplied),
+    entity = "BillingPeriod", id(source = caller),
     columns(
         // The foreign key of the parent marked by `parent`.
         subscription_id(ty = "SubscriptionId", update(persist = false), parent)
@@ -762,8 +762,8 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     pub subscription_id: SubscriptionId,
 # }
 # impl IntoEvents<BillingPeriodEvent> for NewBillingPeriod {
-#     type Id = Supplied;
-#     fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, Supplied>) -> EntityEvents<BillingPeriodEvent> {
+#     type IdSource = FromCaller;
+#     fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, FromCaller>) -> EntityEvents<BillingPeriodEvent> {
 #         builder.initial_events(
 #             self.id,
 #             vec![BillingPeriodEvent::Initialized {
@@ -843,15 +843,15 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 # #[derive(Debug, Clone, Builder)]
 # pub struct NewSubscription {}
 # impl IntoEvents<SubscriptionEvent> for NewSubscription {
-#     type Id = Generated;
-#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, Generated>) -> EntityEvents<SubscriptionEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, FromRepo>) -> EntityEvents<SubscriptionEvent> {
 #         let id = builder.id();
 #         builder.initial_events(vec![SubscriptionEvent::Initialized { id }])
 #     }
 # }
 # #[derive(EsRepo)]
 # #[es_repo(
-#     entity = "BillingPeriod", id(supplied),
+#     entity = "BillingPeriod", id(source = caller),
 #     columns(
 #         subscription_id(ty = "SubscriptionId", update(persist = false), parent)
 #     )

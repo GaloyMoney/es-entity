@@ -52,11 +52,11 @@ impl NewLaneItem {
 }
 
 impl IntoEvents<LaneItemEvent> for NewLaneItem {
-    type Id = Supplied;
+    type IdSource = FromCaller;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<LaneItemEvent, Supplied>,
+        builder: EntityEventsBuilder<LaneItemEvent, FromCaller>,
     ) -> EntityEvents<LaneItemEvent> {
         builder.initial_events(
             self.id,
@@ -118,18 +118,18 @@ impl NewLaneParent {
 }
 
 impl IntoEvents<LaneParentEvent> for NewLaneParent {
-    type Id = Supplied;
+    type IdSource = FromCaller;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<LaneParentEvent, Supplied>,
+        builder: EntityEventsBuilder<LaneParentEvent, FromCaller>,
     ) -> EntityEvents<LaneParentEvent> {
         builder.initial_events(self.id, [LaneParentEvent::Initialized { id: self.id }])
     }
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "LaneParent", id(supplied), delete = "soft")]
+#[es_repo(entity = "LaneParent", id(source = caller), delete = "soft")]
 pub struct LaneParents {
     pool: PgPool,
 
@@ -149,7 +149,7 @@ impl LaneParents {
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "LaneItem",
-    id(supplied),
+    id(source = caller),
     delete = "soft",
     columns(
         parent_id(ty = "LaneParentId", update(persist = false), parent),

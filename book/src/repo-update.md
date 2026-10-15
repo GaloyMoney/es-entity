@@ -21,8 +21,8 @@ In the code below we have a `name` column in the `index` table that needs to be 
 #     NameUpdated { name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Generated;
-#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         let id = builder.id();
 #         builder.initial_events([UserEvent::Initialized {
 #             id,
@@ -138,8 +138,8 @@ The `update(accessor = "<>")` option modifies how the field is accessed on the `
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Generated;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -196,8 +196,8 @@ This is useful for columns that should never change after creation.
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Generated;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }

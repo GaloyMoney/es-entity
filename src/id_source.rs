@@ -1,13 +1,14 @@
-//! How a repo's entities obtain their id, and the one public route into an
-//! [`EntityEvents`] container.
+//! Where a repo's entities get their id from, and the one public route into
+//! an [`EntityEvents`] container.
 //!
 //! A repo resolves the id of every entity it creates according to its
-//! [`IdPolicy`]: [`Generated`] (the default, the repo mints it) or
-//! [`Supplied`] (the `New*` type brings its own). The [`IntoEvents`]
-//! implementation of a `New*` type receives an [`EntityEventsBuilder`] whose
-//! second parameter is that policy, so [`EntityEventsBuilder::id`] exists
-//! only when the repo resolved one, and a [`Generated`] `New*` has no API
-//! through which a caller-chosen id can reach the insert.
+//! [`IdSource`]: [`FromRepo`] (the default, the repo generates it) or
+//! [`FromCaller`] (the caller puts it in the `New*` value). The
+//! [`IntoEvents`] implementation of a `New*` type receives an
+//! [`EntityEventsBuilder`] whose second parameter is that source, so
+//! [`EntityEventsBuilder::id`] exists only when the repo resolved one, and a
+//! [`FromRepo`] `New*` has no API through which a caller-chosen id can reach
+//! the insert.
 //!
 //! [`IntoEvents`]: crate::IntoEvents
 
@@ -17,43 +18,43 @@ mod sealed {
     pub trait Sealed {}
 }
 
-/// Who decides the id of a newly created entity. Sealed: [`Generated`] and
-/// [`Supplied`] are the only policies.
-pub trait IdPolicy: sealed::Sealed {
+/// Where the id of a newly created entity comes from. Sealed: [`FromRepo`]
+/// and [`FromCaller`] are the only sources.
+pub trait IdSource: sealed::Sealed {
     /// What the [`EntityEventsBuilder`] carries: the resolved id for
-    /// [`Generated`], nothing for [`Supplied`].
+    /// [`FromRepo`], nothing for [`FromCaller`].
     type Slot<Id>;
 }
 
 /// The repo resolved the id before `into_events` runs; the `New*` type has no
 /// id field and reads it with [`EntityEventsBuilder::id`].
-pub struct Generated;
-impl sealed::Sealed for Generated {}
-impl IdPolicy for Generated {
+pub struct FromRepo;
+impl sealed::Sealed for FromRepo {}
+impl IdSource for FromRepo {
     type Slot<Id> = Id;
 }
 
-/// The `New*` type brings its own id (a deterministic one), which it hands to
-/// [`EntityEventsBuilder::initial_events`]. A supplied id is a uniqueness
-/// claim made by the caller, so the primary key stays among the repo's
-/// constraint violations.
-pub struct Supplied;
-impl sealed::Sealed for Supplied {}
-impl IdPolicy for Supplied {
+/// The caller puts the id (a deterministic one) in the `New*` value, which
+/// hands it to [`EntityEventsBuilder::initial_events`]. A caller's id is a
+/// uniqueness claim, so the primary key stays among the repo's constraint
+/// violations.
+pub struct FromCaller;
+impl sealed::Sealed for FromCaller {}
+impl IdSource for FromCaller {
     type Slot<Id> = ();
 }
 
-/// The identity policy applied, no events yet. Handed to
+/// The id source applied, no events yet. Handed to
 /// [`IntoEvents::into_events`](crate::IntoEvents::into_events) by the
 /// generated repo code and consumed by `initial_events`, the only public way
 /// to build an [`EntityEvents`] container.
-pub struct EntityEventsBuilder<E: EsEvent, P: IdPolicy> {
-    id: P::Slot<E::EntityId>,
+pub struct EntityEventsBuilder<E: EsEvent, S: IdSource> {
+    id: S::Slot<E::EntityId>,
 }
 
-impl<E: EsEvent> EntityEventsBuilder<E, Generated> {
+impl<E: EsEvent> EntityEventsBuilder<E, FromRepo> {
     #[doc(hidden)]
-    pub fn __generated(id: E::EntityId) -> Self {
+    pub fn __from_repo(id: E::EntityId) -> Self {
         Self { id }
     }
 
@@ -68,13 +69,14 @@ impl<E: EsEvent> EntityEventsBuilder<E, Generated> {
     }
 }
 
-impl<E: EsEvent> EntityEventsBuilder<E, Supplied> {
+impl<E: EsEvent> EntityEventsBuilder<E, FromCaller> {
     #[doc(hidden)]
-    pub fn __supplied() -> Self {
+    pub fn __from_caller() -> Self {
         Self { id: () }
     }
 
-    /// The entity's initial events under the id the `New*` type brought.
+    /// The entity's initial events under the id the caller put in the `New*`
+    /// value.
     pub fn initial_events(
         self,
         id: E::EntityId,

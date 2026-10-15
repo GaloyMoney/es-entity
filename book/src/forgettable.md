@@ -169,8 +169,8 @@ impl TryFromEvents<CustomerEvent> for Customer {
     }
 }
 # impl IntoEvents<CustomerEvent> for NewCustomer {
-#     type Id = Generated;
-#     fn into_events(self, builder: EntityEventsBuilder<CustomerEvent, Generated>) -> EntityEvents<CustomerEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<CustomerEvent, FromRepo>) -> EntityEvents<CustomerEvent> {
 #         let id = builder.id();
 #         builder.initial_events([CustomerEvent::Initialized {
 #             id, name: Forgettable::new(self.name), email: self.email,

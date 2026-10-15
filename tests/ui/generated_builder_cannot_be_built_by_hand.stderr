@@ -1,7 +1,0 @@
-error[E0451]: field `id` of struct `es_entity::EntityEventsBuilder` is private
-  --> tests/ui/generated_builder_cannot_be_built_by_hand.rs:15:9
-   |
-14 |     let _builder = EntityEventsBuilder::<GadgetEvent, Generated> {
-   |                    --------------------------------------------- in this type
-15 |         id: GadgetId::new(),
-   |         ^^ private field

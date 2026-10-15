@@ -16,7 +16,7 @@ use es_entity::*;
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "Partner",
-    id(supplied, scope),
+    id(source = caller, scope),
     columns(name(ty = "String", list_by))
 )]
 pub struct Partners {
@@ -256,7 +256,7 @@ pub mod overridden_id_scope {
     #[derive(EsRepo, Debug)]
     #[es_repo(
         entity = "Partner",
-        id(supplied, scope(variant = "Tenant")),
+        id(source = caller, scope(variant = "Tenant")),
         columns(name(ty = "String"))
     )]
     pub struct PartnersByOverriddenScope {

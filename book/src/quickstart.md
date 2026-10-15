@@ -161,9 +161,9 @@ impl NewUser {
 // The `NewEntity` type must implement `IntoEvents` to get the initial events that require persisting.
 impl IntoEvents<UserEvent> for NewUser {
     // The repository generates the id and hands it over through the builder.
-    type Id = Generated;
+    type IdSource = FromRepo;
 
-    fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+    fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
         let id = builder.id();
         builder.initial_events([UserEvent::Initialized {
             id,

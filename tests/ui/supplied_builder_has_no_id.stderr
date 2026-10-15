@@ -1,5 +1,0 @@
-error[E0599]: no method named `id` found for struct `es_entity::EntityEventsBuilder<GadgetEvent, es_entity::Supplied>` in the current scope
-  --> tests/ui/supplied_builder_has_no_id.rs:24:26
-   |
-24 |         let id = builder.id();
-   |                          ^^ private field, not a method

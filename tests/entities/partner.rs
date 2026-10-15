@@ -55,11 +55,11 @@ impl NewPartner {
 }
 
 impl IntoEvents<PartnerEvent> for NewPartner {
-    type Id = Supplied;
+    type IdSource = FromCaller;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<PartnerEvent, Supplied>,
+        builder: EntityEventsBuilder<PartnerEvent, FromCaller>,
     ) -> EntityEvents<PartnerEvent> {
         builder.initial_events(
             self.id,

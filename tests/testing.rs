@@ -55,11 +55,11 @@ pub struct NewGadget {
 }
 
 impl IntoEvents<GadgetEvent> for NewGadget {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<GadgetEvent, Generated>,
+        builder: EntityEventsBuilder<GadgetEvent, FromRepo>,
     ) -> EntityEvents<GadgetEvent> {
         let id = builder.id();
         builder.initial_events([GadgetEvent::Initialized {
@@ -96,11 +96,11 @@ pub struct NewWidget {
 }
 
 impl IntoEvents<WidgetEvent> for NewWidget {
-    type Id = Supplied;
+    type IdSource = FromCaller;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<WidgetEvent, Supplied>,
+        builder: EntityEventsBuilder<WidgetEvent, FromCaller>,
     ) -> EntityEvents<WidgetEvent> {
         builder.initial_events(self.id, [WidgetEvent::Initialized { id: self.id }])
     }
@@ -149,7 +149,7 @@ fn hydrate_from_events_rejects_a_payload_id_that_is_not_the_stream_id() {
 }
 
 #[test]
-fn hydrate_from_new_takes_the_id_when_the_repo_generates_it() {
+fn hydrate_from_new_takes_the_id_when_the_repo_is_the_source() {
     let id = GadgetId::new();
     let mut gadget = Gadget::hydrate_from_new(
         id,
@@ -170,7 +170,7 @@ fn hydrate_from_new_takes_the_id_when_the_repo_generates_it() {
 }
 
 #[test]
-fn hydrate_from_new_takes_only_the_new_value_when_it_supplies_the_id() {
+fn hydrate_from_new_takes_only_the_new_value_when_the_caller_is_the_source() {
     let id = WidgetId::new();
     let widget = Widget::hydrate_from_new(NewWidget { id }).unwrap();
     assert_eq!(widget.id, id);

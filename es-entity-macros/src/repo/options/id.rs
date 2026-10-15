@@ -1,54 +1,56 @@
-use darling::{FromMeta, util::Flag};
+use darling::FromMeta;
 
 use super::ScopeOpts;
 
-/// How a repo resolves the id of an entity it creates.
+/// Where a repo gets the id of an entity it creates.
 #[derive(Debug, Clone)]
-pub enum IdPolicyOpt {
-    /// The repo mints the id (`<Id>::new()`, or the `by` generator). The
+pub enum IdSourceOpt {
+    /// The repo generates the id (`<Id>::new()`, or the `generator`). The
     /// default.
-    Generated { by: Option<syn::Path> },
-    /// The `New*` type brings its own id.
-    Supplied,
+    Repo { generator: Option<syn::Path> },
+    /// The caller puts the id in the `New*` value.
+    Caller,
 }
 
-impl Default for IdPolicyOpt {
+impl Default for IdSourceOpt {
     fn default() -> Self {
-        Self::Generated { by: None }
+        Self::Repo { generator: None }
     }
 }
 
-impl IdPolicyOpt {
-    pub fn is_generated(&self) -> bool {
-        matches!(self, Self::Generated { .. })
+impl IdSourceOpt {
+    pub fn is_repo(&self) -> bool {
+        matches!(self, Self::Repo { .. })
     }
 
-    /// The `es_entity` policy marker the `New*` type must name as its
-    /// `IntoEvents::Id`.
+    /// The `es_entity` id source marker the `New*` type must name as its
+    /// `IntoEvents::IdSource`.
     pub fn marker(&self) -> proc_macro2::TokenStream {
         match self {
-            Self::Generated { .. } => quote::quote!(es_entity::Generated),
-            Self::Supplied => quote::quote!(es_entity::Supplied),
+            Self::Repo { .. } => quote::quote!(es_entity::FromRepo),
+            Self::Caller => quote::quote!(es_entity::FromCaller),
         }
     }
 
     /// The builder handed to `into_events`, given an expression for the
-    /// resolved id (ignored by a supplied policy).
+    /// resolved id (ignored when the caller is the source).
     pub fn builder(&self, id: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
         match self {
-            Self::Generated { .. } => {
-                quote::quote!(es_entity::EntityEventsBuilder::__generated(#id))
+            Self::Repo { .. } => {
+                quote::quote!(es_entity::EntityEventsBuilder::__from_repo(#id))
             }
-            Self::Supplied => quote::quote!(es_entity::EntityEventsBuilder::__supplied()),
+            Self::Caller => quote::quote!(es_entity::EntityEventsBuilder::__from_caller()),
         }
     }
 
     /// An expression resolving a fresh id inside an async fn that holds
-    /// `self` and `op`: the id type's `new()`, or the repo's `by` generator,
-    /// an `async fn(&Repo, &mut impl AtomicOperation) -> Result<Id, RepoFault>`.
+    /// `self` and `op`: the id type's `new()`, or the repo's `generator`, an
+    /// `async fn(&Repo, &mut impl AtomicOperation) -> Result<Id, RepoFault>`.
     pub fn resolve(&self, id_ty: &syn::Ident) -> proc_macro2::TokenStream {
         match self {
-            Self::Generated { by: Some(path) } => {
+            Self::Repo {
+                generator: Some(path),
+            } => {
                 quote::quote!(#path(self, &mut *op).await?)
             }
             _ => quote::quote!(#id_ty::new()),
@@ -56,16 +58,47 @@ impl IdPolicyOpt {
     }
 }
 
+/// The `source = repo | caller` value, written as a bare word or a string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceKind {
+    Repo,
+    Caller,
+}
+
+impl FromMeta for SourceKind {
+    fn from_string(value: &str) -> darling::Result<Self> {
+        match value {
+            "repo" => Ok(Self::Repo),
+            "caller" => Ok(Self::Caller),
+            other => Err(darling::Error::unknown_value(other)),
+        }
+    }
+
+    fn from_expr(expr: &syn::Expr) -> darling::Result<Self> {
+        match expr {
+            syn::Expr::Path(path) => match path.path.get_ident() {
+                Some(ident) => {
+                    Self::from_string(&ident.to_string()).map_err(|e| e.with_span(ident))
+                }
+                None => Err(darling::Error::unexpected_expr_type(expr)),
+            },
+            syn::Expr::Lit(lit) => Self::from_value(&lit.lit),
+            syn::Expr::Group(group) => Self::from_expr(&group.expr),
+            _ => Err(darling::Error::unexpected_expr_type(expr)),
+        }
+    }
+}
+
 /// The repo-level `id` attribute, in the same two forms as a column:
 /// `id = "CustomId"` names the type and keeps every default, and
-/// `id(ty = "CustomId", supplied, scope)` spells the options out. Unlike a
-/// column, `ty` is optional (it defaults to `{Entity}Id`), `find_by` and
-/// `list_by` are always on, and the id alone takes a policy: `generated` (the
-/// default), `generated(by = "path::to::fn")` or `supplied`.
+/// `id(ty = "CustomId", source = caller, scope)` spells the options out.
+/// Unlike a column, `ty` is optional (it defaults to `{Entity}Id`), `find_by`
+/// and `list_by` are always on, and the id alone takes a source: `repo` (the
+/// default, optionally with `generator = "path::to::fn"`) or `caller`.
 #[derive(Debug, Default)]
 pub struct IdOpts {
     pub ty: Option<syn::Ident>,
-    pub policy: IdPolicyOpt,
+    pub source: IdSourceOpt,
     pub scope: Option<ScopeOpts>,
 }
 
@@ -83,52 +116,31 @@ impl FromMeta for IdOpts {
             #[darling(default)]
             ty: Option<syn::Ident>,
             #[darling(default)]
-            supplied: Flag,
+            source: Option<darling::util::SpannedValue<SourceKind>>,
             #[darling(default)]
-            generated: Option<GeneratedOpts>,
+            generator: Option<darling::util::SpannedValue<syn::Path>>,
             #[darling(default)]
             scope: Option<ScopeOpts>,
         }
 
         let inner = Inner::from_list(items)?;
-        let policy = match (inner.supplied.is_present(), inner.generated) {
-            (true, Some(_)) => {
+        let source = match (inner.source.as_deref(), inner.generator) {
+            (Some(SourceKind::Caller), Some(generator)) => {
                 return Err(darling::Error::custom(
-                    "`supplied` and `generated` are mutually exclusive",
+                    "`generator` needs `source = repo`: a caller-sourced id is not generated",
                 )
-                .with_span(&inner.supplied.span()));
+                .with_span(&generator.span()));
             }
-            (true, None) => IdPolicyOpt::Supplied,
-            (false, generated) => IdPolicyOpt::Generated {
-                by: generated.and_then(|g| g.by),
+            (Some(SourceKind::Caller), None) => IdSourceOpt::Caller,
+            (_, generator) => IdSourceOpt::Repo {
+                generator: generator.map(|g| g.into_inner()),
             },
         };
         Ok(Self {
             ty: inner.ty,
-            policy,
+            source,
             scope: inner.scope,
         })
-    }
-}
-
-#[derive(Debug, Default)]
-struct GeneratedOpts {
-    by: Option<syn::Path>,
-}
-
-impl FromMeta for GeneratedOpts {
-    fn from_word() -> darling::Result<Self> {
-        Ok(Self::default())
-    }
-
-    fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
-        #[derive(FromMeta)]
-        struct Inner {
-            by: syn::Path,
-        }
-
-        let inner = Inner::from_list(items)?;
-        Ok(Self { by: Some(inner.by) })
     }
 }
 
@@ -154,7 +166,7 @@ mod tests {
     fn short_form_names_the_type_and_keeps_the_defaults() {
         let opts = parse(parse_quote!(id = "CustomId")).unwrap();
         assert_eq!(opts.ty.unwrap().to_string(), "CustomId");
-        assert!(matches!(opts.policy, IdPolicyOpt::Generated { by: None }));
+        assert!(matches!(opts.source, IdSourceOpt::Repo { generator: None }));
         assert!(opts.scope.is_none());
     }
 
@@ -162,46 +174,63 @@ mod tests {
     fn empty_long_form_is_the_default() {
         let opts = parse(parse_quote!(id())).unwrap();
         assert!(opts.ty.is_none());
-        assert!(matches!(opts.policy, IdPolicyOpt::Generated { by: None }));
+        assert!(matches!(opts.source, IdSourceOpt::Repo { generator: None }));
         assert!(opts.scope.is_none());
     }
 
     #[test]
-    fn long_form_takes_ty_policy_and_scope() {
-        let opts = parse(parse_quote!(id(ty = "CustomId", supplied, scope))).unwrap();
+    fn long_form_takes_ty_source_and_scope() {
+        let opts = parse(parse_quote!(id(ty = "CustomId", source = caller, scope))).unwrap();
         assert_eq!(opts.ty.unwrap().to_string(), "CustomId");
-        assert!(matches!(opts.policy, IdPolicyOpt::Supplied));
+        assert!(matches!(opts.source, IdSourceOpt::Caller));
         assert!(opts.scope.is_some());
     }
 
     #[test]
-    fn generated_is_explicit_or_takes_a_generator() {
-        let opts = parse(parse_quote!(id(generated))).unwrap();
-        assert!(matches!(opts.policy, IdPolicyOpt::Generated { by: None }));
+    fn source_takes_a_bare_word_or_a_string() {
+        let opts = parse(parse_quote!(id(source = "caller"))).unwrap();
+        assert!(matches!(opts.source, IdSourceOpt::Caller));
 
-        let opts = parse(parse_quote!(id(generated(by = "Self::next_id")))).unwrap();
-        let IdPolicyOpt::Generated { by: Some(by) } = opts.policy else {
-            panic!("expected a generator");
-        };
-        assert_eq!(quote::quote!(#by).to_string(), "Self :: next_id");
+        let opts = parse(parse_quote!(id(source = "repo"))).unwrap();
+        assert!(matches!(opts.source, IdSourceOpt::Repo { generator: None }));
     }
 
     #[test]
-    fn supplied_and_generated_are_exclusive() {
-        let err = err(parse_quote!(id(supplied, generated)));
+    fn repo_source_is_explicit_or_takes_a_generator() {
+        let opts = parse(parse_quote!(id(source = repo))).unwrap();
+        assert!(matches!(opts.source, IdSourceOpt::Repo { generator: None }));
+
+        for meta in [
+            parse_quote!(id(source = repo, generator = "Self::next_id")),
+            parse_quote!(id(generator = "Self::next_id")),
+        ] {
+            let opts = parse(meta).unwrap();
+            let IdSourceOpt::Repo {
+                generator: Some(generator),
+            } = opts.source
+            else {
+                panic!("expected a generator");
+            };
+            assert_eq!(quote::quote!(#generator).to_string(), "Self :: next_id");
+        }
+    }
+
+    #[test]
+    fn generator_needs_the_repo_source() {
+        let err = err(parse_quote!(id(
+            source = caller,
+            generator = "Self::next_id"
+        )));
         assert!(
-            err.contains("mutually exclusive"),
+            err.contains("`generator` needs `source = repo`"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn generated_list_requires_by() {
-        let err = err(parse_quote!(id(generated(other = "x"))));
-        assert!(
-            err.contains("other") || err.contains("by"),
-            "unexpected error: {err}"
-        );
+    fn source_rejects_an_unknown_value() {
+        let err = err(parse_quote!(id(source = database)));
+        assert!(err.contains("database"), "unexpected error: {err}");
     }
 
     #[test]
@@ -243,6 +272,8 @@ mod tests {
             parse_quote!(id(create(persist = false))),
             parse_quote!(id(update(persist = true))),
             parse_quote!(id(parent)),
+            parse_quote!(id(supplied)),
+            parse_quote!(id(generated)),
         ] {
             let err = err(meta);
             assert!(err.contains("Unknown field"), "unexpected error: {err}");

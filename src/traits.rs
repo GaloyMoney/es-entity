@@ -8,7 +8,7 @@ use super::{
     db,
     error::EntityHydrationError,
     events::EntityEvents,
-    id_policy::{EntityEventsBuilder, IdPolicy},
+    id_source::{EntityEventsBuilder, IdSource},
     snapshot::{EsSnapshot, NoSnapshot},
     tree_query::TreeSpec,
 };
@@ -119,9 +119,9 @@ pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
 /// // These events help track `Entity` state mutations
 /// // Returns the `EntityEvents<UserEvent>`
 /// impl IntoEvents<UserEvent> for NewUser {
-///     type Id = Generated;
+///     type IdSource = FromRepo;
 ///
-///     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+///     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 ///         let id = builder.id();
 ///         builder.initial_events([UserEvent::Initialized {
 ///             id,
@@ -146,14 +146,15 @@ pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
 /// }
 /// ```
 pub trait IntoEvents<E: EsEvent>: Sized {
-    /// Who decides the id: [`Generated`](crate::Generated) (the repo mints it
-    /// and the `New*` type has no id field) or [`Supplied`](crate::Supplied)
-    /// (the `New*` type brings a deterministic one). It must agree with the
-    /// repo's `id` policy; a mismatch does not compile.
-    type Id: IdPolicy;
+    /// Where the id comes from: [`FromRepo`](crate::FromRepo) (the repo
+    /// generates it and the `New*` type has no id field) or
+    /// [`FromCaller`](crate::FromCaller) (the caller puts a deterministic one
+    /// in the `New*` value). It must agree with the repo's `id(source = ..)`;
+    /// a mismatch does not compile.
+    type IdSource: IdSource;
 
     /// Method to implement which emits event stream from a `NewEntity`
-    fn into_events(self, builder: EntityEventsBuilder<E, Self::Id>) -> EntityEvents<E>;
+    fn into_events(self, builder: EntityEventsBuilder<E, Self::IdSource>) -> EntityEvents<E>;
 }
 
 /// Required trait for re-constructing entities from their events in chronological order.
@@ -192,9 +193,9 @@ pub trait IntoEvents<E: EsEvent>: Sized {
 ///
 /// // The IntoEvents implementation which emits an event stream.
 /// impl IntoEvents<UserEvent> for NewUser {
-///     type Id = Generated;
+///     type IdSource = FromRepo;
 ///
-///     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+///     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 ///         let id = builder.id();
 ///         builder.initial_events([UserEvent::Initialized {
 ///             id,
@@ -339,8 +340,8 @@ pub trait EsEntity: TryFromEvents<Self::Event, Self::Snapshot> + Send {
 /// # }
 /// # pub struct NewUser { name: String }
 /// # impl IntoEvents<UserEvent> for NewUser {
-/// #     type Id = Generated;
-/// #     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> { unimplemented!() }
+/// #     type IdSource = FromRepo;
+/// #     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> { unimplemented!() }
 /// # }
 /// # #[derive(EsEntity)]
 /// # pub struct User {
@@ -384,8 +385,8 @@ pub trait EsEntity: TryFromEvents<Self::Event, Self::Snapshot> + Send {
 /// # }
 /// # pub struct NewUser { name: String }
 /// # impl IntoEvents<UserEvent> for NewUser {
-/// #     type Id = Generated;
-/// #     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> { unimplemented!() }
+/// #     type IdSource = FromRepo;
+/// #     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> { unimplemented!() }
 /// # }
 /// # #[derive(EsEntity)]
 /// # pub struct User {

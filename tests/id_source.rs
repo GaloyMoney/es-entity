@@ -8,7 +8,7 @@ use es_entity::*;
 es_entity::entity_id! { GadgetId, KnobId, SprocketId, DoohickeyId }
 
 // ---------------------------------------------------------------------------
-// Gadget: default policy over a primary-key-only table
+// Gadget: default id source over a primary-key-only table
 // ---------------------------------------------------------------------------
 
 #[derive(EsEvent, Debug, Serialize, Deserialize)]
@@ -38,11 +38,11 @@ impl TryFromEvents<GadgetEvent> for Gadget {
 pub struct NewGadget;
 
 impl IntoEvents<GadgetEvent> for NewGadget {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<GadgetEvent, Generated>,
+        builder: EntityEventsBuilder<GadgetEvent, FromRepo>,
     ) -> EntityEvents<GadgetEvent> {
         let id = builder.id();
         builder.initial_events([GadgetEvent::Initialized { id }])
@@ -62,7 +62,7 @@ impl Gadgets {
 }
 
 // ---------------------------------------------------------------------------
-// Knob: default policy, a unique column stays in the family
+// Knob: default id source, a unique column stays in the family
 // ---------------------------------------------------------------------------
 
 #[derive(EsEvent, Debug, Serialize, Deserialize)]
@@ -95,11 +95,11 @@ pub struct NewKnob {
 }
 
 impl IntoEvents<KnobEvent> for NewKnob {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<KnobEvent, Generated>,
+        builder: EntityEventsBuilder<KnobEvent, FromRepo>,
     ) -> EntityEvents<KnobEvent> {
         let id = builder.id();
         builder.initial_events([KnobEvent::Initialized {
@@ -152,11 +152,11 @@ impl TryFromEvents<SprocketEvent> for Sprocket {
 pub struct NewSprocket;
 
 impl IntoEvents<SprocketEvent> for NewSprocket {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<SprocketEvent, Generated>,
+        builder: EntityEventsBuilder<SprocketEvent, FromRepo>,
     ) -> EntityEvents<SprocketEvent> {
         let id = builder.id();
         builder.initial_events([SprocketEvent::Initialized { id }])
@@ -164,7 +164,7 @@ impl IntoEvents<SprocketEvent> for NewSprocket {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Sprocket", id(generated(by = "Self::next_id")))]
+#[es_repo(entity = "Sprocket", id(generator = "Self::next_id"))]
 pub struct Sprockets {
     pool: PgPool,
     minted: std::sync::Arc<std::sync::Mutex<Vec<SprocketId>>>,
@@ -189,7 +189,7 @@ impl Sprockets {
 }
 
 // ---------------------------------------------------------------------------
-// Doohickey: a supplied id whose `New*` hands the container a different id
+// Doohickey: a caller's id whose `New*` hands the container a different id
 // ---------------------------------------------------------------------------
 
 #[derive(EsEvent, Debug, Serialize, Deserialize)]
@@ -222,11 +222,11 @@ pub struct NewDoohickey {
 }
 
 impl IntoEvents<DoohickeyEvent> for NewDoohickey {
-    type Id = Supplied;
+    type IdSource = FromCaller;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<DoohickeyEvent, Supplied>,
+        builder: EntityEventsBuilder<DoohickeyEvent, FromCaller>,
     ) -> EntityEvents<DoohickeyEvent> {
         builder.initial_events(
             self.container_id,
@@ -236,7 +236,7 @@ impl IntoEvents<DoohickeyEvent> for NewDoohickey {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Doohickey", id(supplied))]
+#[es_repo(entity = "Doohickey", id(source = caller))]
 pub struct Doohickeys {
     pool: PgPool,
 }
@@ -254,7 +254,7 @@ fn takes_fault<T>(res: Result<T, es_entity::RepoFault>) -> Result<T, es_entity::
 }
 
 #[tokio::test]
-async fn pk_only_table_on_the_default_policy_creates_with_repo_fault() -> anyhow::Result<()> {
+async fn pk_only_table_on_the_default_id_source_creates_with_repo_fault() -> anyhow::Result<()> {
     let gadgets = Gadgets::new(helpers::init_pool().await?);
 
     let gadget = takes_fault(gadgets.create(NewGadget).await)?;
@@ -325,7 +325,7 @@ async fn custom_generator_supplies_the_id() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn supplied_id_that_differs_from_the_container_id_is_a_fault() -> anyhow::Result<()> {
+async fn caller_id_that_differs_from_the_container_id_is_a_fault() -> anyhow::Result<()> {
     let doohickeys = Doohickeys::new(helpers::init_pool().await?);
 
     let err = doohickeys
@@ -342,7 +342,7 @@ async fn supplied_id_that_differs_from_the_container_id_is_a_fault() -> anyhow::
 }
 
 #[tokio::test]
-async fn create_all_with_a_supplied_id_that_differs_from_the_container_id_writes_nothing()
+async fn create_all_with_a_caller_id_that_differs_from_the_container_id_writes_nothing()
 -> anyhow::Result<()> {
     let doohickeys = Doohickeys::new(helpers::init_pool().await?);
     let consistent = DoohickeyId::new();

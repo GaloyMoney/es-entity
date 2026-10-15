@@ -197,7 +197,7 @@ where
 {
     /// Builds a container for a brand-new entity. Only
     /// [`EntityEventsBuilder`](crate::EntityEventsBuilder) reaches it, so the
-    /// container's id is always the one the repo's id policy resolved.
+    /// container's id is always the one the repo's id source resolved.
     pub(crate) fn init(
         id: <T as EsEvent>::EntityId,
         initial_events: impl IntoIterator<Item = T>,
@@ -748,11 +748,11 @@ mod tests {
     struct NewDummyEntity {}
 
     impl IntoEvents<DummyEntityEvent> for NewDummyEntity {
-        type Id = crate::Supplied;
+        type IdSource = crate::FromCaller;
 
         fn into_events(
             self,
-            builder: crate::EntityEventsBuilder<DummyEntityEvent, crate::Supplied>,
+            builder: crate::EntityEventsBuilder<DummyEntityEvent, crate::FromCaller>,
         ) -> EntityEvents<DummyEntityEvent> {
             builder.initial_events(
                 Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap(),

@@ -26,24 +26,23 @@ impl TryFromEvents<GadgetEvent> for Gadget {
     }
 }
 
-pub struct NewGadget {
-    pub id: GadgetId,
-}
+pub struct NewGadget;
 
 impl IntoEvents<GadgetEvent> for NewGadget {
-    type Id = Supplied;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<GadgetEvent, Supplied>,
+        builder: EntityEventsBuilder<GadgetEvent, FromRepo>,
     ) -> EntityEvents<GadgetEvent> {
-        builder.initial_events(self.id, [GadgetEvent::Initialized { id: self.id }])
+        let id = builder.id();
+        builder.initial_events([GadgetEvent::Initialized { id }])
     }
 }
 
-// The default policy generates the id; `NewGadget` brings its own.
+// `NewGadget` carries no id; the repo expects the caller's.
 #[derive(EsRepo)]
-#[es_repo(entity = "Gadget")]
+#[es_repo(entity = "Gadget", id(source = caller))]
 pub struct Gadgets {
     pool: PgPool,
 }

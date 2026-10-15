@@ -138,11 +138,11 @@ impl NewSite {
 }
 
 impl IntoEvents<SiteEvent> for NewSite {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<SiteEvent, Generated>,
+        builder: EntityEventsBuilder<SiteEvent, FromRepo>,
     ) -> EntityEvents<SiteEvent> {
         let id = builder.id();
         builder.initial_events([SiteEvent::Initialized { id }])

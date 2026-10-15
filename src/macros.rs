@@ -141,9 +141,9 @@
 ///
 /// pub struct NewMeter;
 /// impl IntoEvents<MeterEvent> for NewMeter {
-///     type Id = Generated;
+///     type IdSource = FromRepo;
 ///
-///     fn into_events(self, builder: EntityEventsBuilder<MeterEvent, Generated>) -> EntityEvents<MeterEvent> {
+///     fn into_events(self, builder: EntityEventsBuilder<MeterEvent, FromRepo>) -> EntityEvents<MeterEvent> {
 ///         let id = builder.id();
 ///         builder.initial_events([MeterEvent::Initialized { id }])
 ///     }
@@ -205,8 +205,8 @@
 /// # pub enum MeterEvent { Initialized { id: MeterId }, ReadingRecorded { value: i64 } }
 /// # pub struct NewMeter;
 /// # impl IntoEvents<MeterEvent> for NewMeter {
-/// #     type Id = Generated;
-/// #     fn into_events(self, builder: EntityEventsBuilder<MeterEvent, Generated>) -> EntityEvents<MeterEvent> {
+/// #     type IdSource = FromRepo;
+/// #     fn into_events(self, builder: EntityEventsBuilder<MeterEvent, FromRepo>) -> EntityEvents<MeterEvent> {
 /// #         let id = builder.id();
 /// #         builder.initial_events([MeterEvent::Initialized { id }])
 /// #     }

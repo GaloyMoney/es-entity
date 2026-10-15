@@ -22,8 +22,8 @@ Given the query we arrived at in the previous section - this is what a `find_by_
 # }
 # pub struct NewUser { name: String }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Generated;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -104,8 +104,8 @@ This simplifies the above implementation into:
 # }
 # pub struct NewUser { name: String }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Generated;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }

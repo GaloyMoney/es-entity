@@ -204,7 +204,7 @@ fn persist_path(c: &mut Criterion) {
     g.bench_function("entity_events_push/3_ambient_entries", |b| {
         b.iter_batched(
             || {
-                EntityEventsBuilder::<BenchEvent, Generated>::__generated(BenchEntityId::new())
+                EntityEventsBuilder::<BenchEvent, FromRepo>::__from_repo(BenchEntityId::new())
                     .initial_events(std::iter::empty())
             },
             |mut events| {

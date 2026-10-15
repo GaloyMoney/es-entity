@@ -21,7 +21,7 @@ pub struct CreateFn<'a> {
     nested_fn_names: Vec<syn::Ident>,
     post_hydrate_hook: bool,
     post_persist_hook: bool,
-    id_policy: IdPolicyOpt,
+    id_source: IdSourceOpt,
     /// `RepositoryOptions::create_can_reject`: `false` narrows every
     /// generated signature from `RepoWriteError<CV>` to `RepoFault`.
     can_reject: bool,
@@ -39,7 +39,7 @@ pub struct CreateFn<'a> {
 impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
-            id_policy: opts.id_policy(),
+            id_source: opts.id_source(),
             can_reject: opts.create_can_reject(),
             write_error_ty: opts.create_error_ty(),
             create_or_find: opts.create_or_find_enabled(),
@@ -87,17 +87,17 @@ impl ToTokens for CreateFn<'_> {
                 quote! { .narrow_rejected()? },
             )
         };
-        let generated = self.id_policy.is_generated();
-        let policy = self.id_policy.marker();
+        let generated = self.id_source.is_repo();
+        let id_source = self.id_source.marker();
         let resolve_id = if generated {
             let id_ty = self.id;
-            let resolved = self.id_policy.resolve(id_ty);
+            let resolved = self.id_source.resolve(id_ty);
             quote! { let __id: #id_ty = #resolved; }
         } else {
             quote! {}
         };
-        let builder = self.id_policy.builder(quote! { __id.clone() });
-        let (attempted_id, supplied_id_check, classify_create) = if generated {
+        let builder = self.id_source.builder(quote! { __id.clone() });
+        let (attempted_id, caller_id_check, classify_create) = if generated {
             (
                 quote! {},
                 quote! {},
@@ -114,7 +114,7 @@ impl ToTokens for CreateFn<'_> {
                 },
                 quote! {
                     if events.id() != &__attempted_id {
-                        return Err(errlanes::Fatal::invariant("supplied id differs from the id the entity was built under").into());
+                        return Err(errlanes::Fatal::invariant("caller's id differs from the id the entity was built under").into());
                     }
                 },
                 quote! { Self::classify_create_write(e, move |_| Some(__attempted_id)) },
@@ -308,10 +308,10 @@ impl ToTokens for CreateFn<'_> {
             #[inline(always)]
             fn convert_new<Entity, Event, Snapshot>(
                 item: Entity,
-                builder: es_entity::EntityEventsBuilder<Event, #policy>,
+                builder: es_entity::EntityEventsBuilder<Event, #id_source>,
             ) -> es_entity::EntityEvents<Event, Snapshot>
             where
-                Entity: es_entity::IntoEvents<Event, Id = #policy>,
+                Entity: es_entity::IntoEvents<Event, IdSource = #id_source>,
                 Event: es_entity::EsEvent,
                 Snapshot: es_entity::EsSnapshot,
             {
@@ -352,7 +352,7 @@ impl ToTokens for CreateFn<'_> {
                     __query_args.add(op.maybe_now()).map_err(sqlx::Error::Encode)?;
 
                     let mut events = Self::convert_new(new_entity, #builder);
-                    #supplied_id_check
+                    #caller_id_check
                     let events_types = events.new_event_types();
                     let serialized_events = events.serialize_new_events();
                     #ctx_var
@@ -418,7 +418,7 @@ mod tests {
             nested_fn_names: Vec::new(),
             post_hydrate_hook: false,
             post_persist_hook: false,
-            id_policy: IdPolicyOpt::Supplied,
+            id_source: IdSourceOpt::Caller,
             can_reject: true,
             write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             create_or_find: false,
@@ -434,10 +434,10 @@ mod tests {
             #[inline(always)]
             fn convert_new<Entity, Event, Snapshot>(
                 item: Entity,
-                builder: es_entity::EntityEventsBuilder<Event, es_entity::Supplied>,
+                builder: es_entity::EntityEventsBuilder<Event, es_entity::FromCaller>,
             ) -> es_entity::EntityEvents<Event, Snapshot>
             where
-                Entity: es_entity::IntoEvents<Event, Id = es_entity::Supplied>,
+                Entity: es_entity::IntoEvents<Event, IdSource = es_entity::FromCaller>,
                 Event: es_entity::EsEvent,
                 Snapshot: es_entity::EsSnapshot,
             {
@@ -482,9 +482,9 @@ mod tests {
                     __query_args.add(id as &EntityId).map_err(sqlx::Error::Encode)?;
                     __query_args.add(op.maybe_now()).map_err(sqlx::Error::Encode)?;
 
-                    let mut events = Self::convert_new(new_entity, es_entity::EntityEventsBuilder::__supplied());
+                    let mut events = Self::convert_new(new_entity, es_entity::EntityEventsBuilder::__from_caller());
                     if events.id() != &__attempted_id {
-                        return Err(errlanes::Fatal::invariant("supplied id differs from the id the entity was built under").into());
+                        return Err(errlanes::Fatal::invariant("caller's id differs from the id the entity was built under").into());
                     }
                     let events_types = events.new_event_types();
                     let serialized_events = events.serialize_new_events();
@@ -539,7 +539,7 @@ mod tests {
             nested_fn_names: Vec::new(),
             post_hydrate_hook: false,
             post_persist_hook: false,
-            id_policy: IdPolicyOpt::default(),
+            id_source: IdSourceOpt::default(),
             can_reject: false,
             write_error_ty: quote! { es_entity::RepoFault },
             create_or_find: false,
@@ -562,11 +562,11 @@ mod tests {
             "a generated id must never be read off the New* type: {out}"
         );
         assert!(
-            out.contains("EntityEventsBuilder :: __generated (__id . clone ())"),
+            out.contains("EntityEventsBuilder :: __from_repo (__id . clone ())"),
             "{out}"
         );
         assert!(
-            out.contains("IntoEvents < Event , Id = es_entity :: Generated >"),
+            out.contains("IntoEvents < Event , IdSource = es_entity :: FromRepo >"),
             "{out}"
         );
         assert!(
@@ -604,7 +604,7 @@ mod tests {
             nested_fn_names: Vec::new(),
             post_hydrate_hook: false,
             post_persist_hook: false,
-            id_policy: IdPolicyOpt::Supplied,
+            id_source: IdSourceOpt::Caller,
             can_reject: true,
             write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             create_or_find: false,
@@ -620,10 +620,10 @@ mod tests {
             #[inline(always)]
             fn convert_new<Entity, Event, Snapshot>(
                 item: Entity,
-                builder: es_entity::EntityEventsBuilder<Event, es_entity::Supplied>,
+                builder: es_entity::EntityEventsBuilder<Event, es_entity::FromCaller>,
             ) -> es_entity::EntityEvents<Event, Snapshot>
             where
-                Entity: es_entity::IntoEvents<Event, Id = es_entity::Supplied>,
+                Entity: es_entity::IntoEvents<Event, IdSource = es_entity::FromCaller>,
                 Event: es_entity::EsEvent,
                 Snapshot: es_entity::EsSnapshot,
             {
@@ -670,9 +670,9 @@ mod tests {
                     __query_args.add(name as &String).map_err(sqlx::Error::Encode)?;
                     __query_args.add(op.maybe_now()).map_err(sqlx::Error::Encode)?;
 
-                    let mut events = Self::convert_new(new_entity, es_entity::EntityEventsBuilder::__supplied());
+                    let mut events = Self::convert_new(new_entity, es_entity::EntityEventsBuilder::__from_caller());
                     if events.id() != &__attempted_id {
-                        return Err(errlanes::Fatal::invariant("supplied id differs from the id the entity was built under").into());
+                        return Err(errlanes::Fatal::invariant("caller's id differs from the id the entity was built under").into());
                     }
                     let events_types = events.new_event_types();
                     let serialized_events = events.serialize_new_events();

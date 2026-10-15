@@ -608,7 +608,7 @@ mod tests {
     #[test]
     fn pkey_constraint_gets_id_conflict_variant_and_no_from_database_arm() {
         let input: syn::DeriveInput = parse_quote! {
-            #[es_repo(entity = "User", id(supplied), columns(name(ty = "String")))]
+            #[es_repo(entity = "User", id(source = caller), columns(name(ty = "String")))]
             struct Users {
                 pool: sqlx::PgPool,
             }
@@ -637,8 +637,8 @@ mod tests {
         for attr in [
             quote! { #[es_repo(entity = "User", columns(name(ty = "String")))] },
             quote! { #[es_repo(entity = "User", id = "UserId", columns(name(ty = "String")))] },
-            quote! { #[es_repo(entity = "User", id(generated), columns(name(ty = "String")))] },
-            quote! { #[es_repo(entity = "User", id(ty = "UserId", generated(by = "Self::next_id")), columns(name(ty = "String")))] },
+            quote! { #[es_repo(entity = "User", id(source = repo), columns(name(ty = "String")))] },
+            quote! { #[es_repo(entity = "User", id(ty = "UserId", generator = "Self::next_id"), columns(name(ty = "String")))] },
         ] {
             let input: syn::DeriveInput = parse_quote! {
                 #attr
@@ -840,11 +840,11 @@ mod tests {
     }
 
     #[test]
-    fn id_long_form_combines_type_policy_and_scope() {
+    fn id_long_form_combines_type_source_and_scope() {
         let input: syn::DeriveInput = parse_quote! {
             #[es_repo(
                 entity = "Partner",
-                id(ty = "TenantId", supplied, scope),
+                id(ty = "TenantId", source = caller, scope),
                 columns(name(ty = "String"))
             )]
             struct Partners {
@@ -852,17 +852,17 @@ mod tests {
             }
         };
         let tokens = derive(input)
-            .expect("id(ty, supplied, scope) repo should derive")
+            .expect("id(ty, source = caller, scope) repo should derive")
             .to_string();
         assert!(tokens.contains("Id (TenantId)"));
-        assert!(tokens.contains("es_entity :: Supplied"));
+        assert!(tokens.contains("es_entity :: FromCaller"));
         assert!(!tokens.contains("PartnerId"));
     }
 
     #[test]
     fn duplicate_id_attribute_is_error() {
         let input: syn::DeriveInput = parse_quote! {
-            #[es_repo(entity = "Partner", id = "PartnerId", id(supplied))]
+            #[es_repo(entity = "Partner", id = "PartnerId", id(source = caller))]
             struct Partners {
                 pool: sqlx::PgPool,
             }

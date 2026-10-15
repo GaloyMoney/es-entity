@@ -21,8 +21,8 @@ This is useful for situations where you have a `1-to-n` relationship between 2 e
 #     NameUpdated { name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Generated;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -49,8 +49,8 @@ pub enum UserDocumentEvent {
 }
 
 # impl IntoEvents<UserDocumentEvent> for NewUserDocument {
-#     type Id = Generated;
-#     fn into_events(self, builder: EntityEventsBuilder<UserDocumentEvent, Generated>) -> EntityEvents<UserDocumentEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<UserDocumentEvent, FromRepo>) -> EntityEvents<UserDocumentEvent> {
 #         let id = builder.id();
 #         builder.initial_events([UserDocumentEvent::Initialized {
 #             id,

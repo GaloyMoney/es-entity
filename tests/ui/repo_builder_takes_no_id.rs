@@ -15,11 +15,11 @@ pub struct NewGadget {
 }
 
 impl IntoEvents<GadgetEvent> for NewGadget {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<GadgetEvent, Generated>,
+        builder: EntityEventsBuilder<GadgetEvent, FromRepo>,
     ) -> EntityEvents<GadgetEvent> {
         builder.initial_events(self.id, [GadgetEvent::Initialized { id: self.id }])
     }

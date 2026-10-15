@@ -21,8 +21,8 @@ As a minimum you must specify the `entity` attribute and have a field that holds
 # }
 # pub struct NewUser { name: String }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Generated;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -43,7 +43,7 @@ use es_entity::*;
     entity = "User",
 
     // Defaults that get derived if not explicitly configured:
-    // id = "UserId",                  // The id column; id(ty, generated, supplied, scope) in the `id` chapter
+    // id = "UserId",                  // The id column; id(ty, source, generator, scope) in the `id` chapter
     // new = "NewUser",                // The type of the `NewEntity`
     // event = "UserEvent",            // The type of the `Event` enum
     // Every generated write op returns es_entity::RepoWriteError<UserConstraintViolation>;
@@ -79,8 +79,8 @@ The most important of which is the `columns` option that configures the mapping 
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Generated;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }

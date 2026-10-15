@@ -37,7 +37,7 @@ pub struct ErrorClassifier<'a> {
     /// with `-D warnings`. `classify_create_write` needs no such gate:
     /// `create` and `create_all` always issue the combined statement.
     needs_write_classifier: bool,
-    /// The repo resolves ids itself (`id(generated)`): a collision on a
+    /// The repo resolves ids itself (`id(source = repo)`): a collision on a
     /// fresh id is `Fatal(Invariant)`, never a `Pkey` rejection.
     generated_id: bool,
 }
@@ -62,7 +62,7 @@ impl<'a> From<&'a RepositoryOptions> for ErrorClassifier<'a> {
 
             events_table_name: opts.events_table_name(),
             needs_write_classifier: opts.columns.updates_needed() || opts.delete.is_soft(),
-            generated_id: opts.id_policy().is_generated(),
+            generated_id: opts.id_source().is_repo(),
         }
     }
 }

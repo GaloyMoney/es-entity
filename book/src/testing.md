@@ -43,8 +43,8 @@ module reads:
 # }
 # pub struct NewUser { name: String }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Generated;
-#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         let id = builder.id();
 #         builder.initial_events([UserEvent::Initialized { id, name: self.name }])
 #     }

@@ -223,9 +223,9 @@ impl RepositoryOptions {
         self.id_ty.as_ref().expect("ID identifier is not set")
     }
 
-    /// How this repo resolves the id of an entity it creates.
-    pub fn id_policy(&self) -> IdPolicyOpt {
-        self.id_opts.policy.clone()
+    /// Where this repo gets the id of an entity it creates.
+    pub fn id_source(&self) -> IdSourceOpt {
+        self.id_opts.source.clone()
     }
 
     pub fn event(&self) -> &syn::Ident {
@@ -465,7 +465,7 @@ impl RepositoryOptions {
     /// fresh id is a fault. Nested children are folded in by
     /// [`Self::create_error_ty`].
     pub fn create_can_reject(&self) -> bool {
-        let generated = self.id_policy().is_generated();
+        let generated = self.id_source().is_repo();
         crate::repo::error_types::enumerate_constraints(self)
             .iter()
             .filter(|(_, kind, _)| {
@@ -483,7 +483,7 @@ impl RepositoryOptions {
     /// to catch the conflict on, and no scope columns (a scoped repo's
     /// `find_by_id_in_op` needs a scope the create has no way to name).
     pub fn create_or_find_enabled(&self) -> bool {
-        !self.id_policy().is_generated()
+        !self.id_source().is_repo()
             && self.columns.scope_columns().is_empty()
             && crate::repo::error_types::enumerate_constraints(self)
                 .iter()

@@ -21,8 +21,8 @@ In the code below we want to include a `name` column in the `index` table that r
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Generated;
-#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         let id = builder.id();
 #         builder.initial_events([UserEvent::Initialized {
 #             id,
@@ -116,8 +116,8 @@ The `create(accessor = "<>")` option modifies how the field is accessed on the `
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Generated;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -173,8 +173,8 @@ This is useful for dynamic values that don't become known until later on in the 
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Generated;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -208,7 +208,7 @@ pub struct Users {
 
 ## create_or_find_by_id_in_op
 
-A repo with `id(supplied)` (see [id](./repo-id.md)) also gets
+A repo with `id(source = caller)` (see [id](./repo-id.md)) also gets
 `create_or_find_by_id_in_op`, for entities whose id is deterministic and which
 may already exist:
 

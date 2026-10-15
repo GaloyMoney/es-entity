@@ -66,11 +66,11 @@ impl NewTask {
 }
 
 impl IntoEvents<TaskEvent> for NewTask {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<TaskEvent, Generated>,
+        builder: EntityEventsBuilder<TaskEvent, FromRepo>,
     ) -> EntityEvents<TaskEvent> {
         let id = builder.id();
         builder.initial_events([TaskEvent::Initialized {

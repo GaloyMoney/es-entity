@@ -110,11 +110,11 @@ impl NewCustomer {
 }
 
 impl IntoEvents<CustomerEvent> for NewCustomer {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<CustomerEvent, Generated>,
+        builder: EntityEventsBuilder<CustomerEvent, FromRepo>,
     ) -> EntityEvents<CustomerEvent> {
         let id = builder.id();
         builder.initial_events([CustomerEvent::Initialized {

@@ -67,11 +67,11 @@ impl NewParty {
 }
 
 impl IntoEvents<PartyEvent> for NewParty {
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<PartyEvent, Generated>,
+        builder: EntityEventsBuilder<PartyEvent, FromRepo>,
     ) -> EntityEvents<PartyEvent> {
         let id = builder.id();
         builder.initial_events([PartyEvent::Initialized {

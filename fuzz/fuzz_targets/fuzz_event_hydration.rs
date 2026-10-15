@@ -37,9 +37,9 @@ impl EsEvent for FuzzEvent {
 struct NewFuzzEntity;
 
 impl IntoEvents<FuzzEvent> for NewFuzzEntity {
-    type Id = Supplied;
+    type IdSource = FromCaller;
 
-    fn into_events(self, builder: EntityEventsBuilder<FuzzEvent, Supplied>) -> EntityEvents<FuzzEvent> {
+    fn into_events(self, builder: EntityEventsBuilder<FuzzEvent, FromCaller>) -> EntityEvents<FuzzEvent> {
         builder.initial_events(Uuid::nil(), [FuzzEvent::Created("seed".to_string())])
     }
 }

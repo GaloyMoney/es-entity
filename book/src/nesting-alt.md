@@ -203,8 +203,8 @@ This leverages the rust module system to enforce that the children cannot be acc
 # pub struct NewSubscription {}
 # 
 # impl IntoEvents<SubscriptionEvent> for NewSubscription {
-#     type Id = Generated;
-#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, Generated>) -> EntityEvents<SubscriptionEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, FromRepo>) -> EntityEvents<SubscriptionEvent> {
 #         let id = builder.id();
 #         builder.initial_events(vec![SubscriptionEvent::Initialized { id }])
 #     }
@@ -348,8 +348,8 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     pub subscription_id: SubscriptionId,
 # }
 # impl IntoEvents<BillingPeriodEvent> for NewBillingPeriod {
-#     type Id = Supplied;
-#     fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, Supplied>) -> EntityEvents<BillingPeriodEvent> {
+#     type IdSource = FromCaller;
+#     fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, FromCaller>) -> EntityEvents<BillingPeriodEvent> {
 #         builder.initial_events(
 #             self.id,
 #             vec![BillingPeriodEvent::Initialized {
@@ -432,15 +432,15 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 # #[derive(Debug, Clone, Builder)]
 # pub struct NewSubscription {}
 # impl IntoEvents<SubscriptionEvent> for NewSubscription {
-#     type Id = Generated;
-#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, Generated>) -> EntityEvents<SubscriptionEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, FromRepo>) -> EntityEvents<SubscriptionEvent> {
 #         let id = builder.id();
 #         builder.initial_events(vec![SubscriptionEvent::Initialized { id }])
 #     }
 # }
 # #[derive(EsRepo, Debug)]
 # #[es_repo(
-#     entity = "BillingPeriod", id(supplied),
+#     entity = "BillingPeriod", id(source = caller),
 #     columns(
 #         subscription_id(ty = "SubscriptionId", update(persist = false), list_for, parent)
 #     )

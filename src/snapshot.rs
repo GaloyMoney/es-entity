@@ -186,8 +186,8 @@ impl GuardWithoutSnapshotClause for SnapshotRecord<NoSnapshot> {
 /// # }
 /// # pub struct NewSnapGuardMeter;
 /// # impl IntoEvents<SnapGuardMeterEvent> for NewSnapGuardMeter {
-/// #     type Id = Generated;
-/// #     fn into_events(self, builder: EntityEventsBuilder<SnapGuardMeterEvent, Generated>) -> EntityEvents<SnapGuardMeterEvent> {
+/// #     type IdSource = FromRepo;
+/// #     fn into_events(self, builder: EntityEventsBuilder<SnapGuardMeterEvent, FromRepo>) -> EntityEvents<SnapGuardMeterEvent> {
 /// #         let id = builder.id();
 /// #         builder.initial_events([SnapGuardMeterEvent::Initialized { id }])
 /// #     }
@@ -243,8 +243,8 @@ impl GuardWithoutSnapshotClause for SnapshotRecord<NoSnapshot> {
 /// }
 /// # pub struct NewSnapGuardClient { email: String }
 /// # impl IntoEvents<SnapGuardClientEvent> for NewSnapGuardClient {
-/// #     type Id = Generated;
-/// #     fn into_events(self, builder: EntityEventsBuilder<SnapGuardClientEvent, Generated>) -> EntityEvents<SnapGuardClientEvent> {
+/// #     type IdSource = FromRepo;
+/// #     fn into_events(self, builder: EntityEventsBuilder<SnapGuardClientEvent, FromRepo>) -> EntityEvents<SnapGuardClientEvent> {
 /// #         let id = builder.id();
 /// #         builder.initial_events([SnapGuardClientEvent::Initialized { id, email: Forgettable::new(self.email) }])
 /// #     }

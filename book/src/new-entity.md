@@ -9,8 +9,9 @@ Using the [derive_builder](https://docs.rs/derive_builder/latest/derive_builder/
 By default the repository generates the id of every entity it creates, so the
 `NewEntity` has no id field and `IntoEvents` reads the resolved id from the
 builder it receives. An entity whose id is deterministic (derived from another
-aggregate, a well-known constant) supplies it instead ([below](#supplied-ids));
-the repository declares which, see [id](./repo-id.md).
+aggregate, a well-known constant) takes it from the caller instead
+([below](#ids-from-the-caller)); the repository declares which, see
+[id](./repo-id.md).
 
 ```rust
 # extern crate es_entity;
@@ -54,10 +55,10 @@ impl NewUserBuilder {
 
 impl IntoEvents<UserEvent> for NewUser {
     // The repository generates the id; `NewUser` has no id field.
-    type Id = Generated;
+    type IdSource = FromRepo;
 
     // This `fn` returns the first `Events` of the `Entity`
-    fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+    fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
         let id = builder.id();
         builder.initial_events([UserEvent::Initialized {
             id,
@@ -76,14 +77,14 @@ mod tests {
 }
 ```
 
-A `Generated` `NewEntity` has no route by which a caller-chosen id reaches the
+A `FromRepo` `NewEntity` has no route by which a caller-chosen id reaches the
 insert: `builder.initial_events` takes no id and the builder cannot be built by
 hand.
 
-## Supplied ids
+## Ids from the caller
 
-A `NewEntity` with a deterministic id declares `type Id = Supplied`, carries the
-id itself and passes it to `initial_events`:
+A `NewEntity` with a deterministic id declares `type IdSource = FromCaller`,
+carries the id and passes it to `initial_events`:
 
 ```rust
 # extern crate es_entity;
@@ -103,9 +104,9 @@ pub struct NewCustomer {
 }
 
 impl IntoEvents<CustomerEvent> for NewCustomer {
-    type Id = Supplied;
+    type IdSource = FromCaller;
 
-    fn into_events(self, builder: EntityEventsBuilder<CustomerEvent, Supplied>) -> EntityEvents<CustomerEvent> {
+    fn into_events(self, builder: EntityEventsBuilder<CustomerEvent, FromCaller>) -> EntityEvents<CustomerEvent> {
         builder.initial_events(self.id, [CustomerEvent::Initialized { id: self.id }])
     }
 }
