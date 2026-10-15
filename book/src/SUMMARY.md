@@ -9,8 +9,8 @@
 - [Entity Pattern](./entity-pattern.md)
   - [Entity Event](./entity-event.md)
   - [New Entity](./new-entity.md)
-  - [Entity ids](./entity-ids.md)
   - [Entity Type](./entity-type.md)
+  - [Testing](./testing.md)
 
 - [Idempotency](./idempotency.md)
 
@@ -18,6 +18,7 @@
   - [Database Tables](./database-tables.md)
   - [es_query](./es-query.md)
   - [EsRepo trait](./es-repo.md)
+    - [id](./repo-id.md)
     - [create](./repo-create.md)
     - [create_all](./repo-create-all.md)
     - [update](./repo-update.md)

@@ -27,7 +27,7 @@ to ever construct. `update`/`update_all`, `forget` and soft `delete` narrow
 this way whenever every column `update` persists has no unique, primary-key or
 check constraint (a repo of only scope/reference columns written once on
 create, or columns that only carry a foreign key, say). `create`/`create_all`
-narrow the same way for a repo that [generates its own ids](./entity-ids.md)
+narrow the same way for a repo that [generates its own ids](./repo-id.md)
 and has no other constraint. A nested child counts only if *its own* create or
 update can reject: a child with minted ids and only a parent foreign key does
 not make its parent reject.

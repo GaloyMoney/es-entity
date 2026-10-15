@@ -1,8 +1,9 @@
-# Entity ids
+# id
 
 Every entity an `EsRepo` creates gets its id from the repository's *id policy*.
-The policy is also the type parameter of the builder that `IntoEvents` receives,
-so what a `NewEntity` can do with the id is checked by the compiler.
+The policy is also the type parameter of the builder that `IntoEvents` receives
+(see [New Entity](./new-entity.md)), so what a `NewEntity` can do with the id is
+checked by the compiler.
 
 ## The `id` attribute
 
@@ -29,31 +30,14 @@ and `list_by` are always on, and only the id takes a policy (`generated` or
 ## Generated ids (the default)
 
 By default the repository mints the id: `<IdType>::new()`, or the function named
-by `generated(by = "...")`. The `NewEntity` has no id field and reads the id the
-repository resolved from the builder:
+by `generated(by = "...")`. The `NewEntity` declares `type Id = Generated` and
+reads the id from the builder:
 
 ```rust,ignore
-pub struct NewUser {
-    pub name: String,
-}
-
-impl IntoEvents<UserEvent> for NewUser {
-    type Id = Generated;
-
-    fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
-        let id = builder.id();
-        builder.initial_events([UserEvent::Initialized { id, name: self.name }])
-    }
-}
-
 #[derive(EsRepo)]
 #[es_repo(entity = "User")] // same as `id(generated)`
 pub struct Users { pool: sqlx::PgPool }
 ```
-
-A `Generated` `NewEntity` has no route by which a caller-supplied id reaches the
-insert: `builder.initial_events` takes no id, the builder cannot be built by
-hand, and `EntityEvents::init` is crate-private.
 
 Because a collision of a freshly generated id is a fault rather than something a
 caller can act on, the primary key is **not** a case of
@@ -82,18 +66,10 @@ impl PublicIds {
 ## Supplied ids
 
 An entity with a deterministic id (derived from another aggregate, a
-well-known constant) opts out with `id(supplied)`. The `NewEntity` brings the
-id and passes it to `initial_events`:
+well-known constant) opts out with `id(supplied)`. Its `NewEntity` declares
+`type Id = Supplied` and passes its own id to `initial_events`:
 
 ```rust,ignore
-impl IntoEvents<CustomerEvent> for NewCustomer {
-    type Id = Supplied;
-
-    fn into_events(self, builder: EntityEventsBuilder<CustomerEvent, Supplied>) -> EntityEvents<CustomerEvent> {
-        builder.initial_events(self.id, [CustomerEvent::Initialized { id: self.id }])
-    }
-}
-
 #[derive(EsRepo)]
 #[es_repo(entity = "Customer", id(supplied))]
 pub struct Customers { pool: sqlx::PgPool }
@@ -107,37 +83,12 @@ The repository checks that the id the `NewEntity` handed to `initial_events`
 is the one it inserts under; if they differ the create fails with
 `Fatal(Invariant)`.
 
+A supplied-id repo also gets
+[`create_or_find_by_id_in_op`](./repo-create.md#create_or_find_by_id_in_op), for
+entities that may already exist.
+
 ## A mismatch does not compile
 
 The repo's policy and the `NewEntity`'s `type Id` must agree: a `Supplied`
 `NewEntity` used with a default (generated) repo, and the other way round, are
 both compile errors.
-
-## Hydration checks the id
-
-After `TryFromEvents` rebuilds an entity, its `id` field is compared with the id
-its events are stored under. A mismatch (an `Initialized { id }` payload that
-disagrees with the stream) is `Fatal(CorruptState)`.
-
-## Unit tests
-
-Tests build entities without a repository through `es_entity::testing`,
-enabled by the `testing` feature. Enable it from `[dev-dependencies]` only, so
-production builds do not contain it:
-
-```toml
-[dev-dependencies]
-es-entity = { version = "...", features = ["testing"] }
-```
-
-`use es_entity::testing::*;` brings three functions onto every entity:
-
-| Call | Builds the entity from |
-|---|---|
-| `User::hydrate(id, [events..])` | any event stream, stored under `id` |
-| `User::hydrate_new(id, new_user)` | a `NewUser` whose repo generates the id; the test picks it |
-| `User::hydrate_new(new_user)` | a `NewUser` that supplies its own id |
-
-Each returns `Result<User, EntityHydrationError>` and applies the same id check
-as a repository load. The events of the returned entity are new (not yet
-persisted).

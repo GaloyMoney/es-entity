@@ -9,8 +9,8 @@ Using the [derive_builder](https://docs.rs/derive_builder/latest/derive_builder/
 By default the repository generates the id of every entity it creates, so the
 `NewEntity` has no id field and `IntoEvents` reads the resolved id from the
 builder it receives. An entity whose id is deterministic (derived from another
-aggregate, a well-known constant) opts out with `id(supplied)`, see
-[Entity ids](./entity-ids.md).
+aggregate, a well-known constant) supplies it instead ([below](#supplied-ids));
+the repository declares which, see [id](./repo-id.md).
 
 ```rust
 # extern crate es_entity;
@@ -75,3 +75,41 @@ mod tests {
     }
 }
 ```
+
+A `Generated` `NewEntity` has no route by which a caller-chosen id reaches the
+insert: `builder.initial_events` takes no id and the builder cannot be built by
+hand.
+
+## Supplied ids
+
+A `NewEntity` with a deterministic id declares `type Id = Supplied`, carries the
+id itself and passes it to `initial_events`:
+
+```rust
+# extern crate es_entity;
+# extern crate sqlx;
+# extern crate serde;
+# use serde::{Deserialize, Serialize};
+# use es_entity::*;
+# es_entity::entity_id! { CustomerId };
+# #[derive(EsEvent, Debug, Serialize, Deserialize)]
+# #[serde(tag = "type", rename_all = "snake_case")]
+# #[es_event(id = "CustomerId")]
+# pub enum CustomerEvent {
+#     Initialized { id: CustomerId },
+# }
+pub struct NewCustomer {
+    pub id: CustomerId,
+}
+
+impl IntoEvents<CustomerEvent> for NewCustomer {
+    type Id = Supplied;
+
+    fn into_events(self, builder: EntityEventsBuilder<CustomerEvent, Supplied>) -> EntityEvents<CustomerEvent> {
+        builder.initial_events(self.id, [CustomerEvent::Initialized { id: self.id }])
+    }
+}
+```
+
+Which of the two a `NewEntity` must use is declared on its repository, see
+[id](./repo-id.md).

@@ -91,30 +91,12 @@ impl TryFromEvents<UserEvent> for User {
         builder.events(events).build()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    // Requires the `testing` feature, enabled from `[dev-dependencies]`.
-    use es_entity::testing::*;
-
-    use super::*;
-
-    #[test]
-    fn update_name() {
-        let id = UserId::new();
-        // `NewUser` supplies its id, so `hydrate_new` takes only the `NewUser`.
-        let mut user = User::hydrate_new(NewUser { id, name: "Willson".to_string() }).unwrap();
-        // Any event stream can be hydrated directly too.
-        let same = User::hydrate(id, [UserEvent::Initialized { id, name: "Willson".to_string() }]).unwrap();
-        assert_eq!(user.name, same.name);
-
-        let new_name = "Gavin".to_string();
-        assert!(user.update_name(new_name.clone()).did_execute());
-        assert_eq!(user.name, new_name);
-        assert!(user.update_name(new_name).was_already_applied());
-    }
-}
-
 ```
 
-See [Testing](entity-ids.md#unit-tests) for the helpers in `es_entity::testing`.
+## Hydration checks the id
+
+After `TryFromEvents` rebuilds an entity, its `id` field is compared with the id
+its events are stored under. A mismatch (an `Initialized { id }` payload that
+disagrees with the stream) is `Fatal(CorruptState)`.
+
+See [Testing](./testing.md) for building a `User` like this one in unit tests.

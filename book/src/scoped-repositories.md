@@ -134,7 +134,7 @@ pub struct Partners {
 ```
 
 The id is never declared inside `columns(...)`; see
-[Entity ids](./entity-ids.md) for the full `id` attribute.
+[id](./repo-id.md) for the full `id` attribute.
 
 The generated surface is the ordinary scoped one: a `PartnerScope` enum and a
 leading scope argument on every read. Since the `id` column's scope variant

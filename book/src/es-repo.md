@@ -43,7 +43,7 @@ use es_entity::*;
     entity = "User", id(supplied),
 
     // Defaults that get derived if not explicitly configured:
-    // id = "UserId",                  // The type of the `id`
+    // id = "UserId",                  // The id column; id(ty, generated, supplied, scope) in the `id` chapter
     // new = "NewUser",                // The type of the `NewEntity`
     // event = "UserEvent",            // The type of the `Event` enum
     // Every generated write op returns es_entity::RepoWriteError<UserConstraintViolation>;
@@ -51,12 +51,6 @@ use es_entity::*;
     // tbl = "users",                  // The name of the index table
     // events_tbl = "user_events",     // The name of the events table
     // tbl_prefix = "",                // A table prefix that should be added to the derived table names
-
-    // Columns specify a list of attributes that get mapped to the index table:
-    // columns(
-    //     The id column is always mapped - no need to specify it
-    //     id(ty = "UserId", list_by)
-    // )
 )]
 pub struct Users {
     pool: sqlx::PgPool
@@ -127,6 +121,9 @@ pub struct Users {
 ```
 
 ### Column options
+
+The id column is configured by the repo-level `id` attribute, not as a column;
+see [id](./repo-id.md).
 
 Each column supports the following options:
 

@@ -210,7 +210,7 @@ pub struct Users {
 
 ## create_or_find_by_id_in_op
 
-A repo with `id(supplied)` (see [Entity ids](./entity-ids.md)) also gets
+A repo with `id(supplied)` (see [id](./repo-id.md)) also gets
 `create_or_find_by_id_in_op`, for entities whose id is deterministic and which
 may already exist:
 
