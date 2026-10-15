@@ -1,3 +1,12 @@
+# [cala release v0.19.1](https://github.com/GaloyMoney/cala/releases/tag/0.19.1)
+
+
+
+### Features
+
+- Enum-level shared rejection code (#279)
+- Create_or_find_by_<key>_in_op for every unique key (#280)
+
 # [cala release v0.19.0](https://github.com/GaloyMoney/cala/releases/tag/0.19.0)
 
 
