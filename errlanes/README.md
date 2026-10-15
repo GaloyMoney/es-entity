@@ -525,6 +525,7 @@ conversion depends on what changes:
 | a rejecting result | its own `Fail<R, W::Lanes>` at a foreign carrier boundary | `.into_fail()?` |
 | `Result<T, Foreign>` | `Result<T, W>` | `.classify::<W>()`, given `W: Classify + From<Foreign>` |
 | `Result<T, Fail<R, L>>` | `Result<T, Fault<L>>` | `.narrow_rejected()` |
+| `Result<T, Fail<R, L>>` | `Result<T, Fault<L>>`, recovering some members and narrowing the rest | `.narrow_rejected_with(\|r\| ..)` |
 | `Result<T, R>`, a bare rejection | `Result<T, Fatal>` after the precondition is proven | `.narrow_rejected()?` |
 | `Result<T, Fail<R, L>>` | `Result<Result<T, R>, Fault<L>>` | `.rejected()` |
 | `Result<T, Fail<R, L>>` | `Result<T, Fail<P, L>>` | `.map_rejected(f)` for call-site data |
@@ -607,7 +608,7 @@ What `?` does, in and out of a carrier `E`:
   a bare `Fatal` / `Transient` when it has just that lane, and into a foreign
   enum with `#[from] E`.
 - `.lift()`, `into_fault`, `into_fail`, `narrow_transient`, `narrow_denied`, `narrow_rejected`,
-  `rejected` and `map_rejected` work on `Result<T, E>`. A narrowing returns the
+  `narrow_rejected_with`, `rejected` and `map_rejected` work on `Result<T, E>`. A narrowing returns the
   narrowed **built-in** (`Fault<..>` / `Fail<..>`), which `?` carries on.
   `E: Laned` for retry, `record` and `#[errlanes::instrument]`.
 

@@ -1,11 +1,11 @@
 error[E0004]: non-exhaustive patterns: `Outcome::Corrupt` not covered
-  --> tests/coherence/carrier_fail/absorb_missing_member.rs:13:26
+  --> tests/coherence/carrier_fail/narrow_rejected_with_missing_member.rs:11:49
    |
-13 |         |rejected| match rejected {
-   |                          ^^^^^^^^ pattern `Outcome::Corrupt` not covered
+11 |     value.narrow_rejected_with(|rejected| match rejected {
+   |                                                 ^^^^^^^^ pattern `Outcome::Corrupt` not covered
    |
 note: `Outcome` defined here
-  --> tests/coherence/carrier_fail/absorb_missing_member.rs:5:6
+  --> tests/coherence/carrier_fail/narrow_rejected_with_missing_member.rs:5:6
    |
  5 | enum Outcome {
    |      ^^^^^^^
@@ -15,6 +15,6 @@ note: `Outcome` defined here
    = note: the matched value is of type `Outcome`
 help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
    |
-14 ~             Outcome::Missing => Ok(()),
-15 ~             Outcome::Corrupt => todo!(),
+12 ~         Outcome::Missing => Ok(()),
+13 ~         Outcome::Corrupt => todo!(),
    |

@@ -308,15 +308,18 @@ pub trait ResultExt<T, E>: Sized {
         E: IntoLanes,
         E::Rejected: Rejection;
 
-    /// Ends a call site on the faults alone: `on_ok` maps the success value,
-    /// `on_rejected` receives the rejection by value and answers with the
-    /// success value to continue with or a [`Fault`] of its own. Faults
-    /// already on the result pass through untouched.
+    /// Narrows away the `Rejected` lane after the closure has had first
+    /// refusal: `on_rejected` receives the rejection by value and either
+    /// recovers with the success value (`Ok`) or hands back the member it
+    /// does not handle (`Err`), which is then narrowed exactly as
+    /// [`narrow_rejected`](Self::narrow_rejected) would — `Fatal(Invariant)`
+    /// with the rejection as an opaque source. Faults already on the result
+    /// pass through untouched.
     ///
-    /// The closure's `match` is the exhaustiveness proof. When every member
-    /// of the rejection is handled there is nothing left to narrow, so no
-    /// `narrow_rejected()` is needed, and a member added later is a compile
-    /// error in the closure instead of a silent `Fatal(Invariant)`:
+    /// The closure's `match` is the exhaustiveness proof: when every member
+    /// is recovered there is nothing left to narrow, and a member added
+    /// later is a compile error in the closure instead of a silent
+    /// `Fatal(Invariant)`:
     ///
     /// ```
     /// use errlanes::{Fail, Fault, ResultExt, lanes};
@@ -330,22 +333,41 @@ pub trait ResultExt<T, E>: Sized {
     /// }
     ///
     /// fn ensure_added() -> Result<(), Fault<lanes!(Transient, Fatal)>> {
-    ///     add().absorb(|_| (), |AlreadyAdded| Ok(()))
+    ///     add().map(|_| ()).narrow_rejected_with(|AlreadyAdded| Ok(()))
     /// }
     ///
     /// assert!(ensure_added().is_ok());
     /// ```
     ///
-    /// Where some members are invariants, the closure names each as a fault
-    /// explicitly: `Err(Fatal::from_error(FatalKind::Invariant, r).into())`.
-    fn absorb<U>(
+    /// Where some members are invariants, the closure hands them back:
+    ///
+    /// ```
+    /// use errlanes::{Fail, Fault, ResultExt, lanes};
+    ///
+    /// #[derive(Debug, errlanes::Rejection)]
+    /// enum Outcome {
+    ///     Missing,
+    ///     Corrupt,
+    /// }
+    ///
+    /// fn read(value: Result<u32, Fail<Outcome, lanes!(Fatal)>>) -> Result<u32, Fault<lanes!(Fatal)>> {
+    ///     value.narrow_rejected_with(|r| match r {
+    ///         Outcome::Missing => Ok(0),
+    ///         Outcome::Corrupt => Err(r),
+    ///     })
+    /// }
+    ///
+    /// assert_eq!(read(Err(Fail::Rejected(Outcome::Missing))).unwrap(), 0);
+    /// assert!(matches!(read(Err(Fail::Rejected(Outcome::Corrupt))), Err(Fault::Fatal(_))));
+    /// ```
+    fn narrow_rejected_with(
         self,
-        on_ok: impl FnOnce(T) -> U,
-        on_rejected: impl FnOnce(E::Rejected) -> Result<U, Fault<E::Lanes>>,
-    ) -> Result<U, Fault<E::Lanes>>
+        on_rejected: impl FnOnce(E::Rejected) -> Result<T, E::Rejected>,
+    ) -> Result<T, Fault<E::Lanes>>
     where
         E: IntoLanes,
-        E::Rejected: Rejection;
+        E::Rejected: Rejection,
+        E::Lanes: LaneProfile<Fatal = Fatal>;
 
     /// Maps the rejection with a closure and leaves every other lane as it
     /// is: the `Result`-level form of [`Fail::map_rejected`]. For a
@@ -427,19 +449,20 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
         }
     }
 
-    fn absorb<U>(
+    fn narrow_rejected_with(
         self,
-        on_ok: impl FnOnce(T) -> U,
-        on_rejected: impl FnOnce(E::Rejected) -> Result<U, Fault<E::Lanes>>,
-    ) -> Result<U, Fault<E::Lanes>>
+        on_rejected: impl FnOnce(E::Rejected) -> Result<T, E::Rejected>,
+    ) -> Result<T, Fault<E::Lanes>>
     where
         E: IntoLanes,
         E::Rejected: Rejection,
+        E::Lanes: LaneProfile<Fatal = Fatal>,
     {
         match self {
-            Ok(value) => Ok(on_ok(value)),
+            Ok(value) => Ok(value),
             Err(e) => match e.into_lanes().rejected() {
-                Ok(rejected) => on_rejected(rejected),
+                Ok(rejected) => on_rejected(rejected)
+                    .map_err(|r| Fault::Fatal(crate::fail::invariant_from_rejection(r))),
                 Err(fault) => Err(fault),
             },
         }
