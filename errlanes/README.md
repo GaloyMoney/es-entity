@@ -368,6 +368,104 @@ assert!(matches!(Settlement::lift(exceeded), Ok(Settlement::BelowFloor(3))));
 assert!(Settlement::lift(Batch::Apply(Apply::Locked)).is_err());
 ```
 
+### One code, several causes
+
+`#[rejection(code = "..", description = "..")]` on an enum is the code (and
+description, and `level` if given) of every variant that declares neither its
+own `code` nor `delegate`. A cause that the client cannot distinguish is a
+variant under the family's code, not a wrapper around the foreign enum.
+`#[error]`, `#[source]`, `#[rejection(from)]` and `#[lift]` work on each
+variant as before, and a `#[lift]` arm takes the enum's code instead of
+forwarding the source case's. The generated code type has one variant per
+distinct code, and `CODES` lists each code once.
+
+```rust
+use errlanes::{Fail, Rejection, RejectionCode, ResultExt, lanes};
+
+#[derive(Debug, errlanes::Rejection)]
+enum Cala {
+    #[rejection(code = "CALA_DUPLICATE_ID")]
+    DuplicateId(u64),
+    #[rejection(code = "CALA_CODE_ALREADY_EXISTS")]
+    CodeAlreadyExists(String),
+    #[rejection(code = "CALA_UNRELATED")]
+    Unrelated,
+}
+
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+#[rejection(
+    code = "HOLDING_ACCOUNT_ALREADY_EXISTS",
+    description = "A holding account with this id or reference already exists."
+)]
+#[lift(Cala, unhandled = fatal)]
+enum CreateAccountRejection {
+    #[error("holding account id {0} already exists")]
+    #[lift(Cala::DuplicateId)]
+    DuplicateId(u64),
+    #[error("holding account code {0} already exists")]
+    #[lift(Cala::CodeAlreadyExists)]
+    CodeAlreadyExists(String),
+}
+
+assert_eq!(CreateAccountRejectionCode::CODES.len(), 1);
+
+let duplicate: Result<(), Fail<CreateAccountRejection, lanes!(Fatal)>> =
+    Err::<(), _>(Cala::CodeAlreadyExists("H1".into())).lift();
+let rejected = duplicate.unwrap_err().rejected().unwrap();
+assert_eq!(
+    Into::<&str>::into(rejected.code()),
+    "HOLDING_ACCOUNT_ALREADY_EXISTS"
+);
+assert_eq!(rejected.to_string(), "holding account code H1 already exists");
+```
+
+Variants that still declare their own `code`, or `delegate`, keep it, so a
+family can report one code for most causes and a distinct one for a few. One
+code has one description: a variant that takes the shared code cannot declare
+its own `description`. An enum-level `code` is a compile error when every
+variant declares its own code or delegates, when the enum has no variants, or
+next to `code_prefix`.
+
+```rust
+use errlanes::{Rejection, RejectionCode};
+
+#[derive(Debug, errlanes::Rejection)]
+#[rejection(code = "PARTNER_NOT_ACTIVE")]
+#[error("the partner is not active")]
+struct PartnerNotActive;
+
+#[derive(Debug, errlanes::Rejection)]
+#[rejection(
+    code = "PARTNER_API_KEY_CREDENTIALS_REJECTED",
+    description = "The presented API key credentials are not usable."
+)]
+enum ApiKeyCredentialsRejected {
+    #[rejection(from)]
+    #[error("the presented secret is not validly encoded")]
+    InvalidEncoding(#[source] std::str::Utf8Error),
+    #[rejection(from)]
+    #[error("the presented secret has the wrong length")]
+    InvalidLength(#[source] std::array::TryFromSliceError),
+    #[error("no api key matches the presented secret")]
+    Unknown,
+    #[error("the api key is not usable")]
+    Inactive,
+    #[rejection(delegate, from)]
+    #[error("{0}")]
+    PartnerNotActive(PartnerNotActive),
+}
+
+assert_eq!(ApiKeyCredentialsRejectedCode::CODES.len(), 2);
+assert_eq!(
+    Into::<&str>::into(ApiKeyCredentialsRejected::Unknown.code()),
+    "PARTNER_API_KEY_CREDENTIALS_REJECTED"
+);
+assert_eq!(
+    Into::<&str>::into(ApiKeyCredentialsRejected::from(PartnerNotActive).code()),
+    "PARTNER_NOT_ACTIVE"
+);
+```
+
 ## Errors from other crates
 
 Every local error type says, through one trait, how it enters the lanes:

@@ -131,7 +131,17 @@ fn doc_summary(attrs: &[syn::Attribute]) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join(" "))
 }
 
+struct SharedCode {
+    code: String,
+    level: TokenStream,
+    description: TokenStream,
+}
+
 impl RejectionVariant {
+    fn takes_own_code(&self) -> bool {
+        self.code.is_some() || self.delegate || self.code_and_level_from.is_some()
+    }
+
     fn is_delegating(&self) -> bool {
         self.delegate
     }
@@ -296,6 +306,49 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
     let schema = crate::composition::schema(ast).map_err(darling::Error::from)?;
     let error_manual = input.error_manual()?;
 
+    let shared = match &input.code {
+        None => None,
+        Some(code) => {
+            if input.code_prefix.is_some() {
+                return Err(darling::Error::custom(
+                    "`code_prefix` and an enum-level `code` conflict: the prefix is for \
+                     per-variant generated codes, a shared code is spelled in full",
+                )
+                .with_span(&input.ident));
+            }
+            if variants.is_empty() {
+                return Err(darling::Error::custom(
+                    "an enum-level `code` on an enum without variants: an empty family has no \
+                     rejection to report",
+                )
+                .with_span(&input.ident));
+            }
+            if variants.iter().all(|v| v.takes_own_code()) {
+                return Err(darling::Error::custom(
+                    "the enum-level `code` is unused: every variant declares its own `code`, \
+                     `code_and_level_from` or `delegate`",
+                )
+                .with_span(&input.ident));
+            }
+            if let Some(clash) = variants
+                .iter()
+                .find(|v| v.takes_own_code() && v.ident == *ident)
+            {
+                return Err(darling::Error::custom(
+                    "a variant that declares its own code cannot be named like its enum: the \
+                     shared code's variant in the code type is named after the enum",
+                )
+                .with_span(&clash.ident));
+            }
+            Some(SharedCode {
+                code: code.clone(),
+                level: level_expr(&input.level, ident)?,
+                description: description_tokens(&leaf_description(&input.description, &ast.attrs)),
+            })
+        }
+    };
+    let mut shared_code_variant_emitted = false;
+
     let mut code_variants = Vec::new();
     let mut into_str_arms = Vec::new();
     let mut code_match_arms = Vec::new();
@@ -416,7 +469,8 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
         let mut whole_value_source: Option<Path> = None;
         // Lift owns conversion generation. Its mapping also identifies the
         // default metadata source; no Lift implementation is required here.
-        if code_and_level_from.is_none() && v.code.is_none() && !v.delegate {
+        let takes_shared = shared.is_some() && !v.takes_own_code();
+        if code_and_level_from.is_none() && v.code.is_none() && !v.delegate && !takes_shared {
             let mappings: Vec<_> = raw
                 .attrs
                 .iter()
@@ -473,7 +527,32 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             ))
             .with_span(&v.ident)
         };
-        let (code, level, variant_codes) = if let Some(mut source) = code_and_level_from {
+        let (code, level, variant_codes) = if let (true, Some(shared)) = (takes_shared, &shared) {
+            if v.description.is_some() {
+                return Err(darling::Error::custom(
+                    "one code, one description: this variant takes the enum's shared `code`, \
+                     so its description is the enum-level one",
+                )
+                .with_span(&v.ident));
+            }
+            if !shared_code_variant_emitted {
+                shared_code_variant_emitted = true;
+                code_variants.push(quote!(#ident));
+                let shared_code = &shared.code;
+                into_str_arms.push(quote!(#code_ident::#ident => #shared_code));
+            }
+            let shared_code = &shared.code;
+            let description = &shared.description;
+            (
+                quote!(#code_ident::#ident),
+                if v.level.is_some() {
+                    v.level_expr()
+                } else {
+                    shared.level.clone()
+                },
+                quote!(&[errlanes::CodeInfo { code: #shared_code, description: #description }]),
+            )
+        } else if let Some(mut source) = code_and_level_from {
             if v.description.is_some() {
                 return Err(forwards_to(&quote!(#source)));
             }

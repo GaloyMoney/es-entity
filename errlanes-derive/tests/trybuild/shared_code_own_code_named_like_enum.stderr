@@ -1,0 +1,5 @@
+error: a variant that declares its own code cannot be named like its enum: the shared code's variant in the code type is named after the enum
+ --> tests/trybuild/shared_code_own_code_named_like_enum.rs:5:5
+  |
+5 |     Clash,
+  |     ^^^^^

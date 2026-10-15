@@ -1,0 +1,5 @@
+error: the enum-level `code` is unused: every variant declares its own `code`, `code_and_level_from` or `delegate`
+ --> tests/trybuild/shared_code_unused.rs:3:6
+  |
+3 | enum Unused {
+  |      ^^^^^^

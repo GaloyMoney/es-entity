@@ -1,0 +1,5 @@
+error: an enum-level `code` on an enum without variants: an empty family has no rejection to report
+ --> tests/trybuild/shared_code_empty_enum.rs:3:6
+  |
+3 | enum Empty {}
+  |      ^^^^^

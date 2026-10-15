@@ -1,0 +1,5 @@
+error: `code_prefix` and an enum-level `code` conflict: the prefix is for per-variant generated codes, a shared code is spelled in full
+ --> tests/trybuild/shared_code_with_prefix.rs:3:6
+  |
+3 | enum Prefixed {
+  |      ^^^^^^^^
