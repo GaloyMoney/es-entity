@@ -332,11 +332,11 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
             }
             if let Some(clash) = variants
                 .iter()
-                .find(|v| !v.takes_own_code() && v.ident == *ident)
+                .find(|v| v.takes_own_code() && v.ident == *ident)
             {
                 return Err(darling::Error::custom(
-                    "a variant named like its enum cannot take the shared code: the shared \
-                     code's variant in the code type is named after the enum",
+                    "a variant that declares its own code cannot be named like its enum: the \
+                     shared code's variant in the code type is named after the enum",
                 )
                 .with_span(&clash.ident));
             }

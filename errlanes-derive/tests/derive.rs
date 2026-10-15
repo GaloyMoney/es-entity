@@ -9,6 +9,7 @@ fn ui() {
     t.compile_fail("tests/trybuild/shared_code_variant_description.rs");
     t.compile_fail("tests/trybuild/shared_code_with_prefix.rs");
     t.compile_fail("tests/trybuild/shared_code_empty_enum.rs");
+    t.compile_fail("tests/trybuild/shared_code_own_code_named_like_enum.rs");
     t.compile_fail("tests/trybuild/error_format_args_unknown_field.rs");
     t.compile_fail("tests/trybuild/error_format_args_arbitrary_expr.rs");
     t.compile_fail("tests/trybuild/error_format_args_bare_auto_index_still_rejected.rs");

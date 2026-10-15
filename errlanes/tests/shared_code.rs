@@ -213,3 +213,17 @@ fn compose_imports_shared_code_family() {
     assert_eq!(code(&delegated), "PARTNER_NOT_ACTIVE");
     assert_eq!(code(&Gateway::Local), "GATEWAY_LOCAL");
 }
+
+#[derive(Debug, errlanes::Rejection)]
+#[rejection(code = "NAMED_LIKE_ENUM")]
+enum NamedLikeEnum {
+    NamedLikeEnum,
+    Other,
+}
+
+#[test]
+fn a_shared_code_variant_may_be_named_like_its_enum() {
+    assert_eq!(code(&NamedLikeEnum::NamedLikeEnum), "NAMED_LIKE_ENUM");
+    assert_eq!(code(&NamedLikeEnum::Other), "NAMED_LIKE_ENUM");
+    assert_eq!(NamedLikeEnumCode::CODES.len(), 1);
+}
