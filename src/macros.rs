@@ -139,12 +139,13 @@
 ///     ReadingRecorded { value: i64 },
 /// }
 ///
-/// pub struct NewMeter { id: MeterId }
+/// pub struct NewMeter;
 /// impl IntoEvents<MeterEvent> for NewMeter {
-///     type Id = Supplied;
+///     type Id = Generated;
 ///
-///     fn into_events(self, builder: EntityEventsBuilder<MeterEvent, Supplied>) -> EntityEvents<MeterEvent> {
-///         builder.initial_events(self.id, [MeterEvent::Initialized { id: self.id }])
+///     fn into_events(self, builder: EntityEventsBuilder<MeterEvent, Generated>) -> EntityEvents<MeterEvent> {
+///         let id = builder.id();
+///         builder.initial_events([MeterEvent::Initialized { id }])
 ///     }
 /// }
 ///
@@ -184,7 +185,7 @@
 ///
 /// use es_entity::testing::*;
 ///
-/// let mut meter = Meter::hydrate_new(NewMeter { id: MeterId::new() }).unwrap();
+/// let mut meter = Meter::hydrate_new(MeterId::new(), NewMeter).unwrap();
 /// assert!(meter.record(10).did_execute());
 /// assert!(meter.record(10).was_already_applied());
 /// ```
@@ -202,11 +203,12 @@
 /// # #[serde(tag = "type", rename_all = "snake_case")]
 /// # #[es_event(id = "MeterId")]
 /// # pub enum MeterEvent { Initialized { id: MeterId }, ReadingRecorded { value: i64 } }
-/// # pub struct NewMeter { id: MeterId }
+/// # pub struct NewMeter;
 /// # impl IntoEvents<MeterEvent> for NewMeter {
-/// #     type Id = Supplied;
-/// #     fn into_events(self, builder: EntityEventsBuilder<MeterEvent, Supplied>) -> EntityEvents<MeterEvent> {
-/// #         builder.initial_events(self.id, [MeterEvent::Initialized { id: self.id }])
+/// #     type Id = Generated;
+/// #     fn into_events(self, builder: EntityEventsBuilder<MeterEvent, Generated>) -> EntityEvents<MeterEvent> {
+/// #         let id = builder.id();
+/// #         builder.initial_events([MeterEvent::Initialized { id }])
 /// #     }
 /// # }
 /// # #[derive(EsEntity)]

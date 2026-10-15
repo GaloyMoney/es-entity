@@ -12,7 +12,7 @@ attribute. `id = "CustomId"` names the type and keeps every default, and the
 list form spells the options out:
 
 ```rust,ignore
-#[es_repo(entity = "Partner", id(ty = "PartnerId", supplied, scope), columns(...))]
+#[es_repo(entity = "Partner", id(ty = "PartnerId", scope), columns(...))]
 ```
 
 | option | meaning |

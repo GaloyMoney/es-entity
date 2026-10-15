@@ -18,15 +18,13 @@ It takes a `Vec<NewEntity>` and returns `Vec<Entity>`.
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Supplied;
-#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
-#         builder.initial_events(
-#             self.id,
-#             [UserEvent::Initialized {
-#                 id: self.id,
-#                 name: self.name,
-#             }],
-#         )
+#     type Id = Generated;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#         let id = builder.id();
+#         builder.initial_events([UserEvent::Initialized {
+#             id,
+#             name: self.name,
+#         }])
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
@@ -37,7 +35,6 @@ It takes a `Vec<NewEntity>` and returns `Vec<Entity>`.
 use es_entity::*;
 
 pub struct NewUser {
-    id: UserId,
     name: String
 }
 
@@ -49,7 +46,7 @@ pub struct User {
 }
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User", id(supplied), columns(name = "String"))]
+#[es_repo(entity = "User", columns(name = "String"))]
 pub struct Users {
     pool: sqlx::PgPool
 }
@@ -62,8 +59,8 @@ pub struct Users {
 async fn main() -> anyhow::Result<()> {
     let users = Users { pool: init_pool().await? };
     let new_users = vec![
-        NewUser { id: UserId::new(), name: "James".to_string() },
-        NewUser { id: UserId::new(), name: "Roger".to_string() }
+        NewUser { name: "James".to_string() },
+        NewUser { name: "Roger".to_string() }
     ];
     let users = users.create_all(new_users).await?;
 

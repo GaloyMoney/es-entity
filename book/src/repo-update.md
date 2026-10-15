@@ -21,15 +21,13 @@ In the code below we have a `name` column in the `index` table that needs to be 
 #     NameUpdated { name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Supplied;
-#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
-#         builder.initial_events(
-#             self.id,
-#             [UserEvent::Initialized {
-#                 id: self.id,
-#                 name: self.name,
-#             }],
-#         )
+#     type Id = Generated;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#         let id = builder.id();
+#         builder.initial_events([UserEvent::Initialized {
+#             id,
+#             name: self.name,
+#         }])
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
@@ -45,7 +43,6 @@ In the code below we have a `name` column in the `index` table that needs to be 
 #     }
 # }
 # pub struct NewUser {
-#     id: UserId,
 #     name: String
 # }
 use es_entity::*;
@@ -67,7 +64,7 @@ impl User {
 }
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User", id(supplied), columns(name = "String"))]
+#[es_repo(entity = "User", columns(name = "String"))]
 pub struct Users {
     pool: sqlx::PgPool
 }
@@ -81,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
     let users = Users { pool: init_pool().await? };
     
     // First create a user
-    let new_user = NewUser { id: UserId::new(), name: "Fred".to_string() };
+    let new_user = NewUser { name: "Fred".to_string() };
     let mut user = users.create(new_user).await?;
     
     // Now update the user
@@ -101,7 +98,7 @@ impl Users {
     pub async fn update(
         &self,
         entity: &mut User
-    ) -> Result<usize, es_entity::RepoWriteError<UserConstraintViolation>> {
+    ) -> Result<usize, es_entity::RepoFault> {
         // Check if there are any new events to persist
         if !entity.events().any_new() {
             return Ok(0);
@@ -141,8 +138,8 @@ The `update(accessor = "<>")` option modifies how the field is accessed on the `
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Supplied;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#     type Id = Generated;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -151,7 +148,7 @@ The `update(accessor = "<>")` option modifies how the field is accessed on the `
 #         unimplemented!()
 #     }
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 use es_entity::*;
 
 #[derive(EsEntity)]
@@ -169,7 +166,7 @@ impl User {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id(supplied),
+    entity = "User",
     columns(
         // Instead of using the `name` field on the `Entity` struct
         // the generated code will use: `entity.display_name()`
@@ -199,8 +196,8 @@ This is useful for columns that should never change after creation.
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Supplied;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#     type Id = Generated;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -212,7 +209,7 @@ This is useful for columns that should never change after creation.
 use es_entity::*;
 
 // Assume the name of a user is immutable.
-pub struct NewUser { id: UserId, name: String }
+pub struct NewUser { name: String }
 
 #[derive(EsEntity)]
 pub struct User {
@@ -225,7 +222,7 @@ pub struct User {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id(supplied),
+    entity = "User",
     columns(
         name(ty = "String", update(persist = false))
     )

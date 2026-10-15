@@ -21,17 +21,15 @@ Other than the `events` field additional fields can be exposed and populated dur
 #     Initialized { id: UserId, name: String },
 #     NameUpdated { name: String },
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Supplied;
-#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
-#         builder.initial_events(
-#             self.id,
-#             [UserEvent::Initialized {
-#                 id: self.id,
-#                 name: self.name,
-#             }],
-#         )
+#     type Id = Generated;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#         let id = builder.id();
+#         builder.initial_events([UserEvent::Initialized {
+#             id,
+#             name: self.name,
+#         }])
 #     }
 # }
 // Using derive_builder is optional but useful for hydrating

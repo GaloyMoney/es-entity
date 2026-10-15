@@ -21,8 +21,8 @@ This is useful for situations where you have a `1-to-n` relationship between 2 e
 #     NameUpdated { name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Supplied;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#     type Id = Generated;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -31,7 +31,7 @@ This is useful for situations where you have a `1-to-n` relationship between 2 e
 #         unimplemented!()
 #     }
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 # #[derive(EsEntity)]
 # pub struct User {
 #     pub id: UserId,
@@ -49,15 +49,13 @@ pub enum UserDocumentEvent {
 }
 
 # impl IntoEvents<UserDocumentEvent> for NewUserDocument {
-#     type Id = Supplied;
-#     fn into_events(self, builder: EntityEventsBuilder<UserDocumentEvent, Supplied>) -> EntityEvents<UserDocumentEvent> {
-#         builder.initial_events(
-#             self.id,
-#             [UserDocumentEvent::Initialized {
-#                 id: self.id,
-#                 owner_id: self.owner_id,
-#             }],
-#         )
+#     type Id = Generated;
+#     fn into_events(self, builder: EntityEventsBuilder<UserDocumentEvent, Generated>) -> EntityEvents<UserDocumentEvent> {
+#         let id = builder.id();
+#         builder.initial_events([UserDocumentEvent::Initialized {
+#             id,
+#             owner_id: self.owner_id,
+#         }])
 #     }
 # }
 # impl TryFromEvents<UserDocumentEvent> for UserDocument {
@@ -65,7 +63,7 @@ pub enum UserDocumentEvent {
 #         Ok(UserDocument { id: events.id().clone(), owner_id: UserId::new(), events })
 #     }
 # }
-pub struct NewUserDocument { id: UserDocumentId, owner_id: UserId }
+pub struct NewUserDocument { owner_id: UserId }
 
 #[derive(EsEntity)]
 pub struct UserDocument {
@@ -76,7 +74,7 @@ pub struct UserDocument {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "UserDocument", id(supplied),
+    entity = "UserDocument",
     columns(
         // The column name in the schema
         user_id(
@@ -106,8 +104,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Batch creating a few entities for illustration
     let new_docs = vec![
-        NewUserDocument { id: UserDocumentId::new(), owner_id },
-        NewUserDocument { id: UserDocumentId::new(), owner_id }
+        NewUserDocument { owner_id },
+        NewUserDocument { owner_id }
     ];
     docs.create_all(new_docs).await?;
 

@@ -16,7 +16,7 @@ fn list_for_<column>_by_<cursor>_include_deleted
 
 If you don't need the `_include_deleted` query variants, use `delete = "soft_without_queries"` instead:
 ```rust,ignore
-#[es_repo(entity = "User", id(supplied), columns(name = "String"), delete = "soft_without_queries")]
+#[es_repo(entity = "User", columns(name = "String"), delete = "soft_without_queries")]
 ```
 
 As a prerequisite the `index` table must include a `deleted` column:
@@ -39,15 +39,13 @@ CREATE TABLE users (
 # use serde::{Deserialize, Serialize};
 # es_entity::entity_id! { UserId }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Supplied;
-#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
-#         builder.initial_events(
-#             self.id,
-#             [UserEvent::Initialized {
-#                 id: self.id,
-#                 name: self.name,
-#             }],
-#         )
+#     type Id = Generated;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#         let id = builder.id();
+#         builder.initial_events([UserEvent::Initialized {
+#             id,
+#             name: self.name,
+#         }])
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
@@ -55,7 +53,7 @@ CREATE TABLE users (
 #         Ok(User { id: events.id().clone(), name: "Delyth".to_string(), events })
 #     }
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 use es_entity::*;
 
 #[derive(EsEvent, Debug, Serialize, Deserialize)]
@@ -86,7 +84,7 @@ impl User {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id(supplied),
+    entity = "User",
     columns(name = "String"),
     delete = "soft",
 )]
@@ -101,7 +99,7 @@ pub struct Users {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let users = Users { pool: init_pool().await? };
-    let new_user = NewUser { id: UserId::new(), name: "Delyth".to_string() };
+    let new_user = NewUser { name: "Delyth".to_string() };
     let mut user = users.create(new_user).await?;
 
     let found_user = users.maybe_find_by_name("Delyth").await?;

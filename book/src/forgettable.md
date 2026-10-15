@@ -169,14 +169,15 @@ impl TryFromEvents<CustomerEvent> for Customer {
     }
 }
 # impl IntoEvents<CustomerEvent> for NewCustomer {
-#     type Id = Supplied;
-#     fn into_events(self, builder: EntityEventsBuilder<CustomerEvent, Supplied>) -> EntityEvents<CustomerEvent> {
-#         builder.initial_events(self.id, [CustomerEvent::Initialized {
-#             id: self.id, name: Forgettable::new(self.name), email: self.email,
+#     type Id = Generated;
+#     fn into_events(self, builder: EntityEventsBuilder<CustomerEvent, Generated>) -> EntityEvents<CustomerEvent> {
+#         let id = builder.id();
+#         builder.initial_events([CustomerEvent::Initialized {
+#             id, name: Forgettable::new(self.name), email: self.email,
 #         }])
 #     }
 # }
-# pub struct NewCustomer { id: CustomerId, name: String, email: String }
+# pub struct NewCustomer { name: String, email: String }
 # fn main() {}
 ```
 
@@ -187,7 +188,7 @@ Enable forgettable on the repository with the `forgettable` attribute:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Customer", id(supplied),
+    entity = "Customer",
     // `name` is a forgettable index column (queryable, NULLed on forget);
     // `email` is a normal column.
     columns(name = "Forgettable<String>", email = "String"),
@@ -273,7 +274,7 @@ When `forgettable` is enabled and `delete = "soft"` is configured, calling `dele
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Customer", id(supplied),
+    entity = "Customer",
     columns(name = "Forgettable<String>", email = "String"),
     delete = "soft",
     forgettable,
@@ -318,7 +319,6 @@ pub struct Customer {
 }
 
 pub struct NewCustomer {
-    pub id: CustomerId,
     pub name: String,              // New entity holds the raw value
     // ...
 }

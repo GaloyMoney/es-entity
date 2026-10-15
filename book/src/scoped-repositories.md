@@ -13,7 +13,7 @@ Mark exactly one column with `scope`:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Customer", id(supplied),
+    entity = "Customer",
     columns(
         partner_id(ty = "PartnerId", scope),
         email(ty = "String"),
@@ -52,7 +52,7 @@ column, override it with `scope(variant = "...")`:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "CreditFacility", id(supplied),
+    entity = "CreditFacility",
     columns(
         partner_id(ty = "PartnerId", scope(variant = "Partner")),
         customer_id(ty = "CustomerId", scope),
@@ -86,7 +86,7 @@ carries the bare inner type, never `Option<T>`:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Party", id(supplied),
+    entity = "Party",
     columns(
         customer_id(ty = "Option<CustomerId>", scope(variant = "Customer")),
         name(ty = "String"),
@@ -123,7 +123,7 @@ that case, mark the id column as the scope with the repo-level `id` attribute:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Partner", id(supplied, scope),
+    entity = "Partner", id(scope),
     columns(
         name(ty = "String", list_by),
     )
@@ -153,7 +153,7 @@ overridden:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Partner", id(supplied, scope(variant = "Tenant")),
+    entity = "Partner", id(scope(variant = "Tenant")),
     columns(
         name(ty = "String", list_by),
     )
@@ -234,7 +234,7 @@ partner API, and a customer API over the same `CreditFacility` rows:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "CreditFacility", id(supplied),
+    entity = "CreditFacility",
     columns(
         partner_id(ty = "PartnerId", scope),
         customer_id(ty = "CustomerId", scope),

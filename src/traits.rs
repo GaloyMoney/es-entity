@@ -185,26 +185,21 @@ pub trait IntoEvents<E: EsEvent>: Sized {
 ///     events: EntityEvents<UserEvent>
 /// }
 ///
-/// // The 'NewEntity' type used for initialization. A deterministic id is
-/// // supplied by the `New*` type itself and the repo opts in with
-/// // `#[es_repo(id(supplied))]`.
+/// // The 'NewEntity' type used for initialization
 /// pub struct NewUser {
-///     id: UserId,
 ///     name: String
 /// }
 ///
 /// // The IntoEvents implementation which emits an event stream.
 /// impl IntoEvents<UserEvent> for NewUser {
-///     type Id = Supplied;
+///     type Id = Generated;
 ///
-///     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
-///         builder.initial_events(
-///             self.id,
-///             [UserEvent::Initialized {
-///                 id: self.id,
-///                 name: self.name,
-///             }],
-///         )
+///     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+///         let id = builder.id();
+///         builder.initial_events([UserEvent::Initialized {
+///             id,
+///             name: self.name,
+///         }])
 ///     }
 /// }
 ///

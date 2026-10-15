@@ -166,7 +166,7 @@ use es_entity::{clock::ClockHandle, EsRepo};
 use sqlx::PgPool;
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User", id(supplied))]
+#[es_repo(entity = "User")]
 pub struct Users {
     pool: PgPool,
     clock: Option<ClockHandle>,  // Optional: use if Some, fallback to global
@@ -204,7 +204,7 @@ Use `ClockHandle` (non-optional) when you always want to inject a clock:
 
 ```rust,ignore
 #[derive(EsRepo)]
-#[es_repo(entity = "User", id(supplied))]
+#[es_repo(entity = "User")]
 pub struct Users {
     pool: PgPool,
     clock: ClockHandle,  // Required: always use this clock

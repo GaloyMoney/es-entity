@@ -20,10 +20,10 @@ Given the query we arrived at in the previous section - this is what a `find_by_
 # pub enum UserEvent {
 #     Initialized { id: UserId, name: String },
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Supplied;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#     type Id = Generated;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -102,10 +102,10 @@ This simplifies the above implementation into:
 # pub enum UserEvent {
 #     Initialized { id: UserId, name: String },
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Supplied;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#     type Id = Generated;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -123,7 +123,7 @@ use sqlx::PgPool;
 use es_entity::*;
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User", id(supplied))]
+#[es_repo(entity = "User")]
 pub struct Users {
     pool: PgPool
 }

@@ -19,10 +19,10 @@ As a minimum you must specify the `entity` attribute and have a field that holds
 # pub enum UserEvent {
 #     Initialized { id: UserId, name: String },
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Supplied;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#     type Id = Generated;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -40,7 +40,7 @@ use es_entity::*;
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id(supplied),
+    entity = "User",
 
     // Defaults that get derived if not explicitly configured:
     // id = "UserId",                  // The id column; id(ty, generated, supplied, scope) in the `id` chapter
@@ -79,8 +79,8 @@ The most important of which is the `columns` option that configures the mapping 
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Supplied;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#     type Id = Generated;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -91,7 +91,7 @@ The most important of which is the `columns` option that configures the mapping 
 # }
 use es_entity::*;
 
-pub struct NewUser { id: UserId, name: String }
+pub struct NewUser { name: String }
 
 #[derive(EsEntity)]
 pub struct User {
@@ -102,7 +102,7 @@ pub struct User {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id(supplied),
+    entity = "User",
     columns(
         // Declares that there is a `name` column on the `index` table.
         // The rust type for it is `String`.

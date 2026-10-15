@@ -182,11 +182,12 @@ impl HeadSnapshot for Meter {
 #         builder.events(events).build()
 #     }
 # }
-# pub struct NewMeter { pub id: MeterId, pub label: String }
+# pub struct NewMeter { pub label: String }
 # impl IntoEvents<MeterEvent> for NewMeter {
-#     type Id = Supplied;
-#     fn into_events(self, builder: EntityEventsBuilder<MeterEvent, Supplied>) -> EntityEvents<MeterEvent> {
-#         builder.initial_events(self.id, [MeterEvent::Initialized { id: self.id, label: self.label }])
+#     type Id = Generated;
+#     fn into_events(self, builder: EntityEventsBuilder<MeterEvent, Generated>) -> EntityEvents<MeterEvent> {
+#         let id = builder.id();
+#         builder.initial_events([MeterEvent::Initialized { id, label: self.label }])
 #     }
 # }
 # fn main() {}
@@ -220,7 +221,7 @@ idempotency_guard!(
 
 ```rust,ignore
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Meter", id(supplied), snapshot, columns(label(ty = "String")))]
+#[es_repo(entity = "Meter", snapshot, columns(label(ty = "String")))]
 pub struct MeterRepo {
     pool: PgPool,
 }

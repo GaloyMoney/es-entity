@@ -21,15 +21,13 @@ In the code below we want to include a `name` column in the `index` table that r
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Supplied;
-#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
-#         builder.initial_events(
-#             self.id,
-#             [UserEvent::Initialized {
-#                 id: self.id,
-#                 name: self.name,
-#             }],
-#         )
+#     type Id = Generated;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#         let id = builder.id();
+#         builder.initial_events([UserEvent::Initialized {
+#             id,
+#             name: self.name,
+#         }])
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
@@ -40,7 +38,6 @@ In the code below we want to include a `name` column in the `index` table that r
 use es_entity::*;
 
 pub struct NewUser {
-    id: UserId,
     // The `name` attribute on the `NewEntity` must be accessible
     // for inserting into the `index` table.
     name: String
@@ -56,7 +53,7 @@ pub struct User {
 }
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User", id(supplied), columns(name = "String"))]
+#[es_repo(entity = "User", columns(name = "String"))]
 pub struct Users {
     pool: sqlx::PgPool
 }
@@ -68,7 +65,7 @@ pub struct Users {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let users = Users { pool: init_pool().await? };
-    let new_user = NewUser { id: UserId::new(), name: "Fred".to_string() };
+    let new_user = NewUser { name: "Fred".to_string() };
     // The `create` fn takes a `NewEntity` and returns a persisted and hydrated `Entity`
     let _user = users.create(new_user).await?;
 
@@ -82,8 +79,9 @@ impl Users {
     pub async fn create(
         &self,
         new_entity: NewUser
-    ) -> Result<User, es_entity::RepoWriteError<UserConstraintViolation>> {
-        let id = &new_entity.id;
+    ) -> Result<User, es_entity::RepoFault> {
+        // The repository mints the id
+        let id = &UserId::new();
         // The attribute specified in the `columns` option
         let name = &new_entity.name;
 
@@ -118,8 +116,8 @@ The `create(accessor = "<>")` option modifies how the field is accessed on the `
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Supplied;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#     type Id = Generated;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -136,7 +134,7 @@ The `create(accessor = "<>")` option modifies how the field is accessed on the `
 # }
 use es_entity::*;
 
-pub struct NewUser { id: UserId, some_hidden_field: String }
+pub struct NewUser { some_hidden_field: String }
 impl NewUser {
     fn my_name(&self) -> String {
         self.some_hidden_field.clone()
@@ -145,7 +143,7 @@ impl NewUser {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id(supplied),
+    entity = "User",
     columns(
         // Instead of using the `name` field on the `NewEntity` struct
         // the generated code will use: `new_entity.my_name()`
@@ -175,8 +173,8 @@ This is useful for dynamic values that don't become known until later on in the 
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Supplied;
-#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
+#     type Id = Generated;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -194,11 +192,11 @@ This is useful for dynamic values that don't become known until later on in the 
 use es_entity::*;
 
 // There is no `name` attribute because we do not initially insert into this column.
-pub struct NewUser { id: UserId }
+pub struct NewUser;
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id(supplied),
+    entity = "User",
     columns(
         name(ty = "String", create(persist = false)),
     )

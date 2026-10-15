@@ -200,17 +200,13 @@ This leverages the rust module system to enforce that the children cannot be acc
 # }
 # 
 # #[derive(Debug, Clone, Builder)]
-# pub struct NewSubscription {
-#     pub id: SubscriptionId,
-# }
+# pub struct NewSubscription {}
 # 
 # impl IntoEvents<SubscriptionEvent> for NewSubscription {
-#     type Id = Supplied;
-#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, Supplied>) -> EntityEvents<SubscriptionEvent> {
-#         builder.initial_events(
-#             self.id,
-#             vec![SubscriptionEvent::Initialized { id: self.id }],
-#         )
+#     type Id = Generated;
+#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, Generated>) -> EntityEvents<SubscriptionEvent> {
+#         let id = builder.id();
+#         builder.initial_events(vec![SubscriptionEvent::Initialized { id }])
 #     }
 # }
 // private struct
@@ -219,7 +215,7 @@ struct BillingPeriods {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Subscription", id(supplied))]
+#[es_repo(entity = "Subscription")]
 pub struct Subscriptions {
     pool: sqlx::PgPool,
     
@@ -434,16 +430,12 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     }
 # }
 # #[derive(Debug, Clone, Builder)]
-# pub struct NewSubscription {
-#     pub id: SubscriptionId,
-# }
+# pub struct NewSubscription {}
 # impl IntoEvents<SubscriptionEvent> for NewSubscription {
-#     type Id = Supplied;
-#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, Supplied>) -> EntityEvents<SubscriptionEvent> {
-#         builder.initial_events(
-#             self.id,
-#             vec![SubscriptionEvent::Initialized { id: self.id }],
-#         )
+#     type Id = Generated;
+#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, Generated>) -> EntityEvents<SubscriptionEvent> {
+#         let id = builder.id();
+#         builder.initial_events(vec![SubscriptionEvent::Initialized { id }])
 #     }
 # }
 # #[derive(EsRepo, Debug)]
@@ -457,7 +449,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     pool: sqlx::PgPool,
 # }
 # #[derive(EsRepo, Debug)]
-# #[es_repo(entity = "Subscription", id(supplied))]
+# #[es_repo(entity = "Subscription")]
 # pub struct Subscriptions {
 #     pool: sqlx::PgPool,
 #     #[es_repo(nested)]
@@ -478,9 +470,7 @@ async fn main() -> anyhow::Result<()> {
     let subscriptions = Subscriptions::new(pool);
     
     // Create a new subscription
-    let subscription_id = SubscriptionId::new();
-    let new_subscription = NewSubscription { id: subscription_id };
-    let mut subscription = subscriptions.create(new_subscription).await?;
+    let mut subscription = subscriptions.create(NewSubscription {}).await?;
     
     // Start a billing period
     subscription.start_new_billing_period();
@@ -499,7 +489,7 @@ async fn main() -> anyhow::Result<()> {
     subscriptions.update(&mut subscription).await?;
     
     // Load the subscription - nested entities are automatically loaded
-    let loaded = subscriptions.find_by_id(subscription_id).await?;
+    let loaded = subscriptions.find_by_id(subscription.id).await?;
     
     // Access the current billing period
     if let Some(current_period) = loaded.current_billing_period() {

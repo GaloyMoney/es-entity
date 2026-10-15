@@ -120,7 +120,7 @@ column with `virtual = "<sql>"` plus bare `list_for`:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Order", id(supplied),
+    entity = "Order",
     columns(
         status(ty = "OrderStatus", list_for),
         has_open_ticket(
@@ -170,7 +170,7 @@ SQL text:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Order", id(supplied),
+    entity = "Order",
     columns(
         status(ty = "OrderStatus", list_for),
         min_open_tickets(
@@ -241,12 +241,10 @@ custom `entity_id!` type) works here too.
 #     NameUpdated { name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     type Id = Supplied;
-#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Supplied>) -> EntityEvents<UserEvent> {
-#         builder.initial_events(
-#             self.id,
-#             [UserEvent::Initialized { id: self.id, name: self.name }],
-#         )
+#     type Id = Generated;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, Generated>) -> EntityEvents<UserEvent> {
+#         let id = builder.id();
+#         builder.initial_events([UserEvent::Initialized { id, name: self.name }])
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
@@ -261,7 +259,7 @@ custom `entity_id!` type) works here too.
 #         Ok(User { id: events.id().clone(), name, events })
 #     }
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 # #[derive(EsEntity)]
 # pub struct User {
 #     pub id: UserId,
@@ -272,7 +270,7 @@ use es_entity::*;
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id(supplied),
+    entity = "User",
     columns(
         name(ty = "String", list_for(by(id, created_at)))
     )

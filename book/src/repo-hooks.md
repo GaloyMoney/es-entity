@@ -14,7 +14,7 @@ Runs after events have been written to the database but before the entity is ret
 ### Configuration
 
 ```rust,ignore
-#[es_repo(entity = "User", id(supplied), post_persist_hook = "on_persist")]
+#[es_repo(entity = "User", post_persist_hook = "on_persist")]
 ```
 
 ### Hook method
@@ -99,7 +99,7 @@ Runs synchronously every time an entity is reconstructed from its event stream �
 ### Configuration
 
 ```rust,ignore
-#[es_repo(entity = "User", id(supplied), post_hydrate_hook = "validate_user")]
+#[es_repo(entity = "User", post_hydrate_hook = "validate_user")]
 ```
 
 ### Hook method
@@ -122,7 +122,7 @@ impl Users {
 
 ### Error propagation
 
-The `Fatal` is the calling operation's result — `RepoWriteError<C>` on `create`/`create_all`, `RepoFault` on the read operations. To recognise it, look for the hook's own error type in the source chain:
+The `Fatal` is the calling operation's result — `RepoWriteError<C>` on `create`/`create_all` (or `RepoFault` for a repo whose create cannot reject), `RepoFault` on the read operations. To recognise it, look for the hook's own error type in the source chain:
 
 ```rust,ignore
 use std::error::Error as _;
@@ -151,7 +151,7 @@ During `update`, only `post_persist_hook` runs, since the entity is already in m
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id(supplied),
+    entity = "User",
     post_persist_hook = "audit_persist",
     post_hydrate_hook = "validate_user",
 )]
