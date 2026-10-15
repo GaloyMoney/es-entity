@@ -478,33 +478,93 @@ impl RepositoryOptions {
             })
     }
 
-    /// Whether `create_or_find_by_id_in_op` is generated: on a repo whose
-    /// `New*` types bring their own id, with a primary key on the id column
-    /// to catch the conflict on, and no scope columns (a scoped repo's
-    /// `find_by_id_in_op` needs a scope the create has no way to name).
-    pub fn create_or_find_enabled(&self) -> bool {
-        !self.id_source().is_repo()
-            && self.columns.scope_columns().is_empty()
-            && crate::repo::error_types::enumerate_constraints(self)
+    /// The keys `create_or_find_by_<key>_in_op` is generated for.
+    ///
+    /// Never on a scoped repo (`find_by_id_in_op` of a scoped repo needs a
+    /// scope the create has no way to name) nor on a soft-deleting one (a
+    /// soft-deleted row still holds its key but is invisible to the lookup).
+    ///
+    /// The id key needs caller-chosen ids and a primary key on the id
+    /// column. Any other key needs a unique constraint or non-partial unique
+    /// index that the migrations declare for the table, on columns the
+    /// create writes as-is: `ON CONFLICT (<columns>)` can infer exactly that,
+    /// and cannot name a partial index without its predicate.
+    pub fn ensure_keys(&self) -> Vec<EnsureKey> {
+        if !self.columns.scope_columns().is_empty() || self.delete.is_soft() {
+            return Vec::new();
+        }
+        let table = self.table_name();
+        let catalog = self.index_catalog();
+        let catalog_table = table.to_lowercase();
+        let constraints = crate::repo::error_types::enumerate_constraints(self);
+        let columns: Vec<_> = self.columns.column_enum_columns().collect();
+        let repo_ids = self.id_source().is_repo();
+        let mut keys = Vec::new();
+        for (name, kind, col_names) in &constraints {
+            if !matches!(kind, crate::index_catalog::ConstraintKind::Unique) {
+                continue;
+            }
+            let is_pkey = crate::repo::error_types::is_id_pkey(self, name, kind, col_names);
+            if is_pkey && repo_ids {
+                continue;
+            }
+            if !is_pkey {
+                let declared = catalog.constraints.iter().any(|c| {
+                    c.table == catalog_table
+                        && c.name == *name
+                        && matches!(c.kind, crate::index_catalog::ConstraintKind::Unique)
+                });
+                let partial = catalog.entries.iter().any(|e| {
+                    e.table == catalog_table && e.partial && e.name.as_deref() == Some(name)
+                });
+                if !declared || partial || col_names.is_empty() {
+                    continue;
+                }
+            }
+            let key_columns: Option<Vec<&Column>> = col_names
                 .iter()
-                .any(|(name, kind, col_names)| {
-                    crate::repo::error_types::is_id_pkey(self, name, kind, col_names)
-                })
-    }
-
-    /// Whether `create_or_find_by_id_in_op` can reject: the create family
-    /// minus the primary key (which the method turns into `Found`), or any
-    /// nested child.
-    pub fn create_or_find_can_reject(&self) -> bool {
-        self.any_nested()
-            || crate::repo::error_types::enumerate_constraints(self)
+                .map(|n| columns.iter().find(|c| c.name() == n).copied())
+                .collect();
+            let Some(key_columns) = key_columns else {
+                continue;
+            };
+            if !key_columns.iter().all(|c| c.is_ensurable()) {
+                continue;
+            }
+            if !is_pkey && key_columns.len() == 1 && key_columns[0].is_id() {
+                continue;
+            }
+            let suffix = key_columns
                 .iter()
-                .filter(|(_, kind, _)| {
-                    !matches!(kind, crate::index_catalog::ConstraintKind::ForeignKey)
-                })
-                .any(|(name, kind, col_names)| {
-                    !crate::repo::error_types::is_id_pkey(self, name, kind, col_names)
-                })
+                .map(|c| c.name().to_string())
+                .collect::<Vec<_>>()
+                .join("_and_");
+            let can_reject = self.any_nested()
+                || constraints.iter().any(|(other, other_kind, other_cols)| {
+                    !matches!(other_kind, crate::index_catalog::ConstraintKind::ForeignKey)
+                        && other != name
+                        && !(repo_ids
+                            && crate::repo::error_types::is_id_pkey(
+                                self, other, other_kind, other_cols,
+                            ))
+                });
+            keys.push(EnsureKey {
+                residual: syn::Ident::new(
+                    &format!(
+                        "{}EnsureBy{}Rejection",
+                        self.entity_ident,
+                        suffix.to_case(Case::UpperCamel)
+                    ),
+                    Span::call_site(),
+                ),
+                constraint: name.clone(),
+                columns: key_columns.iter().map(|c| c.name().clone()).collect(),
+                column_types: key_columns.iter().map(|c| c.ty().clone()).collect(),
+                suffix,
+                can_reject,
+            });
+        }
+        keys
     }
 
     fn own_shape(can_reject: bool) -> proc_macro2::TokenStream {
@@ -932,6 +992,99 @@ mod foreign_key_tests {
                 "\"foreign key violation on fk_widgets.fk_widgets_owner_id_fkey (owner_id)\""
             ),
             "{generated}"
+        );
+    }
+}
+
+/// One key `create_or_find_by_<suffix>_in_op` is generated for.
+#[derive(Debug, Clone)]
+pub struct EnsureKey {
+    /// The key's columns joined by `_and_`: the method's name suffix.
+    pub suffix: String,
+    /// `{Entity}EnsureBy{Suffix}Rejection`, the constraint violation without
+    /// this key; generated only when `can_reject`.
+    pub residual: syn::Ident,
+    pub constraint: String,
+    pub columns: Vec<syn::Ident>,
+    pub column_types: Vec<syn::Type>,
+    /// Whether any rejection remains once this key is `Found`.
+    pub can_reject: bool,
+}
+
+#[cfg(test)]
+mod ensure_key_tests {
+    use darling::FromDeriveInput;
+    use syn::parse_quote;
+
+    use super::*;
+
+    const COLUMNS: &str = r#"code(ty = "String"), account(ty = "String"), currency(ty = "String"), reference(ty = "String"), lowered(ty = "String")"#;
+
+    fn suffixes(extra: &str, columns: &str, dir: &str) -> Vec<String> {
+        let extra: proc_macro2::TokenStream = extra.parse().unwrap();
+        let columns: proc_macro2::TokenStream = columns.parse().unwrap();
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Widget", migrations_dir = #dir, columns(#columns) #extra)]
+            struct Widgets {
+                pool: sqlx::PgPool,
+            }
+        };
+        let mut keys: Vec<_> = RepositoryOptions::from_derive_input(&input)
+            .unwrap()
+            .ensure_keys()
+            .into_iter()
+            .map(|k| k.suffix)
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    #[test]
+    fn declared_unique_constraints_are_keys_but_partial_and_expression_indexes_are_not() {
+        assert_eq!(
+            suffixes("", COLUMNS, "tests/fixtures/ensure_keys"),
+            ["account_and_currency", "code"]
+        );
+    }
+
+    #[test]
+    fn caller_ids_add_the_id_key() {
+        assert_eq!(
+            suffixes(
+                ", id(source = caller)",
+                COLUMNS,
+                "tests/fixtures/ensure_keys"
+            ),
+            ["account_and_currency", "code", "id"]
+        );
+    }
+
+    #[test]
+    fn a_column_the_create_does_not_write_is_not_a_key() {
+        let columns = COLUMNS.replace(
+            r#"code(ty = "String")"#,
+            r#"code(ty = "String", create(persist = false))"#,
+        );
+        assert_eq!(
+            suffixes("", &columns, "tests/fixtures/ensure_keys"),
+            ["account_and_currency"]
+        );
+    }
+
+    #[test]
+    fn without_a_catalog_no_key_is_assumed_unique() {
+        assert!(suffixes("", COLUMNS, "tests/fixtures/no_such_dir").is_empty());
+    }
+
+    #[test]
+    fn a_soft_deleting_repo_has_no_keys() {
+        assert!(
+            suffixes(
+                r#", delete = "soft""#,
+                COLUMNS,
+                "tests/fixtures/ensure_keys"
+            )
+            .is_empty()
         );
     }
 }

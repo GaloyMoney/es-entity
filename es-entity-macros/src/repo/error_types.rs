@@ -150,6 +150,7 @@ impl<'a> ErrorTypes<'a> {
         let constraints = enumerate_constraints(opts);
         let mut taken = HashSet::new();
         let mut variants = Vec::new();
+        let mut named_variants: Vec<(String, syn::Ident, TokenStream)> = Vec::new();
         let mut classifiers = Vec::new();
         let mut set_values = Vec::new();
         let mut payloads = Vec::new();
@@ -191,11 +192,13 @@ impl<'a> ErrorTypes<'a> {
                 let ty = cols[0].ty();
                 taken.insert("Pkey".to_string());
                 let description = format!("Violates the `{name}` primary key constraint.");
-                variants.push(quote! {
+                let variant_def = quote! {
                     #[error("{0}")]
                     #[rejection(code = #name, description = #description)]
                     Pkey(#[source] es_entity::IdConflict<#ty>)
-                });
+                };
+                variants.push(variant_def.clone());
+                named_variants.push((name.clone(), format_ident!("Pkey"), variant_def));
                 // `kind` is always `Unique` here: both sources that feed
                 // `constraints` (the catalog's own `PRIMARY KEY` handling,
                 // and the gap-filling synthesis above) record a primary key
@@ -250,11 +253,13 @@ impl<'a> ErrorTypes<'a> {
                 ConstraintKind::Check => quote!(Check),
             };
             let description = format!("Violates the `{name}` constraint.");
-            variants.push(quote! {
+            let variant_def = quote! {
                 #[error("{0}")]
                 #[rejection(code = #name, description = #description)]
                 #variant(#[source] es_entity::ConstraintConflict<#ty>)
-            });
+            };
+            variants.push(variant_def.clone());
+            named_variants.push((name.clone(), variant.clone(), variant_def));
             classifiers.push(quote! {
                 #name => Ok(Self::#variant(es_entity::ConstraintConflict::new(None, #table, #name, es_entity::ConstraintKind::#kind, source)))
             });
@@ -276,6 +281,50 @@ impl<'a> ErrorTypes<'a> {
         } else {
             quote!(#[es_entity::errlanes::compose(#(#imports),*)])
         };
+        let residuals: Vec<_> = opts
+            .ensure_keys()
+            .into_iter()
+            .filter(|key| key.can_reject)
+            .map(|key| {
+                let kept: Vec<_> = named_variants
+                    .iter()
+                    .filter(|(name, _, _)| *name != key.constraint)
+                    .collect();
+                let definitions = kept.iter().map(|(_, _, definition)| definition);
+                let idents: Vec<_> = kept.iter().map(|(_, ident, _)| ident).collect();
+                let residual = &key.residual;
+                quote! {
+                    #compose
+                    #[derive(Debug, Clone, es_entity::ConstraintRejection)]
+                    pub enum #residual { #(#definitions),* }
+                    impl #residual {
+                        #[doc(hidden)]
+                        pub fn from_own(violation: #cv) -> Result<Self, #cv> {
+                            match violation {
+                                #(#cv::#idents(conflict) => Ok(Self::#idents(conflict)),)*
+                                other => Err(other),
+                            }
+                        }
+                        #[doc(hidden)]
+                        pub fn narrow_write(
+                            fail: es_entity::RepoWriteError<#cv>,
+                        ) -> es_entity::RepoWriteError<Self> {
+                            match fail.rejected() {
+                                Ok(violation) => match Self::from_own(violation) {
+                                    Ok(rejection) => es_entity::errlanes::Fail::Rejected(rejection),
+                                    Err(other) => es_entity::errlanes::Fatal::invariant(
+                                        "the ensured key conflicted despite ON CONFLICT DO NOTHING",
+                                    )
+                                    .with_context(other.constraint_name().to_owned())
+                                    .into(),
+                                },
+                                Err(fault) => es_entity::errlanes::Fail::from(fault),
+                            }
+                        }
+                    }
+                }
+            })
+            .collect();
         quote! {
             #(#payloads)*
             #[doc(hidden)]
@@ -300,6 +349,7 @@ impl<'a> ErrorTypes<'a> {
                 #pkey_from_database
             }
             #write_error
+            #(#residuals)*
         }
     }
 }

@@ -28,10 +28,9 @@ pub struct CreateFn<'a> {
     /// The generated signatures' error type, see
     /// `RepositoryOptions::create_error_ty`.
     write_error_ty: TokenStream,
-    /// Whether `create_or_find_by_id_in_op` is generated, and whether it can
-    /// reject, see `RepositoryOptions::create_or_find_enabled`.
-    create_or_find: bool,
-    create_or_find_can_reject: bool,
+    /// The keys a `create_or_find_by_<key>_in_op` is generated for, see
+    /// `RepositoryOptions::ensure_keys`.
+    ensure_keys: Vec<EnsureKey>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -42,8 +41,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
             id_source: opts.id_source(),
             can_reject: opts.create_can_reject(),
             write_error_ty: opts.create_error_ty(),
-            create_or_find: opts.create_or_find_enabled(),
-            create_or_find_can_reject: opts.create_or_find_can_reject(),
+            ensure_keys: opts.ensure_keys(),
             in_op_only: opts.in_op_only(),
             table_name: opts.table_name(),
             entity: opts.entity(),
@@ -121,11 +119,16 @@ impl ToTokens for CreateFn<'_> {
             )
         };
 
-        let nested = self.nested_fn_names.iter().map(|f| {
-            quote! {
-                self.#f(op, &mut [&mut entity]).await.map_err(es_entity::LiftNestedWrite::<#constraint_violation>::lift_nested)?;
-            }
-        });
+        let nested = |target: &TokenStream| -> Vec<TokenStream> {
+            self.nested_fn_names
+                .iter()
+                .map(|f| {
+                    quote! {
+                        self.#f(op, &mut [&mut entity]).await.map_err(es_entity::LiftNestedWrite::<#target>::lift_nested)?;
+                    }
+                })
+                .collect()
+        };
         let maybe_mut_entity = if self.nested_fn_names.is_empty() {
             quote! { entity }
         } else {
@@ -159,22 +162,26 @@ impl ToTokens for CreateFn<'_> {
             offset_param: None,
         };
 
-        let query = format!(
-            "WITH new_row AS (INSERT INTO {} ({}, created_at) VALUES ({}, COALESCE(${}, NOW())) RETURNING id) {}",
-            table_name,
-            column_names.join(", "),
-            placeholders,
-            now_p,
-            events_insert.sql(&source, now_p, now_p + 1),
-        );
+        let query = |on_conflict: &str| {
+            format!(
+                "WITH new_row AS (INSERT INTO {} ({}, created_at) VALUES ({}, COALESCE(${}, NOW())){} RETURNING id) {}",
+                table_name,
+                column_names.join(", "),
+                placeholders,
+                now_p,
+                on_conflict,
+                events_insert.sql(&source, now_p, now_p + 1),
+            )
+        };
 
         // The event arrays are encoded after the index columns, whose borrows
         // on the new entity must end before it is consumed into events.
-        let event_arg_adds = events_insert
+        let event_arg_adds: Vec<_> = events_insert
             .arg_exprs(&source)
             .into_iter()
             .skip(1)
-            .map(|expr| quote! { __query_args.add(#expr).map_err(sqlx::Error::Encode)?; });
+            .map(|expr| quote! { __query_args.add(#expr).map_err(sqlx::Error::Encode)?; })
+            .collect();
         let ctx_var = if self.event_ctx {
             quote! { let contexts = events.serialize_new_event_contexts(); }
         } else {
@@ -252,57 +259,124 @@ impl ToTokens for CreateFn<'_> {
             }
         });
 
-        // The conflict on the id's primary key becomes `Found`; every other
-        // outcome of the create is the create's own. The create runs on a
-        // savepoint so the conflict does not poison the caller's operation.
-        let create_or_find = if self.create_or_find {
-            let (ensure_error_ty, other_error) = if self.create_or_find_can_reject {
+        let id_ty = self.id;
+        let create_query = query("");
+        let create_nested = nested(&quote! { #constraint_violation });
+        let ensure_fns = self.ensure_keys.iter().map(|key| {
+            let fn_name = quote::format_ident!("create_or_find_by_{}_in_op", key.suffix);
+            let residual = &key.residual;
+            let (error_ty, target, ensure_constraint_values, map_error) = if key.can_reject {
                 (
-                    quote! { es_entity::RepoWriteError<#constraint_violation> },
-                    quote! { other },
+                    quote! { es_entity::RepoWriteError<#residual> },
+                    quote! { #residual },
+                    self.columns.constraint_values(entity, true),
+                    quote! {
+                        .map_err(|e| {
+                            let __fail = #classify_create;
+                            #residual::narrow_write(
+                                __fail.map_rejected(|r| r.with_attempted(__constraint_values)),
+                            )
+                        })?
+                    },
                 )
             } else {
                 (
                     quote! { es_entity::RepoFault },
-                    quote! { other.narrow_rejected() },
+                    quote! { #constraint_violation },
+                    quote! {},
+                    quote! { .map_err(|e| #classify_create.narrow_rejected())? },
                 )
             };
+            let conflict_target = key.columns.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", ");
+            let ensure_query = query(&format!(" ON CONFLICT ({conflict_target}) DO NOTHING"));
+            let lookup_query = format!(
+                "SELECT id FROM {} WHERE {}",
+                table_name,
+                key.columns
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| format!("{c} = ${}", i + 1))
+                    .collect::<Vec<_>>()
+                    .join(" AND ")
+            );
+            let missing_context = format!(
+                "{table_name} ({conflict_target}): ON CONFLICT DO NOTHING inserted no row and no row is visible"
+            );
+            let key_columns = &key.columns;
+            let key_types = &key.column_types;
+            let ensure_nested = nested(&target);
+            let docs = format!(
+                "Creates the entity, or returns the stored one when a row with the same `{conflict_target}` already exists. \
+                 A `Found` result drops `new_entity`'s events and does not run the post-persist hook."
+            );
             quote! {
-                /// Creates the entity, or — when an entity with this id
-                /// already exists — returns the stored one. The conflict on the
-                /// primary key is the only outcome that is not an error; every
-                /// other constraint still rejects.
-                pub async fn create_or_find_by_id_in_op<OP>(
+                #[doc = #docs]
+                pub async fn #fn_name<OP>(
                     &self,
                     op: &mut OP,
                     new_entity: <#entity as es_entity::EsEntity>::New
-                ) -> Result<es_entity::Ensured<#entity>, #ensure_error_ty>
+                ) -> Result<es_entity::Ensured<#entity>, #error_ty>
                 where
                     OP: es_entity::AtomicOperation + ?Sized
                 {
-                    use es_entity::SavepointOperation as _;
+                    use es_entity::prelude::sqlx::{Arguments, Row};
 
-                    let mut __savepoint = op.begin_savepoint().await?;
-                    match self.create_in_op(&mut __savepoint, new_entity).await {
-                        Ok(entity) => {
-                            __savepoint.release().await?;
-                            Ok(es_entity::Ensured::Created(entity))
-                        }
-                        Err(es_entity::Fail::Rejected(#constraint_violation::Pkey(conflict))) => {
-                            __savepoint.rollback().await?;
-                            let entity = self.find_by_id_in_op(&mut *op, conflict.attempted).await?;
-                            Ok(es_entity::Ensured::Found(entity))
-                        }
-                        Err(other) => {
-                            __savepoint.rollback().await?;
-                            Err(#other_error)
-                        }
+                    #resolve_id
+                    #assignments
+                    #attempted_id
+                    #ensure_constraint_values
+
+                    let mut __query_args = sqlx::postgres::PgArguments::default();
+                    #(#arg_adds)*
+                    __query_args.add(op.maybe_now()).map_err(sqlx::Error::Encode)?;
+
+                    let mut __key_args = sqlx::postgres::PgArguments::default();
+                    #(__key_args.add(#key_columns as &#key_types).map_err(sqlx::Error::Encode)?;)*
+
+                    let mut events = Self::convert_new(new_entity, #builder);
+                    #caller_id_check
+                    let events_types = events.new_event_types();
+                    let serialized_events = events.serialize_new_events();
+                    #ctx_var
+                    #(#event_arg_adds)*
+
+                    let rows = sqlx::query_with(#ensure_query, __query_args)
+                        .fetch_all(op.as_executor())
+                        .await
+                        #map_error;
+
+                    if rows.is_empty() {
+                        let __found_id: Option<#id_ty> = sqlx::query_scalar_with(#lookup_query, __key_args)
+                            .fetch_optional(op.as_executor())
+                            .await?;
+                        let Some(__found_id) = __found_id else {
+                            return Err(es_entity::errlanes::Transient::new(
+                                es_entity::errlanes::TransientKind::OptimisticConflict,
+                            )
+                            .with_context(#missing_context)
+                            .into());
+                        };
+                        let entity = self.find_by_id_in_op(&mut *op, __found_id).await?;
+                        return Ok(es_entity::Ensured::Found(entity));
                     }
+
+                    #forgettable_code
+
+                    let recorded_at = rows
+                        .first()
+                        .ok_or(sqlx::Error::RowNotFound)
+                        .and_then(|row| row.try_get("recorded_at"))?;
+                    let n_events = events.mark_new_events_persisted_at(recorded_at);
+                    let #maybe_mut_entity = Self::hydrate_entity(events)?;
+
+                    #(#ensure_nested)*
+
+                    #post_hydrate_check
+                    #post_persist_check
+                    Ok(es_entity::Ensured::Created(entity))
                 }
             }
-        } else {
-            quote! {}
-        };
+        });
 
         tokens.append_all(quote! {
             #[inline(always)]
@@ -358,7 +432,7 @@ impl ToTokens for CreateFn<'_> {
                     #ctx_var
                     #(#event_arg_adds)*
 
-                    let rows = sqlx::query_with(#query, __query_args)
+                    let rows = sqlx::query_with(#create_query, __query_args)
                         .fetch_all(op.as_executor())
                         .await
                         .map_err(|e| #classify_create)
@@ -373,7 +447,7 @@ impl ToTokens for CreateFn<'_> {
                     let n_events = events.mark_new_events_persisted_at(recorded_at);
                     let #maybe_mut_entity = Self::hydrate_entity(events)?;
 
-                    #(#nested)*
+                    #(#create_nested)*
 
                     #post_hydrate_check
                     #post_persist_check
@@ -384,7 +458,7 @@ impl ToTokens for CreateFn<'_> {
                 __result
             }
 
-            #create_or_find
+            #(#ensure_fns)*
         });
     }
 }
@@ -421,8 +495,7 @@ mod tests {
             id_source: IdSourceOpt::Caller,
             can_reject: true,
             write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
-            create_or_find: false,
-            create_or_find_can_reject: false,
+            ensure_keys: Vec::new(),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -542,8 +615,7 @@ mod tests {
             id_source: IdSourceOpt::default(),
             can_reject: false,
             write_error_ty: quote! { es_entity::RepoFault },
-            create_or_find: false,
-            create_or_find_can_reject: false,
+            ensure_keys: Vec::new(),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -607,8 +679,7 @@ mod tests {
             id_source: IdSourceOpt::Caller,
             can_reject: true,
             write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
-            create_or_find: false,
-            create_or_find_can_reject: false,
+            ensure_keys: Vec::new(),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
