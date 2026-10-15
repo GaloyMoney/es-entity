@@ -131,6 +131,20 @@ impl ToTokens for CreateAllFn<'_> {
         } else {
             quote! {}
         };
+        let (capture_supplied_ids, supplied_ids_check) = if generated {
+            (quote! {}, quote! {})
+        } else {
+            (
+                quote! {
+                    let __supplied_ids: Vec<#id_type> = id_collection.iter().map(|id| <#id_type as Clone>::clone(id)).collect();
+                },
+                quote! {
+                    if all_events.iter().zip(__supplied_ids.iter()).any(|(events, id)| events.id() != id) {
+                        return Err(errlanes::Fatal::invariant("supplied id differs from the id the entity was built under").into());
+                    }
+                },
+            )
+        };
         let convert_all = if generated {
             let builder = self.id_policy.builder(quote! { id.clone() });
             quote! {
@@ -333,9 +347,11 @@ impl ToTokens for CreateAllFn<'_> {
                     // they hold on `new_entities` end here, freeing it to be
                     // consumed into the event stream below.
                     #arg_collection
+                    #capture_supplied_ids
                     #(#arg_adds)*
 
                     let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event, <#entity as es_entity::EsEntity>::Snapshot>> = #convert_all;
+                    #supplied_ids_check
 
                     #batch_declarations
                     let mut n_persisted: Vec<usize> = Vec::new();
@@ -476,10 +492,14 @@ mod tests {
                         name_collection.push(name);
                     }
 
+                    let __supplied_ids: Vec<EntityId> = id_collection.iter().map(|id| <EntityId as Clone>::clone(id)).collect();
                     __query_args.add(id_collection).map_err(sqlx::Error::Encode)?;
                     __query_args.add(name_collection).map_err(sqlx::Error::Encode)?;
 
                     let mut all_events: Vec<es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event, <Entity as es_entity::EsEntity>::Snapshot>> = new_entities.into_iter().map(|new_entity| Self::convert_new(new_entity, es_entity::EntityEventsBuilder::__supplied())).collect();
+                    if all_events.iter().zip(__supplied_ids.iter()).any(|(events, id)| events.id() != id) {
+                        return Err(errlanes::Fatal::invariant("supplied id differs from the id the entity was built under").into());
+                    }
 
                     let mut all_ids: Vec<&EntityId> = Vec::new();
                     let mut all_sequences: Vec<i32> = Vec::new();

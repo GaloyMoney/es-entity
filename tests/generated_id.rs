@@ -342,6 +342,48 @@ async fn supplied_id_that_differs_from_the_container_id_is_a_fault() -> anyhow::
 }
 
 #[tokio::test]
+async fn create_all_with_a_supplied_id_that_differs_from_the_container_id_writes_nothing()
+-> anyhow::Result<()> {
+    let doohickeys = Doohickeys::new(helpers::init_pool().await?);
+    let consistent = DoohickeyId::new();
+    let mismatched = DoohickeyId::new();
+
+    let mut op = doohickeys.begin_op().await?;
+    let err = doohickeys
+        .create_all_in_op(
+            &mut op,
+            vec![
+                NewDoohickey {
+                    id: consistent,
+                    container_id: consistent,
+                },
+                NewDoohickey {
+                    id: mismatched,
+                    container_id: DoohickeyId::new(),
+                },
+            ],
+        )
+        .await
+        .err()
+        .expect("a batch with an entity built under another id must not be inserted");
+    assert!(matches!(err, Fail::Fatal(_)), "got {err:?}");
+
+    assert!(
+        doohickeys
+            .maybe_find_by_id_in_op(&mut op, consistent)
+            .await?
+            .is_none()
+    );
+    assert!(
+        doohickeys
+            .maybe_find_by_id_in_op(&mut op, mismatched)
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn hydrating_an_entity_whose_payload_id_differs_from_the_container_is_corrupt_state()
 -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
