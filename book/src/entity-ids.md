@@ -121,6 +121,23 @@ disagrees with the stream) is `Fatal(CorruptState)`.
 
 ## Unit tests
 
-Repositories hand `into_events` its builder. A unit test that wants the initial
-events of a `NewEntity` builds one itself with the hidden constructors
-`EntityEventsBuilder::__generated(id)` / `EntityEventsBuilder::__supplied()`.
+Tests build entities without a repository through `es_entity::testing`,
+enabled by the `testing` feature. Enable it from `[dev-dependencies]` only, so
+production builds do not contain it:
+
+```toml
+[dev-dependencies]
+es-entity = { version = "...", features = ["testing"] }
+```
+
+`use es_entity::testing::*;` brings three functions onto every entity:
+
+| Call | Builds the entity from |
+|---|---|
+| `User::hydrate(id, [events..])` | any event stream, stored under `id` |
+| `User::hydrate_new(id, new_user)` | a `NewUser` whose repo generates the id; the test picks it |
+| `User::hydrate_new(new_user)` | a `NewUser` that supplies its own id |
+
+Each returns `Result<User, EntityHydrationError>` and applies the same id check
+as a repository load. The events of the returned entity are new (not yet
+persisted).

@@ -41,6 +41,8 @@ pub mod pagination;
 pub mod query;
 pub mod snapshot;
 pub mod sql_commenter;
+#[cfg(feature = "testing")]
+pub mod testing;
 pub mod traits;
 pub mod tree_query;
 pub mod write_shape;

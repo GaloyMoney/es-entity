@@ -783,6 +783,7 @@ dependencies = [
  "criterion",
  "derive_builder",
  "errlanes",
+ "es-entity",
  "es-entity-macros",
  "futures",
  "futures-core",

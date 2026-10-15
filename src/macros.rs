@@ -182,11 +182,9 @@
 ///     }
 /// }
 ///
-/// let id = MeterId::new();
-/// let events = NewMeter { id }
-///     .into_events(EntityEventsBuilder::__supplied())
-///     .widen_snapshot();
-/// let mut meter = <Meter as TryFromEvents<_, _>>::try_from_events(events).unwrap();
+/// use es_entity::testing::*;
+///
+/// let mut meter = Meter::hydrate_new(NewMeter { id: MeterId::new() }).unwrap();
 /// assert!(meter.record(10).did_execute());
 /// assert!(meter.record(10).was_already_applied());
 /// ```

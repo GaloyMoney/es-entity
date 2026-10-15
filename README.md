@@ -270,23 +270,26 @@ See the [Forgettable Data](https://galoymoney.github.io/es-entity/forgettable.ht
 ## Testing
 
 The entity style is easily testable. Hydrate from events, mutate, assert.
+Enable the `testing` feature for tests only:
+
+```toml
+[dev-dependencies]
+es-entity = { version = "...", features = ["testing"] }
+```
 
 ```rust
 #[cfg(test)]
 mod tests {
-    use super::*;
-    
-    fn test_user() -> User {
-        // Repositories hand `into_events` its builder; a unit test builds one itself.
-        let events = NewUser { name: "Alice".to_string() }
-            .into_events(EntityEventsBuilder::__generated(UserId::new()));
+    use es_entity::testing::*;
 
-        User::try_from_events(events).unwrap();
-    }
+    use super::*;
 
     #[test]
     fn test_user_update() {
-        let mut user = test_user();
+        // From a `New*` value; the id comes first when the repo generates it.
+        let mut user = User::hydrate_new(UserId::new(), NewUser { name: "Alice".to_string() }).unwrap();
+        // Or from any event stream:
+        // let user = User::hydrate(id, [UserEvent::Initialized { id, name: "Alice".to_string() }]).unwrap();
         assert_eq!(user.update_name("Bob"), Idempotent::Executed(()));
         assert_eq!(user.update_name("Bob"), Idempotent::AlreadyApplied(()));
     }

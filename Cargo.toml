@@ -20,7 +20,10 @@ graphql = ["es-entity-macros/graphql", "dep:async-graphql", "dep:base64"]
 event-context = ["es-entity-macros/event-context", "event-context-enabled"]
 event-context-enabled = ["es-entity-macros/event-context-enabled"]
 json-schema = ["dep:schemars"]
-mdbook-test = ["dep:anyhow"]
+mdbook-test = ["dep:anyhow", "testing"]
+# `es_entity::testing`: build entities from events or `New*` values without a
+# repository. Enable it from `[dev-dependencies]` only.
+testing = []
 # Split out so a consumer (job) can pull in the errlanes recorder without
 # turning on repo-span instrumentation.
 errlanes-tracing = ["errlanes/tracing"]
@@ -60,6 +63,7 @@ opentelemetry_sdk = { workspace = true, optional = true }
 anyhow = { workspace = true, optional = true }
 
 [dev-dependencies]
+es-entity = { path = ".", features = ["testing"] }
 repo-composition-source = { path = "tests/composition/source" }
 repo-composition-middle = { path = "tests/composition/middle" }
 tokio = { workspace = true }
