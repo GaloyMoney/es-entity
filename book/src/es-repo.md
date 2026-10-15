@@ -40,7 +40,7 @@ use es_entity::*;
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id = supplied,
+    entity = "User", id(supplied),
 
     // Defaults that get derived if not explicitly configured:
     // id = "UserId",                  // The type of the `id`
@@ -108,7 +108,7 @@ pub struct User {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id = supplied,
+    entity = "User", id(supplied),
     columns(
         // Declares that there is a `name` column on the `index` table.
         // The rust type for it is `String`.

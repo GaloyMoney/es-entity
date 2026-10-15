@@ -6,7 +6,7 @@ use es_entity::{clock::*, *};
 use sqlx::PgPool;
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "User", id = supplied, columns(name(ty = "String", list_for)))]
+#[es_repo(entity = "User", id(supplied), columns(name(ty = "String", list_for)))]
 pub struct Users {
     pool: PgPool,
 }
@@ -26,7 +26,7 @@ mod users_with_clock {
 
     /// A repo with an optional clock field for testing clock injection
     #[derive(EsRepo, Debug)]
-    #[es_repo(entity = "User", id = supplied, columns(name(ty = "String", list_for)))]
+    #[es_repo(entity = "User", id(supplied), columns(name(ty = "String", list_for)))]
     pub struct UsersWithClock {
         pool: PgPool,
         clock: Option<ClockHandle>,
@@ -57,7 +57,7 @@ mod users_with_required_clock {
 
     /// A repo with a required (non-optional) clock field
     #[derive(EsRepo, Debug)]
-    #[es_repo(entity = "User", id = supplied, columns(name(ty = "String", list_for)))]
+    #[es_repo(entity = "User", id(supplied), columns(name(ty = "String", list_for)))]
     pub struct UsersWithRequiredClock {
         pool: PgPool,
         clock: ClockHandle,

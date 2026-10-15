@@ -37,7 +37,7 @@ pub struct ErrorClassifier<'a> {
     /// with `-D warnings`. `classify_create_write` needs no such gate:
     /// `create` and `create_all` always issue the combined statement.
     needs_write_classifier: bool,
-    /// The repo resolves ids itself (`id = generated`): a collision on a
+    /// The repo resolves ids itself (`id(generated)`): a collision on a
     /// fresh id is `Fatal(Invariant)`, never a `Pkey` rejection.
     generated_id: bool,
 }

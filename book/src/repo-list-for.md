@@ -76,7 +76,7 @@ pub struct UserDocument {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "UserDocument", id = supplied,
+    entity = "UserDocument", id(supplied),
     columns(
         // The column name in the schema
         user_id(

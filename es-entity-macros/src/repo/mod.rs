@@ -608,7 +608,7 @@ mod tests {
     #[test]
     fn pkey_constraint_gets_id_conflict_variant_and_no_from_database_arm() {
         let input: syn::DeriveInput = parse_quote! {
-            #[es_repo(entity = "User", id = supplied, columns(name(ty = "String")))]
+            #[es_repo(entity = "User", id(supplied), columns(name(ty = "String")))]
             struct Users {
                 pool: sqlx::PgPool,
             }
@@ -636,8 +636,9 @@ mod tests {
     fn generated_id_repo_has_no_pkey_variant() {
         for attr in [
             quote! { #[es_repo(entity = "User", columns(name(ty = "String")))] },
-            quote! { #[es_repo(entity = "User", id = generated, columns(name(ty = "String")))] },
-            quote! { #[es_repo(entity = "User", id = generated(by = "Self::next_id"), columns(name(ty = "String")))] },
+            quote! { #[es_repo(entity = "User", id = "UserId", columns(name(ty = "String")))] },
+            quote! { #[es_repo(entity = "User", id(generated), columns(name(ty = "String")))] },
+            quote! { #[es_repo(entity = "User", id(ty = "UserId", generated(by = "Self::next_id")), columns(name(ty = "String")))] },
         ] {
             let input: syn::DeriveInput = parse_quote! {
                 #attr
@@ -818,7 +819,8 @@ mod tests {
         let input: syn::DeriveInput = parse_quote! {
             #[es_repo(
                 entity = "Partner",
-                columns(id(scope(variant = "Tenant")), name(ty = "String", list_by))
+                id(scope(variant = "Tenant")),
+                columns(name(ty = "String", list_by))
             )]
             struct Partners {
                 pool: sqlx::PgPool,
@@ -835,6 +837,37 @@ mod tests {
         assert!(tokens.contains("PartnerScope :: Tenant (__scope_val)"));
         // every query carries the id conjunct under the overridden variant
         assert!(tokens.contains("WHERE id = $1 AND id = $2"));
+    }
+
+    #[test]
+    fn id_long_form_combines_type_policy_and_scope() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Partner",
+                id(ty = "TenantId", supplied, scope),
+                columns(name(ty = "String"))
+            )]
+            struct Partners {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("id(ty, supplied, scope) repo should derive")
+            .to_string();
+        assert!(tokens.contains("Id (TenantId)"));
+        assert!(tokens.contains("es_entity :: Supplied"));
+        assert!(!tokens.contains("PartnerId"));
+    }
+
+    #[test]
+    fn duplicate_id_attribute_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Partner", id = "PartnerId", id(supplied))]
+            struct Partners {
+                pool: sqlx::PgPool,
+            }
+        };
+        assert!(derive(input).is_err());
     }
 
     #[test]

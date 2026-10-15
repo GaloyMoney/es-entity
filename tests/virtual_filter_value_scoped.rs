@@ -14,7 +14,8 @@ use sqlx::PgPool;
 /// `tests/virtual_filter_column_scoped.rs`.
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Contact", id = supplied,
+    entity = "Contact",
+    id(supplied),
     columns(
         partner_id(ty = "PartnerId", scope),
         email(ty = "String"),

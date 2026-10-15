@@ -129,7 +129,7 @@ impl IntoEvents<LaneParentEvent> for NewLaneParent {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "LaneParent", id = supplied, delete = "soft")]
+#[es_repo(entity = "LaneParent", id(supplied), delete = "soft")]
 pub struct LaneParents {
     pool: PgPool,
 
@@ -148,7 +148,8 @@ impl LaneParents {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "LaneItem", id = supplied,
+    entity = "LaneItem",
+    id(supplied),
     delete = "soft",
     columns(
         parent_id(ty = "LaneParentId", update(persist = false), parent),

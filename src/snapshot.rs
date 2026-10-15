@@ -210,7 +210,7 @@ impl GuardWithoutSnapshotClause for SnapshotRecord<NoSnapshot> {
 /// #[derive(EsRepo, Debug)]
 /// #[es_repo(
 ///     entity = "SnapGuardMeter",
-///     id = supplied,
+///     id(supplied),
 ///     tbl = "meters",
 ///     events_tbl = "meter_events",
 ///     snapshot,
@@ -269,7 +269,7 @@ impl GuardWithoutSnapshotClause for SnapshotRecord<NoSnapshot> {
 /// #[derive(EsRepo, Debug)]
 /// #[es_repo(
 ///     entity = "SnapGuardClient",
-///     id = supplied,
+///     id(supplied),
 ///     tbl = "clients",
 ///     events_tbl = "client_events",
 ///     snapshot,

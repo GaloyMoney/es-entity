@@ -120,7 +120,7 @@ column with `virtual = "<sql>"` plus bare `list_for`:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Order", id = supplied,
+    entity = "Order", id(supplied),
     columns(
         status(ty = "OrderStatus", list_for),
         has_open_ticket(
@@ -170,7 +170,7 @@ SQL text:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Order", id = supplied,
+    entity = "Order", id(supplied),
     columns(
         status(ty = "OrderStatus", list_for),
         min_open_tickets(
@@ -272,7 +272,7 @@ use es_entity::*;
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id = supplied,
+    entity = "User", id(supplied),
     columns(
         name(ty = "String", list_for(by(id, created_at)))
     )

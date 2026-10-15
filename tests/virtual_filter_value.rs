@@ -15,7 +15,8 @@ use sqlx::PgPool;
 /// `vf_account_flags` tables #236 already migrated; no new migration.
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "VfAccount", id = supplied,
+    entity = "VfAccount",
+    id(supplied),
     columns(
         status(ty = "String", list_for(by(created_at))),
         flagged(

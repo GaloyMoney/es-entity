@@ -19,7 +19,7 @@ mod generic_e_repo {
     pub trait EventMarker: std::fmt::Debug + Send + Sync + 'static {}
 
     #[derive(EsRepo, Debug)]
-    #[es_repo(entity = "User", id = supplied, columns(name(ty = "String", list_for)))]
+    #[es_repo(entity = "User", id(supplied), columns(name(ty = "String", list_for)))]
     pub struct UsersWithGenericE<E: EventMarker> {
         pool: PgPool,
         _marker: std::marker::PhantomData<E>,
@@ -27,7 +27,7 @@ mod generic_e_repo {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "User", id = supplied, columns(name(ty = "String", list_for)))]
+#[es_repo(entity = "User", id(supplied), columns(name(ty = "String", list_for)))]
 pub struct Users {
     pool: PgPool,
 }

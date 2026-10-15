@@ -13,7 +13,7 @@ Mark exactly one column with `scope`:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Customer", id = supplied,
+    entity = "Customer", id(supplied),
     columns(
         partner_id(ty = "PartnerId", scope),
         email(ty = "String"),
@@ -52,7 +52,7 @@ column, override it with `scope(variant = "...")`:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "CreditFacility", id = supplied,
+    entity = "CreditFacility", id(supplied),
     columns(
         partner_id(ty = "PartnerId", scope(variant = "Partner")),
         customer_id(ty = "CustomerId", scope),
@@ -86,7 +86,7 @@ carries the bare inner type, never `Option<T>`:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Party", id = supplied,
+    entity = "Party", id(supplied),
     columns(
         customer_id(ty = "Option<CustomerId>", scope(variant = "Customer")),
         name(ty = "String"),
@@ -118,14 +118,13 @@ there is no inner type to unwrap.
 
 The tenancy-root entity itself — the `Partner` in a partner-scoped system —
 has no separate tenant column: its rows' scope value **is their own id**. For
-that case, mark the implicit id column:
+that case, mark the id column as the scope with the repo-level `id` attribute:
 
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Partner", id = supplied,
+    entity = "Partner", id(supplied, scope),
     columns(
-        id(scope),
         name(ty = "String", list_by),
     )
 )]
@@ -134,11 +133,8 @@ pub struct Partners {
 }
 ```
 
-The id column is macro-owned — its type comes from the repo-level `id`
-attribute and `find_by`/`list_by` are always on — so the only accepted
-entries are `id(scope)` and its variant-override form,
-`id(scope(variant = "..."))`; anything else (`ty`, `find_by = ...`) is a
-compile error.
+The id is never declared inside `columns(...)`; see
+[Entity ids](./entity-ids.md) for the full `id` attribute.
 
 The generated surface is the ordinary scoped one: a `PartnerScope` enum and a
 leading scope argument on every read. Since the `id` column's scope variant
@@ -157,9 +153,8 @@ overridden:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Partner", id = supplied,
+    entity = "Partner", id(supplied, scope(variant = "Tenant")),
     columns(
-        id(scope(variant = "Tenant")),
         name(ty = "String", list_by),
     )
 )]
@@ -239,7 +234,7 @@ partner API, and a customer API over the same `CreditFacility` rows:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "CreditFacility", id = supplied,
+    entity = "CreditFacility", id(supplied),
     columns(
         partner_id(ty = "PartnerId", scope),
         customer_id(ty = "CustomerId", scope),

@@ -12,7 +12,8 @@ use es_entity::*;
 /// `score` sort column for NULL-cursor edge cases.
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Transfer", id = supplied,
+    entity = "Transfer",
+    id(supplied),
     columns(
         account_id(ty = "AccountId", list_for(by(created_at))),
         status(ty = "String", list_for(by(created_at))),

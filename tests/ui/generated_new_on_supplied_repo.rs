@@ -42,7 +42,7 @@ impl IntoEvents<GadgetEvent> for NewGadget {
 
 // `NewGadget` has no id to bring; the repo expects it to.
 #[derive(EsRepo)]
-#[es_repo(entity = "Gadget", id = supplied)]
+#[es_repo(entity = "Gadget", id(supplied))]
 pub struct Gadgets {
     pool: PgPool,
 }

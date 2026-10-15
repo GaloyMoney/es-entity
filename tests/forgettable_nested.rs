@@ -165,7 +165,7 @@ impl IntoEvents<AccountEvent> for NewAccount {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Account", id = supplied, delete = "soft")]
+#[es_repo(entity = "Account", id(supplied), delete = "soft")]
 pub struct Accounts {
     pool: PgPool,
 
@@ -184,7 +184,8 @@ impl Accounts {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "AccountHolder", id = supplied,
+    entity = "AccountHolder",
+    id(supplied),
     forgettable,
     delete = "soft",
     columns(

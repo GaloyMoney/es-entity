@@ -15,7 +15,8 @@ use sqlx::PgPool;
 /// entity's table).
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "VfAccount", id = supplied,
+    entity = "VfAccount",
+    id(supplied),
     columns(
         status(ty = "String", list_for(by(created_at))),
         flagged(

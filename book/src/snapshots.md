@@ -220,7 +220,7 @@ idempotency_guard!(
 
 ```rust,ignore
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Meter", id = supplied, snapshot, columns(label(ty = "String")))]
+#[es_repo(entity = "Meter", id(supplied), snapshot, columns(label(ty = "String")))]
 pub struct MeterRepo {
     pool: PgPool,
 }

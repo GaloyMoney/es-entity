@@ -129,7 +129,8 @@ impl IntoEvents<SubscriberEvent> for NewSubscriber {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Subscriber", id = supplied,
+    entity = "Subscriber",
+    id(supplied),
     forgettable,
     delete = "soft",
     columns(email(ty = "Forgettable<String>", list_by), plan(ty = "String"))
@@ -333,7 +334,8 @@ mod frozen {
 
     #[derive(EsRepo, Debug)]
     #[es_repo(
-        entity = "Subscriber", id = supplied,
+        entity = "Subscriber",
+        id(supplied),
         forgettable,
         delete = "soft",
         columns(

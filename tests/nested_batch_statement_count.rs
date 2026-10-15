@@ -30,7 +30,7 @@ use sqlx::PgPool;
 use tracing_subscriber::layer::SubscriberExt;
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Order", id = supplied, delete = "soft")]
+#[es_repo(entity = "Order", id(supplied), delete = "soft")]
 pub struct Orders {
     pool: PgPool,
 
@@ -49,7 +49,8 @@ impl Orders {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "OrderItem", id = supplied,
+    entity = "OrderItem",
+    id(supplied),
     delete = "soft",
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]

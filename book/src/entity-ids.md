@@ -4,6 +4,28 @@ Every entity an `EsRepo` creates gets its id from the repository's *id policy*.
 The policy is also the type parameter of the builder that `IntoEvents` receives,
 so what a `NewEntity` can do with the id is checked by the compiler.
 
+## The `id` attribute
+
+The id column is configured like any other column, by the repo-level `id`
+attribute. `id = "CustomId"` names the type and keeps every default, and the
+list form spells the options out:
+
+```rust,ignore
+#[es_repo(entity = "Partner", id(ty = "PartnerId", supplied, scope), columns(...))]
+```
+
+| option | meaning |
+| --- | --- |
+| `ty = "..."` | the id type; defaults to `{Entity}Id` |
+| `generated` | the repository mints the id (the default) |
+| `generated(by = "path")` | the repository mints the id with `path` |
+| `supplied` | the `NewEntity` brings the id |
+| `scope`, `scope(variant = "...")` | the id is the repo's scope column, see [Scoped repositories](./scoped-repositories.md) |
+
+It differs from an ordinary column in three ways: `ty` is optional, `find_by`
+and `list_by` are always on, and only the id takes a policy (`generated` or
+`supplied`). The id is never declared inside `columns(...)`.
+
 ## Generated ids (the default)
 
 By default the repository mints the id: `<IdType>::new()`, or the function named
@@ -25,7 +47,7 @@ impl IntoEvents<UserEvent> for NewUser {
 }
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User")] // same as `id = generated`
+#[es_repo(entity = "User")] // same as `id(generated)`
 pub struct Users { pool: sqlx::PgPool }
 ```
 
@@ -44,7 +66,7 @@ the operation:
 
 ```rust,ignore
 #[derive(EsRepo)]
-#[es_repo(entity = "PublicId", id = generated(by = "Self::next_id"))]
+#[es_repo(entity = "PublicId", id(generated(by = "Self::next_id")))]
 pub struct PublicIds { pool: sqlx::PgPool }
 
 impl PublicIds {
@@ -60,7 +82,7 @@ impl PublicIds {
 ## Supplied ids
 
 An entity with a deterministic id (derived from another aggregate, a
-well-known constant) opts out with `id = supplied`. The `NewEntity` brings the
+well-known constant) opts out with `id(supplied)`. The `NewEntity` brings the
 id and passes it to `initial_events`:
 
 ```rust,ignore
@@ -73,13 +95,13 @@ impl IntoEvents<CustomerEvent> for NewCustomer {
 }
 
 #[derive(EsRepo)]
-#[es_repo(entity = "Customer", id = supplied)]
+#[es_repo(entity = "Customer", id(supplied))]
 pub struct Customers { pool: sqlx::PgPool }
 ```
 
 A supplied id is a uniqueness claim made by the caller, so `Pkey` stays a case of
-the constraint violation. A repo that names its id type explicitly writes it as
-`id_type = "CustomId"` next to `id = supplied`.
+the constraint violation. A repo that names its id type explicitly writes
+`id(ty = "CustomId", supplied)`.
 
 The repository checks that the id the `NewEntity` handed to `initial_events`
 is the one it inserts under; if they differ the create fails with

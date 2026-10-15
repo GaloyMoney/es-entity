@@ -187,7 +187,7 @@ pub trait IntoEvents<E: EsEvent>: Sized {
 ///
 /// // The 'NewEntity' type used for initialization. A deterministic id is
 /// // supplied by the `New*` type itself and the repo opts in with
-/// // `#[es_repo(id = supplied)]`.
+/// // `#[es_repo(id(supplied))]`.
 /// pub struct NewUser {
 ///     id: UserId,
 ///     name: String

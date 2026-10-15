@@ -12,7 +12,8 @@ mod tbl_prefix_param {
     #[derive(EsRepo, Debug)]
     #[es_repo(
         tbl_prefix = "ignore_prefix",
-        entity = "User", id = supplied,
+        entity = "User",
+        id(supplied),
         columns(name(ty = "String"))
     )]
     struct UsersTblPrefix {
@@ -92,7 +93,8 @@ mod entity_param {
     #[es_repo(
         tbl = "custom_name_for_users",
         events_tbl = "custom_name_for_user_events",
-        entity = "User", id = supplied,
+        entity = "User",
+        id(supplied),
         columns(name(ty = "String"))
     )]
     struct UsersEntity {
@@ -168,7 +170,7 @@ mod no_params {
     use super::*;
 
     #[derive(EsRepo, Debug)]
-    #[es_repo(entity = "User", id = supplied, columns(name(ty = "String")))]
+    #[es_repo(entity = "User", id(supplied), columns(name(ty = "String")))]
     struct UsersNoParams {
         pool: PgPool,
     }

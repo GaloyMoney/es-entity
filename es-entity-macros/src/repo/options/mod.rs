@@ -1,6 +1,6 @@
 mod columns;
 mod delete;
-mod id_policy;
+mod id;
 
 use convert_case::{Case, Casing};
 use darling::{FromDeriveInput, FromField};
@@ -9,7 +9,7 @@ use quote::quote;
 
 pub use columns::*;
 pub use delete::*;
-pub use id_policy::*;
+pub use id::*;
 
 /// Information about the clock field in a repository
 #[derive(Debug, Clone)]
@@ -122,9 +122,8 @@ pub struct RepositoryOptions {
     #[darling(default, rename = "event")]
     event_ident: Option<syn::Ident>,
     #[darling(default, rename = "id")]
-    id_attr: Option<IdAttr>,
-    /// The id type when `id` selects a policy instead of naming the type.
-    #[darling(default, rename = "id_type")]
+    id_opts: IdOpts,
+    #[darling(skip)]
     id_ty: Option<syn::Ident>,
     #[darling(default, rename = "tbl_prefix")]
     prefix: Option<syn::LitStr>,
@@ -164,17 +163,9 @@ impl RepositoryOptions {
                 proc_macro2::Span::call_site(),
             ));
         }
-        if self.id_ty.is_none()
-            && let Some(IdAttr::Type(ty)) = &self.id_attr
-        {
-            self.id_ty = Some(ty.clone());
-        }
-        if self.id_ty.is_none() {
-            self.id_ty = Some(syn::Ident::new(
-                &format!("{entity_name}Id"),
-                proc_macro2::Span::call_site(),
-            ));
-        }
+        self.id_ty = Some(self.id_opts.ty.clone().unwrap_or_else(|| {
+            syn::Ident::new(&format!("{entity_name}Id"), proc_macro2::Span::call_site())
+        }));
         let prefix = if let Some(prefix) = &self.prefix {
             format!("{}_", prefix.value())
         } else {
@@ -209,6 +200,9 @@ impl RepositoryOptions {
 
         self.columns
             .set_id_column(self.id_ty.as_ref().expect("Id not set"));
+        if let Some(scope) = self.id_opts.scope.take() {
+            self.columns.scope_id_column(scope);
+        }
 
         self
     }
@@ -231,10 +225,7 @@ impl RepositoryOptions {
 
     /// How this repo resolves the id of an entity it creates.
     pub fn id_policy(&self) -> IdPolicyOpt {
-        match &self.id_attr {
-            Some(IdAttr::Policy(policy)) => policy.clone(),
-            _ => IdPolicyOpt::default(),
-        }
+        self.id_opts.policy.clone()
     }
 
     pub fn event(&self) -> &syn::Ident {

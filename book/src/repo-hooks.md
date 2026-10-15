@@ -14,7 +14,7 @@ Runs after events have been written to the database but before the entity is ret
 ### Configuration
 
 ```rust,ignore
-#[es_repo(entity = "User", id = supplied, post_persist_hook = "on_persist")]
+#[es_repo(entity = "User", id(supplied), post_persist_hook = "on_persist")]
 ```
 
 ### Hook method
@@ -99,7 +99,7 @@ Runs synchronously every time an entity is reconstructed from its event stream â
 ### Configuration
 
 ```rust,ignore
-#[es_repo(entity = "User", id = supplied, post_hydrate_hook = "validate_user")]
+#[es_repo(entity = "User", id(supplied), post_hydrate_hook = "validate_user")]
 ```
 
 ### Hook method
@@ -151,7 +151,7 @@ During `update`, only `post_persist_hook` runs, since the entity is already in m
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id = supplied,
+    entity = "User", id(supplied),
     post_persist_hook = "audit_persist",
     post_hydrate_hook = "validate_user",
 )]

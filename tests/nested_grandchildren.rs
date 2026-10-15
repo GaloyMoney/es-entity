@@ -254,7 +254,8 @@ impl IntoEvents<GcParentEvent> for NewGcParent {
 // ─── Repos ──────────────────────────────────────────────────────────────
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "GcGrandchild", id = supplied,
+    entity = "GcGrandchild",
+    id(supplied),
     tbl = "gc_grandchildren",
     events_tbl = "gc_grandchild_events",
     delete = "soft",
@@ -272,7 +273,8 @@ impl GcGrandchildren {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "GcChild", id = supplied,
+    entity = "GcChild",
+    id(supplied),
     tbl = "gc_children",
     events_tbl = "gc_child_events",
     delete = "soft",
@@ -296,7 +298,8 @@ impl GcChildren {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "GcParent", id = supplied,
+    entity = "GcParent",
+    id(supplied),
     tbl = "gc_parents",
     events_tbl = "gc_parent_events",
     delete = "soft"

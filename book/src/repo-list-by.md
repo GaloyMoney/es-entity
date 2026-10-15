@@ -48,7 +48,7 @@ use es_entity::*;
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id = supplied,
+    entity = "User", id(supplied),
     // list_by will generate the UserByNameCursor
     columns(name(ty = "String", list_by))
 )]

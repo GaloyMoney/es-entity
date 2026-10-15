@@ -14,7 +14,8 @@ use es_entity::*;
 /// read; only `All` sees them.
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Party", id = supplied,
+    entity = "Party",
+    id(supplied),
     columns(
         customer_id(
             ty = "Option<CustomerId>",

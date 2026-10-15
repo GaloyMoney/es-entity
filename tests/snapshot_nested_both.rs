@@ -13,7 +13,7 @@ use tracing_subscriber::layer::SubscriberExt;
 
 /// Both parent (`Site`) and child (`Meter`) snapshot.
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Site", id = supplied, snapshot)]
+#[es_repo(entity = "Site", id(supplied), snapshot)]
 pub struct BothSites {
     pool: PgPool,
 
@@ -32,7 +32,8 @@ impl BothSites {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Meter", id = supplied,
+    entity = "Meter",
+    id(supplied),
     snapshot,
     columns(
         site_id(ty = "SiteId", update(persist = false), parent),

@@ -48,7 +48,8 @@ pub struct HookCall {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Customer", id = supplied,
+    entity = "Customer",
+    id(supplied),
     forgettable,
     columns(email(ty = "String")),
     post_persist_hook = "publish"

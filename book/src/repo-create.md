@@ -56,7 +56,7 @@ pub struct User {
 }
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User", id = supplied, columns(name = "String"))]
+#[es_repo(entity = "User", id(supplied), columns(name = "String"))]
 pub struct Users {
     pool: sqlx::PgPool
 }
@@ -145,7 +145,7 @@ impl NewUser {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id = supplied,
+    entity = "User", id(supplied),
     columns(
         // Instead of using the `name` field on the `NewEntity` struct
         // the generated code will use: `new_entity.my_name()`
@@ -198,7 +198,7 @@ pub struct NewUser { id: UserId }
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id = supplied,
+    entity = "User", id(supplied),
     columns(
         name(ty = "String", create(persist = false)),
     )
@@ -210,7 +210,7 @@ pub struct Users {
 
 ## create_or_find_by_id_in_op
 
-A repo with `id = supplied` (see [Entity ids](./entity-ids.md)) also gets
+A repo with `id(supplied)` (see [Entity ids](./entity-ids.md)) also gets
 `create_or_find_by_id_in_op`, for entities whose id is deterministic and which
 may already exist:
 

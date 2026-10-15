@@ -219,7 +219,7 @@ struct BillingPeriods {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Subscription", id = supplied)]
+#[es_repo(entity = "Subscription", id(supplied))]
 pub struct Subscriptions {
     pool: sqlx::PgPool,
     
@@ -448,7 +448,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 # }
 # #[derive(EsRepo, Debug)]
 # #[es_repo(
-#     entity = "BillingPeriod", id = supplied,
+#     entity = "BillingPeriod", id(supplied),
 #     columns(
 #         subscription_id(ty = "SubscriptionId", update(persist = false), list_for, parent)
 #     )
@@ -457,7 +457,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     pool: sqlx::PgPool,
 # }
 # #[derive(EsRepo, Debug)]
-# #[es_repo(entity = "Subscription", id = supplied)]
+# #[es_repo(entity = "Subscription", id(supplied))]
 # pub struct Subscriptions {
 #     pool: sqlx::PgPool,
 #     #[es_repo(nested)]

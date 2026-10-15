@@ -123,7 +123,7 @@ use sqlx::PgPool;
 use es_entity::*;
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User", id = supplied)]
+#[es_repo(entity = "User", id(supplied))]
 pub struct Users {
     pool: PgPool
 }

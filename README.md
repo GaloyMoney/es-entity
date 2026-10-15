@@ -216,7 +216,7 @@ pub struct Order {
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "OrderItem", id = supplied,
+    entity = "OrderItem", id(supplied),
     // Child repo marks the parent foreign key
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
@@ -226,7 +226,7 @@ struct OrderItems {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Order", id = supplied,
+    entity = "Order", id(supplied),
 )]
 pub struct Orders {
     pool: PgPool,

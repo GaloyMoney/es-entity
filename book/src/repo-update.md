@@ -67,7 +67,7 @@ impl User {
 }
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User", id = supplied, columns(name = "String"))]
+#[es_repo(entity = "User", id(supplied), columns(name = "String"))]
 pub struct Users {
     pool: sqlx::PgPool
 }
@@ -169,7 +169,7 @@ impl User {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id = supplied,
+    entity = "User", id(supplied),
     columns(
         // Instead of using the `name` field on the `Entity` struct
         // the generated code will use: `entity.display_name()`
@@ -225,7 +225,7 @@ pub struct User {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id = supplied,
+    entity = "User", id(supplied),
     columns(
         name(ty = "String", update(persist = false))
     )

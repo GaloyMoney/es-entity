@@ -49,7 +49,7 @@ impl IntoEvents<DoohickeyEvent> for NewDoohickey {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Doohickey", id = supplied)]
+#[es_repo(entity = "Doohickey", id(supplied))]
 pub struct Doohickeys {
     pool: PgPool,
 }
@@ -106,7 +106,7 @@ impl IntoEvents<KnobEvent> for NewKnob {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Knob", id = supplied, columns(serial(ty = "String")))]
+#[es_repo(entity = "Knob", id(supplied), columns(serial(ty = "String")))]
 pub struct Knobs {
     pool: PgPool,
 }

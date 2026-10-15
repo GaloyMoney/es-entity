@@ -15,8 +15,7 @@ use tracing_subscriber::layer::SubscriberExt;
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "SiteOverPlainMeters",
-    id = supplied,
-    id_type = "SiteId",
+    id(ty = "SiteId", supplied),
     event = "SiteEvent",
     tbl = "sites",
     events_tbl = "site_events",
@@ -42,8 +41,7 @@ impl ParentOnlySites {
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "PlainMeter",
-    id = supplied,
-    id_type = "MeterId",
+    id(ty = "MeterId", supplied),
     event = "MeterEvent",
     tbl = "meters",
     events_tbl = "meter_events",

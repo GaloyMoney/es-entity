@@ -17,7 +17,8 @@ use es_entity::*;
 /// rows.
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Contact", id = supplied,
+    entity = "Contact",
+    id(supplied),
     columns(
         partner_id(ty = "PartnerId", scope, list_for(by(created_at))),
         email(ty = "String"),

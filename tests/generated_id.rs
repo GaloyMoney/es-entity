@@ -164,7 +164,7 @@ impl IntoEvents<SprocketEvent> for NewSprocket {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Sprocket", id = generated(by = "Self::next_id"))]
+#[es_repo(entity = "Sprocket", id(generated(by = "Self::next_id")))]
 pub struct Sprockets {
     pool: PgPool,
     minted: std::sync::Arc<std::sync::Mutex<Vec<SprocketId>>>,
@@ -236,7 +236,7 @@ impl IntoEvents<DoohickeyEvent> for NewDoohickey {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Doohickey", id = supplied)]
+#[es_repo(entity = "Doohickey", id(supplied))]
 pub struct Doohickeys {
     pool: PgPool,
 }

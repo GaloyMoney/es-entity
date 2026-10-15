@@ -14,7 +14,11 @@ use es_entity::*;
 /// missing and not-yours look identical. `All` reads across scopes. Writes
 /// (`create`, `update`, `delete`) keep their unscoped signatures.
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Partner", id = supplied, columns(id(scope), name(ty = "String", list_by)))]
+#[es_repo(
+    entity = "Partner",
+    id(supplied, scope),
+    columns(name(ty = "String", list_by))
+)]
 pub struct Partners {
     pool: PgPool,
 }
@@ -251,8 +255,9 @@ pub mod overridden_id_scope {
 
     #[derive(EsRepo, Debug)]
     #[es_repo(
-        entity = "Partner", id = supplied,
-        columns(id(scope(variant = "Tenant")), name(ty = "String"))
+        entity = "Partner",
+        id(supplied, scope(variant = "Tenant")),
+        columns(name(ty = "String"))
     )]
     pub struct PartnersByOverriddenScope {
         pool: PgPool,

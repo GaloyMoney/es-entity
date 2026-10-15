@@ -20,7 +20,8 @@ use es_entity::{DbOp, *};
 /// takes the operation from its caller.
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "User", id = supplied,
+    entity = "User",
+    id(supplied),
     in_op_only,
     columns(name(ty = "String", list_by, list_for))
 )]
@@ -163,7 +164,12 @@ mod with_pool {
     use sqlx::PgPool;
 
     #[derive(EsRepo, Debug)]
-    #[es_repo(entity = "User", id = supplied, in_op_only, columns(name(ty = "String")))]
+    #[es_repo(
+        entity = "User",
+        id(supplied),
+        in_op_only,
+        columns(name(ty = "String"))
+    )]
     pub struct Users {
         pool: PgPool,
     }

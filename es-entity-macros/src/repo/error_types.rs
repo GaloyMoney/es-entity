@@ -449,7 +449,7 @@ mod tests {
     fn id_foreign_key_and_redundant_unique_are_not_primary_keys() {
         use darling::FromDeriveInput;
         let input: syn::DeriveInput = syn::parse_quote! {
-            #[es_repo(entity = "SharedId", id = supplied, migrations_dir = "tests/fixtures/shared_id")]
+            #[es_repo(entity = "SharedId", id(supplied), migrations_dir = "tests/fixtures/shared_id")]
             struct SharedIds { pool: sqlx::PgPool }
         };
         let opts = RepositoryOptions::from_derive_input(&input).unwrap();
@@ -509,7 +509,7 @@ mod tests {
             syn::parse_quote! {
                 #[es_repo(
                     entity = "Gadget",
-                    id = supplied,
+                    id(supplied),
                     migrations_dir = "tests/fixtures/catalog_authoritative",
                     columns(name(ty = "String"), note(ty = "String"))
                 )]

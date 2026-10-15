@@ -51,7 +51,7 @@ pub struct User {
 }
 
 #[derive(EsRepo)]
-#[es_repo(entity = "User", id = supplied, columns(name = "String"))]
+#[es_repo(entity = "User", id(supplied), columns(name = "String"))]
 pub struct Users {
     pool: sqlx::PgPool
 }

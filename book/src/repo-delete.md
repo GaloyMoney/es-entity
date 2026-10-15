@@ -16,7 +16,7 @@ fn list_for_<column>_by_<cursor>_include_deleted
 
 If you don't need the `_include_deleted` query variants, use `delete = "soft_without_queries"` instead:
 ```rust,ignore
-#[es_repo(entity = "User", id = supplied, columns(name = "String"), delete = "soft_without_queries")]
+#[es_repo(entity = "User", id(supplied), columns(name = "String"), delete = "soft_without_queries")]
 ```
 
 As a prerequisite the `index` table must include a `deleted` column:
@@ -86,7 +86,7 @@ impl User {
 
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "User", id = supplied,
+    entity = "User", id(supplied),
     columns(name = "String"),
     delete = "soft",
 )]

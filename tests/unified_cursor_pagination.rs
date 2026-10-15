@@ -29,7 +29,8 @@ use es_entity::*;
 /// sort column driving `list_by`.
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Transfer", id = supplied,
+    entity = "Transfer",
+    id(supplied),
     columns(
         account_id(ty = "AccountId"),
         status(ty = "String"),

@@ -624,7 +624,7 @@ This leverages the rust module system to enforce that the children cannot be acc
 # fn main() {}
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "BillingPeriod", id = supplied,
+    entity = "BillingPeriod", id(supplied),
     columns(
         // The foreign key of the parent marked by `parent`.
         subscription_id(ty = "SubscriptionId", update(persist = false), parent)
@@ -636,7 +636,7 @@ struct BillingPeriods {
 }
 
 #[derive(EsRepo)]
-#[es_repo(entity = "Subscription", id = supplied)]
+#[es_repo(entity = "Subscription", id(supplied))]
 pub struct Subscriptions {
     pool: sqlx::PgPool,
 
@@ -862,7 +862,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 # }
 # #[derive(EsRepo)]
 # #[es_repo(
-#     entity = "BillingPeriod", id = supplied,
+#     entity = "BillingPeriod", id(supplied),
 #     columns(
 #         subscription_id(ty = "SubscriptionId", update(persist = false), parent)
 #     )
@@ -871,7 +871,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     pool: sqlx::PgPool,
 # }
 # #[derive(EsRepo)]
-# #[es_repo(entity = "Subscription", id = supplied)]
+# #[es_repo(entity = "Subscription", id(supplied))]
 # pub struct Subscriptions {
 #     pool: sqlx::PgPool,
 #     #[es_repo(nested)]

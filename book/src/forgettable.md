@@ -187,7 +187,7 @@ Enable forgettable on the repository with the `forgettable` attribute:
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Customer", id = supplied,
+    entity = "Customer", id(supplied),
     // `name` is a forgettable index column (queryable, NULLed on forget);
     // `email` is a normal column.
     columns(name = "Forgettable<String>", email = "String"),
@@ -273,7 +273,7 @@ When `forgettable` is enabled and `delete = "soft"` is configured, calling `dele
 ```rust,ignore
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "Customer", id = supplied,
+    entity = "Customer", id(supplied),
     columns(name = "Forgettable<String>", email = "String"),
     delete = "soft",
     forgettable,

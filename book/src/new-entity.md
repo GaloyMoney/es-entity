@@ -9,7 +9,7 @@ Using the [derive_builder](https://docs.rs/derive_builder/latest/derive_builder/
 By default the repository generates the id of every entity it creates, so the
 `NewEntity` has no id field and `IntoEvents` reads the resolved id from the
 builder it receives. An entity whose id is deterministic (derived from another
-aggregate, a well-known constant) opts out with `id = supplied`, see
+aggregate, a well-known constant) opts out with `id(supplied)`, see
 [Entity ids](./entity-ids.md).
 
 ```rust

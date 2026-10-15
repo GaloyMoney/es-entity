@@ -12,7 +12,8 @@ use es_entity::*;
 /// never by both at once (disjunctive scoping).
 #[derive(EsRepo, Debug)]
 #[es_repo(
-    entity = "Facility", id = supplied,
+    entity = "Facility",
+    id(supplied),
     columns(
         partner_id(ty = "PartnerId", scope),
         customer_id(ty = "CustomerId", scope),
@@ -47,7 +48,8 @@ pub mod overridden_scope {
 
     #[derive(EsRepo, Debug)]
     #[es_repo(
-        entity = "Facility", id = supplied,
+        entity = "Facility",
+        id(supplied),
         columns(
             partner_id(ty = "PartnerId", scope(variant = "Partner")),
             customer_id(ty = "CustomerId", scope),

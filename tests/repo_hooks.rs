@@ -42,7 +42,8 @@ mod users_with_hydrate_hook {
 
     #[derive(EsRepo, Debug)]
     #[es_repo(
-        entity = "User", id = supplied,
+        entity = "User",
+        id(supplied),
         columns(name = "String"),
         post_hydrate_hook = "validate_hydrated"
     )]
@@ -81,7 +82,8 @@ mod users_with_persist_hook {
 
     #[derive(EsRepo, Debug)]
     #[es_repo(
-        entity = "User", id = supplied,
+        entity = "User",
+        id(supplied),
         columns(name = "String"),
         post_persist_hook = "audit_persist"
     )]
