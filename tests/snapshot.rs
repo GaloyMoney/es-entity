@@ -6,12 +6,7 @@ use es_entity::*;
 use sqlx::PgPool;
 
 #[derive(EsRepo, Debug)]
-#[es_repo(
-    entity = "Meter",
-    id(supplied),
-    snapshot,
-    columns(label(ty = "String"))
-)]
+#[es_repo(entity = "Meter", snapshot, columns(label(ty = "String")))]
 pub struct MeterRepo {
     pool: PgPool,
 }
@@ -25,7 +20,7 @@ impl MeterRepo {
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "PlainMeter",
-    id(ty = "MeterId", supplied),
+    id = "MeterId",
     event = "MeterEvent",
     tbl = "meters",
     events_tbl = "meter_events",
@@ -43,7 +38,6 @@ impl PlainMeterRepo {
 
 fn new_meter(label: &str) -> NewMeter {
     NewMeter::builder()
-        .id(MeterId::new())
         .site_id(SiteId::new())
         .label(label)
         .build()

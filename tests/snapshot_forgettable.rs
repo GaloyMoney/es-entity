@@ -9,7 +9,7 @@ use sqlx::PgPool;
 /// live in the same `<tbl>_forgettable_payloads` table, at the reserved
 /// `sequence = 0` row.
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Client", id(supplied), snapshot, forgettable)]
+#[es_repo(entity = "Client", snapshot, forgettable)]
 pub struct ClientRepo {
     pool: PgPool,
 }
@@ -21,11 +21,7 @@ impl ClientRepo {
 }
 
 fn new_client(email: &str) -> NewClient {
-    NewClient::builder()
-        .id(ClientId::new())
-        .email(email)
-        .build()
-        .unwrap()
+    NewClient::builder().email(email).build().unwrap()
 }
 
 async fn payload_row(pool: &PgPool, id: ClientId) -> anyhow::Result<Option<String>> {

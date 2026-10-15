@@ -17,7 +17,6 @@ use sqlx::PgPool;
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "VfAccount",
-    id(supplied),
     columns(flagged_by(
         ty = "VfAccountId",
         virtual = "EXISTS (SELECT 1 FROM vf_account_flags f WHERE f.account_id = vf_accounts.id AND f.account_id = {value})",
@@ -36,13 +35,7 @@ impl VfAccountsFlaggedBy {
 
 async fn create_account(repo: &VfAccountsFlaggedBy, status: &str) -> anyhow::Result<VfAccount> {
     Ok(repo
-        .create(
-            NewVfAccount::builder()
-                .id(VfAccountId::new())
-                .status(status)
-                .build()
-                .unwrap(),
-        )
+        .create(NewVfAccount::builder().status(status).build().unwrap())
         .await?)
 }
 

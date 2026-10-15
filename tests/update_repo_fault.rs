@@ -14,7 +14,6 @@ use sqlx::PgPool;
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "User",
-    id(supplied),
     tbl = "users",
     columns(name(ty = "String", update(persist = false)))
 )]
@@ -40,13 +39,7 @@ async fn update_without_a_constrained_column_or_nesting_returns_repo_fault() -> 
     let repo = ImmutableNameUsers::new(helpers::init_pool().await?);
 
     let mut user = repo
-        .create(
-            NewUser::builder()
-                .id(UserId::new())
-                .name("First")
-                .build()
-                .unwrap(),
-        )
+        .create(NewUser::builder().name("First").build().unwrap())
         .await?;
     let _ = user.update_name("Second");
 
@@ -65,13 +58,7 @@ async fn stale_sequence_update_is_transient_optimistic_conflict_through_repo_fau
     let repo = ImmutableNameUsers::new(helpers::init_pool().await?);
 
     let user = repo
-        .create(
-            NewUser::builder()
-                .id(UserId::new())
-                .name("Concurrent")
-                .build()
-                .unwrap(),
-        )
+        .create(NewUser::builder().name("Concurrent").build().unwrap())
         .await?;
 
     let mut first = repo.find_by_id(user.id).await?;
@@ -96,7 +83,7 @@ async fn stale_sequence_update_is_transient_optimistic_conflict_through_repo_fau
 /// `update_can_reject()` is false and `update`/`update_in_op` narrow to
 /// `RepoFault` even though the combined index+events statement is used.
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "OrderItem", id(supplied), columns(order_id(ty = "OrderId")))]
+#[es_repo(entity = "OrderItem", columns(order_id(ty = "OrderId")))]
 pub struct ForeignKeyOnlyOrderItems {
     pool: PgPool,
 }
@@ -122,7 +109,6 @@ async fn update_persisting_only_a_foreign_key_column_returns_repo_fault() -> any
     let mut item = repo
         .create(
             NewOrderItem::builder()
-                .id(OrderItemId::new())
                 .order_id(order_id)
                 .product_name("Widget")
                 .quantity(1)

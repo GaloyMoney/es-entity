@@ -21,7 +21,6 @@ use es_entity::{DbOp, *};
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "User",
-    id(supplied),
     in_op_only,
     columns(name(ty = "String", list_by, list_for))
 )]
@@ -29,7 +28,6 @@ pub struct Users {}
 
 fn new_user(name: &str) -> NewUser {
     NewUser::builder()
-        .id(UserId::new())
         .name(name.to_string())
         .build()
         .expect("failed to build user")
@@ -164,12 +162,7 @@ mod with_pool {
     use sqlx::PgPool;
 
     #[derive(EsRepo, Debug)]
-    #[es_repo(
-        entity = "User",
-        id(supplied),
-        in_op_only,
-        columns(name(ty = "String"))
-    )]
+    #[es_repo(entity = "User", in_op_only, columns(name(ty = "String")))]
     pub struct Users {
         pool: PgPool,
     }

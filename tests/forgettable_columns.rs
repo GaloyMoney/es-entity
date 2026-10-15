@@ -96,8 +96,6 @@ impl TryFromEvents<SubscriberEvent> for Subscriber {
 #[derive(Debug, Builder)]
 pub struct NewSubscriber {
     #[builder(setter(into))]
-    pub id: SubscriberId,
-    #[builder(setter(into))]
     pub email: String,
     #[builder(setter(into))]
     pub plan: String,
@@ -110,27 +108,24 @@ impl NewSubscriber {
 }
 
 impl IntoEvents<SubscriberEvent> for NewSubscriber {
-    type Id = Supplied;
+    type Id = Generated;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<SubscriberEvent, Supplied>,
+        builder: EntityEventsBuilder<SubscriberEvent, Generated>,
     ) -> EntityEvents<SubscriberEvent> {
-        builder.initial_events(
-            self.id,
-            [SubscriberEvent::Initialized {
-                id: self.id,
-                email: Forgettable::new(self.email),
-                plan: self.plan,
-            }],
-        )
+        let id = builder.id();
+        builder.initial_events([SubscriberEvent::Initialized {
+            id,
+            email: Forgettable::new(self.email),
+            plan: self.plan,
+        }])
     }
 }
 
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "Subscriber",
-    id(supplied),
     forgettable,
     delete = "soft",
     columns(email(ty = "Forgettable<String>", list_by), plan(ty = "String"))
@@ -149,10 +144,8 @@ impl Subscribers {
 /// across tests and runs, so a fixed value would collide). Returns the entity
 /// and its email.
 async fn new_subscriber(subscribers: &Subscribers) -> anyhow::Result<(Subscriber, String)> {
-    let id = SubscriberId::new();
-    let email = format!("user-{id}@example.com");
+    let email = format!("user-{}@example.com", SubscriberId::new());
     let new = NewSubscriber::builder()
-        .id(id)
         .email(email.clone())
         .plan("pro")
         .build()
@@ -330,12 +323,11 @@ mod frozen {
     use es_entity::*;
     use sqlx::PgPool;
 
-    use super::{NewSubscriber, Subscriber, SubscriberEvent, SubscriberId};
+    use super::{Subscriber, SubscriberEvent, SubscriberId};
 
     #[derive(EsRepo, Debug)]
     #[es_repo(
         entity = "Subscriber",
-        id(supplied),
         forgettable,
         delete = "soft",
         columns(

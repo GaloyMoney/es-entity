@@ -82,7 +82,6 @@ impl TryFromEvents<GcGrandchildEvent> for GcGrandchild {
 
 #[derive(Debug, Clone, Builder)]
 pub struct NewGcGrandchild {
-    pub id: GcGrandchildId,
     pub child_id: GcChildId,
     #[builder(setter(into))]
     pub note: String,
@@ -95,20 +94,18 @@ impl NewGcGrandchild {
 }
 
 impl IntoEvents<GcGrandchildEvent> for NewGcGrandchild {
-    type Id = Supplied;
+    type Id = Generated;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<GcGrandchildEvent, Supplied>,
+        builder: EntityEventsBuilder<GcGrandchildEvent, Generated>,
     ) -> EntityEvents<GcGrandchildEvent> {
-        builder.initial_events(
-            self.id,
-            vec![GcGrandchildEvent::Initialized {
-                id: self.id,
-                child_id: self.child_id,
-                note: self.note,
-            }],
-        )
+        let id = builder.id();
+        builder.initial_events(vec![GcGrandchildEvent::Initialized {
+            id,
+            child_id: self.child_id,
+            note: self.note,
+        }])
     }
 }
 
@@ -171,24 +168,21 @@ impl TryFromEvents<GcChildEvent> for GcChild {
 
 #[derive(Debug, Clone, Builder)]
 pub struct NewGcChild {
-    pub id: GcChildId,
     pub parent_id: GcParentId,
 }
 
 impl IntoEvents<GcChildEvent> for NewGcChild {
-    type Id = Supplied;
+    type Id = Generated;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<GcChildEvent, Supplied>,
+        builder: EntityEventsBuilder<GcChildEvent, Generated>,
     ) -> EntityEvents<GcChildEvent> {
-        builder.initial_events(
-            self.id,
-            vec![GcChildEvent::Initialized {
-                id: self.id,
-                parent_id: self.parent_id,
-            }],
-        )
+        let id = builder.id();
+        builder.initial_events(vec![GcChildEvent::Initialized {
+            id,
+            parent_id: self.parent_id,
+        }])
     }
 }
 
@@ -236,18 +230,17 @@ impl TryFromEvents<GcParentEvent> for GcParent {
 }
 
 #[derive(Debug, Clone, Builder)]
-pub struct NewGcParent {
-    pub id: GcParentId,
-}
+pub struct NewGcParent {}
 
 impl IntoEvents<GcParentEvent> for NewGcParent {
-    type Id = Supplied;
+    type Id = Generated;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<GcParentEvent, Supplied>,
+        builder: EntityEventsBuilder<GcParentEvent, Generated>,
     ) -> EntityEvents<GcParentEvent> {
-        builder.initial_events(self.id, vec![GcParentEvent::Initialized { id: self.id }])
+        let id = builder.id();
+        builder.initial_events(vec![GcParentEvent::Initialized { id }])
     }
 }
 
@@ -255,7 +248,6 @@ impl IntoEvents<GcParentEvent> for NewGcParent {
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "GcGrandchild",
-    id(supplied),
     tbl = "gc_grandchildren",
     events_tbl = "gc_grandchild_events",
     delete = "soft",
@@ -274,7 +266,6 @@ impl GcGrandchildren {
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "GcChild",
-    id(supplied),
     tbl = "gc_children",
     events_tbl = "gc_child_events",
     delete = "soft",
@@ -299,7 +290,6 @@ impl GcChildren {
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "GcParent",
-    id(supplied),
     tbl = "gc_parents",
     events_tbl = "gc_parent_events",
     delete = "soft"
@@ -363,18 +353,12 @@ async fn grandchild_batching_composes_across_the_whole_tree() -> anyhow::Result<
 
     let mut parent_ids = Vec::new();
     for _ in 0..N_PARENTS {
-        let parent_id = GcParentId::new();
         let mut parent = parents_repo
-            .create(NewGcParentBuilder::default().id(parent_id).build()?)
+            .create(NewGcParentBuilder::default().build()?)
             .await?;
+        let parent_id = parent.id;
         for _ in 0..N_CHILDREN_PER_PARENT {
-            let child_id = GcChildId::new();
-            parent.add_child(
-                NewGcChildBuilder::default()
-                    .id(child_id)
-                    .parent_id(parent_id)
-                    .build()?,
-            );
+            parent.add_child(NewGcChildBuilder::default().parent_id(parent_id).build()?);
         }
         parents_repo.update(&mut parent).await?;
         parent_ids.push(parent_id);
@@ -397,7 +381,6 @@ async fn grandchild_batching_composes_across_the_whole_tree() -> anyhow::Result<
     for child in children_vec.iter_mut() {
         child.add_grandchild(
             NewGcGrandchild::builder()
-                .id(GcGrandchildId::new())
                 .child_id(child.id)
                 .note("initial")
                 .build()?,
@@ -424,7 +407,6 @@ async fn grandchild_batching_composes_across_the_whole_tree() -> anyhow::Result<
             child.update_grandchild_note("updated");
             child.add_grandchild(
                 NewGcGrandchild::builder()
-                    .id(GcGrandchildId::new())
                     .child_id(child.id)
                     .note("new")
                     .build()?,

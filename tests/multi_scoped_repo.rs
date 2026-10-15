@@ -13,7 +13,6 @@ use es_entity::*;
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "Facility",
-    id(supplied),
     columns(
         partner_id(ty = "PartnerId", scope),
         customer_id(ty = "CustomerId", scope),
@@ -49,7 +48,6 @@ pub mod overridden_scope {
     #[derive(EsRepo, Debug)]
     #[es_repo(
         entity = "Facility",
-        id(supplied),
         columns(
             partner_id(ty = "PartnerId", scope(variant = "Partner")),
             customer_id(ty = "CustomerId", scope),
@@ -75,9 +73,7 @@ async fn seed_facilities(
 ) -> anyhow::Result<Vec<FacilityId>> {
     let mut ids = Vec::new();
     for status in specs {
-        let id = FacilityId::new();
         let new = NewFacility::builder()
-            .id(id)
             .partner_id(partner_id)
             .customer_id(customer_id)
             .status(*status)
@@ -85,8 +81,7 @@ async fn seed_facilities(
             .unwrap();
         // create is deliberately unscoped: both scope columns are ordinary
         // NewEntity data.
-        repo.create(new).await?;
-        ids.push(id);
+        ids.push(repo.create(new).await?.id);
     }
     Ok(ids)
 }
@@ -366,15 +361,13 @@ async fn scope_variant_override_dispatches_correctly() -> anyhow::Result<()> {
     let partner_b = PartnerId::new();
     let customer_x = CustomerId::new();
 
-    let id_a = FacilityId::new();
     let new = NewFacility::builder()
-        .id(id_a)
         .partner_id(partner_a)
         .customer_id(customer_x)
         .status("active")
         .build()
         .unwrap();
-    facilities.create(new).await?;
+    let id_a = facilities.create(new).await?.id;
 
     // raw id routes through `From<PartnerId> for FacilityScope` into the
     // overridden `Partner` variant

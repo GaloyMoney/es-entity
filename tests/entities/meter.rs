@@ -150,7 +150,6 @@ impl TryFromEvents<MeterEvent, MeterSnapshot> for Meter {
 
 #[derive(Debug, Builder)]
 pub struct NewMeter {
-    pub id: MeterId,
     pub site_id: SiteId,
     #[builder(setter(into))]
     pub label: String,
@@ -163,20 +162,18 @@ impl NewMeter {
 }
 
 impl IntoEvents<MeterEvent> for NewMeter {
-    type Id = Supplied;
+    type Id = Generated;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<MeterEvent, Supplied>,
+        builder: EntityEventsBuilder<MeterEvent, Generated>,
     ) -> EntityEvents<MeterEvent> {
-        builder.initial_events(
-            self.id,
-            [MeterEvent::Initialized {
-                id: self.id,
-                site_id: self.site_id,
-                label: self.label,
-            }],
-        )
+        let id = builder.id();
+        builder.initial_events([MeterEvent::Initialized {
+            id,
+            site_id: self.site_id,
+            label: self.label,
+        }])
     }
 }
 

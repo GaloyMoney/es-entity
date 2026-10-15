@@ -6,7 +6,7 @@ use es_entity::*;
 use sqlx::PgPool;
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "User", id(supplied), columns(name(ty = "String", list_for)))]
+#[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
 pub struct Users {
     pool: PgPool,
 }
@@ -17,6 +17,79 @@ impl Users {
     }
 }
 
+/// `User` with a caller-supplied id, on the `users` tables.
+mod supplied {
+    use derive_builder::Builder;
+    use es_entity::*;
+    use sqlx::PgPool;
+
+    use super::entities::user::{UserEvent, UserId};
+
+    #[derive(EsEntity, Builder)]
+    #[es_entity(event = "UserEvent")]
+    #[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+    pub struct SuppliedUser {
+        pub id: UserId,
+        events: EntityEvents<UserEvent>,
+    }
+
+    impl TryFromEvents<UserEvent> for SuppliedUser {
+        fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
+            let mut builder = SuppliedUserBuilder::default();
+            for event in events.iter_all() {
+                if let UserEvent::Initialized { id, .. } = event {
+                    builder = builder.id(*id);
+                }
+            }
+            builder.events(events).build()
+        }
+    }
+
+    pub struct NewSuppliedUser {
+        pub id: UserId,
+        pub name: String,
+    }
+
+    impl NewSuppliedUser {
+        pub fn new(id: UserId, name: impl Into<String>) -> Self {
+            Self {
+                id,
+                name: name.into(),
+            }
+        }
+    }
+
+    impl IntoEvents<UserEvent> for NewSuppliedUser {
+        type Id = Supplied;
+
+        fn into_events(
+            self,
+            builder: EntityEventsBuilder<UserEvent, Supplied>,
+        ) -> EntityEvents<UserEvent> {
+            builder.initial_events(
+                self.id,
+                [UserEvent::Initialized {
+                    id: self.id,
+                    name: self.name,
+                }],
+            )
+        }
+    }
+
+    #[derive(EsRepo)]
+    #[es_repo(
+        entity = "SuppliedUser",
+        event = "UserEvent",
+        id(ty = "UserId", supplied),
+        tbl = "users",
+        events_tbl = "user_events",
+        columns(name(ty = "String", update(persist = false)))
+    )]
+    pub struct Users {
+        pub pool: PgPool,
+    }
+}
+
 /// Profiles repo with custom accessors:
 /// - `name`: field-path accessor (`data.name`) — accesses nested struct field
 /// - `display_name`: method-call accessor (`display_name()`) — returns owned String
@@ -24,7 +97,6 @@ impl Users {
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "Profile",
-    id(supplied),
     columns(
         name(ty = "String", update(accessor = "data.name")),
         display_name(
@@ -51,7 +123,6 @@ impl Profiles {
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "OrderItem",
-    id(supplied),
     delete = "soft",
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
@@ -75,8 +146,8 @@ fn rejected(
 }
 
 fn rejected_user(
-    err: es_entity::RepoWriteError<UserConstraintViolation>,
-) -> UserConstraintViolation {
+    err: es_entity::RepoWriteError<supplied::SuppliedUserConstraintViolation>,
+) -> supplied::SuppliedUserConstraintViolation {
     match err {
         Fail::Rejected(cv) => cv,
         other => panic!("expected Rejected, got {other:?}"),
@@ -95,7 +166,6 @@ async fn create_duplicate_email_returns_constraint_violation_with_value() -> any
     let email = format!("unique_{}@test.com", ProfileId::new());
 
     let first = NewProfile::builder()
-        .id(ProfileId::new())
         .name("First")
         .email(&email)
         .build()
@@ -103,7 +173,6 @@ async fn create_duplicate_email_returns_constraint_violation_with_value() -> any
     profiles.create(first).await?;
 
     let duplicate = NewProfile::builder()
-        .id(ProfileId::new())
         .name("Second")
         .email(&email)
         .build()
@@ -143,23 +212,26 @@ async fn create_duplicate_email_returns_constraint_violation_with_value() -> any
 #[tokio::test]
 async fn create_duplicate_id_returns_constraint_violation_with_value() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
-    let users = Users::new(pool);
+    let users = supplied::Users { pool };
 
     let id = UserId::new();
 
-    let first = NewUser::builder().id(id).name("First").build().unwrap();
+    let first = supplied::NewSuppliedUser::new(id, "First");
     users.create(first).await?;
 
-    let duplicate = NewUser::builder().id(id).name("Second").build().unwrap();
+    let duplicate = supplied::NewSuppliedUser::new(id, "Second");
     let err = match users.create(duplicate).await {
         Err(e) => e,
         Ok(_) => panic!("expected constraint violation"),
     };
     let cv = rejected_user(err);
 
-    assert!(matches!(&cv, UserConstraintViolation::Pkey(c) if c.attempted == id));
+    assert!(matches!(&cv, supplied::SuppliedUserConstraintViolation::Pkey(c) if c.attempted == id));
     assert_eq!(cv.constraint_name(), "users_pkey");
-    assert!(matches!(&cv, UserConstraintViolation::Pkey(_)));
+    assert!(matches!(
+        &cv,
+        supplied::SuppliedUserConstraintViolation::Pkey(_)
+    ));
     assert_eq!(cv.kind(), ConstraintKind::Unique);
 
     Ok(())
@@ -175,7 +247,7 @@ async fn create_duplicate_id_returns_constraint_violation_with_value() -> anyhow
 #[tokio::test]
 async fn create_all_intra_batch_duplicate_id_classifies_as_duplicate() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
-    let users = Users::new(pool);
+    let users = supplied::Users { pool };
 
     // Duplicate in different positions and batch sizes, in case the chosen
     // plan (and therefore which constraint fires first) varies with shape.
@@ -189,11 +261,7 @@ async fn create_all_intra_batch_duplicate_id_classifies_as_duplicate() -> anyhow
                     } else {
                         UserId::new()
                     };
-                    NewUser::builder()
-                        .id(id)
-                        .name(format!("User{i}"))
-                        .build()
-                        .unwrap()
+                    supplied::NewSuppliedUser::new(id, format!("User{i}"))
                 })
                 .collect();
 
@@ -205,7 +273,9 @@ async fn create_all_intra_batch_duplicate_id_classifies_as_duplicate() -> anyhow
             assert_eq!(err.lane(), Lane::Rejected, "got {err:?}");
             let cv = rejected_user(err);
 
-            assert!(matches!(&cv, UserConstraintViolation::Pkey(c) if c.attempted == dup_id));
+            assert!(
+                matches!(&cv, supplied::SuppliedUserConstraintViolation::Pkey(c) if c.attempted == dup_id)
+            );
 
             // The whole batch rolls back.
             assert!(users.find_by_id(dup_id).await.is_err());
@@ -220,20 +290,16 @@ async fn create_all_intra_batch_duplicate_id_classifies_as_duplicate() -> anyhow
 #[tokio::test]
 async fn create_all_preexisting_duplicate_id_classifies_as_duplicate() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
-    let users = Users::new(pool);
+    let users = supplied::Users { pool };
 
     let id = UserId::new();
     users
-        .create(NewUser::builder().id(id).name("First").build().unwrap())
+        .create(supplied::NewSuppliedUser::new(id, "First"))
         .await?;
 
     let new_users = vec![
-        NewUser::builder()
-            .id(UserId::new())
-            .name("Fresh")
-            .build()
-            .unwrap(),
-        NewUser::builder().id(id).name("Dup").build().unwrap(),
+        supplied::NewSuppliedUser::new(UserId::new(), "Fresh"),
+        supplied::NewSuppliedUser::new(id, "Dup"),
     ];
     let err = match users.create_all(new_users).await {
         Err(e) => e,
@@ -243,7 +309,7 @@ async fn create_all_preexisting_duplicate_id_classifies_as_duplicate() -> anyhow
     assert_eq!(err.lane(), Lane::Rejected);
     let cv = rejected_user(err);
 
-    assert!(matches!(&cv, UserConstraintViolation::Pkey(c) if c.attempted == id));
+    assert!(matches!(&cv, supplied::SuppliedUserConstraintViolation::Pkey(c) if c.attempted == id));
 
     Ok(())
 }
@@ -257,7 +323,6 @@ async fn update_to_duplicate_email_returns_constraint_violation_with_value() -> 
     let email_b = format!("update_b_{}@test.com", ProfileId::new());
 
     let profile_a = NewProfile::builder()
-        .id(ProfileId::new())
         .name("A")
         .email(&email_a)
         .build()
@@ -265,7 +330,6 @@ async fn update_to_duplicate_email_returns_constraint_violation_with_value() -> 
     profiles.create(profile_a).await?;
 
     let profile_b = NewProfile::builder()
-        .id(ProfileId::new())
         .name("B")
         .email(&email_b)
         .build()
@@ -298,7 +362,6 @@ async fn create_fk_violation_is_a_fatal_invariant() -> anyhow::Result<()> {
 
     // No such order exists — violates order_items_order_id_fkey.
     let item = NewOrderItem::builder()
-        .id(OrderItemId::new())
         .order_id(OrderId::new())
         .product_name("Orphan")
         .quantity(1)
@@ -314,8 +377,8 @@ async fn create_fk_violation_is_a_fatal_invariant() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn assert_foreign_key_invariant(err: es_entity::RepoWriteError<OrderItemConstraintViolation>) {
-    let Fail::Fatal(fatal) = err else {
+fn assert_foreign_key_invariant(err: es_entity::RepoFault) {
+    let Fault::Fatal(fatal) = err else {
         panic!("expected Fatal(Invariant), got {err:?}")
     };
     assert_eq!(fatal.kind, FatalKind::Invariant);
@@ -333,7 +396,6 @@ async fn create_all_fk_violation_is_a_fatal_invariant() -> anyhow::Result<()> {
     let order_items = OrderItems::new(pool);
 
     let item = NewOrderItem::builder()
-        .id(OrderItemId::new())
         .order_id(OrderId::new())
         .product_name("Orphan")
         .quantity(1)
@@ -356,7 +418,6 @@ async fn create_check_violation_returns_constraint_violation() -> anyhow::Result
 
     // Blank email violates the profiles_email_not_blank CHECK constraint.
     let profile = NewProfile::builder()
-        .id(ProfileId::new())
         .name("Blank")
         .email("")
         .build()
@@ -385,7 +446,6 @@ async fn update_check_violation_returns_constraint_violation() -> anyhow::Result
 
     let email = format!("check_{}@test.com", ProfileId::new());
     let profile = NewProfile::builder()
-        .id(ProfileId::new())
         .name("Check")
         .email(&email)
         .build()
@@ -478,7 +538,6 @@ async fn unknown_database_constraint_is_fatal_with_original_source() -> anyhow::
     sqlx::query("ALTER TABLE users ADD CONSTRAINT v2_unknown_constraint CHECK (name <> 'v2-unknown-constraint-trigger') NOT VALID")
         .execute(op.as_executor()).await?;
     let new = NewUser::builder()
-        .id(UserId::new())
         .name("v2-unknown-constraint-trigger")
         .build()
         .unwrap();
@@ -487,7 +546,7 @@ async fn unknown_database_constraint_is_fatal_with_original_source() -> anyhow::
         .await
         .err()
         .expect("check fails");
-    let Fail::Fatal(fatal) = error else {
+    let Fault::Fatal(fatal) = error else {
         panic!("unknown constraint must be fatal")
     };
     assert_eq!(fatal.kind, FatalKind::Invariant);
@@ -511,7 +570,6 @@ mod composite {
     #[derive(EsRepo)]
     #[es_repo(
         entity = "Profile",
-        id(supplied),
         tbl = "v2_profiles",
         events_tbl = "v2_profile_events",
         columns(
@@ -532,7 +590,6 @@ async fn composite_partial_index_preserves_typed_key_and_batch_uncertainty() -> 
     let email = format!("composite-{}", ProfileId::new());
     let make = |name: &str| {
         NewProfile::builder()
-            .id(ProfileId::new())
             .name(name)
             .email(&email)
             .build()
@@ -572,16 +629,17 @@ async fn composite_partial_index_preserves_typed_key_and_batch_uncertainty() -> 
 // ===========================================================================
 
 mod custom_pkey {
-    use super::entities::user::*;
+    use super::{entities::user::*, supplied::SuppliedUser};
     use es_entity::*;
     use sqlx::PgPool;
     #[derive(EsRepo, Debug)]
     #[es_repo(
-        entity = "User",
-        id(supplied),
+        entity = "SuppliedUser",
+        event = "UserEvent",
+        id(ty = "UserId", supplied),
         tbl = "v2_widgets",
         events_tbl = "v2_widget_events",
-        columns(name(ty = "String"))
+        columns(name(ty = "String", update(persist = false)))
     )]
     pub struct Widgets {
         pub pool: PgPool,
@@ -596,11 +654,11 @@ async fn custom_named_pkey_attributes_the_id_under_its_own_constraint_name() -> 
 
     let id = UserId::new();
     widgets
-        .create(NewUser::builder().id(id).name("First").build().unwrap())
+        .create(supplied::NewSuppliedUser::new(id, "First"))
         .await?;
 
     let err = match widgets
-        .create(NewUser::builder().id(id).name("Second").build().unwrap())
+        .create(supplied::NewSuppliedUser::new(id, "Second"))
         .await
     {
         Err(e) => e,
@@ -612,20 +670,18 @@ async fn custom_named_pkey_attributes_the_id_under_its_own_constraint_name() -> 
 
     // The variant is still the stable `Pkey`, but its diagnostics carry the
     // migration's own constraint name, not the `v2_widgets_pkey` convention.
-    assert!(matches!(&cv, custom_pkey::UserConstraintViolation::Pkey(c) if c.attempted == id));
+    assert!(
+        matches!(&cv, custom_pkey::SuppliedUserConstraintViolation::Pkey(c) if c.attempted == id)
+    );
     assert_eq!(cv.constraint_name(), "v2_widgets_id_pk");
 
     // The same attribution must also work through `create_all`'s
     // detail-text lookup, which depends on the identical resolved name.
     let dup_id = UserId::new();
     let new_users = vec![
-        NewUser::builder()
-            .id(UserId::new())
-            .name("Fresh")
-            .build()
-            .unwrap(),
-        NewUser::builder().id(dup_id).name("Dup").build().unwrap(),
-        NewUser::builder().id(dup_id).name("Dup2").build().unwrap(),
+        supplied::NewSuppliedUser::new(UserId::new(), "Fresh"),
+        supplied::NewSuppliedUser::new(dup_id, "Dup"),
+        supplied::NewSuppliedUser::new(dup_id, "Dup2"),
     ];
     let err = match widgets.create_all(new_users).await {
         Err(e) => e,
@@ -634,7 +690,9 @@ async fn custom_named_pkey_attributes_the_id_under_its_own_constraint_name() -> 
     let Fail::Rejected(cv) = err else {
         panic!("expected Rejected, got {err:?}")
     };
-    assert!(matches!(&cv, custom_pkey::UserConstraintViolation::Pkey(c) if c.attempted == dup_id));
+    assert!(
+        matches!(&cv, custom_pkey::SuppliedUserConstraintViolation::Pkey(c) if c.attempted == dup_id)
+    );
 
     Ok(())
 }

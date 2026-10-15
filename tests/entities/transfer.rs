@@ -67,8 +67,6 @@ impl TryFromEvents<TransferEvent> for Transfer {
 #[derive(Debug, Builder)]
 pub struct NewTransfer {
     #[builder(setter(into))]
-    pub id: TransferId,
-    #[builder(setter(into))]
     pub account_id: AccountId,
     #[builder(setter(into))]
     pub status: String,
@@ -85,21 +83,19 @@ impl NewTransfer {
 }
 
 impl IntoEvents<TransferEvent> for NewTransfer {
-    type Id = Supplied;
+    type Id = Generated;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<TransferEvent, Supplied>,
+        builder: EntityEventsBuilder<TransferEvent, Generated>,
     ) -> EntityEvents<TransferEvent> {
-        builder.initial_events(
-            self.id,
-            [TransferEvent::Initialized {
-                id: self.id,
-                account_id: self.account_id,
-                status: self.status,
-                reference: self.reference,
-                score: self.score,
-            }],
-        )
+        let id = builder.id();
+        builder.initial_events([TransferEvent::Initialized {
+            id,
+            account_id: self.account_id,
+            status: self.status,
+            reference: self.reference,
+            score: self.score,
+        }])
     }
 }

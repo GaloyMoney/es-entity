@@ -27,10 +27,9 @@ impl RunJob for TestJob {
         let pool = self.pool.clone();
 
         let orders = Orders::new(pool);
-        let order_id = OrderId::new();
-        let new_order = NewOrderBuilder::default().id(order_id).build().unwrap();
+        let new_order = NewOrderBuilder::default().build().unwrap();
 
-        let _ = orders.create(new_order).await?;
+        let order_id = orders.create(new_order).await?.id;
         let mut op = orders.begin_op().await?;
         let mut order = orders.find_by_id_in_op(&mut op, order_id).await?;
         orders.update_in_op(&mut op, &mut order).await?;
@@ -41,7 +40,7 @@ impl RunJob for TestJob {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Order", id(supplied))]
+#[es_repo(entity = "Order")]
 pub struct Orders {
     pool: PgPool,
     #[es_repo(nested)]
@@ -60,7 +59,6 @@ impl Orders {
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "OrderItem",
-    id(supplied),
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
 pub struct OrderItems {

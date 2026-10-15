@@ -54,8 +54,6 @@ impl TryFromEvents<PartyEvent> for Party {
 
 #[derive(Debug, Builder)]
 pub struct NewParty {
-    #[builder(setter(into))]
-    pub id: PartyId,
     #[builder(setter(into, strip_option), default)]
     pub customer_id: Option<CustomerId>,
     #[builder(setter(into))]
@@ -69,19 +67,17 @@ impl NewParty {
 }
 
 impl IntoEvents<PartyEvent> for NewParty {
-    type Id = Supplied;
+    type Id = Generated;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<PartyEvent, Supplied>,
+        builder: EntityEventsBuilder<PartyEvent, Generated>,
     ) -> EntityEvents<PartyEvent> {
-        builder.initial_events(
-            self.id,
-            [PartyEvent::Initialized {
-                id: self.id,
-                customer_id: self.customer_id,
-                name: self.name,
-            }],
-        )
+        let id = builder.id();
+        builder.initial_events([PartyEvent::Initialized {
+            id,
+            customer_id: self.customer_id,
+            name: self.name,
+        }])
     }
 }

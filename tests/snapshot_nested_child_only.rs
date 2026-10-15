@@ -15,7 +15,7 @@ use tracing_subscriber::layer::SubscriberExt;
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "PlainSiteOverMeters",
-    id(ty = "SiteId", supplied),
+    id = "SiteId",
     event = "SiteEvent",
     tbl = "sites",
     events_tbl = "site_events"
@@ -23,7 +23,7 @@ use tracing_subscriber::layer::SubscriberExt;
 pub struct ChildOnlySites {
     pool: PgPool,
 
-    #[es_repo(nested)]
+    #[es_repo(nested, entity = "Meter")]
     meters: ChildOnlyMeters,
 }
 
@@ -39,7 +39,6 @@ impl ChildOnlySites {
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "Meter",
-    id(supplied),
     snapshot,
     columns(
         site_id(ty = "SiteId", update(persist = false), parent),
@@ -84,13 +83,11 @@ async fn nested_child_only_snapshot_one_statement() -> anyhow::Result<()> {
     let pool = init_pool().await?;
     let repo = ChildOnlySites::new(pool);
 
-    let site_id = SiteId::new();
-    let meter_id = MeterId::new();
-    let mut site = repo
-        .create(NewSite::builder().id(site_id).build().unwrap())
-        .await?;
-    site.add_meter(new_meter(meter_id, site_id, "m"));
+    let mut site = repo.create(NewSite::builder().build().unwrap()).await?;
+    let site_id = site.id;
+    site.add_meter(new_meter(site_id, "m"));
     repo.update(&mut site).await?;
+    let meter_id = site.meters.iter_persisted().next().unwrap().id;
 
     for v in 1..=5i64 {
         let _ = site.meters.get_persisted_mut(&meter_id).unwrap().record(v);

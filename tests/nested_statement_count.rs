@@ -12,7 +12,7 @@ use sqlx::PgPool;
 use tracing_subscriber::layer::SubscriberExt;
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Order", id(supplied), delete = "soft")]
+#[es_repo(entity = "Order", delete = "soft")]
 pub struct Orders {
     pool: PgPool,
 
@@ -32,7 +32,6 @@ impl Orders {
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "OrderItem",
-    id(supplied),
     delete = "soft",
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
@@ -68,14 +67,13 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for QueryEventCount {
 }
 
 async fn seed_order(orders: &Orders, item_names: &[&str]) -> anyhow::Result<OrderId> {
-    let order_id = OrderId::new();
     let mut order = orders
-        .create(NewOrderBuilder::default().id(order_id).build().unwrap())
+        .create(NewOrderBuilder::default().build().unwrap())
         .await?;
+    let order_id = order.id;
     for name in item_names {
         order.add_item(
             NewOrderItemBuilder::default()
-                .id(OrderItemId::new())
                 .order_id(order_id)
                 .product_name(*name)
                 .quantity(1)

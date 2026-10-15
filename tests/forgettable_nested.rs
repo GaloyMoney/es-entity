@@ -68,7 +68,6 @@ impl TryFromEvents<AccountHolderEvent> for AccountHolder {
 
 #[derive(Debug, Builder)]
 pub struct NewAccountHolder {
-    pub id: AccountHolderId,
     pub account_id: AccountId,
     #[builder(setter(into))]
     pub name: String,
@@ -83,21 +82,19 @@ impl NewAccountHolder {
 }
 
 impl IntoEvents<AccountHolderEvent> for NewAccountHolder {
-    type Id = Supplied;
+    type Id = Generated;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<AccountHolderEvent, Supplied>,
+        builder: EntityEventsBuilder<AccountHolderEvent, Generated>,
     ) -> EntityEvents<AccountHolderEvent> {
-        builder.initial_events(
-            self.id,
-            [AccountHolderEvent::Initialized {
-                id: self.id,
-                account_id: self.account_id,
-                name: Forgettable::new(self.name),
-                email: Forgettable::new(self.email),
-            }],
-        )
+        let id = builder.id();
+        builder.initial_events([AccountHolderEvent::Initialized {
+            id,
+            account_id: self.account_id,
+            name: Forgettable::new(self.name),
+            email: Forgettable::new(self.email),
+        }])
     }
 }
 
@@ -143,9 +140,7 @@ impl TryFromEvents<AccountEvent> for Account {
 }
 
 #[derive(Debug, Builder)]
-pub struct NewAccount {
-    pub id: AccountId,
-}
+pub struct NewAccount {}
 
 impl NewAccount {
     pub fn builder() -> NewAccountBuilder {
@@ -154,18 +149,19 @@ impl NewAccount {
 }
 
 impl IntoEvents<AccountEvent> for NewAccount {
-    type Id = Supplied;
+    type Id = Generated;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<AccountEvent, Supplied>,
+        builder: EntityEventsBuilder<AccountEvent, Generated>,
     ) -> EntityEvents<AccountEvent> {
-        builder.initial_events(self.id, [AccountEvent::Initialized { id: self.id }])
+        let id = builder.id();
+        builder.initial_events([AccountEvent::Initialized { id }])
     }
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Account", id(supplied), delete = "soft")]
+#[es_repo(entity = "Account", delete = "soft")]
 pub struct Accounts {
     pool: PgPool,
 
@@ -185,7 +181,6 @@ impl Accounts {
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "AccountHolder",
-    id(supplied),
     forgettable,
     delete = "soft",
     columns(
@@ -210,16 +205,14 @@ async fn cascade_delete_scrubs_forgettable_nested_children() -> anyhow::Result<(
 
     // Create a parent with a forgettable child (both a forgettable event field
     // and a forgettable index column).
-    let account_id = AccountId::new();
-    let holder_id = AccountHolderId::new();
-    let email = format!("holder-{holder_id}@example.com");
+    let email = format!("holder-{}@example.com", AccountHolderId::new());
 
     let mut account = accounts
-        .create(NewAccount::builder().id(account_id).build().unwrap())
+        .create(NewAccount::builder().build().unwrap())
         .await?;
+    let account_id = account.id;
     account.add_holder(
         NewAccountHolder::builder()
-            .id(holder_id)
             .account_id(account_id)
             .name("Grace Hopper")
             .email(email.clone())
@@ -232,6 +225,7 @@ async fn cascade_delete_scrubs_forgettable_nested_children() -> anyhow::Result<(
     // value, and a payload row exists.
     let loaded = accounts.find_by_id(account_id).await?;
     assert_eq!(loaded.n_holders(), 1);
+    let holder_id = loaded.holders.iter_persisted().next().unwrap().id;
 
     let row = sqlx::query!(
         "SELECT email FROM account_holders WHERE id = $1",

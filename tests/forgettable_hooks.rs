@@ -49,7 +49,6 @@ pub struct HookCall {
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "Customer",
-    id(supplied),
     forgettable,
     columns(email(ty = "String")),
     post_persist_hook = "publish"
@@ -126,9 +125,7 @@ async fn forget_runs_post_persist_hook_for_staged_erasure_event() -> anyhow::Res
     let pool = helpers::init_pool().await?;
     let customers = CustomersWithHook::new(pool);
 
-    let id = CustomerId::new();
     let new_customer = NewCustomer::builder()
-        .id(id)
         .name("Hooked Hannah")
         .email("hooked@example.com")
         .build()
@@ -156,9 +153,7 @@ async fn forget_without_staged_events_does_not_run_hook() -> anyhow::Result<()> 
     let pool = helpers::init_pool().await?;
     let customers = CustomersWithHook::new(pool);
 
-    let id = CustomerId::new();
     let new_customer = NewCustomer::builder()
-        .id(id)
         .name("Quiet Quinn")
         .email("quiet@example.com")
         .build()
@@ -179,9 +174,7 @@ async fn hook_sees_forgotten_payloads_for_staged_pii_events() -> anyhow::Result<
     let pool = helpers::init_pool().await?;
     let customers = CustomersWithHook::new(pool);
 
-    let id = CustomerId::new();
     let new_customer = NewCustomer::builder()
-        .id(id)
         .name("Leaky Lou")
         .email("leaky@example.com")
         .build()
@@ -213,14 +206,13 @@ async fn hook_error_rolls_back_the_entire_erasure() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let customers = CustomersWithHook::new(pool.clone());
 
-    let id = CustomerId::new();
     let new_customer = NewCustomer::builder()
-        .id(id)
         .name("Rollback Rae")
         .email("rollback@example.com")
         .build()
         .unwrap();
     let mut customer = customers.create(new_customer).await?;
+    let id = customer.id;
 
     customers.fail_on_forgot.store(true, Ordering::SeqCst);
     customer.record_erasure();
@@ -274,14 +266,12 @@ async fn stale_writer_pii_is_fenced_and_leaves_no_trace_after_forget() -> anyhow
     let pool = helpers::init_pool().await?;
     let customers = CustomersWithHook::new(pool.clone());
 
-    let id = CustomerId::new();
     let new_customer = NewCustomer::builder()
-        .id(id)
         .name("Fenced Fran")
         .email("fenced@example.com")
         .build()
         .unwrap();
-    customers.create(new_customer).await?;
+    let id = customers.create(new_customer).await?.id;
 
     let mut stale = customers.find_by_id(id).await?;
     let mut fresh = customers.find_by_id(id).await?;

@@ -6,12 +6,7 @@ use es_entity::*;
 use sqlx::PgPool;
 
 #[derive(EsRepo, Debug)]
-#[es_repo(
-    entity = "Customer",
-    id(supplied),
-    forgettable,
-    columns(email(ty = "String"))
-)]
+#[es_repo(entity = "Customer", forgettable, columns(email(ty = "String")))]
 pub struct Customers {
     pool: PgPool,
 }
@@ -28,7 +23,6 @@ async fn create_and_load_with_forgettable_fields() -> anyhow::Result<()> {
     let customers = Customers::new(pool);
 
     let new_customer = NewCustomer::builder()
-        .id(CustomerId::new())
         .name("Alice Smith")
         .email("alice@example.com")
         .build()
@@ -51,15 +45,14 @@ async fn forget_removes_forgettable_data() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let customers = Customers::new(pool);
 
-    let id = CustomerId::new();
     let new_customer = NewCustomer::builder()
-        .id(id)
         .name("Bob Jones")
         .email("bob@example.com")
         .build()
         .unwrap();
 
     let mut customer = customers.create(new_customer).await?;
+    let id = customer.id;
     assert_eq!(customer.name, "Bob Jones");
 
     // Update the name (adds another event with a forgettable field)
@@ -88,15 +81,14 @@ async fn forget_preserves_non_forgettable_events() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let customers = Customers::new(pool);
 
-    let id = CustomerId::new();
     let new_customer = NewCustomer::builder()
-        .id(id)
         .name("Charlie")
         .email("charlie@example.com")
         .build()
         .unwrap();
 
     let mut customer = customers.create(new_customer).await?;
+    let id = customer.id;
 
     // Update email (non-forgettable field)
     let _ = customer.update_email("charlie_new@example.com");
@@ -118,15 +110,14 @@ async fn staged_erasure_event_is_persisted_by_forget() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let customers = Customers::new(pool.clone());
 
-    let id = CustomerId::new();
     let new_customer = NewCustomer::builder()
-        .id(id)
         .name("Marker Test")
         .email("marker@example.com")
         .build()
         .unwrap();
 
     let mut customer = customers.create(new_customer).await?;
+    let id = customer.id;
 
     // Convention: stage the domain erasure event before forgetting. forget()
     // persists it in the erasure transaction — durable Art. 17 evidence
@@ -173,14 +164,12 @@ async fn staged_erasure_event_fences_stale_writers() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let customers = Customers::new(pool);
 
-    let id = CustomerId::new();
     let new_customer = NewCustomer::builder()
-        .id(id)
         .name("Stale Writer")
         .email("stale@example.com")
         .build()
         .unwrap();
-    customers.create(new_customer).await?;
+    let id = customers.create(new_customer).await?.id;
 
     // Two copies of the same entity: one gets forgotten, one goes stale.
     let mut stale = customers.find_by_id(id).await?;
@@ -210,14 +199,12 @@ async fn forget_without_staged_event_leaves_stale_writers_unfenced() -> anyhow::
     let pool = helpers::init_pool().await?;
     let customers = Customers::new(pool);
 
-    let id = CustomerId::new();
     let new_customer = NewCustomer::builder()
-        .id(id)
         .name("Unfenced")
         .email("unfenced@example.com")
         .build()
         .unwrap();
-    customers.create(new_customer).await?;
+    let id = customers.create(new_customer).await?.id;
 
     let mut stale = customers.find_by_id(id).await?;
     let fresh = customers.find_by_id(id).await?;
@@ -247,14 +234,13 @@ async fn forget_persists_staged_events_without_laundering() -> anyhow::Result<()
     let pool = helpers::init_pool().await?;
     let customers = Customers::new(pool.clone());
 
-    let id = CustomerId::new();
     let new_customer = NewCustomer::builder()
-        .id(id)
         .name("Pending Pat")
         .email("pending@example.com")
         .build()
         .unwrap();
     let mut customer = customers.create(new_customer).await?;
+    let id = customer.id;
 
     // Mutate without persisting: the staged event carries a raw forgettable
     // value in memory. forget() persists it BEFORE deleting payload rows,
@@ -292,15 +278,14 @@ async fn events_table_stores_null_for_live_forgettable_fields() -> anyhow::Resul
     let pool = helpers::init_pool().await?;
     let customers = Customers::new(pool.clone());
 
-    let id = CustomerId::new();
     let new_customer = NewCustomer::builder()
-        .id(id)
         .name("Nina Null")
         .email("nina@example.com")
         .build()
         .unwrap();
 
     let customer = customers.create(new_customer).await?;
+    let id = customer.id;
     // The live entity has the value...
     assert_eq!(customer.name, "Nina Null");
 
@@ -339,17 +324,13 @@ async fn create_all_stores_payloads_and_nulls_events() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let customers = Customers::new(pool.clone());
 
-    let id1 = CustomerId::new();
-    let id2 = CustomerId::new();
     let new_customers = vec![
         NewCustomer::builder()
-            .id(id1)
             .name("Batch One")
             .email("batch1@example.com")
             .build()
             .unwrap(),
         NewCustomer::builder()
-            .id(id2)
             .name("Batch Two")
             .email("batch2@example.com")
             .build()
@@ -358,6 +339,7 @@ async fn create_all_stores_payloads_and_nulls_events() -> anyhow::Result<()> {
 
     let created = customers.create_all(new_customers).await?;
     assert_eq!(created.len(), 2);
+    let (id1, id2) = (created[0].id, created[1].id);
 
     // Batch persistence must extract payloads exactly like the single path:
     // events hold null, payload rows hold the values.
@@ -393,24 +375,19 @@ async fn find_all_works_with_forgettable() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let customers = Customers::new(pool);
 
-    let id1 = CustomerId::new();
-    let id2 = CustomerId::new();
-
     let c1 = NewCustomer::builder()
-        .id(id1)
         .name("Dave")
         .email("dave@example.com")
         .build()
         .unwrap();
     let c2 = NewCustomer::builder()
-        .id(id2)
         .name("Eve")
         .email("eve@example.com")
         .build()
         .unwrap();
 
-    customers.create(c1).await?;
-    customers.create(c2).await?;
+    let id1 = customers.create(c1).await?.id;
+    let id2 = customers.create(c2).await?.id;
 
     let all = customers.find_all::<Customer>(&[id1, id2]).await?;
     assert_eq!(all.len(), 2);

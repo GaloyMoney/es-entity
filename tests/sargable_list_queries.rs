@@ -13,7 +13,6 @@ use es_entity::*;
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "Transfer",
-    id(supplied),
     columns(
         account_id(ty = "AccountId", list_for(by(created_at))),
         status(ty = "String", list_for(by(created_at))),
@@ -47,7 +46,6 @@ async fn seed_transfers(
 ) -> anyhow::Result<()> {
     for (account_id, status, reference, score) in specs {
         let mut new = NewTransfer::builder()
-            .id(TransferId::new())
             .account_id(AccountId::from(*account_id))
             .status(*status)
             .score(*score)

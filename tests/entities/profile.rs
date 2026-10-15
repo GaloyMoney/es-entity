@@ -101,8 +101,6 @@ impl TryFromEvents<ProfileEvent> for Profile {
 #[derive(Debug, Builder)]
 pub struct NewProfile {
     #[builder(setter(into))]
-    pub id: ProfileId,
-    #[builder(setter(into))]
     pub name: String,
     #[builder(setter(into))]
     pub email: String,
@@ -119,19 +117,17 @@ impl NewProfile {
 }
 
 impl IntoEvents<ProfileEvent> for NewProfile {
-    type Id = Supplied;
+    type Id = Generated;
 
     fn into_events(
         self,
-        builder: EntityEventsBuilder<ProfileEvent, Supplied>,
+        builder: EntityEventsBuilder<ProfileEvent, Generated>,
     ) -> EntityEvents<ProfileEvent> {
-        builder.initial_events(
-            self.id,
-            [ProfileEvent::Initialized {
-                id: self.id,
-                name: self.name,
-                email: self.email,
-            }],
-        )
+        let id = builder.id();
+        builder.initial_events([ProfileEvent::Initialized {
+            id,
+            name: self.name,
+            email: self.email,
+        }])
     }
 }

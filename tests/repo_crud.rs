@@ -19,7 +19,7 @@ mod generic_e_repo {
     pub trait EventMarker: std::fmt::Debug + Send + Sync + 'static {}
 
     #[derive(EsRepo, Debug)]
-    #[es_repo(entity = "User", id(supplied), columns(name(ty = "String", list_for)))]
+    #[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
     pub struct UsersWithGenericE<E: EventMarker> {
         pool: PgPool,
         _marker: std::marker::PhantomData<E>,
@@ -27,7 +27,7 @@ mod generic_e_repo {
 }
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "User", id(supplied), columns(name(ty = "String", list_for)))]
+#[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
 pub struct Users {
     pool: PgPool,
 }
@@ -46,11 +46,7 @@ async fn create() -> anyhow::Result<()> {
 
     let users = Users::new(pool);
 
-    let new_user = NewUser::builder()
-        .id(UserId::new())
-        .name("Frank")
-        .build()
-        .unwrap();
+    let new_user = NewUser::builder().name("Frank").build().unwrap();
 
     let mut user = users.create(new_user).await?;
 
@@ -72,11 +68,7 @@ async fn list_by() -> anyhow::Result<()> {
 
     let users = Users::new(pool);
 
-    let new_user = NewUser::builder()
-        .id(UserId::new())
-        .name("Frank")
-        .build()
-        .unwrap();
+    let new_user = NewUser::builder().name("Frank").build().unwrap();
 
     users.create(new_user).await?;
     let result = users
@@ -121,11 +113,7 @@ async fn list_for_filters() -> anyhow::Result<()> {
 
     // Create a user with a unique name for testing the filter
     let unique_name = format!("FiltersTest_{}", UserId::new());
-    let new_user = NewUser::builder()
-        .id(UserId::new())
-        .name(&unique_name)
-        .build()
-        .unwrap();
+    let new_user = NewUser::builder().name(&unique_name).build().unwrap();
 
     users.create(new_user).await?;
 
@@ -199,7 +187,7 @@ async fn collecting_pages_preserves_requested_size() -> anyhow::Result<()> {
     let mut expected_ids = std::collections::HashSet::new();
     for _ in 0..7 {
         let user = users
-            .create(NewUser::builder().id(UserId::new()).name(&name).build()?)
+            .create(NewUser::builder().name(&name).build()?)
             .await?;
         expected_ids.insert(user.id);
     }
@@ -283,7 +271,7 @@ async fn collecting_filtered_pages_crosses_default_page_boundary() -> anyhow::Re
     for count in [100, 101] {
         while expected_ids.len() < count {
             let user = users
-                .create(NewUser::builder().id(UserId::new()).name(&name).build()?)
+                .create(NewUser::builder().name(&name).build()?)
                 .await?;
             expected_ids.push(user.id);
         }
@@ -350,21 +338,9 @@ async fn update_all() -> anyhow::Result<()> {
     let users = Users::new(pool);
 
     let new_users = vec![
-        NewUser::builder()
-            .id(UserId::new())
-            .name("Alice")
-            .build()
-            .unwrap(),
-        NewUser::builder()
-            .id(UserId::new())
-            .name("Bob")
-            .build()
-            .unwrap(),
-        NewUser::builder()
-            .id(UserId::new())
-            .name("Charlie")
-            .build()
-            .unwrap(),
+        NewUser::builder().name("Alice").build().unwrap(),
+        NewUser::builder().name("Bob").build().unwrap(),
+        NewUser::builder().name("Charlie").build().unwrap(),
     ];
 
     let mut created = users.create_all(new_users).await?;
@@ -399,11 +375,7 @@ async fn update_concurrent_modification() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let users = Users::new(pool);
 
-    let new_user = NewUser::builder()
-        .id(UserId::new())
-        .name("Concurrent")
-        .build()
-        .unwrap();
+    let new_user = NewUser::builder().name("Concurrent").build().unwrap();
     let user = users.create(new_user).await?;
 
     let mut first = users.find_by_id(user.id).await?;
@@ -432,11 +404,7 @@ async fn update_all_concurrent_modification() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let users = Users::new(pool);
 
-    let new_user = NewUser::builder()
-        .id(UserId::new())
-        .name("BulkConcurrent")
-        .build()
-        .unwrap();
+    let new_user = NewUser::builder().name("BulkConcurrent").build().unwrap();
     let user = users.create(new_user).await?;
 
     let mut first = vec![users.find_by_id(user.id).await?];
@@ -477,13 +445,7 @@ async fn update_of_vanished_row_is_concurrent_modification() -> anyhow::Result<(
     let users = Users::new(pool.clone());
 
     let mut user = users
-        .create(
-            NewUser::builder()
-                .id(UserId::new())
-                .name("Vanishing")
-                .build()
-                .unwrap(),
-        )
+        .create(NewUser::builder().name("Vanishing").build().unwrap())
         .await?;
     vanish(&pool, user.id).await?;
 
@@ -504,11 +466,7 @@ async fn update_all_of_vanished_row_is_concurrent_modification() -> anyhow::Resu
 
     let mut batch = users
         .create_all(vec![
-            NewUser::builder()
-                .id(UserId::new())
-                .name("BulkVanishing")
-                .build()
-                .unwrap(),
+            NewUser::builder().name("BulkVanishing").build().unwrap(),
         ])
         .await?;
     vanish(&pool, batch[0].id).await?;

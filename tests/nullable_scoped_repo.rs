@@ -15,7 +15,6 @@ use es_entity::*;
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "Party",
-    id(supplied),
     columns(
         customer_id(
             ty = "Option<CustomerId>",
@@ -40,24 +39,19 @@ async fn seed_owned(
     customer_id: CustomerId,
     name: &str,
 ) -> anyhow::Result<PartyId> {
-    let id = PartyId::new();
     let new = NewParty::builder()
-        .id(id)
         .customer_id(customer_id)
         .name(name)
         .build()
         .unwrap();
-    repo.create(new).await?;
-    Ok(id)
+    Ok(repo.create(new).await?.id)
 }
 
 async fn seed_unowned(repo: &Parties, name: &str) -> anyhow::Result<PartyId> {
-    let id = PartyId::new();
     // No `.customer_id(..)` call — the field stays `None`, persisted as SQL
     // NULL: this row belongs to no customer directly.
-    let new = NewParty::builder().id(id).name(name).build().unwrap();
-    repo.create(new).await?;
-    Ok(id)
+    let new = NewParty::builder().name(name).build().unwrap();
+    Ok(repo.create(new).await?.id)
 }
 
 /// The generated variant carries the inner `CustomerId`, not

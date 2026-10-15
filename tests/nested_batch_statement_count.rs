@@ -30,7 +30,7 @@ use sqlx::PgPool;
 use tracing_subscriber::layer::SubscriberExt;
 
 #[derive(EsRepo, Debug)]
-#[es_repo(entity = "Order", id(supplied), delete = "soft")]
+#[es_repo(entity = "Order", delete = "soft")]
 pub struct Orders {
     pool: PgPool,
 
@@ -50,7 +50,6 @@ impl Orders {
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "OrderItem",
-    id(supplied),
     delete = "soft",
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
@@ -89,22 +88,15 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for SpanCounts {
     }
 }
 
-async fn create_order_with_items(
-    orders: &Orders,
-    n_items: usize,
-) -> anyhow::Result<(OrderId, Vec<OrderItemId>)> {
-    let order_id = OrderId::new();
+async fn create_order_with_items(orders: &Orders, n_items: usize) -> anyhow::Result<OrderId> {
     let mut order = orders
-        .create(NewOrderBuilder::default().id(order_id).build().unwrap())
+        .create(NewOrderBuilder::default().build().unwrap())
         .await?;
+    let order_id = order.id;
 
-    let mut item_ids = Vec::new();
     for i in 0..n_items {
-        let item_id = OrderItemId::new();
-        item_ids.push(item_id);
         order.add_item(
             NewOrderItemBuilder::default()
-                .id(item_id)
                 .order_id(order_id)
                 .product_name(format!("item-{i}"))
                 .quantity(1)
@@ -115,7 +107,7 @@ async fn create_order_with_items(
     }
     orders.update(&mut order).await?;
 
-    Ok((order_id, item_ids))
+    Ok(order_id)
 }
 
 /// N parents, each with M already-persisted children being updated and one
@@ -133,7 +125,7 @@ async fn update_all_batches_nested_children_across_parents() -> anyhow::Result<(
 
     let mut order_ids = Vec::new();
     for _ in 0..N_PARENTS {
-        let (order_id, _items) = create_order_with_items(&orders, M_PERSISTED_ITEMS).await?;
+        let order_id = create_order_with_items(&orders, M_PERSISTED_ITEMS).await?;
         order_ids.push(order_id);
     }
 
@@ -152,7 +144,6 @@ async fn update_all_batches_nested_children_across_parents() -> anyhow::Result<(
             .expect("item-0 exists");
         order.add_item(
             NewOrderItemBuilder::default()
-                .id(OrderItemId::new())
                 .order_id(order.id)
                 .product_name("new-item")
                 .quantity(1)
@@ -222,7 +213,7 @@ async fn update_all_mut_accepts_a_chained_iterator() -> anyhow::Result<()> {
 
     let mut order_ids = Vec::new();
     for _ in 0..N_PARENTS {
-        let (order_id, _items) = create_order_with_items(&orders, M_ITEMS).await?;
+        let order_id = create_order_with_items(&orders, M_ITEMS).await?;
         order_ids.push(order_id);
     }
 
