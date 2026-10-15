@@ -98,8 +98,6 @@ impl TryFromEvents<CustomerEvent> for Customer {
 #[derive(Debug, Builder)]
 pub struct NewCustomer {
     #[builder(setter(into))]
-    pub id: CustomerId,
-    #[builder(setter(into))]
     pub name: String,
     #[builder(setter(into))]
     pub email: String,
@@ -112,14 +110,17 @@ impl NewCustomer {
 }
 
 impl IntoEvents<CustomerEvent> for NewCustomer {
-    fn into_events(self) -> EntityEvents<CustomerEvent> {
-        EntityEvents::init(
-            self.id,
-            [CustomerEvent::Initialized {
-                id: self.id,
-                name: Forgettable::new(self.name),
-                email: self.email,
-            }],
-        )
+    type IdSource = FromRepo;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<CustomerEvent, FromRepo>,
+    ) -> EntityEvents<CustomerEvent> {
+        let id = builder.id();
+        builder.initial_events([CustomerEvent::Initialized {
+            id,
+            name: Forgettable::new(self.name),
+            email: self.email,
+        }])
     }
 }

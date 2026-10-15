@@ -4,7 +4,7 @@ use derive_builder::Builder;
 use es_entity::*;
 use serde::{Deserialize, Serialize};
 
-use super::meter::{Meter, MeterId, NewMeter, PlainMeter, SiteId};
+use super::meter::{Meter, NewMeter, PlainMeter, SiteId};
 
 #[derive(EsEvent, Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -129,9 +129,7 @@ impl PlainSiteOverMeters {
 }
 
 #[derive(Debug, Builder)]
-pub struct NewSite {
-    pub id: SiteId,
-}
+pub struct NewSite {}
 
 impl NewSite {
     pub fn builder() -> NewSiteBuilder {
@@ -140,14 +138,19 @@ impl NewSite {
 }
 
 impl IntoEvents<SiteEvent> for NewSite {
-    fn into_events(self) -> EntityEvents<SiteEvent> {
-        EntityEvents::init(self.id, [SiteEvent::Initialized { id: self.id }])
+    type IdSource = FromRepo;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<SiteEvent, FromRepo>,
+    ) -> EntityEvents<SiteEvent> {
+        let id = builder.id();
+        builder.initial_events([SiteEvent::Initialized { id }])
     }
 }
 
-pub fn new_meter(id: MeterId, site_id: SiteId, label: &str) -> NewMeter {
+pub fn new_meter(site_id: SiteId, label: &str) -> NewMeter {
     NewMeter::builder()
-        .id(id)
         .site_id(site_id)
         .label(label)
         .build()

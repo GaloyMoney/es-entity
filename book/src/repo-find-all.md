@@ -26,14 +26,13 @@ Unlike `find_by_id`, `find_all` does **not** return a `NotFound` error for missi
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
-#             self.id,
-#             [UserEvent::Initialized {
-#                 id: self.id,
-#                 name: self.name,
-#             }],
-#         )
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
+#         let id = builder.id();
+#         builder.initial_events([UserEvent::Initialized {
+#             id,
+#             name: self.name,
+#         }])
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
@@ -41,7 +40,7 @@ Unlike `find_by_id`, `find_all` does **not** return a `NotFound` error for missi
 #         Ok(User { id: events.id().clone(), name: "Fred".to_string(), events })
 #     }
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 use es_entity::*;
 
 #[derive(EsEntity)]
@@ -66,9 +65,9 @@ async fn main() -> anyhow::Result<()> {
     let users = Users { pool: init_pool().await? };
     
     // Create multiple users
-    let user1 = users.create(NewUser { id: UserId::new(), name: "Alice".to_string() }).await?;
-    let user2 = users.create(NewUser { id: UserId::new(), name: "Bob".to_string() }).await?;
-    let user3 = users.create(NewUser { id: UserId::new(), name: "Charlie".to_string() }).await?;
+    let user1 = users.create(NewUser { name: "Alice".to_string() }).await?;
+    let user2 = users.create(NewUser { name: "Bob".to_string() }).await?;
+    let user3 = users.create(NewUser { name: "Charlie".to_string() }).await?;
 
     // Fetch multiple users by their IDs
     let ids = vec![user1.id.clone(), user2.id.clone(), user3.id.clone()];

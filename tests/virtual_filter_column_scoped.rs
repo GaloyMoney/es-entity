@@ -40,13 +40,11 @@ async fn create_contact(
     partner_id: PartnerId,
     status: &str,
 ) -> anyhow::Result<Contact> {
-    let id = ContactId::new();
     Ok(repo
         .create(
             NewContact::builder()
-                .id(id)
                 .partner_id(partner_id)
-                .email(format!("{id}@test.com"))
+                .email(format!("{}@test.com", ContactId::new()))
                 .status(status)
                 .build()
                 .unwrap(),

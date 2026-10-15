@@ -37,6 +37,9 @@ pub struct ErrorClassifier<'a> {
     /// with `-D warnings`. `classify_create_write` needs no such gate:
     /// `create` and `create_all` always issue the combined statement.
     needs_write_classifier: bool,
+    /// The repo resolves ids itself (`id(source = repo)`): a collision on a
+    /// fresh id is `Fatal(Invariant)`, never a `Pkey` rejection.
+    generated_id: bool,
 }
 
 impl<'a> From<&'a RepositoryOptions> for ErrorClassifier<'a> {
@@ -59,6 +62,7 @@ impl<'a> From<&'a RepositoryOptions> for ErrorClassifier<'a> {
 
             events_table_name: opts.events_table_name(),
             needs_write_classifier: opts.columns.updates_needed() || opts.delete.is_soft(),
+            generated_id: opts.id_source().is_repo(),
         }
     }
 }
@@ -70,6 +74,7 @@ impl ToTokens for ErrorClassifier<'_> {
             self.id_type,
             &self.index_pkey,
             self.events_table_name,
+            self.generated_id,
         ));
         if self.needs_write_classifier {
             tokens.append_all(update_write_classifier_fn(
@@ -96,7 +101,14 @@ fn index_violation_arm(constraint_violation: &syn::Ident, events_table: &str) ->
             let name = db_err.constraint().unwrap_or("unknown").to_owned();
             match #constraint_violation::from_database(e, &name) {
                 Ok(rejection) => errlanes::Fail::Rejected(rejection),
-                Err(source) => errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, source).with_context(name).into(),
+                Err(source) => {
+                    let context: std::borrow::Cow<'static, str> =
+                        match #constraint_violation::foreign_key_context(&name) {
+                            Some(context) => std::borrow::Cow::Borrowed(context),
+                            None => std::borrow::Cow::Owned(name),
+                        };
+                    errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, source).with_context(context).into()
+                }
             }
         }
     }
@@ -139,9 +151,34 @@ fn create_write_classifier_fn(
     id_type: &syn::Ident,
     index_pkey: &str,
     events_table_name: &str,
+    generated_id: bool,
 ) -> TokenStream {
     let events_table = bare_table_name(events_table_name);
     let index_arm = index_violation_arm(constraint_violation, events_table);
+    if generated_id {
+        let collision_context = format!("{index_pkey}: generated id collided");
+        return quote! {
+            #[inline(always)]
+            fn classify_create_write(
+                e: sqlx::Error,
+            ) -> es_entity::RepoWriteError<#constraint_violation> {
+                match &e {
+                    sqlx::Error::Database(db_err)
+                        if db_err.is_unique_violation()
+                            && (db_err.table() == Some(#events_table)
+                                || db_err.constraint() == Some(#index_pkey)) =>
+                    {
+                        errlanes::Fail::from(
+                            errlanes::Fatal::from_error(errlanes::FatalKind::Invariant, e)
+                                .with_context(#collision_context)
+                        )
+                    }
+                    #index_arm
+                    _ => errlanes::Fail::from(e),
+                }
+            }
+        };
+    }
     let not_attributable_context = format!("{index_pkey}: conflicting id not attributable");
     quote! {
         #[inline(always)]

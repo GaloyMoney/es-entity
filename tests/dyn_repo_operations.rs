@@ -38,11 +38,7 @@ async fn generated_in_op_fns_accept_dyn_atomic_operation_directly() -> anyhow::R
     let users = Users::new(pool.clone());
     let mut db_op = DbOp::init(&pool).await?;
 
-    let new_user = NewUser::builder()
-        .id(UserId::new())
-        .name("Dyn Op")
-        .build()
-        .unwrap();
+    let new_user = NewUser::builder().name("Dyn Op").build().unwrap();
 
     // `create_in_op` takes `op: &mut OP`. Passing a `&mut dyn AtomicOperation`
     // straight through unifies `OP = dyn AtomicOperation` — only possible
@@ -134,11 +130,7 @@ async fn hook_configured_repo_still_accepts_dyn_atomic_operation_directly() -> a
     let tasks = TasksWithHook::new(pool.clone());
     let mut db_op = DbOp::init(&pool).await?;
 
-    let new_task = NewTask::builder()
-        .id(TaskId::new())
-        .status("open")
-        .build()
-        .unwrap();
+    let new_task = NewTask::builder().status("open").build().unwrap();
 
     let op: &mut dyn AtomicOperation = &mut db_op;
     let _task = tasks.create_in_op(op, new_task).await?;

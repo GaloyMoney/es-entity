@@ -169,13 +169,15 @@ impl TryFromEvents<CustomerEvent> for Customer {
     }
 }
 # impl IntoEvents<CustomerEvent> for NewCustomer {
-#     fn into_events(self) -> EntityEvents<CustomerEvent> {
-#         EntityEvents::init(self.id, [CustomerEvent::Initialized {
-#             id: self.id, name: Forgettable::new(self.name), email: self.email,
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<CustomerEvent, FromRepo>) -> EntityEvents<CustomerEvent> {
+#         let id = builder.id();
+#         builder.initial_events([CustomerEvent::Initialized {
+#             id, name: Forgettable::new(self.name), email: self.email,
 #         }])
 #     }
 # }
-# pub struct NewCustomer { id: CustomerId, name: String, email: String }
+# pub struct NewCustomer { name: String, email: String }
 # fn main() {}
 ```
 
@@ -242,7 +244,7 @@ runs:
 
 If no staged events are persisted the hook is not invoked, matching
 `update`'s no-op semantics. A hook failure widens directly into `forget`'s
-`es_entity::RepoWriteError<{Entity}ConstraintViolation>` — see [Hooks](./repo-hooks.md).
+`es_entity::RepoWriteError<{Entity}ConstraintViolation>` (or its plain `RepoFault`, see [Error Types](./repo-errors.md)) — see [Hooks](./repo-hooks.md).
 
 ## Custom Queries with `es_query!`
 
@@ -317,7 +319,6 @@ pub struct Customer {
 }
 
 pub struct NewCustomer {
-    pub id: CustomerId,
     pub name: String,              // New entity holds the raw value
     // ...
 }

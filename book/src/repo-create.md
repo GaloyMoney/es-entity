@@ -21,14 +21,13 @@ In the code below we want to include a `name` column in the `index` table that r
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
-#             self.id,
-#             [UserEvent::Initialized {
-#                 id: self.id,
-#                 name: self.name,
-#             }],
-#         )
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
+#         let id = builder.id();
+#         builder.initial_events([UserEvent::Initialized {
+#             id,
+#             name: self.name,
+#         }])
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
@@ -39,7 +38,6 @@ In the code below we want to include a `name` column in the `index` table that r
 use es_entity::*;
 
 pub struct NewUser {
-    id: UserId,
     // The `name` attribute on the `NewEntity` must be accessible
     // for inserting into the `index` table.
     name: String
@@ -67,7 +65,7 @@ pub struct Users {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let users = Users { pool: init_pool().await? };
-    let new_user = NewUser { id: UserId::new(), name: "Fred".to_string() };
+    let new_user = NewUser { name: "Fred".to_string() };
     // The `create` fn takes a `NewEntity` and returns a persisted and hydrated `Entity`
     let _user = users.create(new_user).await?;
 
@@ -81,8 +79,9 @@ impl Users {
     pub async fn create(
         &self,
         new_entity: NewUser
-    ) -> Result<User, es_entity::RepoWriteError<UserConstraintViolation>> {
-        let id = &new_entity.id;
+    ) -> Result<User, es_entity::RepoFault> {
+        // The repository mints the id
+        let id = &UserId::new();
         // The attribute specified in the `columns` option
         let name = &new_entity.name;
 
@@ -117,7 +116,8 @@ The `create(accessor = "<>")` option modifies how the field is accessed on the `
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -134,7 +134,7 @@ The `create(accessor = "<>")` option modifies how the field is accessed on the `
 # }
 use es_entity::*;
 
-pub struct NewUser { id: UserId, some_hidden_field: String }
+pub struct NewUser { some_hidden_field: String }
 impl NewUser {
     fn my_name(&self) -> String {
         self.some_hidden_field.clone()
@@ -173,7 +173,8 @@ This is useful for dynamic values that don't become known until later on in the 
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -191,7 +192,7 @@ This is useful for dynamic values that don't become known until later on in the 
 use es_entity::*;
 
 // There is no `name` attribute because we do not initially insert into this column.
-pub struct NewUser { id: UserId }
+pub struct NewUser;
 
 #[derive(EsRepo)]
 #[es_repo(
@@ -204,3 +205,18 @@ pub struct Users {
     pool: sqlx::PgPool
 }
 ```
+
+## create_or_find_by_id_in_op
+
+A repo with `id(source = caller)` (see [id](./repo-id.md)) also gets
+`create_or_find_by_id_in_op`, for entities whose id is deterministic and which
+may already exist:
+
+```rust,ignore
+pub enum Ensured<E> { Created(E), Found(E) }
+
+pub async fn create_or_find_by_id_in_op<OP>(&self, op: &mut OP, new: NewUser)
+    -> Result<Ensured<User>, es_entity::RepoWriteError<UserConstraintViolation>>
+```
+
+The method is not generated for a repo with scope columns.

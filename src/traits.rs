@@ -8,6 +8,7 @@ use super::{
     db,
     error::EntityHydrationError,
     events::EntityEvents,
+    id_source::{EntityEventsBuilder, IdSource},
     snapshot::{EsSnapshot, NoSnapshot},
     tree_query::TreeSpec,
 };
@@ -108,9 +109,9 @@ pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
 ///     events: EntityEvents<UserEvent>
 /// }
 ///
-/// // The `NewEntity` type used for initialization.
+/// // The `NewEntity` type used for initialization. It has no id: the repo
+/// // generates one and hands it over through the builder.
 /// pub struct NewUser {
-///     id: UserId,
 ///     name: String
 /// }
 ///
@@ -118,14 +119,14 @@ pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
 /// // These events help track `Entity` state mutations
 /// // Returns the `EntityEvents<UserEvent>`
 /// impl IntoEvents<UserEvent> for NewUser {
-///     fn into_events(self) -> EntityEvents<UserEvent> {
-///         EntityEvents::init(
-///             self.id,
-///             [UserEvent::Initialized {
-///                 id: self.id,
-///                 name: self.name,
-///             }],
-///         )
+///     type IdSource = FromRepo;
+///
+///     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
+///         let id = builder.id();
+///         builder.initial_events([UserEvent::Initialized {
+///             id,
+///             name: self.name,
+///         }])
 ///     }
 /// }
 ///
@@ -144,9 +145,16 @@ pub trait EsEvent: DeserializeOwned + Serialize + Send + Sync {
 ///     }
 /// }
 /// ```
-pub trait IntoEvents<E: EsEvent> {
+pub trait IntoEvents<E: EsEvent>: Sized {
+    /// Where the id comes from: [`FromRepo`](crate::FromRepo) (the repo
+    /// generates it and the `New*` type has no id field) or
+    /// [`FromCaller`](crate::FromCaller) (the caller puts a deterministic one
+    /// in the `New*` value). It must agree with the repo's `id(source = ..)`;
+    /// a mismatch does not compile.
+    type IdSource: IdSource;
+
     /// Method to implement which emits event stream from a `NewEntity`
-    fn into_events(self) -> EntityEvents<E>;
+    fn into_events(self, builder: EntityEventsBuilder<E, Self::IdSource>) -> EntityEvents<E>;
 }
 
 /// Required trait for re-constructing entities from their events in chronological order.
@@ -178,22 +186,21 @@ pub trait IntoEvents<E: EsEvent> {
 ///     events: EntityEvents<UserEvent>
 /// }
 ///
-/// // The 'NewEntity' type used for initialization.
+/// // The 'NewEntity' type used for initialization
 /// pub struct NewUser {
-///     id: UserId,
 ///     name: String
 /// }
 ///
 /// // The IntoEvents implementation which emits an event stream.
 /// impl IntoEvents<UserEvent> for NewUser {
-///     fn into_events(self) -> EntityEvents<UserEvent> {
-///         EntityEvents::init(
-///             self.id,
-///             [UserEvent::Initialized {
-///                 id: self.id,
-///                 name: self.name,
-///             }],
-///         )
+///     type IdSource = FromRepo;
+///
+///     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
+///         let id = builder.id();
+///         builder.initial_events([UserEvent::Initialized {
+///             id,
+///             name: self.name,
+///         }])
 ///     }
 /// }
 ///
@@ -271,6 +278,11 @@ pub trait EsEntity: TryFromEvents<Self::Event, Self::Snapshot> + Send {
 
     /// Returns mutable reference to the entity's events
     fn events_mut(&mut self) -> &mut EntityEvents<Self::Event, Self::Snapshot>;
+
+    /// The entity's own `id` field, which hydration compares against the id
+    /// the events are stored under. Implemented by the derive.
+    #[doc(hidden)]
+    fn __entity_id(&self) -> &<Self::Event as EsEvent>::EntityId;
 }
 
 /// Required trait for all repositories to be compatible with es-entity and generate functions.
@@ -326,9 +338,10 @@ pub trait EsEntity: TryFromEvents<Self::Event, Self::Snapshot> + Send {
 /// # pub enum UserEvent {
 /// #     Initialized { id: UserId, name: String },
 /// # }
-/// # pub struct NewUser { id: UserId, name: String }
+/// # pub struct NewUser { name: String }
 /// # impl IntoEvents<UserEvent> for NewUser {
-/// #     fn into_events(self) -> EntityEvents<UserEvent> { unimplemented!() }
+/// #     type IdSource = FromRepo;
+/// #     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> { unimplemented!() }
 /// # }
 /// # #[derive(EsEntity)]
 /// # pub struct User {
@@ -370,9 +383,10 @@ pub trait EsEntity: TryFromEvents<Self::Event, Self::Snapshot> + Send {
 /// # pub enum UserEvent {
 /// #     Initialized { id: UserId, name: String },
 /// # }
-/// # pub struct NewUser { id: UserId, name: String }
+/// # pub struct NewUser { name: String }
 /// # impl IntoEvents<UserEvent> for NewUser {
-/// #     fn into_events(self) -> EntityEvents<UserEvent> { unimplemented!() }
+/// #     type IdSource = FromRepo;
+/// #     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> { unimplemented!() }
 /// # }
 /// # #[derive(EsEntity)]
 /// # pub struct User {
@@ -405,9 +419,12 @@ pub trait EsRepo: Send {
     /// its statement can hit no constraint and the repo has no nested
     /// children, in which case it returns the plain `Result<T,
     /// crate::RepoFault>` instead — there is nothing left in the `Rejected`
-    /// lane for it to ever construct. `update`/`update_all` narrow this way
-    /// when every persisted column is unconstrained and nothing is nested;
-    /// `delete`/`forget` keep `RepoWriteError` unconditionally. Find/list ops
+    /// lane for it to ever construct. `update`/`update_all`/`forget`/`delete`
+    /// narrow this way when every persisted column has no unique, primary-key
+    /// or check constraint and nothing is nested (a foreign key violation is a
+    /// fault, not a rejection); `create`/`create_all` narrow the same way when
+    /// the repo generates its own ids (so the primary key cannot conflict) and
+    /// no other constraint remains. Find/list ops
     /// always return `Result<T, crate::RepoFault>` — reads never reject, so
     /// there is no `NotFound` rejection, only `Fatal`.
     type ConstraintViolation: crate::errlanes::Rejection;

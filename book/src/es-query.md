@@ -20,9 +20,10 @@ Given the query we arrived at in the previous section - this is what a `find_by_
 # pub enum UserEvent {
 #     Initialized { id: UserId, name: String },
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -101,9 +102,10 @@ This simplifies the above implementation into:
 # pub enum UserEvent {
 #     Initialized { id: UserId, name: String },
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }

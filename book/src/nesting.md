@@ -166,8 +166,10 @@ pub struct NewBillingPeriod {
 }
 
 impl IntoEvents<BillingPeriodEvent> for NewBillingPeriod {
-    fn into_events(self) -> EntityEvents<BillingPeriodEvent> {
-        EntityEvents::init(
+    type IdSource = FromCaller;
+
+    fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, FromCaller>) -> EntityEvents<BillingPeriodEvent> {
+        builder.initial_events(
             self.id,
             vec![BillingPeriodEvent::Initialized {
                 id: self.id,
@@ -299,8 +301,9 @@ Now let's implement the `Subscription` entity that will contain the nested `Bill
 # }
 #
 # impl IntoEvents<BillingPeriodEvent> for NewBillingPeriod {
-#     fn into_events(self) -> EntityEvents<BillingPeriodEvent> {
-#         EntityEvents::init(
+#     type IdSource = FromCaller;
+#     fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, FromCaller>) -> EntityEvents<BillingPeriodEvent> {
+#         builder.initial_events(
 #             self.id,
 #             vec![BillingPeriodEvent::Initialized {
 #                 id: self.id,
@@ -392,16 +395,14 @@ impl TryFromEvents<SubscriptionEvent> for Subscription {
 }
 
 #[derive(Debug, Clone, Builder)]
-pub struct NewSubscription {
-    pub id: SubscriptionId,
-}
+pub struct NewSubscription {}
 
 impl IntoEvents<SubscriptionEvent> for NewSubscription {
-    fn into_events(self) -> EntityEvents<SubscriptionEvent> {
-        EntityEvents::init(
-            self.id,
-            vec![SubscriptionEvent::Initialized { id: self.id }],
-        )
+    type IdSource = FromRepo;
+
+    fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, FromRepo>) -> EntityEvents<SubscriptionEvent> {
+        let id = builder.id();
+        builder.initial_events(vec![SubscriptionEvent::Initialized { id }])
     }
 }
 ```
@@ -411,6 +412,7 @@ The key points to note:
 2. The field type is `Nested<BillingPeriod>` which is a special container for nested entities
 3. We use `add_new()` to add new nested entities
 4. We mutate the children via `get_persisted_mut()`.
+5. `BillingPeriods` uses `id(source = caller)` because the parent picks the child's id and records it in its own `BillingPeriodStarted` event.
 
 Under the hood the `EsEntity` macro will create an implementation of the `Parent` trait:
 ```rust,ignore
@@ -550,8 +552,9 @@ This leverages the rust module system to enforce that the children cannot be acc
 # }
 #
 # impl IntoEvents<BillingPeriodEvent> for NewBillingPeriod {
-#     fn into_events(self) -> EntityEvents<BillingPeriodEvent> {
-#         EntityEvents::init(
+#     type IdSource = FromCaller;
+#     fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, FromCaller>) -> EntityEvents<BillingPeriodEvent> {
+#         builder.initial_events(
 #             self.id,
 #             vec![BillingPeriodEvent::Initialized {
 #                 id: self.id,
@@ -602,22 +605,19 @@ This leverages the rust module system to enforce that the children cannot be acc
 # }
 #
 # #[derive(Debug, Clone, Builder)]
-# pub struct NewSubscription {
-#     pub id: SubscriptionId,
-# }
+# pub struct NewSubscription {}
 #
 # impl IntoEvents<SubscriptionEvent> for NewSubscription {
-#     fn into_events(self) -> EntityEvents<SubscriptionEvent> {
-#         EntityEvents::init(
-#             self.id,
-#             vec![SubscriptionEvent::Initialized { id: self.id }],
-#         )
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, FromRepo>) -> EntityEvents<SubscriptionEvent> {
+#         let id = builder.id();
+#         builder.initial_events(vec![SubscriptionEvent::Initialized { id }])
 #     }
 # }
 # fn main() {}
 #[derive(EsRepo)]
 #[es_repo(
-    entity = "BillingPeriod",
+    entity = "BillingPeriod", id(source = caller),
     columns(
         // The foreign key of the parent marked by `parent`.
         subscription_id(ty = "SubscriptionId", update(persist = false), parent)
@@ -762,8 +762,9 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     pub subscription_id: SubscriptionId,
 # }
 # impl IntoEvents<BillingPeriodEvent> for NewBillingPeriod {
-#     fn into_events(self) -> EntityEvents<BillingPeriodEvent> {
-#         EntityEvents::init(
+#     type IdSource = FromCaller;
+#     fn into_events(self, builder: EntityEventsBuilder<BillingPeriodEvent, FromCaller>) -> EntityEvents<BillingPeriodEvent> {
+#         builder.initial_events(
 #             self.id,
 #             vec![BillingPeriodEvent::Initialized {
 #                 id: self.id,
@@ -840,20 +841,17 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     }
 # }
 # #[derive(Debug, Clone, Builder)]
-# pub struct NewSubscription {
-#     pub id: SubscriptionId,
-# }
+# pub struct NewSubscription {}
 # impl IntoEvents<SubscriptionEvent> for NewSubscription {
-#     fn into_events(self) -> EntityEvents<SubscriptionEvent> {
-#         EntityEvents::init(
-#             self.id,
-#             vec![SubscriptionEvent::Initialized { id: self.id }],
-#         )
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<SubscriptionEvent, FromRepo>) -> EntityEvents<SubscriptionEvent> {
+#         let id = builder.id();
+#         builder.initial_events(vec![SubscriptionEvent::Initialized { id }])
 #     }
 # }
 # #[derive(EsRepo)]
 # #[es_repo(
-#     entity = "BillingPeriod",
+#     entity = "BillingPeriod", id(source = caller),
 #     columns(
 #         subscription_id(ty = "SubscriptionId", update(persist = false), parent)
 #     )
@@ -885,9 +883,7 @@ async fn main() -> anyhow::Result<()> {
     let subscriptions = Subscriptions::new(init_pool().await?);
 
     // Create a new subscription
-    let subscription_id = SubscriptionId::new();
-    let new_subscription = NewSubscription { id: subscription_id };
-    let mut subscription = subscriptions.create(new_subscription).await?;
+    let mut subscription = subscriptions.create(NewSubscription {}).await?;
 
     // Start a billing period
     subscription.start_new_billing_period();
@@ -906,7 +902,7 @@ async fn main() -> anyhow::Result<()> {
     subscriptions.update(&mut subscription).await?;
 
     // Load the subscription - nested entities are automatically loaded
-    let loaded = subscriptions.find_by_id(subscription_id).await?;
+    let loaded = subscriptions.find_by_id(subscription.id).await?;
 
     // Access the current billing period
     if let Some(current_period) = loaded.current_billing_period() {

@@ -31,6 +31,7 @@ pub mod error;
 pub use constraint::*;
 pub mod events;
 pub mod forgettable;
+pub mod id_source;
 pub mod idempotent;
 mod macros;
 pub mod nested;
@@ -40,8 +41,11 @@ pub mod pagination;
 pub mod query;
 pub mod snapshot;
 pub mod sql_commenter;
+#[cfg(feature = "testing")]
+pub mod testing;
 pub mod traits;
 pub mod tree_query;
+pub mod write_shape;
 
 pub mod prelude {
     //! Convenience re-export of crates that the derive macros reference in generated code.
@@ -80,6 +84,8 @@ pub use events::*;
 #[doc(inline)]
 pub use forgettable::{Forgettable, ForgettableRef};
 #[doc(inline)]
+pub use id_source::{Ensured, EntityEventsBuilder, FromCaller, FromRepo, IdSource};
+#[doc(inline)]
 pub use idempotent::*;
 #[doc(inline)]
 pub use nested::*;
@@ -97,6 +103,8 @@ pub use snapshot::*;
 pub use traits::*;
 #[doc(inline)]
 pub use tree_query::*;
+#[doc(inline)]
+pub use write_shape::{Faults, LiftNestedWrite, Rejects, WriteShape, WriteShapes};
 
 #[cfg(feature = "graphql")]
 pub mod graphql {

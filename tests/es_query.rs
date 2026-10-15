@@ -49,10 +49,9 @@ mod tbl_prefix_param {
     async fn with_args() -> anyhow::Result<()> {
         let pool = init_pool().await?;
         let users = UsersTblPrefix::new(pool);
-        let id = UserId::new();
-        let new_user = NewUser::builder().id(id).name("Frank").build().unwrap();
+        let new_user = NewUser::builder().name("Frank").build().unwrap();
 
-        users.create(new_user).await?;
+        let id = users.create(new_user).await?.id;
         let loaded_user = users.query_with_args(id).await?;
         assert_eq!(loaded_user.id, id);
 
@@ -64,16 +63,8 @@ mod tbl_prefix_param {
         let pool = init_pool().await?;
         let users = UsersTblPrefix::new(pool);
 
-        let user1 = NewUser::builder()
-            .id(UserId::new())
-            .name("Alice")
-            .build()
-            .unwrap();
-        let user2 = NewUser::builder()
-            .id(UserId::new())
-            .name("Bob")
-            .build()
-            .unwrap();
+        let user1 = NewUser::builder().name("Alice").build().unwrap();
+        let user2 = NewUser::builder().name("Bob").build().unwrap();
 
         users.create(user1).await?;
         users.create(user2).await?;
@@ -128,10 +119,9 @@ mod entity_param {
     async fn with_args() -> anyhow::Result<()> {
         let pool = init_pool().await?;
         let users = UsersEntity::new(pool);
-        let id = UserId::new();
-        let new_user = NewUser::builder().id(id).name("Frank").build().unwrap();
+        let new_user = NewUser::builder().name("Frank").build().unwrap();
 
-        users.create(new_user).await?;
+        let id = users.create(new_user).await?.id;
         let loaded_user = users.query_with_args(id).await?;
         assert_eq!(loaded_user.id, id);
 
@@ -143,16 +133,8 @@ mod entity_param {
         let pool = init_pool().await?;
         let users = UsersEntity::new(pool);
 
-        let user1 = NewUser::builder()
-            .id(UserId::new())
-            .name("Alice")
-            .build()
-            .unwrap();
-        let user2 = NewUser::builder()
-            .id(UserId::new())
-            .name("Bob")
-            .build()
-            .unwrap();
+        let user1 = NewUser::builder().name("Alice").build().unwrap();
+        let user2 = NewUser::builder().name("Bob").build().unwrap();
 
         users.create(user1).await?;
         users.create(user2).await?;
@@ -196,10 +178,9 @@ mod no_params {
     async fn with_args() -> anyhow::Result<()> {
         let pool = init_pool().await?;
         let users = UsersNoParams::new(pool);
-        let id = UserId::new();
-        let new_user = NewUser::builder().id(id).name("Frank").build().unwrap();
+        let new_user = NewUser::builder().name("Frank").build().unwrap();
 
-        users.create(new_user).await?;
+        let id = users.create(new_user).await?.id;
         let loaded_user = users.query_with_args(id).await?;
         assert_eq!(loaded_user.id, id);
 
@@ -211,16 +192,8 @@ mod no_params {
         let pool = init_pool().await?;
         let users = UsersNoParams::new(pool);
 
-        let user1 = NewUser::builder()
-            .id(UserId::new())
-            .name("Alice")
-            .build()
-            .unwrap();
-        let user2 = NewUser::builder()
-            .id(UserId::new())
-            .name("Bob")
-            .build()
-            .unwrap();
+        let user1 = NewUser::builder().name("Alice").build().unwrap();
+        let user2 = NewUser::builder().name("Bob").build().unwrap();
 
         users.create(user1).await?;
         users.create(user2).await?;

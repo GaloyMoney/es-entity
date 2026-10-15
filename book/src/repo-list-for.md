@@ -21,7 +21,8 @@ This is useful for situations where you have a `1-to-n` relationship between 2 e
 #     NameUpdated { name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
+#     type IdSource = FromRepo;
+#     fn into_events(self, _builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
 #         unimplemented!()
 #     }
 # }
@@ -30,7 +31,7 @@ This is useful for situations where you have a `1-to-n` relationship between 2 e
 #         unimplemented!()
 #     }
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 # #[derive(EsEntity)]
 # pub struct User {
 #     pub id: UserId,
@@ -48,14 +49,13 @@ pub enum UserDocumentEvent {
 }
 
 # impl IntoEvents<UserDocumentEvent> for NewUserDocument {
-#     fn into_events(self) -> EntityEvents<UserDocumentEvent> {
-#         EntityEvents::init(
-#             self.id,
-#             [UserDocumentEvent::Initialized {
-#                 id: self.id,
-#                 owner_id: self.owner_id,
-#             }],
-#         )
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<UserDocumentEvent, FromRepo>) -> EntityEvents<UserDocumentEvent> {
+#         let id = builder.id();
+#         builder.initial_events([UserDocumentEvent::Initialized {
+#             id,
+#             owner_id: self.owner_id,
+#         }])
 #     }
 # }
 # impl TryFromEvents<UserDocumentEvent> for UserDocument {
@@ -63,7 +63,7 @@ pub enum UserDocumentEvent {
 #         Ok(UserDocument { id: events.id().clone(), owner_id: UserId::new(), events })
 #     }
 # }
-pub struct NewUserDocument { id: UserDocumentId, owner_id: UserId }
+pub struct NewUserDocument { owner_id: UserId }
 
 #[derive(EsEntity)]
 pub struct UserDocument {
@@ -104,8 +104,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Batch creating a few entities for illustration
     let new_docs = vec![
-        NewUserDocument { id: UserDocumentId::new(), owner_id },
-        NewUserDocument { id: UserDocumentId::new(), owner_id }
+        NewUserDocument { owner_id },
+        NewUserDocument { owner_id }
     ];
     docs.create_all(new_docs).await?;
 

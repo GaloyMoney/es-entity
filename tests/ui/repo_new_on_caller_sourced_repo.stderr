@@ -1,0 +1,33 @@
+error[E0609]: no field `id` on type `NewGadget`
+  --> tests/ui/repo_new_on_caller_sourced_repo.rs:44:10
+   |
+44 | #[derive(EsRepo)]
+   |          ^^^^^^ unknown field
+   |
+   = note: this error originates in the derive macro `EsRepo` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0271]: type mismatch resolving `<NewGadget as IntoEvents<GadgetEvent>>::IdSource == FromCaller`
+  --> tests/ui/repo_new_on_caller_sourced_repo.rs:44:10
+   |
+44 | #[derive(EsRepo)]
+   |          ^^^^^^ type mismatch resolving `<NewGadget as IntoEvents<GadgetEvent>>::IdSource == FromCaller`
+   |
+note: expected this to be `FromCaller`
+  --> tests/ui/repo_new_on_caller_sourced_repo.rs:32:21
+   |
+32 |     type IdSource = FromRepo;
+   |                     ^^^^^^^^
+note: required by a bound in `Gadgets::convert_new`
+  --> tests/ui/repo_new_on_caller_sourced_repo.rs:44:10
+   |
+44 | #[derive(EsRepo)]
+   |          ^^^^^^ required by this bound in `Gadgets::convert_new`
+   = note: this error originates in the derive macro `EsRepo` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0609]: no field `id` on type `&NewGadget`
+  --> tests/ui/repo_new_on_caller_sourced_repo.rs:44:10
+   |
+44 | #[derive(EsRepo)]
+   |          ^^^^^^ unknown field
+   |
+   = note: this error originates in the derive macro `EsRepo` (in Nightly builds, run with -Z macro-backtrace for more info)

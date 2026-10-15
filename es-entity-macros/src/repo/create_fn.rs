@@ -21,6 +21,17 @@ pub struct CreateFn<'a> {
     nested_fn_names: Vec<syn::Ident>,
     post_hydrate_hook: bool,
     post_persist_hook: bool,
+    id_source: IdSourceOpt,
+    /// `RepositoryOptions::create_can_reject`: `false` narrows every
+    /// generated signature from `RepoWriteError<CV>` to `RepoFault`.
+    can_reject: bool,
+    /// The generated signatures' error type, see
+    /// `RepositoryOptions::create_error_ty`.
+    write_error_ty: TokenStream,
+    /// Whether `create_or_find_by_id_in_op` is generated, and whether it can
+    /// reject, see `RepositoryOptions::create_or_find_enabled`.
+    create_or_find: bool,
+    create_or_find_can_reject: bool,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -28,6 +39,11 @@ pub struct CreateFn<'a> {
 impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
+            id_source: opts.id_source(),
+            can_reject: opts.create_can_reject(),
+            write_error_ty: opts.create_error_ty(),
+            create_or_find: opts.create_or_find_enabled(),
+            create_or_find_can_reject: opts.create_or_find_can_reject(),
             in_op_only: opts.in_op_only(),
             table_name: opts.table_name(),
             entity: opts.entity(),
@@ -53,12 +69,61 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
 impl ToTokens for CreateFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let entity = self.entity;
-        let constraint_values = self.columns.constraint_values(entity, true);
+        let constraint_values = if self.can_reject {
+            self.columns.constraint_values(entity, true)
+        } else {
+            quote! {}
+        };
         let constraint_violation = &self.constraint_violation;
+        let write_error_ty = &self.write_error_ty;
+        let (rejection_prelude, rejection_tail) = if self.can_reject {
+            (
+                quote! { use es_entity::errlanes::ResultExt as _; },
+                quote! { .map_rejected(|r| r.with_attempted(__constraint_values))? },
+            )
+        } else {
+            (
+                quote! { use es_entity::errlanes::ResultExt as _; },
+                quote! { .narrow_rejected()? },
+            )
+        };
+        let generated = self.id_source.is_repo();
+        let id_source = self.id_source.marker();
+        let resolve_id = if generated {
+            let id_ty = self.id;
+            let resolved = self.id_source.resolve(id_ty);
+            quote! { let __id: #id_ty = #resolved; }
+        } else {
+            quote! {}
+        };
+        let builder = self.id_source.builder(quote! { __id.clone() });
+        let (attempted_id, caller_id_check, classify_create) = if generated {
+            (
+                quote! {},
+                quote! {},
+                quote! { Self::classify_create_write(e) },
+            )
+        } else {
+            (
+                quote! {
+                    // A single create already knows its id from its own
+                    // input, so a duplicate-id conflict always attributes
+                    // to exactly this id -- captured before `new_entity` is
+                    // consumed into `events` below.
+                    let __attempted_id = (*id).clone();
+                },
+                quote! {
+                    if events.id() != &__attempted_id {
+                        return Err(errlanes::Fatal::invariant("caller's id differs from the id the entity was built under").into());
+                    }
+                },
+                quote! { Self::classify_create_write(e, move |_| Some(__attempted_id)) },
+            )
+        };
 
         let nested = self.nested_fn_names.iter().map(|f| {
             quote! {
-                self.#f(op, &mut [&mut entity]).await.map_err(errlanes::Fail::lift::<#constraint_violation, errlanes::lanes!(Transient, Fatal)>)?;
+                self.#f(op, &mut [&mut entity]).await.map_err(es_entity::LiftNestedWrite::<#constraint_violation>::lift_nested)?;
             }
         });
         let maybe_mut_entity = if self.nested_fn_names.is_empty() {
@@ -68,7 +133,7 @@ impl ToTokens for CreateFn<'_> {
         };
         let assignments = self
             .columns
-            .variable_assignments_for_create(syn::parse_quote! { new_entity });
+            .variable_assignments_for_create(syn::parse_quote! { new_entity }, generated);
 
         let table_name = self.table_name;
 
@@ -178,7 +243,7 @@ impl ToTokens for CreateFn<'_> {
                 pub async fn create(
                     &self,
                     new_entity: <#entity as es_entity::EsEntity>::New
-                ) -> Result<#entity, es_entity::RepoWriteError<#constraint_violation>> {
+                ) -> Result<#entity, #write_error_ty> {
                     let mut op = self.begin_op().await?;
                     let res = self.create_in_op(&mut op, new_entity).await?;
                     op.commit().await?;
@@ -187,25 +252,78 @@ impl ToTokens for CreateFn<'_> {
             }
         });
 
+        // The conflict on the id's primary key becomes `Found`; every other
+        // outcome of the create is the create's own. The create runs on a
+        // savepoint so the conflict does not poison the caller's operation.
+        let create_or_find = if self.create_or_find {
+            let (ensure_error_ty, other_error) = if self.create_or_find_can_reject {
+                (
+                    quote! { es_entity::RepoWriteError<#constraint_violation> },
+                    quote! { other },
+                )
+            } else {
+                (
+                    quote! { es_entity::RepoFault },
+                    quote! { other.narrow_rejected() },
+                )
+            };
+            quote! {
+                /// Creates the entity, or — when an entity with this id
+                /// already exists — returns the stored one. The conflict on the
+                /// primary key is the only outcome that is not an error; every
+                /// other constraint still rejects.
+                pub async fn create_or_find_by_id_in_op<OP>(
+                    &self,
+                    op: &mut OP,
+                    new_entity: <#entity as es_entity::EsEntity>::New
+                ) -> Result<es_entity::Ensured<#entity>, #ensure_error_ty>
+                where
+                    OP: es_entity::AtomicOperation + ?Sized
+                {
+                    use es_entity::SavepointOperation as _;
+
+                    let mut __savepoint = op.begin_savepoint().await?;
+                    match self.create_in_op(&mut __savepoint, new_entity).await {
+                        Ok(entity) => {
+                            __savepoint.release().await?;
+                            Ok(es_entity::Ensured::Created(entity))
+                        }
+                        Err(es_entity::Fail::Rejected(#constraint_violation::Pkey(conflict))) => {
+                            __savepoint.rollback().await?;
+                            let entity = self.find_by_id_in_op(&mut *op, conflict.attempted).await?;
+                            Ok(es_entity::Ensured::Found(entity))
+                        }
+                        Err(other) => {
+                            __savepoint.rollback().await?;
+                            Err(#other_error)
+                        }
+                    }
+                }
+            }
+        } else {
+            quote! {}
+        };
+
         tokens.append_all(quote! {
             #[inline(always)]
-            fn convert_new<Entity, Event, Snapshot>(item: Entity) -> es_entity::EntityEvents<Event, Snapshot>
+            fn convert_new<Entity, Event, Snapshot>(
+                item: Entity,
+                builder: es_entity::EntityEventsBuilder<Event, #id_source>,
+            ) -> es_entity::EntityEvents<Event, Snapshot>
             where
-                Entity: es_entity::IntoEvents<Event>,
+                Entity: es_entity::IntoEvents<Event, IdSource = #id_source>,
                 Event: es_entity::EsEvent,
                 Snapshot: es_entity::EsSnapshot,
             {
-                item.into_events().widen_snapshot()
+                item.into_events(builder).widen_snapshot()
             }
 
             #[inline(always)]
-            fn hydrate_entity<Entity, Event, Snapshot>(events: es_entity::EntityEvents<Event, Snapshot>) -> Result<Entity, es_entity::EntityHydrationError>
+            fn hydrate_entity<Entity>(events: es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event, <Entity as es_entity::EsEntity>::Snapshot>) -> Result<Entity, es_entity::EntityHydrationError>
             where
-                Entity: es_entity::TryFromEvents<Event, Snapshot>,
-                Event: es_entity::EsEvent,
-                Snapshot: es_entity::EsSnapshot,
+                Entity: es_entity::EsEntity,
             {
-                Entity::try_from_events(events)
+                es_entity::hydrate_checked(events)
             }
 
             #standalone
@@ -215,20 +333,17 @@ impl ToTokens for CreateFn<'_> {
                 &self,
                 op: &mut OP,
                 new_entity: <#entity as es_entity::EsEntity>::New
-            ) -> Result<#entity, es_entity::RepoWriteError<#constraint_violation>>
+            ) -> Result<#entity, #write_error_ty>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<#entity, es_entity::RepoWriteError<#constraint_violation>> = async {
-                    use es_entity::errlanes::ResultExt as _;
+                let __result: Result<#entity, #write_error_ty> = async {
+                    #rejection_prelude
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
+                    #resolve_id
                     #assignments
-                    // A single create already knows its id from its own
-                    // input, so a duplicate-id conflict always attributes
-                    // to exactly this id -- captured before `new_entity` is
-                    // consumed into `events` below.
-                    let __attempted_id = (*id).clone();
+                    #attempted_id
                     #constraint_values
                     #record_id
 
@@ -236,7 +351,8 @@ impl ToTokens for CreateFn<'_> {
                     #(#arg_adds)*
                     __query_args.add(op.maybe_now()).map_err(sqlx::Error::Encode)?;
 
-                    let mut events = Self::convert_new(new_entity);
+                    let mut events = Self::convert_new(new_entity, #builder);
+                    #caller_id_check
                     let events_types = events.new_event_types();
                     let serialized_events = events.serialize_new_events();
                     #ctx_var
@@ -245,8 +361,8 @@ impl ToTokens for CreateFn<'_> {
                     let rows = sqlx::query_with(#query, __query_args)
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_create_write(e, move |_| Some(__attempted_id)))
-                        .map_rejected(|r| r.with_attempted(__constraint_values))?;
+                        .map_err(|e| #classify_create)
+                        #rejection_tail;
 
                     #forgettable_code
 
@@ -267,6 +383,8 @@ impl ToTokens for CreateFn<'_> {
                 #error_recording
                 __result
             }
+
+            #create_or_find
         });
     }
 }
@@ -300,6 +418,11 @@ mod tests {
             nested_fn_names: Vec::new(),
             post_hydrate_hook: false,
             post_persist_hook: false,
+            id_source: IdSourceOpt::Caller,
+            can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
+            create_or_find: false,
+            create_or_find_can_reject: false,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -309,29 +432,30 @@ mod tests {
 
         let expected = quote! {
             #[inline(always)]
-            fn convert_new<Entity, Event, Snapshot>(item: Entity) -> es_entity::EntityEvents<Event, Snapshot>
+            fn convert_new<Entity, Event, Snapshot>(
+                item: Entity,
+                builder: es_entity::EntityEventsBuilder<Event, es_entity::FromCaller>,
+            ) -> es_entity::EntityEvents<Event, Snapshot>
             where
-                Entity: es_entity::IntoEvents<Event>,
+                Entity: es_entity::IntoEvents<Event, IdSource = es_entity::FromCaller>,
                 Event: es_entity::EsEvent,
                 Snapshot: es_entity::EsSnapshot,
             {
-                item.into_events().widen_snapshot()
+                item.into_events(builder).widen_snapshot()
             }
 
             #[inline(always)]
-            fn hydrate_entity<Entity, Event, Snapshot>(events: es_entity::EntityEvents<Event, Snapshot>) -> Result<Entity, es_entity::EntityHydrationError>
+            fn hydrate_entity<Entity>(events: es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event, <Entity as es_entity::EsEntity>::Snapshot>) -> Result<Entity, es_entity::EntityHydrationError>
             where
-                Entity: es_entity::TryFromEvents<Event, Snapshot>,
-                Event: es_entity::EsEvent,
-                Snapshot: es_entity::EsSnapshot,
+                Entity: es_entity::EsEntity,
             {
-                Entity::try_from_events(events)
+                es_entity::hydrate_checked(events)
             }
 
             pub async fn create(
                 &self,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation>> {
+            ) -> Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation> > {
                 let mut op = self.begin_op().await?;
                 let res = self.create_in_op(&mut op, new_entity).await?;
                 op.commit().await?;
@@ -342,11 +466,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation>>
+            ) -> Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation> >
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                let __result: Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation> > = async {
                     use es_entity::errlanes::ResultExt as _;
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
@@ -358,7 +482,10 @@ mod tests {
                     __query_args.add(id as &EntityId).map_err(sqlx::Error::Encode)?;
                     __query_args.add(op.maybe_now()).map_err(sqlx::Error::Encode)?;
 
-                    let mut events = Self::convert_new(new_entity);
+                    let mut events = Self::convert_new(new_entity, es_entity::EntityEventsBuilder::__from_caller());
+                    if events.id() != &__attempted_id {
+                        return Err(errlanes::Fatal::invariant("caller's id differs from the id the entity was built under").into());
+                    }
                     let events_types = events.new_event_types();
                     let serialized_events = events.serialize_new_events();
                     __query_args.add(&events_types).map_err(sqlx::Error::Encode)?;
@@ -391,6 +518,66 @@ mod tests {
     }
 
     #[test]
+    fn create_fn_generated_id_has_no_route_for_a_caller_id() {
+        let entity = Ident::new("Entity", Span::call_site());
+        let id = Ident::new("EntityId", Span::call_site());
+        let event = Ident::new("EntityEvent", Span::call_site());
+        let mut columns = Columns::default();
+        columns.set_id_column(&id);
+
+        let create_fn = CreateFn {
+            in_op_only: false,
+            table_name: "entities",
+            entity: &entity,
+            id: &id,
+            event: &event,
+            events_table_name: "entity_events",
+            event_ctx: false,
+            forgettable_table_name: None,
+            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
+            columns: &columns,
+            nested_fn_names: Vec::new(),
+            post_hydrate_hook: false,
+            post_persist_hook: false,
+            id_source: IdSourceOpt::default(),
+            can_reject: false,
+            write_error_ty: quote! { es_entity::RepoFault },
+            create_or_find: false,
+            create_or_find_can_reject: false,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        create_fn.to_tokens(&mut tokens);
+        let out = tokens.to_string();
+
+        assert!(
+            out.contains("let __id : EntityId = EntityId :: new ()"),
+            "{out}"
+        );
+        assert!(out.contains("let id = & __id"), "{out}");
+        assert!(
+            !out.contains("new_entity . id"),
+            "a generated id must never be read off the New* type: {out}"
+        );
+        assert!(
+            out.contains("EntityEventsBuilder :: __from_repo (__id . clone ())"),
+            "{out}"
+        );
+        assert!(
+            out.contains("IntoEvents < Event , IdSource = es_entity :: FromRepo >"),
+            "{out}"
+        );
+        assert!(
+            out.contains("Result < Entity , es_entity :: RepoFault >"),
+            "a repo that cannot reject returns RepoFault: {out}"
+        );
+        assert!(!out.contains("RepoWriteError"), "{out}");
+        assert!(!out.contains("map_rejected"), "{out}");
+    }
+
+    #[test]
     fn create_fn_with_columns() {
         let entity = Ident::new("Entity", Span::call_site());
         let constraint_violation = syn::Ident::new("EntityConstraintViolation", Span::call_site());
@@ -417,6 +604,11 @@ mod tests {
             nested_fn_names: Vec::new(),
             post_hydrate_hook: false,
             post_persist_hook: false,
+            id_source: IdSourceOpt::Caller,
+            can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
+            create_or_find: false,
+            create_or_find_can_reject: false,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -426,29 +618,30 @@ mod tests {
 
         let expected = quote! {
             #[inline(always)]
-            fn convert_new<Entity, Event, Snapshot>(item: Entity) -> es_entity::EntityEvents<Event, Snapshot>
+            fn convert_new<Entity, Event, Snapshot>(
+                item: Entity,
+                builder: es_entity::EntityEventsBuilder<Event, es_entity::FromCaller>,
+            ) -> es_entity::EntityEvents<Event, Snapshot>
             where
-                Entity: es_entity::IntoEvents<Event>,
+                Entity: es_entity::IntoEvents<Event, IdSource = es_entity::FromCaller>,
                 Event: es_entity::EsEvent,
                 Snapshot: es_entity::EsSnapshot,
             {
-                item.into_events().widen_snapshot()
+                item.into_events(builder).widen_snapshot()
             }
 
             #[inline(always)]
-            fn hydrate_entity<Entity, Event, Snapshot>(events: es_entity::EntityEvents<Event, Snapshot>) -> Result<Entity, es_entity::EntityHydrationError>
+            fn hydrate_entity<Entity>(events: es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event, <Entity as es_entity::EsEntity>::Snapshot>) -> Result<Entity, es_entity::EntityHydrationError>
             where
-                Entity: es_entity::TryFromEvents<Event, Snapshot>,
-                Event: es_entity::EsEvent,
-                Snapshot: es_entity::EsSnapshot,
+                Entity: es_entity::EsEntity,
             {
-                Entity::try_from_events(events)
+                es_entity::hydrate_checked(events)
             }
 
             pub async fn create(
                 &self,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation>> {
+            ) -> Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation> > {
                 let mut op = self.begin_op().await?;
                 let res = self.create_in_op(&mut op, new_entity).await?;
                 op.commit().await?;
@@ -459,11 +652,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 new_entity: <Entity as es_entity::EsEntity>::New
-            ) -> Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation>>
+            ) -> Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation> >
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                let __result: Result<Entity, es_entity::RepoWriteError<EntityConstraintViolation> > = async {
                     use es_entity::errlanes::ResultExt as _;
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
@@ -477,7 +670,10 @@ mod tests {
                     __query_args.add(name as &String).map_err(sqlx::Error::Encode)?;
                     __query_args.add(op.maybe_now()).map_err(sqlx::Error::Encode)?;
 
-                    let mut events = Self::convert_new(new_entity);
+                    let mut events = Self::convert_new(new_entity, es_entity::EntityEventsBuilder::__from_caller());
+                    if events.id() != &__attempted_id {
+                        return Err(errlanes::Fatal::invariant("caller's id differs from the id the entity was built under").into());
+                    }
                     let events_types = events.new_event_types();
                     let serialized_events = events.serialize_new_events();
                     __query_args.add(&events_types).map_err(sqlx::Error::Encode)?;

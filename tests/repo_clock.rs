@@ -87,11 +87,7 @@ async fn create_with_manual_clock() -> anyhow::Result<()> {
     // Begin operation with the manual clock
     let mut op = users.begin_op_with_clock(&clock).await?;
 
-    let new_user = NewUser::builder()
-        .id(UserId::new())
-        .name("TimeTest")
-        .build()
-        .unwrap();
+    let new_user = NewUser::builder().name("TimeTest").build().unwrap();
 
     let user = users.create_in_op(&mut op, new_user).await?;
     let user_id = user.id;
@@ -124,11 +120,7 @@ async fn create_with_repo_clock_field() -> anyhow::Result<()> {
     // Create repo with the clock field set
     let users = UsersWithClock::with_clock(pool, clock);
 
-    let new_user = NewUser::builder()
-        .id(UserId::new())
-        .name("ClockFieldTest")
-        .build()
-        .unwrap();
+    let new_user = NewUser::builder().name("ClockFieldTest").build().unwrap();
 
     // Use the simple create() method - it should use the repo's clock field
     let user = users.create(new_user).await?;
@@ -154,11 +146,7 @@ async fn create_with_repo_clock_field_none() -> anyhow::Result<()> {
     // Create repo without clock (clock = None) - should use global clock
     let users = UsersWithClock::new(pool);
 
-    let new_user = NewUser::builder()
-        .id(UserId::new())
-        .name("NoClockFieldTest")
-        .build()
-        .unwrap();
+    let new_user = NewUser::builder().name("NoClockFieldTest").build().unwrap();
 
     // Use the simple create() method - it should use the global clock (realtime)
     let user = users.create(new_user).await?;
@@ -197,7 +185,6 @@ async fn create_with_required_clock_field() -> anyhow::Result<()> {
     let users = UsersWithRequiredClock::new(pool, clock);
 
     let new_user = NewUser::builder()
-        .id(UserId::new())
         .name("RequiredClockTest")
         .build()
         .unwrap();

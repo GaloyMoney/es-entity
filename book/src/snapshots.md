@@ -182,10 +182,12 @@ impl HeadSnapshot for Meter {
 #         builder.events(events).build()
 #     }
 # }
-# pub struct NewMeter { pub id: MeterId, pub label: String }
+# pub struct NewMeter { pub label: String }
 # impl IntoEvents<MeterEvent> for NewMeter {
-#     fn into_events(self) -> EntityEvents<MeterEvent> {
-#         EntityEvents::init(self.id, [MeterEvent::Initialized { id: self.id, label: self.label }])
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<MeterEvent, FromRepo>) -> EntityEvents<MeterEvent> {
+#         let id = builder.id();
+#         builder.initial_events([MeterEvent::Initialized { id, label: self.label }])
 #     }
 # }
 # fn main() {}

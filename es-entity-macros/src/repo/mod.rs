@@ -263,6 +263,8 @@ impl ToTokens for EsRepo<'_> {
 
         let constraint_violation = self.opts.constraint_violation();
         let write_error = self.opts.write_error();
+        let create_shape = self.opts.create_shape();
+        let update_shape = self.opts.update_shape();
         let error_types = self.error_types.generate();
 
         let scope_type = scope::ScopeType::new(self.opts);
@@ -444,6 +446,11 @@ impl ToTokens for EsRepo<'_> {
 
             #hydrate_nested
 
+            impl es_entity::WriteShapes for #constraint_violation {
+                type Create = #create_shape;
+                type Update = #update_shape;
+            }
+
             impl #impl_generics es_entity::EsRepo for #repo #ty_generics #where_clause {
                 type Entity = #entity;
                 type ConstraintViolation = #constraint_violation;
@@ -601,7 +608,7 @@ mod tests {
     #[test]
     fn pkey_constraint_gets_id_conflict_variant_and_no_from_database_arm() {
         let input: syn::DeriveInput = parse_quote! {
-            #[es_repo(entity = "User", columns(name(ty = "String")))]
+            #[es_repo(entity = "User", id(source = caller), columns(name(ty = "String")))]
             struct Users {
                 pool: sqlx::PgPool,
             }
@@ -620,6 +627,29 @@ mod tests {
             "the pkey name must have no from_database match arm of its own \
              -- it falls through to the catch-all Err(source), got: {out}"
         );
+    }
+
+    /// A repo that generates its own ids can never reject on the primary
+    /// key: a collision of a fresh id is a fault, so the family has no
+    /// `Pkey` variant and no `pkey_from_database` constructor.
+    #[test]
+    fn generated_id_repo_has_no_pkey_variant() {
+        for attr in [
+            quote! { #[es_repo(entity = "User", columns(name(ty = "String")))] },
+            quote! { #[es_repo(entity = "User", id = "UserId", columns(name(ty = "String")))] },
+            quote! { #[es_repo(entity = "User", id(source = repo), columns(name(ty = "String")))] },
+            quote! { #[es_repo(entity = "User", id(ty = "UserId", generator = "Self::next_id"), columns(name(ty = "String")))] },
+        ] {
+            let input: syn::DeriveInput = parse_quote! {
+                #attr
+                struct Users {
+                    pool: sqlx::PgPool,
+                }
+            };
+            let out = derive(input).unwrap().to_string();
+            assert!(!out.contains("Pkey"), "no Pkey variant expected: {out}");
+            assert!(!out.contains("pkey_from_database"), "{out}");
+        }
     }
 
     // Guard 1 (event has Forgettable fields but the repo omits `forgettable`)
@@ -789,7 +819,8 @@ mod tests {
         let input: syn::DeriveInput = parse_quote! {
             #[es_repo(
                 entity = "Partner",
-                columns(id(scope(variant = "Tenant")), name(ty = "String", list_by))
+                id(scope(variant = "Tenant")),
+                columns(name(ty = "String", list_by))
             )]
             struct Partners {
                 pool: sqlx::PgPool,
@@ -806,6 +837,37 @@ mod tests {
         assert!(tokens.contains("PartnerScope :: Tenant (__scope_val)"));
         // every query carries the id conjunct under the overridden variant
         assert!(tokens.contains("WHERE id = $1 AND id = $2"));
+    }
+
+    #[test]
+    fn id_long_form_combines_type_source_and_scope() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Partner",
+                id(ty = "TenantId", source = caller, scope),
+                columns(name(ty = "String"))
+            )]
+            struct Partners {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("id(ty, source = caller, scope) repo should derive")
+            .to_string();
+        assert!(tokens.contains("Id (TenantId)"));
+        assert!(tokens.contains("es_entity :: FromCaller"));
+        assert!(!tokens.contains("PartnerId"));
+    }
+
+    #[test]
+    fn duplicate_id_attribute_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Partner", id = "PartnerId", id(source = caller))]
+            struct Partners {
+                pool: sqlx::PgPool,
+            }
+        };
+        assert!(derive(input).is_err());
     }
 
     #[test]

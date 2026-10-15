@@ -60,8 +60,6 @@ impl TryFromEvents<UserEvent> for User {
 #[derive(Debug, Builder)]
 pub struct NewUser {
     #[builder(setter(into))]
-    pub id: UserId,
-    #[builder(setter(into))]
     pub name: String,
 }
 
@@ -72,13 +70,16 @@ impl NewUser {
 }
 
 impl IntoEvents<UserEvent> for NewUser {
-    fn into_events(self) -> EntityEvents<UserEvent> {
-        EntityEvents::init(
-            self.id,
-            [UserEvent::Initialized {
-                id: self.id,
-                name: self.name,
-            }],
-        )
+    type IdSource = FromRepo;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<UserEvent, FromRepo>,
+    ) -> EntityEvents<UserEvent> {
+        let id = builder.id();
+        builder.initial_events([UserEvent::Initialized {
+            id,
+            name: self.name,
+        }])
     }
 }

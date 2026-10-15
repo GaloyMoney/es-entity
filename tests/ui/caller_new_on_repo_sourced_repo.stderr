@@ -1,0 +1,17 @@
+error[E0271]: type mismatch resolving `<NewGadget as IntoEvents<GadgetEvent>>::IdSource == FromRepo`
+  --> tests/ui/caller_new_on_repo_sourced_repo.rs:45:10
+   |
+45 | #[derive(EsRepo)]
+   |          ^^^^^^ type mismatch resolving `<NewGadget as IntoEvents<GadgetEvent>>::IdSource == FromRepo`
+   |
+note: expected this to be `FromRepo`
+  --> tests/ui/caller_new_on_repo_sourced_repo.rs:34:21
+   |
+34 |     type IdSource = FromCaller;
+   |                     ^^^^^^^^^^
+note: required by a bound in `Gadgets::convert_new`
+  --> tests/ui/caller_new_on_repo_sourced_repo.rs:45:10
+   |
+45 | #[derive(EsRepo)]
+   |          ^^^^^^ required by this bound in `Gadgets::convert_new`
+   = note: this error originates in the derive macro `EsRepo` (in Nightly builds, run with -Z macro-backtrace for more info)

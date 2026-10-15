@@ -117,6 +117,26 @@ pub(crate) fn enumerate_constraints(
         .collect()
 }
 
+/// Whether a constraint of [`enumerate_constraints`] is the primary key on
+/// nothing but the id column, the one constraint a repo that generates its
+/// own ids can never reject on.
+pub(crate) fn is_id_pkey(
+    opts: &RepositoryOptions,
+    name: &str,
+    kind: &ConstraintKind,
+    col_names: &[String],
+) -> bool {
+    let Some(id) = opts.columns.column_enum_columns().find(|c| c.is_id()) else {
+        return false;
+    };
+    matches!(kind, ConstraintKind::Unique)
+        && col_names == [id.name().to_string()]
+        && name
+            == opts
+                .index_catalog()
+                .pkey_constraint_name(opts.table_name(), &id.name().to_string())
+}
+
 impl<'a> ErrorTypes<'a> {
     pub fn new(opts: &'a RepositoryOptions) -> Self {
         Self { opts }
@@ -133,6 +153,7 @@ impl<'a> ErrorTypes<'a> {
         let mut classifiers = Vec::new();
         let mut set_values = Vec::new();
         let mut payloads = Vec::new();
+        let mut foreign_keys = Vec::new();
         // A nested repository imports its whole constraint family under a
         // prefix, which the compose attribute lists as `Source as Prefix`.
         let mut imports = Vec::new();
@@ -164,6 +185,9 @@ impl<'a> ErrorTypes<'a> {
                         .index_catalog()
                         .pkey_constraint_name(table, &cols[0].name().to_string())
             {
+                if opts.id_source().is_repo() {
+                    continue;
+                }
                 let ty = cols[0].ty();
                 taken.insert("Pkey".to_string());
                 let description = format!("Violates the `{name}` primary key constraint.");
@@ -190,6 +214,14 @@ impl<'a> ErrorTypes<'a> {
                 // `set_values` arm either: the id is already always
                 // present, so `with_attempted` is the identity on `Pkey`
                 // via the catch-all below.
+                continue;
+            }
+            if matches!(kind, ConstraintKind::ForeignKey) {
+                let context = format!(
+                    "foreign key violation on {table}.{name} ({})",
+                    col_names.join(", ")
+                );
+                foreign_keys.push(quote! { #name => Some(#context) });
                 continue;
             }
             let variant = constraint_variant_ident(table, &name, &mut taken);
@@ -229,29 +261,10 @@ impl<'a> ErrorTypes<'a> {
             set_values.push(quote! { Self::#variant(mut conflict) => { conflict.attempted = #attempted; Self::#variant(conflict) } });
         }
         for nested in opts.all_nested() {
-            let mut path = if let syn::Type::Path(p) = &nested.ty {
-                p.path.clone()
-            } else {
-                return syn::Error::new_spanned(
-                    &nested.ty,
-                    "nested repository must have a named type",
-                )
-                .to_compile_error();
+            let path = match nested_constraint_violation_path(nested) {
+                Ok(path) => path,
+                Err(error) => return error.to_compile_error(),
             };
-            let entity = nested
-                .entity
-                .clone()
-                .or_else(|| derive_entity_from_repo_type(&nested.ty));
-            let Some(entity) = entity else {
-                return syn::Error::new_spanned(
-                    &nested.ty,
-                    "cannot infer nested entity; specify entity explicitly",
-                )
-                .to_compile_error();
-            };
-            let last = path.segments.last_mut().unwrap();
-            last.ident = format_ident!("{entity}ConstraintViolation");
-            last.arguments = syn::PathArguments::None;
             let name = nested.nested_variant_name();
             imports.push(quote! { #path as #name });
         }
@@ -275,6 +288,10 @@ impl<'a> ErrorTypes<'a> {
                 #[doc(hidden)]
                 pub fn from_database(source: sqlx::Error, name: &str) -> Result<Self, sqlx::Error> {
                     match name { #(#classifiers,)* _ => Err(source) }
+                }
+                #[doc(hidden)]
+                pub fn foreign_key_context(name: &str) -> Option<&'static str> {
+                    match name { #(#foreign_keys,)* _ => None }
                 }
                 #[doc(hidden)]
                 pub fn with_attempted(self, values: #values) -> Self {
@@ -343,6 +360,36 @@ fn write_error_type(opts: &RepositoryOptions, constraint_violation: &syn::Ident)
         }
     }
 }
+/// The path of a nested child's generated `{Entity}ConstraintViolation`: the
+/// child repo's own path with its last segment replaced. The violation enum is
+/// always `pub`, so it can be named in a public signature even when the child
+/// repo type is not.
+pub(crate) fn nested_constraint_violation_path(
+    nested: &super::options::RepoField,
+) -> Result<syn::Path, syn::Error> {
+    let syn::Type::Path(type_path) = &nested.ty else {
+        return Err(syn::Error::new_spanned(
+            &nested.ty,
+            "nested repository must have a named type",
+        ));
+    };
+    let mut path = type_path.path.clone();
+    let entity = nested
+        .entity
+        .clone()
+        .or_else(|| derive_entity_from_repo_type(&nested.ty))
+        .ok_or_else(|| {
+            syn::Error::new_spanned(
+                &nested.ty,
+                "cannot infer nested entity; specify entity explicitly",
+            )
+        })?;
+    let last = path.segments.last_mut().unwrap();
+    last.ident = format_ident!("{entity}ConstraintViolation");
+    last.arguments = syn::PathArguments::None;
+    Ok(path)
+}
+
 fn derive_entity_from_repo_type(ty: &syn::Type) -> Option<syn::Ident> {
     if let syn::Type::Path(type_path) = ty
         && let Some(segment) = type_path.path.segments.last()
@@ -402,7 +449,7 @@ mod tests {
     fn id_foreign_key_and_redundant_unique_are_not_primary_keys() {
         use darling::FromDeriveInput;
         let input: syn::DeriveInput = syn::parse_quote! {
-            #[es_repo(entity = "SharedId", migrations_dir = "tests/fixtures/shared_id")]
+            #[es_repo(entity = "SharedId", id(source = caller), migrations_dir = "tests/fixtures/shared_id")]
             struct SharedIds { pool: sqlx::PgPool }
         };
         let opts = RepositoryOptions::from_derive_input(&input).unwrap();
@@ -423,7 +470,8 @@ mod tests {
         let generated_tokens = quote!(#generated).to_string();
         assert!(generated_tokens.contains("fn pkey_from_database"));
         assert!(generated_tokens.contains("\"shared_ids_actual_pk\""));
-        for expected in ["IdFkey", "IdCheck", "IdKey"] {
+        assert!(variants.iter().all(|v| v.ident != "IdFkey"));
+        for expected in ["IdCheck", "IdKey"] {
             let variant = variants
                 .iter()
                 .find(|v| v.ident == expected)
@@ -461,6 +509,7 @@ mod tests {
             syn::parse_quote! {
                 #[es_repo(
                     entity = "Gadget",
+                    id(source = caller),
                     migrations_dir = "tests/fixtures/catalog_authoritative",
                     columns(name(ty = "String"), note(ty = "String"))
                 )]

@@ -25,7 +25,7 @@ use tracing_subscriber::layer::SubscriberExt;
 pub struct ParentOnlySites {
     pool: PgPool,
 
-    #[es_repo(nested)]
+    #[es_repo(nested, entity = "PlainMeter")]
     meters: ParentOnlyMeters,
 }
 
@@ -88,13 +88,11 @@ async fn nested_parent_only_snapshot_one_statement() -> anyhow::Result<()> {
     let pool = init_pool().await?;
     let repo = ParentOnlySites::new(pool);
 
-    let site_id = SiteId::new();
-    let meter_id = MeterId::new();
-    let mut site = repo
-        .create(NewSite::builder().id(site_id).build().unwrap())
-        .await?;
-    site.add_meter(new_meter(meter_id, site_id, "m"));
+    let mut site = repo.create(NewSite::builder().build().unwrap()).await?;
+    let site_id = site.id;
+    site.add_meter(new_meter(site_id, "m"));
     repo.update(&mut site).await?;
+    let meter_id = site.meters.iter_persisted().next().unwrap().id;
 
     let counter = QueryEventCount::default();
     let subscriber = tracing_subscriber::registry().with(counter.clone());

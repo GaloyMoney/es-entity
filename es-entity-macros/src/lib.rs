@@ -161,7 +161,7 @@ pub fn constraint_rejection(input: proc_macro::TokenStream) -> proc_macro::Token
     quote::quote! {
         impl #ident {
             pub fn diagnostics(&self) -> &es_entity::ConstraintDiagnostics {
-                match self { #(Self::#variants(conflict) => &conflict.diagnostics),* }
+                match *self { #(Self::#variants(ref conflict) => &conflict.diagnostics),* }
             }
             pub fn constraint_name(&self) -> &str { self.diagnostics().constraint }
             pub fn kind(&self) -> es_entity::ConstraintKind { self.diagnostics().kind }

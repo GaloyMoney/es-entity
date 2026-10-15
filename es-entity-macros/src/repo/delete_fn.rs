@@ -11,7 +11,6 @@ pub struct DeleteFn<'a> {
     in_op_only: bool,
     id: &'a syn::Ident,
     event: &'a syn::Ident,
-    constraint_violation: syn::Ident,
     entity: &'a syn::Ident,
     table_name: &'a str,
     events_table_name: &'a str,
@@ -21,6 +20,12 @@ pub struct DeleteFn<'a> {
     nested_delete_fn_names: Vec<syn::Ident>,
     post_persist_hook: bool,
     forgettable_table_name: Option<&'a str>,
+    /// `RepositoryOptions::update_can_reject`: `false` narrows the generated
+    /// signatures from `RepoWriteError<CV>` to `es_entity::RepoFault`.
+    can_reject: bool,
+    /// The generated signatures' error type, see
+    /// `RepositoryOptions::update_error_ty`.
+    write_error_ty: TokenStream,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -32,7 +37,6 @@ impl<'a> DeleteFn<'a> {
             id: opts.id(),
             event: opts.event(),
             entity: opts.entity(),
-            constraint_violation: opts.constraint_violation(),
             columns: &opts.columns,
             table_name: opts.table_name(),
             events_table_name: opts.events_table_name(),
@@ -44,6 +48,8 @@ impl<'a> DeleteFn<'a> {
                 .collect(),
             post_persist_hook: opts.post_persist_hook.is_some(),
             forgettable_table_name: opts.forgettable_table_name(),
+            can_reject: opts.update_can_reject(),
+            write_error_ty: opts.update_error_ty(),
             #[cfg(feature = "instrument")]
             repo_name_snake: opts.repo_name_snake_case(),
         }
@@ -57,7 +63,6 @@ impl ToTokens for DeleteFn<'_> {
         }
 
         let entity = self.entity;
-        let constraint_violation = &self.constraint_violation;
         let table_name = self.table_name;
 
         let nested_deletes = self.nested_delete_fn_names.iter().map(|f| {
@@ -161,12 +166,27 @@ impl ToTokens for DeleteFn<'_> {
             None => quote! {},
         };
 
+        let write_error_ty = &self.write_error_ty;
+        let (rejection_prelude, rejection_tail, constraint_values) = if self.can_reject {
+            (
+                quote! { use es_entity::errlanes::ResultExt as _; },
+                quote! { .map_rejected(|r| r.with_attempted(__constraint_values))? },
+                constraint_values,
+            )
+        } else {
+            (
+                quote! { use es_entity::errlanes::ResultExt as _; },
+                quote! { .narrow_rejected()? },
+                quote! {},
+            )
+        };
+
         let standalone = (!self.in_op_only).then(|| {
             quote! {
                 pub async fn delete(
                     &self,
                     entity: #entity
-                ) -> Result<(), es_entity::RepoWriteError<#constraint_violation>> {
+                ) -> Result<(), #write_error_ty> {
                     let mut op = self.begin_op().await?;
                     let res = self.delete_in_op(&mut op, entity).await?;
                     op.commit().await?;
@@ -182,12 +202,12 @@ impl ToTokens for DeleteFn<'_> {
             pub async fn delete_in_op<OP>(&self,
                 op: &mut OP,
                 mut entity: #entity
-            ) -> Result<(), es_entity::RepoWriteError<#constraint_violation>>
+            ) -> Result<(), #write_error_ty>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), es_entity::RepoWriteError<#constraint_violation>> = async {
-                    use es_entity::errlanes::ResultExt as _;
+                let __result: Result<(), #write_error_ty> = async {
+                    #rejection_prelude
 
                     #(#nested_deletes)*
                     #assignments
@@ -207,7 +227,7 @@ impl ToTokens for DeleteFn<'_> {
                         .fetch_all(op.as_executor())
                         .await
                         .map_err(|e| Self::classify_update_write(e, format!("{} seq conflict", #table_name)))
-                        .map_rejected(|r| r.with_attempted(__constraint_values))?;
+                        #rejection_tail;
 
                     #staged_payload_insert
 
@@ -218,10 +238,9 @@ impl ToTokens for DeleteFn<'_> {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or_else(|| errlanes::Fail::<#constraint_violation, errlanes::lanes!(Transient, Fatal)>::from(
-                                errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
-                                    .with_context(format!("{} row vanished", #table_name))
-                            ))?;
+                            .ok_or_else(|| errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                .with_context(format!("{} row vanished", #table_name))
+                            )?;
                         let n_events = Self::extract_events(&mut entity)
                             .mark_new_events_persisted_at(recorded_at);
 
@@ -257,7 +276,6 @@ mod tests {
             id: &id,
             event: &event,
             entity: &entity,
-            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -265,6 +283,8 @@ mod tests {
             delete_option: &DeleteOption::Soft,
             nested_delete_fn_names: Vec::new(),
             post_persist_hook: false,
+            can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -277,7 +297,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> {
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation> > {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -288,11 +308,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>>
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation> >
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                let __result: Result<(), es_entity::RepoWriteError<EntityConstraintViolation> > = async {
                     use es_entity::errlanes::ResultExt as _;
 
                     let id = &entity.id;
@@ -320,10 +340,9 @@ mod tests {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or_else(|| errlanes::Fail::<EntityConstraintViolation, errlanes::lanes!(Transient, Fatal)>::from(
-                                errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
-                                    .with_context(format!("{} row vanished", "entities"))
-                            ))?;
+                            .ok_or_else(|| errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                .with_context(format!("{} row vanished", "entities"))
+                            )?;
                         let n_events = Self::extract_events(&mut entity)
                             .mark_new_events_persisted_at(recorded_at);
                     }
@@ -357,7 +376,6 @@ mod tests {
             id: &id,
             event: &event,
             entity: &entity,
-            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -365,6 +383,8 @@ mod tests {
             delete_option: &DeleteOption::Soft,
             nested_delete_fn_names: Vec::new(),
             post_persist_hook: false,
+            can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             forgettable_table_name: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -377,7 +397,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> {
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation> > {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -388,11 +408,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>>
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation> >
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                let __result: Result<(), es_entity::RepoWriteError<EntityConstraintViolation> > = async {
                     use es_entity::errlanes::ResultExt as _;
 
                     let id = &entity.id;
@@ -422,10 +442,9 @@ mod tests {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or_else(|| errlanes::Fail::<EntityConstraintViolation, errlanes::lanes!(Transient, Fatal)>::from(
-                                errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
-                                    .with_context(format!("{} row vanished", "entities"))
-                            ))?;
+                            .ok_or_else(|| errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                .with_context(format!("{} row vanished", "entities"))
+                            )?;
                         let n_events = Self::extract_events(&mut entity)
                             .mark_new_events_persisted_at(recorded_at);
                     }
@@ -453,7 +472,6 @@ mod tests {
             id: &id,
             event: &event,
             entity: &entity,
-            constraint_violation: syn::Ident::new("EntityConstraintViolation", Span::call_site()),
             table_name: "entities",
             events_table_name: "entity_events",
             event_ctx: false,
@@ -461,6 +479,8 @@ mod tests {
             delete_option: &DeleteOption::Soft,
             nested_delete_fn_names: Vec::new(),
             post_persist_hook: false,
+            can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             forgettable_table_name: Some("entities_forgettable_payloads"),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -473,7 +493,7 @@ mod tests {
             pub async fn delete(
                 &self,
                 entity: Entity
-            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> {
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation> > {
                 let mut op = self.begin_op().await?;
                 let res = self.delete_in_op(&mut op, entity).await?;
                 op.commit().await?;
@@ -484,11 +504,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 mut entity: Entity
-            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation>>
+            ) -> Result<(), es_entity::RepoWriteError<EntityConstraintViolation> >
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<(), es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                let __result: Result<(), es_entity::RepoWriteError<EntityConstraintViolation> > = async {
                     use es_entity::errlanes::ResultExt as _;
 
                     let id = &entity.id;
@@ -546,10 +566,9 @@ mod tests {
                         let recorded_at = rows
                             .first()
                             .map(|row| row.recorded_at)
-                            .ok_or_else(|| errlanes::Fail::<EntityConstraintViolation, errlanes::lanes!(Transient, Fatal)>::from(
-                                errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
-                                    .with_context(format!("{} row vanished", "entities"))
-                            ))?;
+                            .ok_or_else(|| errlanes::Transient::new(errlanes::TransientKind::OptimisticConflict)
+                                .with_context(format!("{} row vanished", "entities"))
+                            )?;
                         let n_events = Self::extract_events(&mut entity)
                             .mark_new_events_persisted_at(recorded_at);
                     }

@@ -41,16 +41,13 @@ async fn seed_contacts(
 ) -> anyhow::Result<Vec<ContactId>> {
     let mut ids = Vec::new();
     for (email, status) in specs {
-        let id = ContactId::new();
         let new = NewContact::builder()
-            .id(id)
             .partner_id(partner_id)
-            .email(format!("{email}-{id}@test.com"))
+            .email(format!("{email}-{}@test.com", ContactId::new()))
             .status(*status)
             .build()
             .unwrap();
-        repo.create(new).await?;
-        ids.push(id);
+        ids.push(repo.create(new).await?.id);
     }
     Ok(ids)
 }

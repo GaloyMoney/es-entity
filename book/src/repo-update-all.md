@@ -20,14 +20,13 @@ Returns the total number of events persisted. Entities without new events are sk
 #     NameUpdated { name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
-#             self.id,
-#             [UserEvent::Initialized {
-#                 id: self.id,
-#                 name: self.name,
-#             }],
-#         )
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
+#         let id = builder.id();
+#         builder.initial_events([UserEvent::Initialized {
+#             id,
+#             name: self.name,
+#         }])
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
@@ -45,7 +44,6 @@ Returns the total number of events persisted. Entities without new events are sk
 use es_entity::*;
 
 pub struct NewUser {
-    id: UserId,
     name: String
 }
 
@@ -79,8 +77,8 @@ async fn main() -> anyhow::Result<()> {
 
     // First create some users
     let new_users = vec![
-        NewUser { id: UserId::new(), name: "James".to_string() },
-        NewUser { id: UserId::new(), name: "Roger".to_string() }
+        NewUser { name: "James".to_string() },
+        NewUser { name: "Roger".to_string() }
     ];
     let mut users_vec = users.create_all(new_users).await?;
 

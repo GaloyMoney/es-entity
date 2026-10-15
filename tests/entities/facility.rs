@@ -62,8 +62,6 @@ impl TryFromEvents<FacilityEvent> for Facility {
 #[derive(Debug, Builder)]
 pub struct NewFacility {
     #[builder(setter(into))]
-    pub id: FacilityId,
-    #[builder(setter(into))]
     pub partner_id: PartnerId,
     #[builder(setter(into))]
     pub customer_id: CustomerId,
@@ -78,15 +76,18 @@ impl NewFacility {
 }
 
 impl IntoEvents<FacilityEvent> for NewFacility {
-    fn into_events(self) -> EntityEvents<FacilityEvent> {
-        EntityEvents::init(
-            self.id,
-            [FacilityEvent::Initialized {
-                id: self.id,
-                partner_id: self.partner_id,
-                customer_id: self.customer_id,
-                status: self.status,
-            }],
-        )
+    type IdSource = FromRepo;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<FacilityEvent, FromRepo>,
+    ) -> EntityEvents<FacilityEvent> {
+        let id = builder.id();
+        builder.initial_events([FacilityEvent::Initialized {
+            id,
+            partner_id: self.partner_id,
+            customer_id: self.customer_id,
+            status: self.status,
+        }])
     }
 }

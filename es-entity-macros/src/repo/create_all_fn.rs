@@ -21,6 +21,14 @@ pub struct CreateAllFn<'a> {
     nested_fn_names: Vec<syn::Ident>,
     post_hydrate_hook: bool,
     post_persist_hook: bool,
+    id_source: IdSourceOpt,
+    /// Whether the repo's own batch statement can reject — see
+    /// `RepositoryOptions::create_can_reject`. `false` narrows the
+    /// statement's classification with `narrow_rejected()`.
+    can_reject: bool,
+    /// The generated signatures' error type, see
+    /// `RepositoryOptions::create_error_ty`.
+    write_error_ty: TokenStream,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -28,6 +36,9 @@ pub struct CreateAllFn<'a> {
 impl<'a> From<&'a RepositoryOptions> for CreateAllFn<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
+            id_source: opts.id_source(),
+            can_reject: opts.create_can_reject(),
+            write_error_ty: opts.create_error_ty(),
             in_op_only: opts.in_op_only(),
             table_name: opts.table_name(),
             entity: opts.entity(),
@@ -64,7 +75,7 @@ impl ToTokens for CreateAllFn<'_> {
         } else {
             let nested = self.nested_fn_names.iter().map(|f| {
                 quote! {
-                    self.#f(op, &mut entity_refs).await.map_err(errlanes::Fail::lift::<#constraint_violation, errlanes::lanes!(Transient, Fatal)>)?;
+                    self.#f(op, &mut entity_refs).await.map_err(es_entity::LiftNestedWrite::<#constraint_violation>::lift_nested)?;
                 }
             });
             quote! {
@@ -80,7 +91,7 @@ impl ToTokens for CreateAllFn<'_> {
         let placeholders = self.columns.insert_placeholders(1);
         let (arg_collection, arg_adds) = self
             .columns
-            .create_all_arg_collection(syn::parse_quote! { new_entity });
+            .create_all_arg_collection(syn::parse_quote! { new_entity }, self.id_source.is_repo());
 
         // Both inserts in one statement. The events insert joins the `new_rows`
         // CTE, which reveals index rows that vanished (a short RETURNING
@@ -107,6 +118,50 @@ impl ToTokens for CreateAllFn<'_> {
         );
 
         let id_type = self.id;
+        let generated = self.id_source.is_repo();
+        let resolve_ids = if generated {
+            let resolved = self.id_source.resolve(id_type);
+            quote! {
+                let mut __ids: Vec<#id_type> = Vec::with_capacity(new_entities.len());
+                for _ in 0..new_entities.len() {
+                    __ids.push(#resolved);
+                }
+            }
+        } else {
+            quote! {}
+        };
+        let (capture_caller_ids, caller_ids_check) = if generated {
+            (quote! {}, quote! {})
+        } else {
+            (
+                quote! {
+                    let __caller_ids: Vec<#id_type> = id_collection.iter().map(|id: &&#id_type| <#id_type as Clone>::clone(*id)).collect();
+                },
+                quote! {
+                    if all_events.iter().zip(__caller_ids.iter()).any(|(events, id): (&es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event, <#entity as es_entity::EsEntity>::Snapshot>, &#id_type)| events.id() != id) {
+                        return Err(errlanes::Fatal::invariant("caller's id differs from the id the entity was built under").into());
+                    }
+                },
+            )
+        };
+        let convert_all = if generated {
+            let builder = self.id_source.builder(quote! { id.clone() });
+            quote! {
+                new_entities
+                    .into_iter()
+                    .zip(__ids.iter())
+                    .map(|(new_entity, id)| Self::convert_new(new_entity, #builder))
+                    .collect()
+            }
+        } else {
+            let builder = self.id_source.builder(quote! {});
+            quote! {
+                new_entities
+                    .into_iter()
+                    .map(|new_entity| Self::convert_new(new_entity, #builder))
+                    .collect()
+            }
+        };
         // Postgres reports the bare table name in errors, so a
         // schema-qualified events table is reduced to its last path
         // component before being compared against `DatabaseError::table()`.
@@ -115,7 +170,37 @@ impl ToTokens for CreateAllFn<'_> {
             .rsplit('.')
             .next()
             .unwrap_or(self.events_table_name);
-
+        let classify_create = if generated {
+            quote! { Self::classify_create_write(e) }
+        } else {
+            quote! {
+                Self::classify_create_write(e, |db_err| {
+                    // The database message is a lookup key, never a
+                    // value: the attributed id is always one of the
+                    // batch's own ids, found by matching the
+                    // reported key text against them. A duplicate
+                    // reported inside the batch itself still
+                    // matches correctly -- both occurrences are the
+                    // same id, so `find`'s first hit is right either
+                    // way.
+                    let reported = if db_err.table() == Some(#events_table_bare) {
+                        es_entity::extract_events_pkey_id_value(db_err)
+                    } else {
+                        es_entity::extract_constraint_value(db_err)
+                    }?;
+                    all_ids.iter().find(|id| id.to_string() == reported).map(|id| (**id).clone())
+                })
+            }
+        };
+        let write_error_ty = &self.write_error_ty;
+        let (narrow_import, narrow_call) = if self.can_reject {
+            (quote! {}, quote! {})
+        } else {
+            (
+                quote! { use es_entity::errlanes::ResultExt as _; },
+                quote! { .narrow_rejected() },
+            )
+        };
         let batch_declarations = events_insert.batch_declarations(id_type);
         let gather = events_insert.gather_batch(quote! { events }, quote! { id });
         // The index columns are encoded first (their borrows on the new
@@ -222,7 +307,7 @@ impl ToTokens for CreateAllFn<'_> {
                 pub async fn create_all(
                     &self,
                     new_entities: Vec<<#entity as es_entity::EsEntity>::New>
-                ) -> Result<Vec<#entity>, es_entity::RepoWriteError<#constraint_violation>> {
+                ) -> Result<Vec<#entity>, #write_error_ty> {
                     let mut op = self.begin_op().await?;
                     let res = self.create_all_in_op(&mut op, new_entities).await?;
                     op.commit().await?;
@@ -239,17 +324,20 @@ impl ToTokens for CreateAllFn<'_> {
                 &self,
                 op: &mut OP,
                 new_entities: Vec<<#entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<#entity>, es_entity::RepoWriteError<#constraint_violation>>
+            ) -> Result<Vec<#entity>, #write_error_ty>
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<Vec<#entity>, es_entity::RepoWriteError<#constraint_violation>> = async {
+                let __result: Result<Vec<#entity>, #write_error_ty> = async {
+                    #narrow_import
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     let mut entities = Vec::new();
                     if new_entities.is_empty() {
                         return Ok(entities);
                     }
+
+                    #resolve_ids
 
                     let mut __query_args = sqlx::postgres::PgArguments::default();
                     __query_args.add(op.maybe_now()).map_err(sqlx::Error::Encode)?;
@@ -258,9 +346,11 @@ impl ToTokens for CreateAllFn<'_> {
                     // they hold on `new_entities` end here, freeing it to be
                     // consumed into the event stream below.
                     #arg_collection
+                    #capture_caller_ids
                     #(#arg_adds)*
 
-                    let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event, <#entity as es_entity::EsEntity>::Snapshot>> = new_entities.into_iter().map(Self::convert_new).collect();
+                    let mut all_events: Vec<es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event, <#entity as es_entity::EsEntity>::Snapshot>> = #convert_all;
+                    #caller_ids_check
 
                     #batch_declarations
                     let mut n_persisted: Vec<usize> = Vec::new();
@@ -279,22 +369,8 @@ impl ToTokens for CreateAllFn<'_> {
                     let rows = sqlx::query_with(#query, __query_args)
                         .fetch_all(op.as_executor())
                         .await
-                        .map_err(|e| Self::classify_create_write(e, |db_err| {
-                            // The database message is a lookup key, never a
-                            // value: the attributed id is always one of the
-                            // batch's own ids, found by matching the
-                            // reported key text against them. A duplicate
-                            // reported inside the batch itself still
-                            // matches correctly -- both occurrences are the
-                            // same id, so `find`'s first hit is right either
-                            // way.
-                            let reported = if db_err.table() == Some(#events_table_bare) {
-                                es_entity::extract_events_pkey_id_value(db_err)
-                            } else {
-                                es_entity::extract_constraint_value(db_err)
-                            }?;
-                            all_ids.iter().find(|id| id.to_string() == reported).map(|id| (**id).clone())
-                        }))?;
+                        .map_err(|e| #classify_create)
+                        #narrow_call?;
 
                     #forgettable_insert
 
@@ -304,11 +380,11 @@ impl ToTokens for CreateAllFn<'_> {
                         // a torn batch, not a race (every row belongs to this
                         // statement's own transaction).
                         if rows.len() != expected_events {
-                            return Err(errlanes::Fail::from(errlanes::Fatal::invariant(format!(
+                            return Err(errlanes::Fatal::invariant(format!(
                                 "batch wrote {} of {} events",
                                 rows.len(),
                                 expected_events
-                            ))));
+                            )).into());
                         }
 
                         let recorded_at = rows
@@ -364,6 +440,9 @@ mod tests {
             nested_fn_names: Vec::new(),
             post_hydrate_hook: false,
             post_persist_hook: false,
+            id_source: IdSourceOpt::Caller,
+            can_reject: true,
+            write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -375,7 +454,7 @@ mod tests {
             pub async fn create_all(
                 &self,
                 new_entities: Vec<<Entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<Entity>, es_entity::RepoWriteError<EntityConstraintViolation>> {
+            ) -> Result<Vec<Entity>, es_entity::RepoWriteError<EntityConstraintViolation> > {
                 let mut op = self.begin_op().await?;
                 let res = self.create_all_in_op(&mut op, new_entities).await?;
                 op.commit().await?;
@@ -386,11 +465,11 @@ mod tests {
                 &self,
                 op: &mut OP,
                 new_entities: Vec<<Entity as es_entity::EsEntity>::New>
-            ) -> Result<Vec<Entity>, es_entity::RepoWriteError<EntityConstraintViolation>>
+            ) -> Result<Vec<Entity>, es_entity::RepoWriteError<EntityConstraintViolation> >
             where
                 OP: es_entity::AtomicOperation + ?Sized
             {
-                let __result: Result<Vec<Entity>, es_entity::RepoWriteError<EntityConstraintViolation>> = async {
+                let __result: Result<Vec<Entity>, es_entity::RepoWriteError<EntityConstraintViolation> > = async {
                     use es_entity::prelude::sqlx::{Arguments, Row};
 
                     let mut entities = Vec::new();
@@ -412,10 +491,14 @@ mod tests {
                         name_collection.push(name);
                     }
 
+                    let __caller_ids: Vec<EntityId> = id_collection.iter().map(|id: &&EntityId| <EntityId as Clone>::clone(*id)).collect();
                     __query_args.add(id_collection).map_err(sqlx::Error::Encode)?;
                     __query_args.add(name_collection).map_err(sqlx::Error::Encode)?;
 
-                    let mut all_events: Vec<es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event, <Entity as es_entity::EsEntity>::Snapshot>> = new_entities.into_iter().map(Self::convert_new).collect();
+                    let mut all_events: Vec<es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event, <Entity as es_entity::EsEntity>::Snapshot>> = new_entities.into_iter().map(|new_entity| Self::convert_new(new_entity, es_entity::EntityEventsBuilder::__from_caller())).collect();
+                    if all_events.iter().zip(__caller_ids.iter()).any(|(events, id): (&es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event, <Entity as es_entity::EsEntity>::Snapshot>, &EntityId)| events.id() != id) {
+                        return Err(errlanes::Fatal::invariant("caller's id differs from the id the entity was built under").into());
+                    }
 
                     let mut all_ids: Vec<&EntityId> = Vec::new();
                     let mut all_sequences: Vec<i32> = Vec::new();
@@ -460,11 +543,11 @@ mod tests {
 
                     if expected_events > 0 {
                         if rows.len() != expected_events {
-                            return Err(errlanes::Fail::from(errlanes::Fatal::invariant(format!(
+                            return Err(errlanes::Fatal::invariant(format!(
                                 "batch wrote {} of {} events",
                                 rows.len(),
                                 expected_events
-                            ))));
+                            )).into());
                         }
 
                         let recorded_at = rows

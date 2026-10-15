@@ -241,11 +241,10 @@ custom `entity_id!` type) works here too.
 #     NameUpdated { name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
-#             self.id,
-#             [UserEvent::Initialized { id: self.id, name: self.name }],
-#         )
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
+#         let id = builder.id();
+#         builder.initial_events([UserEvent::Initialized { id, name: self.name }])
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
@@ -260,7 +259,7 @@ custom `entity_id!` type) works here too.
 #         Ok(User { id: events.id().clone(), name, events })
 #     }
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 # #[derive(EsEntity)]
 # pub struct User {
 #     pub id: UserId,

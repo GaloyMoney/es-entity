@@ -21,16 +21,15 @@ Other than the `events` field additional fields can be exposed and populated dur
 #     Initialized { id: UserId, name: String },
 #     NameUpdated { name: String },
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
-#             self.id,
-#             [UserEvent::Initialized {
-#                 id: self.id,
-#                 name: self.name,
-#             }],
-#         )
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
+#         let id = builder.id();
+#         builder.initial_events([UserEvent::Initialized {
+#             id,
+#             name: self.name,
+#         }])
 #     }
 # }
 // Using derive_builder is optional but useful for hydrating
@@ -93,16 +92,13 @@ impl TryFromEvents<UserEvent> for User {
 
 #[cfg(test)]
 mod tests {
+    use es_entity::testing::*;
+
+    use super::*;
+
     fn fresh_user() -> User {
-        let id = UserId::new();
-        let initial_events = EntityEvents::init(
-            id,
-            [UserEvent::Initialized {
-                id, 
-                name: "Willson"
-            }],
-        );
-        User::try_from_events(initial_events).expect("Could not create user");
+        User::hydrate_from_new(UserId::new(), NewUser { name: "Willson".to_string() })
+            .expect("Could not create user")
     }
 
     #[test]
@@ -110,15 +106,16 @@ mod tests {
         let mut user = fresh_user();
 
         // There are no new events to persist after hydrating
-        assert!(!user.events.any_new());
+        assert!(!user.events().any_new());
 
         let new_name = "Gavin".to_string();
-        user.update_name(new_name.clone()).unwrap();
+        assert!(user.update_name(new_name.clone()).did_execute());
         assert_eq!(user.name, new_name);
 
         // Mutations are expected to append events
-        assert!(user.events.any_new());
+        assert!(user.events().any_new());
     }
 }
-
 ```
+
+See [Testing](./testing.md) for building a `User` like this one in unit tests.

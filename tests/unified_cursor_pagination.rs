@@ -53,7 +53,6 @@ async fn seed(
 ) -> anyhow::Result<()> {
     for score in scores {
         let new = NewTransfer::builder()
-            .id(TransferId::new())
             .account_id(AccountId::from(account_id))
             .status("unified_cursor_test")
             .score(*score)

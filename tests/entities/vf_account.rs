@@ -40,8 +40,6 @@ impl TryFromEvents<VfAccountEvent> for VfAccount {
 #[derive(Debug, Builder)]
 pub struct NewVfAccount {
     #[builder(setter(into))]
-    pub id: VfAccountId,
-    #[builder(setter(into))]
     pub status: String,
 }
 
@@ -52,13 +50,16 @@ impl NewVfAccount {
 }
 
 impl IntoEvents<VfAccountEvent> for NewVfAccount {
-    fn into_events(self) -> EntityEvents<VfAccountEvent> {
-        EntityEvents::init(
-            self.id,
-            [VfAccountEvent::Initialized {
-                id: self.id,
-                status: self.status,
-            }],
-        )
+    type IdSource = FromRepo;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<VfAccountEvent, FromRepo>,
+    ) -> EntityEvents<VfAccountEvent> {
+        let id = builder.id();
+        builder.initial_events([VfAccountEvent::Initialized {
+            id,
+            status: self.status,
+        }])
     }
 }

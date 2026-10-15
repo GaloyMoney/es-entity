@@ -550,6 +550,14 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
         });
     }
 
+    // A rejection without variants (a repo whose writes can reject on nothing)
+    // matches the place itself: `match self {}` on a reference is not
+    // exhaustive, `match *self {}` on the uninhabited type is.
+    let scrutinee = if code_match_arms.is_empty() {
+        quote!(*self)
+    } else {
+        quote!(self)
+    };
     // Private helper consts, named after the (unique-in-module) type.
     let parts_ident = quote::format_ident!("__errlanes_code_parts_{}", ident);
     let len_ident = quote::format_ident!("__errlanes_code_len_{}", ident);
@@ -594,14 +602,14 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
 
             #[allow(unused_variables, unused_assignments)]
             fn code(&self) -> #code_ident {
-                match self {
+                match #scrutinee {
                     #(#code_match_arms),*
                 }
             }
 
             #[allow(unused_variables, unused_assignments)]
             fn level(&self) -> errlanes::Level {
-                match self {
+                match #scrutinee {
                     #(#level_match_arms),*
                 }
             }

@@ -34,13 +34,7 @@ impl VfAccountsFlagOnly {
 
 async fn create_account(repo: &VfAccountsFlagOnly, status: &str) -> anyhow::Result<VfAccount> {
     Ok(repo
-        .create(
-            NewVfAccount::builder()
-                .id(VfAccountId::new())
-                .status(status)
-                .build()
-                .unwrap(),
-        )
+        .create(NewVfAccount::builder().status(status).build().unwrap())
         .await?)
 }
 

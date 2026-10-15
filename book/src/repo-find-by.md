@@ -24,14 +24,13 @@ It is assumed that your database schema has a relevant `INDEX` on `<column>` to 
 #     Initialized { id: UserId, name: String },
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
-#             self.id,
-#             [UserEvent::Initialized {
-#                 id: self.id,
-#                 name: self.name,
-#             }],
-#         )
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
+#         let id = builder.id();
+#         builder.initial_events([UserEvent::Initialized {
+#             id,
+#             name: self.name,
+#         }])
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
@@ -39,7 +38,7 @@ It is assumed that your database schema has a relevant `INDEX` on `<column>` to 
 #         Ok(User { id: events.id().clone(), name: "Fred".to_string(), events })
 #     }
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 use es_entity::*;
 
 #[derive(EsEntity)]
@@ -62,7 +61,7 @@ pub struct Users {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let users = Users { pool: init_pool().await? };
-    let new_user = NewUser { id: UserId::new(), name: "Fred".to_string() };
+    let new_user = NewUser { name: "Fred".to_string() };
     users.create(new_user).await?;
 
     let user = users.find_by_name("Fred").await?;

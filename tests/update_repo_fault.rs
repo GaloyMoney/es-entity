@@ -1,7 +1,7 @@
 mod entities;
 mod helpers;
 
-use entities::user::*;
+use entities::{order::*, user::*};
 use es_entity::*;
 use sqlx::PgPool;
 
@@ -39,13 +39,7 @@ async fn update_without_a_constrained_column_or_nesting_returns_repo_fault() -> 
     let repo = ImmutableNameUsers::new(helpers::init_pool().await?);
 
     let mut user = repo
-        .create(
-            NewUser::builder()
-                .id(UserId::new())
-                .name("First")
-                .build()
-                .unwrap(),
-        )
+        .create(NewUser::builder().name("First").build().unwrap())
         .await?;
     let _ = user.update_name("Second");
 
@@ -64,13 +58,7 @@ async fn stale_sequence_update_is_transient_optimistic_conflict_through_repo_fau
     let repo = ImmutableNameUsers::new(helpers::init_pool().await?);
 
     let user = repo
-        .create(
-            NewUser::builder()
-                .id(UserId::new())
-                .name("Concurrent")
-                .build()
-                .unwrap(),
-        )
+        .create(NewUser::builder().name("Concurrent").build().unwrap())
         .await?;
 
     let mut first = repo.find_by_id(user.id).await?;
@@ -86,6 +74,53 @@ async fn stale_sequence_update_is_transient_optimistic_conflict_through_repo_fau
         }
         other => panic!("expected Fault::Transient(OptimisticConflict), got: {other:?}"),
     }
+
+    Ok(())
+}
+
+/// The only constrained column `update` persists is the `order_id` foreign
+/// key. A foreign key violation is an invariant, never a rejection, so
+/// `update_can_reject()` is false and `update`/`update_in_op` narrow to
+/// `RepoFault` even though the combined index+events statement is used.
+#[derive(EsRepo, Debug)]
+#[es_repo(entity = "OrderItem", columns(order_id(ty = "OrderId")))]
+pub struct ForeignKeyOnlyOrderItems {
+    pool: PgPool,
+}
+
+impl ForeignKeyOnlyOrderItems {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[tokio::test]
+async fn update_persisting_only_a_foreign_key_column_returns_repo_fault() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let order_id = OrderId::new();
+    sqlx::query!(
+        "INSERT INTO orders (id, created_at) VALUES ($1, now())",
+        order_id as OrderId
+    )
+    .execute(&pool)
+    .await?;
+    let repo = ForeignKeyOnlyOrderItems::new(pool);
+
+    let mut item = repo
+        .create(
+            NewOrderItem::builder()
+                .order_id(order_id)
+                .product_name("Widget")
+                .quantity(1)
+                .price(1.0)
+                .build()
+                .unwrap(),
+        )
+        .await?;
+    let _ = item.update_quantity(2);
+
+    let n_events = takes_fault(repo.update(&mut item).await)?;
+    assert_eq!(n_events, 1);
 
     Ok(())
 }

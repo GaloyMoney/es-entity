@@ -17,7 +17,7 @@ use tracing_subscriber::layer::SubscriberExt;
 pub struct BothSites {
     pool: PgPool,
 
-    #[es_repo(nested)]
+    #[es_repo(nested, entity = "Meter")]
     meters: BothMeters,
 }
 
@@ -77,13 +77,11 @@ async fn nested_both_snapshot_one_statement() -> anyhow::Result<()> {
     let pool = init_pool().await?;
     let repo = BothSites::new(pool);
 
-    let site_id = SiteId::new();
-    let meter_id = MeterId::new();
-    let mut site = repo
-        .create(NewSite::builder().id(site_id).build().unwrap())
-        .await?;
-    site.add_meter(new_meter(meter_id, site_id, "m"));
+    let mut site = repo.create(NewSite::builder().build().unwrap()).await?;
+    let site_id = site.id;
+    site.add_meter(new_meter(site_id, "m"));
     repo.update(&mut site).await?;
+    let meter_id = site.meters.iter_persisted().next().unwrap().id;
 
     // Cross the child's own snapshot threshold (tail_len() >= 4) the same
     // way a flat repo would.
@@ -121,16 +119,15 @@ async fn nested_update_refreshes_every_stale_child_not_just_the_mutated_one() ->
     let pool = init_pool().await?;
     let repo = BothSites::new(pool.clone());
 
-    let site_id = SiteId::new();
-    let mut site = repo
-        .create(NewSite::builder().id(site_id).build().unwrap())
-        .await?;
+    let mut site = repo.create(NewSite::builder().build().unwrap()).await?;
+    let site_id = site.id;
 
-    let meter_ids: Vec<MeterId> = (0..3).map(|_| MeterId::new()).collect();
-    for &id in &meter_ids {
-        site.add_meter(new_meter(id, site_id, "m"));
+    for _ in 0..3 {
+        site.add_meter(new_meter(site_id, "m"));
     }
     repo.update(&mut site).await?;
+    let meter_ids: Vec<MeterId> = site.meters.iter_persisted().map(|m| m.id).collect();
+    assert_eq!(meter_ids.len(), 3);
 
     // Cross every child's own snapshot threshold.
     for &id in &meter_ids {

@@ -21,14 +21,13 @@ This will generate the `list_by_<column>` `fn`s and appropriate `cursor` structs
 #     Deleted
 # }
 # impl IntoEvents<UserEvent> for NewUser {
-#     fn into_events(self) -> EntityEvents<UserEvent> {
-#         EntityEvents::init(
-#             self.id,
-#             [UserEvent::Initialized {
-#                 id: self.id,
-#                 name: self.name,
-#             }],
-#         )
+#     type IdSource = FromRepo;
+#     fn into_events(self, builder: EntityEventsBuilder<UserEvent, FromRepo>) -> EntityEvents<UserEvent> {
+#         let id = builder.id();
+#         builder.initial_events([UserEvent::Initialized {
+#             id,
+#             name: self.name,
+#         }])
 #     }
 # }
 # impl TryFromEvents<UserEvent> for User {
@@ -36,7 +35,7 @@ This will generate the `list_by_<column>` `fn`s and appropriate `cursor` structs
 #         Ok(User { id: events.id().clone(), name: "Fred".to_string(), events })
 #     }
 # }
-# pub struct NewUser { id: UserId, name: String }
+# pub struct NewUser { name: String }
 # #[derive(EsEntity)]
 # pub struct User {
 #     pub id: UserId,
@@ -82,7 +81,7 @@ pub struct Users {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let users = Users { pool: init_pool().await? };
-    let new_user = NewUser { id: UserId::new(), name: "Fred".to_string() };
+    let new_user = NewUser { name: "Fred".to_string() };
     users.create(new_user).await?;
 
     let page = users

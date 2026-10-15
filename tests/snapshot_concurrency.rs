@@ -19,7 +19,6 @@ impl MeterRepo {
 
 fn new_meter(label: &str) -> NewMeter {
     NewMeter::builder()
-        .id(MeterId::new())
         .site_id(SiteId::new())
         .label(label)
         .build()

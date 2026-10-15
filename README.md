@@ -153,8 +153,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let users = Users { pool };
     
     // Create a new user
+    // (the repository generates the id, `NewUser` has no id field)
     let user = users.create(NewUser {
-        id: UserId::new(),
         name: "Alice".to_string(),
     }).await?;
     
@@ -225,9 +225,7 @@ struct OrderItems {
 }
 
 #[derive(EsRepo)]
-#[es_repo(
-    entity = "Order",
-)]
+#[es_repo(entity = "Order")]
 pub struct Orders {
     pool: PgPool,
 
@@ -270,27 +268,26 @@ See the [Forgettable Data](https://galoymoney.github.io/es-entity/forgettable.ht
 ## Testing
 
 The entity style is easily testable. Hydrate from events, mutate, assert.
+Enable the `testing` feature for tests only:
+
+```toml
+[dev-dependencies]
+es-entity = { version = "...", features = ["testing"] }
+```
 
 ```rust
 #[cfg(test)]
 mod tests {
+    use es_entity::testing::*;
+
     use super::*;
-    
-    fn test_user(id: UserId) -> User {
-        let events = EntityEvents::init(
-            id,
-            [UserEvent::Initialized { 
-                id,
-                name: "Alice".to_string() 
-            }],
-        );
-        
-        User::try_from_events(events).unwrap();
-    }
 
     #[test]
     fn test_user_update() {
-        let mut user = test_user(UserId::new());
+        // From a `New*` value; the id comes first when the repo generates it.
+        let mut user = User::hydrate_from_new(UserId::new(), NewUser { name: "Alice".to_string() }).unwrap();
+        // Or from any event stream:
+        // let user = User::hydrate_from_events(id, [UserEvent::Initialized { id, name: "Alice".to_string() }]).unwrap();
         assert_eq!(user.update_name("Bob"), Idempotent::Executed(()));
         assert_eq!(user.update_name("Bob"), Idempotent::AlreadyApplied(()));
     }

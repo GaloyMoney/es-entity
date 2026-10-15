@@ -96,8 +96,6 @@ impl TryFromEvents<SubscriberEvent> for Subscriber {
 #[derive(Debug, Builder)]
 pub struct NewSubscriber {
     #[builder(setter(into))]
-    pub id: SubscriberId,
-    #[builder(setter(into))]
     pub email: String,
     #[builder(setter(into))]
     pub plan: String,
@@ -110,15 +108,18 @@ impl NewSubscriber {
 }
 
 impl IntoEvents<SubscriberEvent> for NewSubscriber {
-    fn into_events(self) -> EntityEvents<SubscriberEvent> {
-        EntityEvents::init(
-            self.id,
-            [SubscriberEvent::Initialized {
-                id: self.id,
-                email: Forgettable::new(self.email),
-                plan: self.plan,
-            }],
-        )
+    type IdSource = FromRepo;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<SubscriberEvent, FromRepo>,
+    ) -> EntityEvents<SubscriberEvent> {
+        let id = builder.id();
+        builder.initial_events([SubscriberEvent::Initialized {
+            id,
+            email: Forgettable::new(self.email),
+            plan: self.plan,
+        }])
     }
 }
 
@@ -143,10 +144,8 @@ impl Subscribers {
 /// across tests and runs, so a fixed value would collide). Returns the entity
 /// and its email.
 async fn new_subscriber(subscribers: &Subscribers) -> anyhow::Result<(Subscriber, String)> {
-    let id = SubscriberId::new();
-    let email = format!("user-{id}@example.com");
+    let email = format!("user-{}@example.com", SubscriberId::new());
     let new = NewSubscriber::builder()
-        .id(id)
         .email(email.clone())
         .plan("pro")
         .build()
@@ -314,6 +313,73 @@ async fn soft_delete_auto_forgets_the_index_column() -> anyhow::Result<()> {
     assert!(row.deleted);
     assert_eq!(row.email, None);
     assert_eq!(row.plan, "pro");
+
+    Ok(())
+}
+
+/// No column persists on update, so `update_can_reject()` is false:
+/// `forget` and soft `delete` narrow to `RepoFault` like `update` does.
+mod frozen {
+    use es_entity::*;
+    use sqlx::PgPool;
+
+    use super::{Subscriber, SubscriberEvent, SubscriberId};
+
+    #[derive(EsRepo, Debug)]
+    #[es_repo(
+        entity = "Subscriber",
+        forgettable,
+        delete = "soft",
+        columns(
+            email(ty = "Forgettable<String>", update(persist = false)),
+            plan(ty = "String", update(persist = false))
+        )
+    )]
+    pub struct FrozenSubscribers {
+        pool: PgPool,
+    }
+
+    impl FrozenSubscribers {
+        pub fn new(pool: PgPool) -> Self {
+            Self { pool }
+        }
+    }
+}
+use frozen::FrozenSubscribers;
+
+fn takes_fault<T>(res: Result<T, es_entity::RepoFault>) -> Result<T, es_entity::RepoFault> {
+    res
+}
+
+#[tokio::test]
+async fn forget_and_delete_return_repo_fault_when_the_repo_cannot_reject() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let subscribers = Subscribers::new(pool.clone());
+    let frozen = FrozenSubscribers::new(pool.clone());
+
+    let (subscriber, _email) = new_subscriber(&subscribers).await?;
+    let id = subscriber.id;
+    let forgotten = takes_fault(frozen.forget(subscriber).await)?;
+    assert!(forgotten.email.is_forgotten());
+
+    let row = sqlx::query!(
+        "SELECT email FROM subscribers WHERE id = $1",
+        id as SubscriberId
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(row.email, None);
+
+    let (subscriber, _email) = new_subscriber(&subscribers).await?;
+    let id = subscriber.id;
+    takes_fault(frozen.delete(subscriber).await)?;
+    let row = sqlx::query!(
+        "SELECT deleted FROM subscribers WHERE id = $1",
+        id as SubscriberId
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert!(row.deleted);
 
     Ok(())
 }

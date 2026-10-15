@@ -46,7 +46,6 @@ async fn seed_transfers(
 ) -> anyhow::Result<()> {
     for (account_id, status, reference, score) in specs {
         let mut new = NewTransfer::builder()
-            .id(TransferId::new())
             .account_id(AccountId::from(*account_id))
             .status(*status)
             .score(*score)

@@ -53,8 +53,6 @@ impl TryFromEvents<TaskEvent> for Task {
 
 #[derive(Debug, Builder)]
 pub struct NewTask {
-    #[builder(setter(into))]
-    pub id: TaskId,
     #[builder(setter(into, strip_option), default)]
     pub workspace_id: Option<WorkspaceId>,
     #[builder(setter(into))]
@@ -68,14 +66,17 @@ impl NewTask {
 }
 
 impl IntoEvents<TaskEvent> for NewTask {
-    fn into_events(self) -> EntityEvents<TaskEvent> {
-        EntityEvents::init(
-            self.id,
-            [TaskEvent::Initialized {
-                id: self.id,
-                workspace_id: self.workspace_id,
-                status: self.status,
-            }],
-        )
+    type IdSource = FromRepo;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<TaskEvent, FromRepo>,
+    ) -> EntityEvents<TaskEvent> {
+        let id = builder.id();
+        builder.initial_events([TaskEvent::Initialized {
+            id,
+            workspace_id: self.workspace_id,
+            status: self.status,
+        }])
     }
 }

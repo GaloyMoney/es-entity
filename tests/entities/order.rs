@@ -85,7 +85,6 @@ impl TryFromEvents<OrderItemEvent> for OrderItem {
 
 #[derive(Debug, Clone, Builder)]
 pub struct NewOrderItem {
-    pub id: OrderItemId,
     pub order_id: OrderId,
     #[builder(setter(into))]
     pub product_name: String,
@@ -100,17 +99,20 @@ impl NewOrderItem {
 }
 
 impl IntoEvents<OrderItemEvent> for NewOrderItem {
-    fn into_events(self) -> EntityEvents<OrderItemEvent> {
-        EntityEvents::init(
-            self.id,
-            vec![OrderItemEvent::Initialized {
-                id: self.id,
-                order_id: self.order_id,
-                product_name: self.product_name,
-                quantity: self.quantity,
-                price: self.price,
-            }],
-        )
+    type IdSource = FromRepo;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<OrderItemEvent, FromRepo>,
+    ) -> EntityEvents<OrderItemEvent> {
+        let id = builder.id();
+        builder.initial_events(vec![OrderItemEvent::Initialized {
+            id,
+            order_id: self.order_id,
+            product_name: self.product_name,
+            quantity: self.quantity,
+            price: self.price,
+        }])
     }
 }
 
@@ -174,9 +176,7 @@ impl TryFromEvents<OrderEvent> for Order {
 }
 
 #[derive(Debug, Clone, Builder)]
-pub struct NewOrder {
-    pub id: OrderId,
-}
+pub struct NewOrder {}
 
 impl NewOrder {
     pub fn builder() -> NewOrderBuilder {
@@ -185,7 +185,13 @@ impl NewOrder {
 }
 
 impl IntoEvents<OrderEvent> for NewOrder {
-    fn into_events(self) -> EntityEvents<OrderEvent> {
-        EntityEvents::init(self.id, vec![OrderEvent::Initialized { id: self.id }])
+    type IdSource = FromRepo;
+
+    fn into_events(
+        self,
+        builder: EntityEventsBuilder<OrderEvent, FromRepo>,
+    ) -> EntityEvents<OrderEvent> {
+        let id = builder.id();
+        builder.initial_events(vec![OrderEvent::Initialized { id }])
     }
 }

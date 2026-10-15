@@ -1,5 +1,6 @@
 mod columns;
 mod delete;
+mod id;
 
 use convert_case::{Case, Casing};
 use darling::{FromDeriveInput, FromField};
@@ -8,6 +9,7 @@ use quote::quote;
 
 pub use columns::*;
 pub use delete::*;
+pub use id::*;
 
 /// Information about the clock field in a repository
 #[derive(Debug, Clone)]
@@ -120,6 +122,8 @@ pub struct RepositoryOptions {
     #[darling(default, rename = "event")]
     event_ident: Option<syn::Ident>,
     #[darling(default, rename = "id")]
+    id_opts: IdOpts,
+    #[darling(skip)]
     id_ty: Option<syn::Ident>,
     #[darling(default, rename = "tbl_prefix")]
     prefix: Option<syn::LitStr>,
@@ -159,12 +163,9 @@ impl RepositoryOptions {
                 proc_macro2::Span::call_site(),
             ));
         }
-        if self.id_ty.is_none() {
-            self.id_ty = Some(syn::Ident::new(
-                &format!("{entity_name}Id"),
-                proc_macro2::Span::call_site(),
-            ));
-        }
+        self.id_ty = Some(self.id_opts.ty.clone().unwrap_or_else(|| {
+            syn::Ident::new(&format!("{entity_name}Id"), proc_macro2::Span::call_site())
+        }));
         let prefix = if let Some(prefix) = &self.prefix {
             format!("{}_", prefix.value())
         } else {
@@ -199,6 +200,9 @@ impl RepositoryOptions {
 
         self.columns
             .set_id_column(self.id_ty.as_ref().expect("Id not set"));
+        if let Some(scope) = self.id_opts.scope.take() {
+            self.columns.scope_id_column(scope);
+        }
 
         self
     }
@@ -217,6 +221,11 @@ impl RepositoryOptions {
 
     pub fn id(&self) -> &syn::Ident {
         self.id_ty.as_ref().expect("ID identifier is not set")
+    }
+
+    /// Where this repo gets the id of an entity it creates.
+    pub fn id_source(&self) -> IdSourceOpt {
+        self.id_opts.source.clone()
     }
 
     pub fn event(&self) -> &syn::Ident {
@@ -414,8 +423,10 @@ impl RepositoryOptions {
     /// `RepoWriteError<CV>` — there is nothing left in the `Rejected` lane
     /// for them to ever construct.
     ///
-    /// 1. No constraint on the entity's table has a column that persists on
-    ///    update — reusing [`crate::repo::error_types::enumerate_constraints`],
+    /// 1. No unique, primary-key or check constraint on the entity's table has
+    ///    a column that persists on update. Foreign keys do not count: a
+    ///    violation is an invariant fault, never a rejection, on the
+    ///    precondition that referenced rows are not hard-deleted. Reusing [`crate::repo::error_types::enumerate_constraints`],
     ///    the same enumeration `ErrorTypes` builds the violation enum from,
     ///    so this sees exactly the same constraint set (id-only pkey
     ///    resolution via the catalog included). When the catalog has no
@@ -423,14 +434,12 @@ impl RepositoryOptions {
     ///    from convention rather than read from a real migration, so which
     ///    persisted columns are genuinely constrained can't be known —
     ///    conservatively, this degrades to [`Columns::updates_needed`].
-    /// 2. The repo has no nested children — a nested create batched during
-    ///    an update can reject on the child's own constraints, so a parent
-    ///    with nested repos always keeps `RepoWriteError`, independent of
-    ///    its own columns.
+    ///
+    /// This is the repo's *own* statement only. A nested child's writes run
+    /// inside the parent's, and whether they can reject is the child's own
+    /// answer, published as `es_entity::WriteShapes` on its violation enum
+    /// and folded into the signature by [`Self::update_error_ty`].
     pub fn update_can_reject(&self) -> bool {
-        if self.any_nested() {
-            return true;
-        }
         let table = self.table_name();
         if self.index_catalog().table_constraints(table).is_empty() {
             return self.columns.updates_needed();
@@ -443,7 +452,134 @@ impl RepositoryOptions {
         };
         crate::repo::error_types::enumerate_constraints(self)
             .iter()
+            .filter(|(_, kind, _)| {
+                !matches!(kind, crate::index_catalog::ConstraintKind::ForeignKey)
+            })
             .any(|(_, _, col_names)| col_names.iter().any(updatable))
+    }
+
+    /// Whether the repo's own create statement can ever reject: `true` unless
+    /// every constraint in the family is one a create cannot hit. Foreign
+    /// keys never count (a violation is a fault), and neither does the
+    /// primary key when the repo generates its own ids, since a collision of a
+    /// fresh id is a fault. Nested children are folded in by
+    /// [`Self::create_error_ty`].
+    pub fn create_can_reject(&self) -> bool {
+        let generated = self.id_source().is_repo();
+        crate::repo::error_types::enumerate_constraints(self)
+            .iter()
+            .filter(|(_, kind, _)| {
+                !matches!(kind, crate::index_catalog::ConstraintKind::ForeignKey)
+            })
+            .any(|(name, kind, col_names)| {
+                let unreachable_pkey =
+                    generated && crate::repo::error_types::is_id_pkey(self, name, kind, col_names);
+                !unreachable_pkey
+            })
+    }
+
+    /// Whether `create_or_find_by_id_in_op` is generated: on a repo whose
+    /// `New*` types bring their own id, with a primary key on the id column
+    /// to catch the conflict on, and no scope columns (a scoped repo's
+    /// `find_by_id_in_op` needs a scope the create has no way to name).
+    pub fn create_or_find_enabled(&self) -> bool {
+        !self.id_source().is_repo()
+            && self.columns.scope_columns().is_empty()
+            && crate::repo::error_types::enumerate_constraints(self)
+                .iter()
+                .any(|(name, kind, col_names)| {
+                    crate::repo::error_types::is_id_pkey(self, name, kind, col_names)
+                })
+    }
+
+    /// Whether `create_or_find_by_id_in_op` can reject: the create family
+    /// minus the primary key (which the method turns into `Found`), or any
+    /// nested child.
+    pub fn create_or_find_can_reject(&self) -> bool {
+        self.any_nested()
+            || crate::repo::error_types::enumerate_constraints(self)
+                .iter()
+                .filter(|(_, kind, _)| {
+                    !matches!(kind, crate::index_catalog::ConstraintKind::ForeignKey)
+                })
+                .any(|(name, kind, col_names)| {
+                    !crate::repo::error_types::is_id_pkey(self, name, kind, col_names)
+                })
+    }
+
+    fn own_shape(can_reject: bool) -> proc_macro2::TokenStream {
+        if can_reject {
+            quote! { es_entity::Rejects }
+        } else {
+            quote! { es_entity::Faults }
+        }
+    }
+
+    /// The `es_entity::WriteShape` of this repo's `create`/`create_all`: its
+    /// own statement, then every nested child's create.
+    pub fn create_shape(&self) -> proc_macro2::TokenStream {
+        self.all_nested().fold(
+            Self::own_shape(self.create_can_reject()),
+            |shape, nested| {
+                let child = Self::child_shapes(nested);
+                quote! {
+                    <#shape as es_entity::WriteShape>::Or<<#child>::Create>
+                }
+            },
+        )
+    }
+
+    /// `<ChildConstraintViolation as es_entity::WriteShapes>`: where a nested
+    /// child publishes its shapes. The child's violation enum is named rather
+    /// than the child repo because it is always `pub`: a public parent whose
+    /// signatures mention a less visible child repo would not compile.
+    pub(crate) fn child_shapes(nested: &RepoField) -> proc_macro2::TokenStream {
+        match crate::repo::error_types::nested_constraint_violation_path(nested) {
+            Ok(path) => quote! { #path as es_entity::WriteShapes },
+            // `ErrorTypes` reports the real error; keep this one quiet.
+            Err(_) => quote! { () as es_entity::WriteShapes },
+        }
+    }
+
+    /// The `es_entity::WriteShape` of this repo's `update`/`update_all` (and,
+    /// with the same gate, `forget`/`delete`): its own statement, then every
+    /// nested child's update and the create of its new children.
+    pub fn update_shape(&self) -> proc_macro2::TokenStream {
+        self.all_nested().fold(
+            Self::own_shape(self.update_can_reject()),
+            |shape, nested| {
+                let child = Self::child_shapes(nested);
+                quote! {
+                    <<#shape as es_entity::WriteShape>::Or<<#child>::Update>
+                        as es_entity::WriteShape>::Or<<#child>::Create>
+                }
+            },
+        )
+    }
+
+    fn error_ty(
+        &self,
+        own_can_reject: bool,
+        shape: proc_macro2::TokenStream,
+    ) -> proc_macro2::TokenStream {
+        let cv = self.constraint_violation();
+        if own_can_reject {
+            quote! { es_entity::RepoWriteError<#cv> }
+        } else if !self.any_nested() {
+            quote! { es_entity::RepoFault }
+        } else {
+            quote! { <#shape as es_entity::WriteShape>::Error<#cv> }
+        }
+    }
+
+    /// The error type of the generated `create`/`create_all`.
+    pub fn create_error_ty(&self) -> proc_macro2::TokenStream {
+        self.error_ty(self.create_can_reject(), self.create_shape())
+    }
+
+    /// The error type of the generated `update`/`update_all`/`forget`/`delete`.
+    pub fn update_error_ty(&self) -> proc_macro2::TokenStream {
+        self.error_ty(self.update_can_reject(), self.update_shape())
     }
 
     pub fn query_fn_generics() -> proc_macro2::TokenStream {
@@ -667,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn update_can_reject_when_the_repo_has_nested_children_regardless_of_columns() {
+    fn a_nested_child_is_folded_into_the_error_type_by_its_own_shape() {
         let input: syn::DeriveInput = parse_quote! {
             #[es_repo(entity = "Widget", columns(name(ty = "String", update(persist = false))))]
             struct Widgets {
@@ -678,8 +814,40 @@ mod tests {
         };
         let opts = RepositoryOptions::from_derive_input(&input).unwrap();
         assert!(
-            opts.update_can_reject(),
-            "a nested child can reject on its own constraints even if the parent cannot"
+            !opts.update_can_reject(),
+            "the parent's own statement cannot reject"
+        );
+        let shape = opts.update_shape().to_string();
+        assert!(
+            shape.contains(
+                "< WidgetPartConstraintViolation as es_entity :: WriteShapes > :: Update"
+            ) && shape.contains(
+                "< WidgetPartConstraintViolation as es_entity :: WriteShapes > :: Create"
+            ),
+            "the child's update and create shapes decide whether the parent rejects: {shape}"
+        );
+        assert!(
+            opts.update_error_ty()
+                .to_string()
+                .contains("as es_entity :: WriteShape > :: Error"),
+            "the error type is the folded shape's projection"
+        );
+    }
+
+    #[test]
+    fn a_rejecting_parent_does_not_depend_on_its_children() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Widget", columns(name(ty = "String")))]
+            struct Widgets {
+                pool: sqlx::PgPool,
+                #[es_repo(nested)]
+                parts: WidgetParts,
+            }
+        };
+        let opts = RepositoryOptions::from_derive_input(&input).unwrap();
+        assert_eq!(
+            opts.update_error_ty().to_string(),
+            "es_entity :: RepoWriteError < WidgetConstraintViolation >"
         );
     }
 
@@ -714,5 +882,56 @@ mod tests {
         };
         let opts = RepositoryOptions::from_derive_input(&input).unwrap();
         assert!(opts.update_can_reject());
+    }
+}
+
+#[cfg(test)]
+mod foreign_key_tests {
+    use darling::FromDeriveInput;
+    use syn::parse_quote;
+
+    use super::*;
+
+    fn opts(columns: &str) -> RepositoryOptions {
+        let columns: proc_macro2::TokenStream = columns.parse().unwrap();
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "FkWidget", migrations_dir = "tests/fixtures/fk_unique", columns(#columns))]
+            struct FkWidgets {
+                pool: sqlx::PgPool,
+            }
+        };
+        RepositoryOptions::from_derive_input(&input).unwrap()
+    }
+
+    #[test]
+    fn update_cannot_reject_when_only_a_foreign_key_column_persists() {
+        let opts =
+            opts(r#"owner_id(ty = "OwnerId"), name(ty = "String", update(persist = false))"#);
+        assert!(!opts.update_can_reject());
+    }
+
+    #[test]
+    fn update_can_reject_when_a_unique_column_persists_next_to_a_foreign_key() {
+        let opts = opts(r#"owner_id(ty = "OwnerId"), name(ty = "String")"#);
+        assert!(opts.update_can_reject());
+    }
+
+    #[test]
+    fn foreign_key_has_no_violation_variant_but_is_classified_at_runtime() {
+        let opts = opts(r#"owner_id(ty = "OwnerId"), name(ty = "String")"#);
+        let generated = crate::repo::error_types::ErrorTypes::new(&opts)
+            .generate()
+            .to_string();
+        assert!(!generated.contains("OwnerIdFkey"), "{generated}");
+        assert!(
+            generated.contains("FkWidgetNameKey") || generated.contains("NameKey"),
+            "{generated}"
+        );
+        assert!(
+            generated.contains(
+                "\"foreign key violation on fk_widgets.fk_widgets_owner_id_fkey (owner_id)\""
+            ),
+            "{generated}"
+        );
     }
 }

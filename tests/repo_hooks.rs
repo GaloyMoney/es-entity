@@ -120,17 +120,6 @@ use users_with_hydrate_hook::UsersWithHydrateHook;
 use users_with_persist_hook::UsersWithPersistHook;
 
 /// The hook's own error, as `Fatal`'s source message. Panics if `err` isn't
-/// `Fail::Fatal` at all.
-fn fatal_source_message<D: std::fmt::Debug>(err: &es_entity::RepoWriteError<D>) -> String {
-    match err {
-        es_entity::Fail::Fatal(fatal) => std::error::Error::source(fatal)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| fatal.to_string()),
-        other => panic!("expected Fatal, got: {other:?}"),
-    }
-}
-
-/// [`fatal_source_message`] for a read path's `Fault`. Panics if `err` isn't
 /// `Fault::Fatal` at all.
 fn fault_source_message(err: &es_entity::RepoFault) -> String {
     match err {
@@ -150,17 +139,13 @@ async fn post_hydrate_hook_error_propagates_through_create() -> anyhow::Result<(
     let pool = helpers::init_pool().await?;
     let users = UsersWithHydrateHook::new(pool);
 
-    let new_user = NewUser::builder()
-        .id(UserId::new())
-        .name("BANNED")
-        .build()
-        .unwrap();
+    let new_user = NewUser::builder().name("BANNED").build().unwrap();
 
     let result = users.create(new_user).await;
 
     match result {
         Err(ref e) => {
-            let msg = fatal_source_message(e);
+            let msg = fault_source_message(e);
             assert!(
                 msg.contains("banned name"),
                 "expected banned name message, got: {msg}"
@@ -177,11 +162,7 @@ async fn post_hydrate_hook_allows_valid_entities() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let users = UsersWithHydrateHook::new(pool);
 
-    let new_user = NewUser::builder()
-        .id(UserId::new())
-        .name("Alice")
-        .build()
-        .unwrap();
+    let new_user = NewUser::builder().name("Alice").build().unwrap();
 
     let user = users.create(new_user).await?;
 
@@ -199,13 +180,9 @@ async fn post_hydrate_hook_error_propagates_through_find_by_id() -> anyhow::Resu
 
     // Create via the hook repo with a valid name
     let users = UsersWithHydrateHook::new(pool.clone());
-    let id = UserId::new();
-    let new_user = NewUser::builder()
-        .id(id)
-        .name("ValidAtFirst")
-        .build()
-        .unwrap();
+    let new_user = NewUser::builder().name("ValidAtFirst").build().unwrap();
     let mut user = users.create(new_user).await?;
+    let id = user.id;
 
     // Update the user's name to the banned value
     let _ = user.update_name("BANNED");
@@ -246,17 +223,13 @@ async fn post_persist_hook_error_propagates_through_create() -> anyhow::Result<(
     let pool = helpers::init_pool().await?;
     let users = UsersWithPersistHook::new(pool);
 
-    let new_user = NewUser::builder()
-        .id(UserId::new())
-        .name("BLOCKED")
-        .build()
-        .unwrap();
+    let new_user = NewUser::builder().name("BLOCKED").build().unwrap();
 
     let result = users.create(new_user).await;
 
     match result {
         Err(ref e) => {
-            let msg = fatal_source_message(e);
+            let msg = fault_source_message(e);
             assert!(
                 msg.contains("blocked name"),
                 "expected blocked name message, got: {msg}"
@@ -273,11 +246,7 @@ async fn post_persist_hook_allows_valid_entities() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let users = UsersWithPersistHook::new(pool);
 
-    let new_user = NewUser::builder()
-        .id(UserId::new())
-        .name("Bob")
-        .build()
-        .unwrap();
+    let new_user = NewUser::builder().name("Bob").build().unwrap();
 
     let user = users.create(new_user).await?;
     assert_eq!(user.name, "Bob");
@@ -290,11 +259,7 @@ async fn post_persist_hook_error_propagates_through_update() -> anyhow::Result<(
     let pool = helpers::init_pool().await?;
     let users = UsersWithPersistHook::new(pool);
 
-    let new_user = NewUser::builder()
-        .id(UserId::new())
-        .name("Carol")
-        .build()
-        .unwrap();
+    let new_user = NewUser::builder().name("Carol").build().unwrap();
     let mut user = users.create(new_user).await?;
 
     // Rename to blocked value and update

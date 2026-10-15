@@ -43,13 +43,11 @@ async fn update_all_with_custom_accessors() -> anyhow::Result<()> {
 
     let new_profiles = vec![
         NewProfile::builder()
-            .id(ProfileId::new())
             .name("Alice")
             .email(&alice_email)
             .build()
             .unwrap(),
         NewProfile::builder()
-            .id(ProfileId::new())
             .name("Bob")
             .email(&bob_email)
             .build()

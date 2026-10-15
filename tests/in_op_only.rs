@@ -28,7 +28,6 @@ pub struct Users {}
 
 fn new_user(name: &str) -> NewUser {
     NewUser::builder()
-        .id(UserId::new())
         .name(name.to_string())
         .build()
         .expect("failed to build user")

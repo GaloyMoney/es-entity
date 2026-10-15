@@ -45,6 +45,13 @@ pub enum EntityHydrationError {
     /// A hydration row carried neither an event nor a usable snapshot.
     #[classify(fatal(CorruptState))]
     NoEvents,
+    /// The id the rebuilt entity carries is not the id its events are
+    /// stored under.
+    #[error(
+        "EntityHydrationError - IdMismatch: the entity id is not the id its events are stored under"
+    )]
+    #[classify(fatal(CorruptState))]
+    IdMismatch,
 }
 
 #[derive(Debug, errlanes::Classify)]
