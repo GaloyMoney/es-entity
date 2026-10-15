@@ -136,10 +136,10 @@ impl ToTokens for CreateAllFn<'_> {
         } else {
             (
                 quote! {
-                    let __supplied_ids: Vec<#id_type> = id_collection.iter().map(|id| <#id_type as Clone>::clone(id)).collect();
+                    let __supplied_ids: Vec<#id_type> = id_collection.iter().map(|id: &&#id_type| <#id_type as Clone>::clone(*id)).collect();
                 },
                 quote! {
-                    if all_events.iter().zip(__supplied_ids.iter()).any(|(events, id)| events.id() != id) {
+                    if all_events.iter().zip(__supplied_ids.iter()).any(|(events, id): (&es_entity::EntityEvents<<#entity as es_entity::EsEntity>::Event, <#entity as es_entity::EsEntity>::Snapshot>, &#id_type)| events.id() != id) {
                         return Err(errlanes::Fatal::invariant("supplied id differs from the id the entity was built under").into());
                     }
                 },
@@ -492,12 +492,12 @@ mod tests {
                         name_collection.push(name);
                     }
 
-                    let __supplied_ids: Vec<EntityId> = id_collection.iter().map(|id| <EntityId as Clone>::clone(id)).collect();
+                    let __supplied_ids: Vec<EntityId> = id_collection.iter().map(|id: &&EntityId| <EntityId as Clone>::clone(*id)).collect();
                     __query_args.add(id_collection).map_err(sqlx::Error::Encode)?;
                     __query_args.add(name_collection).map_err(sqlx::Error::Encode)?;
 
                     let mut all_events: Vec<es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event, <Entity as es_entity::EsEntity>::Snapshot>> = new_entities.into_iter().map(|new_entity| Self::convert_new(new_entity, es_entity::EntityEventsBuilder::__supplied())).collect();
-                    if all_events.iter().zip(__supplied_ids.iter()).any(|(events, id)| events.id() != id) {
+                    if all_events.iter().zip(__supplied_ids.iter()).any(|(events, id): (&es_entity::EntityEvents<<Entity as es_entity::EsEntity>::Event, <Entity as es_entity::EsEntity>::Snapshot>, &EntityId)| events.id() != id) {
                         return Err(errlanes::Fatal::invariant("supplied id differs from the id the entity was built under").into());
                     }
 
