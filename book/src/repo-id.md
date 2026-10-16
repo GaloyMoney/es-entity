@@ -84,9 +84,8 @@ The repository checks that the id the `NewEntity` handed to `initial_events`
 is the one it inserts under; if they differ the create fails with
 `Fatal(Invariant)`.
 
-A caller-sourced repo also gets
-[`create_or_find_by_id_in_op`](./repo-create.md#create_or_find_by_key_in_op), for
-entities that may already exist.
+For entities that may already exist, the id is one of the keys of
+[`create_or_find_in_op`](./repo-create.md#create_or_find_in_op).
 
 ## A mismatch does not compile
 
