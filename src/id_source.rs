@@ -109,3 +109,45 @@ impl<E> Ensured<E> {
         matches!(self, Self::Created(_))
     }
 }
+
+/// What `create_or_find_in_op` did on a soft-delete repo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnsuredOrDeleted<E> {
+    /// This call inserted the entity.
+    Created(E),
+    /// A unique key of the `new` entity names a live stored entity; this is
+    /// it. Its id may differ from the `new` entity's id.
+    Found(E),
+    /// No live entity holds any of the `new` entity's keys, but exactly one
+    /// soft-deleted entity does; this is it, loaded as the `_include_deleted`
+    /// finders load it. Nothing was written. Its id may differ from the `new`
+    /// entity's id.
+    FoundDeleted(E),
+}
+
+impl<E> EnsuredOrDeleted<E> {
+    /// The live entity: `Created` or `Found`. `None` on `FoundDeleted`.
+    pub fn into_live(self) -> Option<E> {
+        match self {
+            Self::Created(entity) | Self::Found(entity) => Some(entity),
+            Self::FoundDeleted(_) => None,
+        }
+    }
+
+    pub fn is_created(&self) -> bool {
+        matches!(self, Self::Created(_))
+    }
+
+    pub fn is_found_deleted(&self) -> bool {
+        matches!(self, Self::FoundDeleted(_))
+    }
+}
+
+impl<E> From<Ensured<E>> for EnsuredOrDeleted<E> {
+    fn from(ensured: Ensured<E>) -> Self {
+        match ensured {
+            Ensured::Created(entity) => Self::Created(entity),
+            Ensured::Found(entity) => Self::Found(entity),
+        }
+    }
+}

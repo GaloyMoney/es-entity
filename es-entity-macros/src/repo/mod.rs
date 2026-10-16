@@ -556,6 +556,79 @@ mod tests {
         );
     }
 
+    fn soft_widgets(delete: &str, nested: bool) -> String {
+        let delete: proc_macro2::TokenStream = format!("delete = \"{delete}\"").parse().unwrap();
+        let nested = nested.then(|| {
+            quote! {
+                #[es_repo(nested)]
+                items: WidgetItems,
+            }
+        });
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Widget",
+                #delete,
+                migrations_dir = "tests/fixtures/ensure_keys_soft",
+                columns(code(ty = "String"), handle(ty = "String"))
+            )]
+            struct Widgets {
+                pool: sqlx::PgPool,
+                #nested
+            }
+        };
+        derive(input).unwrap().to_string()
+    }
+
+    #[test]
+    fn a_soft_delete_repo_gets_create_or_find_in_op_returning_ensured_or_deleted() {
+        let out = soft_widgets("soft", false);
+        assert_eq!(out.matches("fn create_or_find_in_op").count(), 1, "{out}");
+        assert!(out.contains("EnsuredOrDeleted < Widget >"), "{out}");
+        assert!(out.contains("fn __find_by_id_any_in_op"), "{out}");
+        assert!(
+            out.contains("code = $1 OR (handle = $2 AND deleted = FALSE)"),
+            "{out}"
+        );
+        assert!(out.contains("COALESCE(deleted, FALSE)"), "{out}");
+        assert!(!out.contains("fetch_optional_include_deleted"), "{out}");
+    }
+
+    #[test]
+    fn a_soft_without_queries_repo_gets_the_method_and_no_include_deleted_finder() {
+        let out = soft_widgets("soft_without_queries", false);
+        assert_eq!(out.matches("fn create_or_find_in_op").count(), 1, "{out}");
+        assert!(out.contains("EnsuredOrDeleted < Widget >"), "{out}");
+        assert!(out.contains("fn __find_by_id_any_in_op"), "{out}");
+        assert!(!out.contains("fn find_by_id_include_deleted"), "{out}");
+        assert!(!out.contains("_include_deleted_in_op"), "{out}");
+    }
+
+    #[test]
+    fn a_nested_soft_delete_repo_loads_the_deleted_entity_with_its_deleted_children() {
+        let out = soft_widgets("soft", true);
+        assert!(out.contains("fn __find_by_id_any_in_op"), "{out}");
+        assert!(out.contains("fetch_optional_include_deleted"), "{out}");
+    }
+
+    #[test]
+    fn a_non_soft_repo_keeps_ensured() {
+        let out = derive(parse_quote! {
+            #[es_repo(
+                entity = "Widget",
+                migrations_dir = "tests/fixtures/ensure_keys_soft",
+                columns(code(ty = "String"), handle(ty = "String"))
+            )]
+            struct Widgets {
+                pool: sqlx::PgPool,
+            }
+        })
+        .unwrap()
+        .to_string();
+        assert!(!out.contains("EnsuredOrDeleted"), "{out}");
+        assert!(!out.contains("__find_by_id_any_in_op"), "{out}");
+        assert!(out.contains("es_entity :: Ensured < Widget >"), "{out}");
+    }
+
     #[test]
     fn a_caller_id_only_repo_gets_create_or_find_in_op_returning_repo_fault() {
         let input: syn::DeriveInput = parse_quote! {

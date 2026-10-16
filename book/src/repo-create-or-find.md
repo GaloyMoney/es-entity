@@ -21,9 +21,11 @@ pub async fn create_or_find_in_op<OP>(&self, op: &mut OP, new: NewAccount)
   stored entity, for example the code is held by one and the email by another. The
   rejection carries the ids and key names, never values. The caller's
   transaction is not aborted.
-- **`Transient`**: under `REPEATABLE READ` / `SERIALIZABLE` the row committed
-  by another transaction is not visible, so retry in a new transaction. Under
-  `READ COMMITTED` it is found.
+- **`Rejected(<constraint member>)`**: the insert conflicted on a unique
+  arbiter the lookup cannot see, see [Other arbiters](#other-arbiters).
+- **`Transient`**: only under `REPEATABLE READ` / `SERIALIZABLE`, where the
+  row committed by another transaction is not visible: retry in a new
+  transaction. Under `READ COMMITTED` it is found.
 
 > **Take the id from the returned entity.** The stored entity's id may differ
 > from `new`'s id (it was found through another key). If "found by id is fine,
@@ -56,14 +58,58 @@ other key gets no method. A table without a schema catalog has no keys besides
 a caller-chosen id. A repo with a single key returns `RepoFault`, since its
 keys cannot span entities.
 
-A conflict on a partial or expression index whose columns are not also a full
-unique key cannot be looked up, so it ends in `Transient(OptimisticConflict)`.
+`<Entity>EnsureRejection` also keeps the repo's check-constraint members, the
+members of unique constraints that are not keys, and nested children's
+rejections. Its own code is `<table>_keys_span_entities`. A repo whose table
+declares a unique constraint that is not a key returns
+`RepoWriteError<..EnsureRejection>` even with a single key.
 
-Soft-deleting repos get no method: a soft-deleted row still holds its key but
-is invisible to the lookup.
+## Soft-delete repos
 
-`<Entity>EnsureRejection` also keeps the repo's check-constraint members and
-nested children's rejections. Its own code is `<table>_keys_span_entities`.
+Repos with `delete = "soft"` or `delete = "soft_without_queries"` get the
+method too, returning a separate type:
+
+```rust,ignore
+pub enum EnsuredOrDeleted<E> { Created(E), Found(E), FoundDeleted(E) }
+
+pub async fn create_or_find_in_op<OP>(&self, op: &mut OP, new: NewAccount)
+    -> Result<EnsuredOrDeleted<Account>, es_entity::RepoWriteError<AccountEnsureRejection>>
+```
+
+A soft-deleted row still holds its primary key and any full unique constraint,
+so the lookup also reads deleted rows. Live matches win:
+
+- **`Found`**: exactly one live entity holds one of the keys. Deleted matches are
+  ignored.
+- **`FoundDeleted`**: no live entity holds a key, and exactly one soft-deleted
+  entity does. It is returned unchanged, loaded as the `_include_deleted`
+  finders load it (nested children included). Nothing is written and the
+  post-persist hook does not run. Resurrecting it is a command on the returned
+  entity, never something ensure does.
+- **`KeysSpanEntities`**: more than one live match, or no live match and more
+  than one deleted match.
+
+`EnsuredOrDeleted` has no `into_inner`: use `into_live()`, which is `None` on
+`FoundDeleted`, or match.
+
+A partial unique index whose predicate is a soft-delete liveness test is a key
+that a deleted row does not hold. The recognised spellings are
+`WHERE deleted = FALSE`, `deleted = false`, `deleted IS FALSE` and
+`NOT deleted`, with or without the table qualifier. Other predicates are not
+keys, see below.
+
+## Other arbiters
+
+The insert arbitrates on every unique constraint and index, but the lookup only
+covers the keys. A conflict on an arbiter that is not a key, such as a partial
+or expression unique index, or a unique constraint on a column the create does
+not write as-is, leaves the lookup empty. The call then retries the plain
+insert inside a savepoint and reports the conflict as `Rejected` with the
+constraint's member, the same member `create_in_op` rejects with (without the
+attempted value). The savepoint is rolled back, so the caller's transaction
+stays usable. A conflict on a key itself at that point is the snapshot
+isolation case above, `Transient(OptimisticConflict)`. A constraint the
+generated enum does not know is `Fatal(Invariant)`, naming the constraint.
 
 ## Scoped repos
 

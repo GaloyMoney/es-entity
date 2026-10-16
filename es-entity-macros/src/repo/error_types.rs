@@ -148,6 +148,7 @@ impl<'a> ErrorTypes<'a> {
         let table = opts.table_name();
         let columns: Vec<_> = opts.columns.column_enum_columns().collect();
         let constraints = enumerate_constraints(opts);
+        let key_constraints = opts.ensure_key_constraint_names();
         let mut taken = HashSet::new();
         let mut variants = Vec::new();
         let mut check_variants: Vec<(syn::Ident, TokenStream)> = Vec::new();
@@ -247,6 +248,7 @@ impl<'a> ErrorTypes<'a> {
                 None => (quote!(()), quote!(None)),
             };
             let is_check = matches!(kind, ConstraintKind::Check);
+            let is_unique = matches!(kind, ConstraintKind::Unique);
             let kind = match kind {
                 ConstraintKind::Unique => quote!(Unique),
                 ConstraintKind::ForeignKey => quote!(ForeignKey),
@@ -258,7 +260,7 @@ impl<'a> ErrorTypes<'a> {
                 #[rejection(code = #name, description = #description)]
                 #variant(#[source] es_entity::ConstraintConflict<#ty>)
             };
-            if is_check {
+            if is_check || (is_unique && !key_constraints.contains(&name)) {
                 check_variants.push((variant.clone(), variant_def.clone()));
             }
             variants.push(variant_def);
@@ -313,6 +315,23 @@ impl<'a> ErrorTypes<'a> {
                         match violation {
                             #(#cv::#idents(conflict) => Ok(Self::#idents(conflict)),)*
                             other => Err(other),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn narrow_fallback(
+                        fail: es_entity::RepoWriteError<#cv>,
+                        key_conflict: &'static str,
+                    ) -> es_entity::RepoWriteError<Self> {
+                        match fail.rejected() {
+                            Ok(violation) => match Self::from_own(violation) {
+                                Ok(rejection) => es_entity::errlanes::Fail::Rejected(rejection),
+                                Err(_) => es_entity::errlanes::Transient::new(
+                                    es_entity::errlanes::TransientKind::OptimisticConflict,
+                                )
+                                .with_context(key_conflict)
+                                .into(),
+                            },
+                            Err(fault) => es_entity::errlanes::Fail::from(fault),
                         }
                     }
                     #[doc(hidden)]

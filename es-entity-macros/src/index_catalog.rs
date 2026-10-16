@@ -45,6 +45,54 @@ pub struct IndexEntry {
     pub name: Option<String>,
     /// `true` if the index carries a `WHERE` clause (partial index).
     pub partial: bool,
+    /// The `WHERE` clause when it is a shape the macros act on.
+    pub predicate: Option<IndexPredicate>,
+}
+
+/// A partial-index predicate the macros recognise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexPredicate {
+    /// A soft-delete liveness test on the `deleted` column: `deleted = FALSE`,
+    /// `deleted IS FALSE` or `NOT deleted`, optionally table-qualified.
+    DeletedIsFalse,
+}
+
+fn is_deleted_column(expr: &Expr) -> bool {
+    match expr {
+        Expr::Identifier(ident) => ident.value.eq_ignore_ascii_case("deleted"),
+        Expr::CompoundIdentifier(parts) => parts
+            .last()
+            .is_some_and(|ident| ident.value.eq_ignore_ascii_case("deleted")),
+        Expr::Nested(inner) => is_deleted_column(inner),
+        _ => false,
+    }
+}
+
+fn is_false_literal(expr: &Expr) -> bool {
+    match expr {
+        Expr::Value(value) => matches!(value.value, sqlparser::ast::Value::Boolean(false)),
+        Expr::Nested(inner) => is_false_literal(inner),
+        _ => false,
+    }
+}
+
+fn recognise_predicate(expr: &Expr) -> Option<IndexPredicate> {
+    use sqlparser::ast::{BinaryOperator, UnaryOperator};
+    let live = match expr {
+        Expr::Nested(inner) => return recognise_predicate(inner),
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::Eq,
+            right,
+        } => is_deleted_column(left) && is_false_literal(right),
+        Expr::IsFalse(inner) => is_deleted_column(inner),
+        Expr::UnaryOp {
+            op: UnaryOperator::Not,
+            expr,
+        } => is_deleted_column(expr),
+        _ => false,
+    };
+    live.then_some(IndexPredicate::DeletedIsFalse)
 }
 
 /// The kind of a classified table constraint.
@@ -233,6 +281,24 @@ impl IndexCatalog {
         })
     }
 
+    /// Whether the unique constraint `name` on `table` is a partial unique
+    /// index whose predicate is a soft-delete liveness test.
+    pub fn deleted_false_partial_unique(&self, table: &str, name: &str) -> bool {
+        let table = table.to_lowercase();
+        self.entries.iter().any(|entry| {
+            entry.unique
+                && entry.partial
+                && entry.predicate == Some(IndexPredicate::DeletedIsFalse)
+                && entry.table == table
+                && entry
+                    .name
+                    .clone()
+                    .or_else(|| synthesized_name(&entry.table, &entry.columns, "idx"))
+                    .as_deref()
+                    == Some(name)
+        })
+    }
+
     /// Every classified constraint on `table` as `(name, kind)` pairs, deduped
     /// by name in first-seen order. Feeds the generated `{Entity}Constraint`
     /// enum.
@@ -306,6 +372,7 @@ fn apply_statement(
                     unique: create.unique,
                     name,
                     partial: create.predicate.is_some(),
+                    predicate: create.predicate.as_ref().and_then(recognise_predicate),
                 },
             );
         }
@@ -364,6 +431,7 @@ fn apply_statement(
                                 unique: true,
                                 name: None,
                                 partial: false,
+                                predicate: None,
                             },
                         );
                     }
@@ -448,6 +516,7 @@ fn apply_table_constraint(
                     unique: true,
                     name,
                     partial: false,
+                    predicate: None,
                 },
             );
         }
@@ -475,6 +544,7 @@ fn apply_table_constraint(
                     unique: true,
                     name,
                     partial: false,
+                    predicate: None,
                 },
             );
         }
@@ -803,6 +873,41 @@ mod tests {
         assert!(c.is_partial_unique("t", "live_tag_idx"));
         assert!(c.is_partial_unique("t", "t_code_idx"));
         assert!(!c.is_partial_unique("t", "t_serial_idx"));
+    }
+
+    #[test]
+    fn deleted_false_predicate_spellings_are_recognised() {
+        for predicate in [
+            "deleted = FALSE",
+            "deleted = false",
+            "deleted IS FALSE",
+            "NOT deleted",
+            "t.deleted = FALSE",
+            "t.deleted IS FALSE",
+            "NOT t.deleted",
+        ] {
+            let c = cat(&format!(
+                "CREATE UNIQUE INDEX live_a_idx ON t (a) WHERE {predicate};"
+            ));
+            assert_eq!(
+                c.entries[0].predicate,
+                Some(IndexPredicate::DeletedIsFalse),
+                "{predicate}"
+            );
+            assert!(c.deleted_false_partial_unique("t", "live_a_idx"));
+        }
+    }
+
+    #[test]
+    fn other_predicates_are_not_recognised() {
+        for predicate in ["NOT retired", "deleted = TRUE", "deleted IS NOT FALSE"] {
+            let c = cat(&format!(
+                "CREATE UNIQUE INDEX live_a_idx ON t (a) WHERE {predicate};"
+            ));
+            assert!(c.entries[0].partial);
+            assert_eq!(c.entries[0].predicate, None, "{predicate}");
+            assert!(!c.deleted_false_partial_unique("t", "live_a_idx"));
+        }
     }
 
     #[test]

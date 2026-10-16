@@ -957,7 +957,7 @@ async fn keys_span_entities_carries_ids_and_names_not_values() -> anyhow::Result
 }
 
 #[tokio::test]
-async fn partial_unique_index_conflict_is_transient() -> anyhow::Result<()> {
+async fn partial_unique_index_conflict_is_rejected() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let repo = EnsurePartials { pool: pool.clone() };
     let tag = unique("tag");
@@ -985,20 +985,41 @@ async fn partial_unique_index_conflict_is_transient() -> anyhow::Result<()> {
         "the partial index must arbitrate the conflict"
     );
 
-    let fault = takes_fault(
-        repo.create_or_find_in_op(
+    let err = repo
+        .create_or_find_in_op(
             &mut op,
             NewEnsurePartial {
                 id: EnsurePartialId::new(),
                 tag: tag.clone(),
             },
         )
-        .await,
-    )
-    .err()
-    .expect("a conflict no key explains cannot be found");
-    assert!(fault.is_transient(), "{fault:?}");
-    assert!(!fault.is_fatal(), "{fault:?}");
+        .await
+        .err()
+        .expect("a conflict no key explains is the constraint's rejection");
+    assert!(!err.is_transient(), "{err:?}");
+    let Fail::Rejected(rejection) = err else {
+        panic!("expected a rejection, got {err:?}");
+    };
+    let EnsurePartialEnsureRejection::LiveTagIdx(conflict) = rejection else {
+        panic!("expected the partial index's member, got {rejection:?}");
+    };
+    assert_eq!(
+        conflict.diagnostics.constraint,
+        "ensure_partials_live_tag_idx"
+    );
+    assert!(conflict.attempted.is_none());
+    assert!(!format!("{conflict}").contains(&tag));
+
+    let other = repo
+        .create_in_op(
+            &mut op,
+            NewEnsurePartial {
+                id: EnsurePartialId::new(),
+                tag: unique("tag"),
+            },
+        )
+        .await?;
+    assert_eq!(other.events().len_persisted(), 1);
     Ok(())
 }
 

@@ -84,7 +84,9 @@ pub use events::*;
 #[doc(inline)]
 pub use forgettable::{Forgettable, ForgettableRef};
 #[doc(inline)]
-pub use id_source::{Ensured, EntityEventsBuilder, FromCaller, FromRepo, IdSource};
+pub use id_source::{
+    Ensured, EnsuredOrDeleted, EntityEventsBuilder, FromCaller, FromRepo, IdSource,
+};
 #[doc(inline)]
 pub use idempotent::*;
 #[doc(inline)]
