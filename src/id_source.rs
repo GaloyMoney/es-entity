@@ -86,13 +86,14 @@ impl<E: EsEvent> EntityEventsBuilder<E, FromCaller> {
     }
 }
 
-/// What `create_or_find_by_id_in_op` did for a repo with deterministic ids.
+/// What `create_or_find_in_op` did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ensured<E> {
     /// This call inserted the entity.
     Created(E),
-    /// The id already existed (a concurrent or earlier create won); this is
-    /// the stored entity.
+    /// A unique key of the `new` entity (a caller-chosen id included) named a
+    /// stored entity (a concurrent or earlier create won); this is the stored
+    /// entity. Its id may differ from the `new` entity's id.
     Found(E),
 }
 

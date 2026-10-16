@@ -20,6 +20,7 @@
   - [EsRepo trait](./es-repo.md)
     - [id](./repo-id.md)
     - [create](./repo-create.md)
+    - [create_or_find](./repo-create-or-find.md)
     - [create_all](./repo-create-all.md)
     - [update](./repo-update.md)
     - [update_all](./repo-update-all.md)
