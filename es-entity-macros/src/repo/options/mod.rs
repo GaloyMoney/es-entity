@@ -521,11 +521,8 @@ impl RepositoryOptions {
                     && c.name == *name
                     && matches!(c.kind, crate::index_catalog::ConstraintKind::Unique)
             });
-            let partial = catalog
-                .entries
-                .iter()
-                .any(|e| e.table == catalog_table && e.partial && e.name.as_deref() == Some(name));
-            if !declared || partial || col_names.is_empty() {
+            if !declared || catalog.is_partial_unique(&catalog_table, name) || col_names.is_empty()
+            {
                 continue;
             }
             let key_columns: Option<Vec<&Column>> = col_names
@@ -1027,7 +1024,7 @@ mod ensure_key_tests {
 
     use super::*;
 
-    const COLUMNS: &str = r#"code(ty = "String"), account(ty = "String"), currency(ty = "String"), reference(ty = "String"), lowered(ty = "String")"#;
+    const COLUMNS: &str = r#"code(ty = "String"), account(ty = "String"), currency(ty = "String"), reference(ty = "String"), lowered(ty = "String"), label(ty = "String")"#;
 
     fn options(extra: &str, columns: &str, dir: &str) -> RepositoryOptions {
         let extra: proc_macro2::TokenStream = extra.parse().unwrap();
@@ -1060,7 +1057,11 @@ mod ensure_key_tests {
     #[test]
     fn partial_and_expression_indexes_are_not_keys() {
         let keys = names("", COLUMNS, "tests/fixtures/ensure_keys");
-        assert!(!keys.iter().any(|k| k == "reference" || k == "lowered"));
+        assert!(
+            !keys
+                .iter()
+                .any(|k| k == "reference" || k == "lowered" || k == "label")
+        );
     }
 
     #[test]

@@ -216,6 +216,23 @@ impl IndexCatalog {
             .collect()
     }
 
+    /// Whether the unique constraint `name` on `table` is a partial unique
+    /// index, whether the DDL named it or Postgres auto-named it.
+    pub fn is_partial_unique(&self, table: &str, name: &str) -> bool {
+        let table = table.to_lowercase();
+        self.entries.iter().any(|entry| {
+            entry.unique
+                && entry.partial
+                && entry.table == table
+                && entry
+                    .name
+                    .clone()
+                    .or_else(|| synthesized_name(&entry.table, &entry.columns, "idx"))
+                    .as_deref()
+                    == Some(name)
+        })
+    }
+
     /// Every classified constraint on `table` as `(name, kind)` pairs, deduped
     /// by name in first-seen order. Feeds the generated `{Entity}Constraint`
     /// enum.
@@ -774,6 +791,18 @@ mod tests {
         let c = cat("CREATE INDEX ON t (a) WHERE deleted = FALSE;");
         assert!(c.entries[0].partial);
         assert_eq!(c.entries[0].columns, vec!["a"]);
+    }
+
+    #[test]
+    fn partial_unique_by_explicit_or_auto_name() {
+        let c = cat(
+            "CREATE UNIQUE INDEX live_tag_idx ON t (tag) WHERE NOT retired; \
+             CREATE UNIQUE INDEX ON t (code) WHERE NOT retired; \
+             CREATE UNIQUE INDEX ON t (serial);",
+        );
+        assert!(c.is_partial_unique("t", "live_tag_idx"));
+        assert!(c.is_partial_unique("t", "t_code_idx"));
+        assert!(!c.is_partial_unique("t", "t_serial_idx"));
     }
 
     #[test]
