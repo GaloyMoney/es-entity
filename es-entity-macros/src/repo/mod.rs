@@ -547,15 +547,19 @@ mod tests {
         assert_eq!(out.matches("fn create_or_find_in_op").count(), 1, "{out}");
         assert!(out.contains("pub enum WidgetEnsureRejection"), "{out}");
         assert!(
+            out.contains("FROM widgets WHERE code = $1 OR (account = $2 AND currency = $3)"),
+            "{out}"
+        );
+        assert!(
             out.contains("The stored entity's id may differ from `new`'s id"),
             "{out}"
         );
     }
 
     #[test]
-    fn an_id_only_repo_gets_create_or_find_in_op_returning_repo_fault() {
+    fn a_caller_id_only_repo_gets_create_or_find_in_op_returning_repo_fault() {
         let input: syn::DeriveInput = parse_quote! {
-            #[es_repo(entity = "Widget", migrations_dir = "tests/fixtures/no_such_dir")]
+            #[es_repo(entity = "Widget", id(source = caller), migrations_dir = "tests/fixtures/no_such_dir")]
             struct Widgets {
                 pool: sqlx::PgPool,
             }
@@ -594,8 +598,8 @@ mod tests {
         // Every create path calls the shared fn rather than inlining a match.
         assert_eq!(
             out.matches("Self :: classify_create_write").count(),
-            3,
-            "create, create_all and create_or_find_in_op should all call the shared classifier"
+            2,
+            "create and create_all should both call the shared classifier"
         );
 
         // No index columns to persist and no soft delete → nothing calls the

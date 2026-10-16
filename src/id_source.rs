@@ -91,7 +91,7 @@ impl<E: EsEvent> EntityEventsBuilder<E, FromCaller> {
 pub enum Ensured<E> {
     /// This call inserted the entity.
     Created(E),
-    /// A unique key of the `new` entity (its id included) already named a
+    /// A unique key of the `new` entity (a caller-chosen id included) named a
     /// stored entity (a concurrent or earlier create won); this is the stored
     /// entity. Its id may differ from the `new` entity's id.
     Found(E),

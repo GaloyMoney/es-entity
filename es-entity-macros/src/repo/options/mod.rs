@@ -478,17 +478,19 @@ impl RepositoryOptions {
             })
     }
 
-    /// The disjuncts of the `create_or_find_in_op` lookup, id first.
+    /// The disjuncts of the `create_or_find_in_op` lookup, a caller-chosen id
+    /// first.
     ///
     /// Empty on a soft-deleting repo (a soft-deleted row still holds its key
     /// but is invisible to the lookup), when the id is not a column the create
     /// writes as-is, and when a scope column is not (a stored row's scope
     /// could not be compared with the `new` entity's).
     ///
-    /// Besides the id, a key is a unique constraint or non-partial unique
+    /// A repo-generated id is fresh, so no key contains it. Besides a
+    /// caller-chosen id, a key is a unique constraint or non-partial unique
     /// index that the migrations declare for the table, on columns the create
-    /// writes as-is. Without a catalog entry for the table nothing but the id
-    /// is known to be unique.
+    /// writes as-is. Without a catalog entry for the table nothing but a
+    /// caller-chosen id is known to be unique.
     pub fn ensure_keys(&self) -> Vec<EnsureKey> {
         if self.delete.is_soft()
             || !self
@@ -511,7 +513,11 @@ impl RepositoryOptions {
         else {
             return Vec::new();
         };
-        let mut keys = vec![EnsureKey::of(&[*id])];
+        let repo_ids = self.id_source().is_repo();
+        let mut keys = Vec::new();
+        if !repo_ids {
+            keys.push(EnsureKey::of(&[*id]));
+        }
         for (name, kind, col_names) in &constraints {
             if !matches!(kind, crate::index_catalog::ConstraintKind::Unique) {
                 continue;
@@ -532,7 +538,9 @@ impl RepositoryOptions {
             let Some(key_columns) = key_columns else {
                 continue;
             };
-            if !key_columns.iter().all(|c| c.is_ensurable()) {
+            if !key_columns.iter().all(|c| c.is_ensurable())
+                || (repo_ids && key_columns.iter().any(|c| c.is_id()))
+            {
                 continue;
             }
             let key = EnsureKey::of(&key_columns);
@@ -1046,10 +1054,12 @@ mod ensure_key_tests {
             .collect()
     }
 
+    const CALLER_IDS: &str = ", id(source = caller)";
+
     #[test]
-    fn keys_are_the_id_then_the_declared_unique_constraints_in_catalog_order() {
+    fn keys_are_a_caller_id_then_the_declared_unique_constraints_in_catalog_order() {
         assert_eq!(
-            names("", COLUMNS, "tests/fixtures/ensure_keys"),
+            names(CALLER_IDS, COLUMNS, "tests/fixtures/ensure_keys"),
             ["id", "code", "account_and_currency"]
         );
     }
@@ -1065,14 +1075,10 @@ mod ensure_key_tests {
     }
 
     #[test]
-    fn the_id_is_a_key_whoever_chooses_it() {
+    fn a_repo_generated_id_is_not_a_key() {
         assert_eq!(
-            names(
-                ", id(source = caller)",
-                COLUMNS,
-                "tests/fixtures/ensure_keys"
-            ),
-            names("", COLUMNS, "tests/fixtures/ensure_keys")
+            names("", COLUMNS, "tests/fixtures/ensure_keys"),
+            ["code", "account_and_currency"]
         );
     }
 
@@ -1084,13 +1090,17 @@ mod ensure_key_tests {
         );
         assert_eq!(
             names("", &columns, "tests/fixtures/ensure_keys"),
-            ["id", "account_and_currency"]
+            ["account_and_currency"]
         );
     }
 
     #[test]
-    fn without_a_catalog_only_the_id_is_a_key() {
-        assert_eq!(names("", COLUMNS, "tests/fixtures/no_such_dir"), ["id"]);
+    fn without_a_catalog_only_a_caller_id_is_a_key() {
+        assert_eq!(
+            names(CALLER_IDS, COLUMNS, "tests/fixtures/no_such_dir"),
+            ["id"]
+        );
+        assert!(names("", COLUMNS, "tests/fixtures/no_such_dir").is_empty());
     }
 
     #[test]
@@ -1108,7 +1118,7 @@ mod ensure_key_tests {
     #[test]
     fn a_scoped_repo_has_keys_and_can_reject() {
         let columns = format!(r#"{COLUMNS}, tenant(ty = "String", scope)"#);
-        let opts = options("", &columns, "tests/fixtures/no_such_dir");
+        let opts = options(CALLER_IDS, &columns, "tests/fixtures/no_such_dir");
         assert_eq!(
             opts.ensure_keys()
                 .into_iter()
@@ -1128,7 +1138,7 @@ mod ensure_key_tests {
 
     #[test]
     fn an_id_only_repo_cannot_reject() {
-        assert!(!options("", COLUMNS, "tests/fixtures/no_such_dir").ensure_can_reject());
+        assert!(!options(CALLER_IDS, COLUMNS, "tests/fixtures/no_such_dir").ensure_can_reject());
     }
 
     #[test]

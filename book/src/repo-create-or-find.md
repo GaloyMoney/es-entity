@@ -14,11 +14,11 @@ pub async fn create_or_find_in_op<OP>(&self, op: &mut OP, new: NewAccount)
 ## Outcomes
 
 - **`Created`**: the insert hit no unique constraint. It behaves like `create_in_op`.
-- **`Found`**: the `new` entity's unique keys (id included) match exactly one
-  stored entity, which is returned unchanged. `new`'s events are dropped and the
+- **`Found`**: the `new` entity's unique keys match exactly one stored entity,
+  which is returned unchanged. `new`'s events are dropped and the
   post-persist hook does not run. Only keys are compared: Ensure never updates.
 - **`Rejected(KeysSpanEntities { ids, keys })`**: the keys match more than one
-  stored entity, for example the id is held by one and the code by another. The
+  stored entity, for example the code is held by one and the email by another. The
   rejection carries the ids and key names, never values. The caller's
   transaction is not aborted.
 - **`Transient`**: under `REPEATABLE READ` / `SERIALIZABLE` the row committed
@@ -40,7 +40,7 @@ by every key at once:
 
 ```sql
 SELECT id, .. FROM accounts
-WHERE id = $1 OR code = $2 OR (ledger = $3 AND currency = $4)
+WHERE code = $1 OR (ledger = $2 AND currency = $3)
 ```
 
 Values are bind parameters, read from the `NewEntity` the way `create` reads
@@ -48,10 +48,13 @@ them. A `None` optional key never matches.
 
 ## Keys
 
-The keys are the id plus every unique constraint or non-partial unique index
-the migrations declare, on columns the create writes as-is. A table without a
-schema catalog is ensured by id alone. A repo whose only key is the id returns
-`RepoFault`, since its keys cannot span entities.
+The keys are every unique constraint or non-partial unique index the
+migrations declare, on columns the create writes as-is. With
+`id(source = caller)` the id is a key too, and comes first. A repo-generated id
+is fresh, so it is never looked up, and a repo with repo-generated ids and no
+other key gets no method. A table without a schema catalog has no keys besides
+a caller-chosen id. A repo with a single key returns `RepoFault`, since its
+keys cannot span entities.
 
 A conflict on a partial or expression index whose columns are not also a full
 unique key cannot be looked up, so it ends in `Transient(OptimisticConflict)`.

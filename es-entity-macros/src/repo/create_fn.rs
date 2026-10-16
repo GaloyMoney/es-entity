@@ -334,11 +334,11 @@ impl ToTokens for CreateFn<'_> {
             let n_keys = self.ensure_keys.len();
             let ensure_nested = nested(&target);
             let docs = [
-                "Creates the entity, or returns the stored one when the `new` entity's unique keys (id included) already name it.",
+                "Creates the entity, or returns the stored one when the `new` entity's unique keys (a caller-chosen id included) already name it.",
                 "",
                 "- **`Created`**: the insert hit no unique constraint. Events are persisted and the post-persist hook runs, as in `create_in_op`.",
-                "- **`Found`**: the insert hit a unique constraint, and the `new` entity's unique keys (id included) match exactly one stored entity. That entity is returned unchanged: `new`'s events are dropped, nothing is written, the hook does not run. The stored entity's id may differ from `new`'s id (it was found through another key). Callers take the id from the returned entity, never from the `new` they passed in.",
-                "- **`Rejected(KeysSpanEntities)`**: the `new` entity's keys match more than one stored entity (its id is held by one, its code by another). No single stored entity is the one the caller described. This rejection does not abort the caller's transaction: the insert was `DO NOTHING` and the lookup is a `SELECT`.",
+                "- **`Found`**: the insert hit a unique constraint, and the `new` entity's unique keys (a caller-chosen id included) match exactly one stored entity. That entity is returned unchanged: `new`'s events are dropped, nothing is written, the hook does not run. The stored entity's id may differ from `new`'s id (it was found through another key). Callers take the id from the returned entity, never from the `new` they passed in.",
+                "- **`Rejected(KeysSpanEntities)`**: the `new` entity's keys match more than one stored entity (one holds its code, another its email). No single stored entity is the one the caller described. This rejection does not abort the caller's transaction: the insert was `DO NOTHING` and the lookup is a `SELECT`.",
                 "- **`Transient(OptimisticConflict)`**: the insert conflicted and the lookup found nothing. Not reachable under READ COMMITTED (the lookup runs as a second statement and sees the committed row); kept for REPEATABLE READ / SERIALIZABLE, where the insert itself usually raises 40001 first (`Transient(SerializationFailure)`).",
                 "",
                 "`Found` compares nothing but keys: a `new` entity whose non-key fields differ from the stored entity still gets the stored entity. Ensure never updates.",

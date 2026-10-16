@@ -1004,9 +1004,7 @@ async fn partial_unique_index_conflict_is_transient() -> anyhow::Result<()> {
 
 async fn repeatable_read_after_concurrent_commit(
     level: &str,
-) -> anyhow::Result<
-    Result<Ensured<EnsureTemplate>, es_entity::RepoWriteError<EnsureTemplateEnsureRejection>>,
-> {
+) -> anyhow::Result<Result<Ensured<EnsureTemplate>, RepoFault>> {
     let pool = helpers::init_pool().await?;
     let repo = EnsureTemplates { pool: pool.clone() };
     let code = unique("isolation");
