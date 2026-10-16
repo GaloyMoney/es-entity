@@ -28,9 +28,12 @@ pub struct CreateFn<'a> {
     /// The generated signatures' error type, see
     /// `RepositoryOptions::create_error_ty`.
     write_error_ty: TokenStream,
-    /// The keys a `create_or_find_by_<key>_in_op` is generated for, see
+    /// The disjuncts of the `create_or_find_in_op` lookup, see
     /// `RepositoryOptions::ensure_keys`.
     ensure_keys: Vec<EnsureKey>,
+    /// `Some` when `create_or_find_in_op` can reject, see
+    /// `RepositoryOptions::ensure_can_reject`.
+    ensure_rejection: Option<syn::Ident>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -42,6 +45,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
             can_reject: opts.create_can_reject(),
             write_error_ty: opts.create_error_ty(),
             ensure_keys: opts.ensure_keys(),
+            ensure_rejection: opts.ensure_can_reject().then(|| opts.ensure_rejection()),
             in_op_only: opts.in_op_only(),
             table_name: opts.table_name(),
             entity: opts.entity(),
@@ -262,56 +266,114 @@ impl ToTokens for CreateFn<'_> {
         let id_ty = self.id;
         let create_query = query("");
         let create_nested = nested(&quote! { #constraint_violation });
-        let ensure_fns = self.ensure_keys.iter().map(|key| {
-            let fn_name = quote::format_ident!("create_or_find_by_{}_in_op", key.suffix);
-            let residual = &key.residual;
-            let (error_ty, target, ensure_constraint_values, map_error) = if key.can_reject {
-                (
-                    quote! { es_entity::RepoWriteError<#residual> },
-                    quote! { #residual },
+        let ensure_fn = (!self.ensure_keys.is_empty()).then(|| {
+            let (error_ty, target, ensure_constraint_values, map_error) = match &self.ensure_rejection {
+                Some(rejection) => (
+                    quote! { es_entity::RepoWriteError<#rejection> },
+                    quote! { #rejection },
                     self.columns.constraint_values(entity, true),
                     quote! {
                         .map_err(|e| {
                             let __fail = #classify_create;
-                            #residual::narrow_write(
+                            #rejection::narrow_write(
                                 __fail.map_rejected(|r| r.with_attempted(__constraint_values)),
                             )
                         })?
                     },
-                )
-            } else {
-                (
+                ),
+                None => (
                     quote! { es_entity::RepoFault },
                     quote! { #constraint_violation },
                     quote! {},
                     quote! { .map_err(|e| #classify_create.narrow_rejected())? },
-                )
+                ),
             };
-            let conflict_target = key.columns.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", ");
-            let ensure_query = query(&format!(" ON CONFLICT ({conflict_target}) DO NOTHING"));
+            let ensure_query = query(" ON CONFLICT DO NOTHING");
+            let mut next_param = 0;
+            let conditions: Vec<String> = self
+                .ensure_keys
+                .iter()
+                .map(|key| {
+                    let parts: Vec<String> = key
+                        .columns
+                        .iter()
+                        .map(|c| {
+                            next_param += 1;
+                            format!("{c} = ${next_param}")
+                        })
+                        .collect();
+                    if parts.len() == 1 {
+                        parts.join("")
+                    } else {
+                        format!("({})", parts.join(" AND "))
+                    }
+                })
+                .collect();
             let lookup_query = format!(
-                "SELECT id FROM {} WHERE {}",
-                table_name,
-                key.columns
+                "SELECT id, {} FROM {} WHERE {}",
+                conditions
                     .iter()
-                    .enumerate()
-                    .map(|(i, c)| format!("{c} = ${}", i + 1))
+                    .map(|c| format!("COALESCE({c}, FALSE)"))
                     .collect::<Vec<_>>()
-                    .join(" AND ")
+                    .join(", "),
+                table_name,
+                conditions.join(" OR ")
             );
             let missing_context = format!(
-                "{table_name} ({conflict_target}): ON CONFLICT DO NOTHING inserted no row and no row is visible"
+                "{table_name}: ON CONFLICT DO NOTHING inserted no row and no unique key matches a stored row"
             );
-            let key_columns = &key.columns;
-            let key_types = &key.column_types;
+            let spanning_context = format!("{table_name}: the unique keys match more than one row");
+            let key_columns = self.ensure_keys.iter().flat_map(|k| k.columns.iter());
+            let key_types = self.ensure_keys.iter().flat_map(|k| k.column_types.iter());
+            let key_names = self.ensure_keys.iter().map(|k| k.name.as_str());
+            let n_keys = self.ensure_keys.len();
             let ensure_nested = nested(&target);
-            let docs = format!(
-                "Creates the entity, or returns the stored one when a row with the same `{conflict_target}` already exists. \
-                 A `Found` result drops `new_entity`'s events and does not run the post-persist hook."
-            );
+            let docs = [
+                "Creates the entity, or returns the stored one when the `new` entity's unique keys (id included) already name it.",
+                "",
+                "- **`Created`**: the insert hit no unique constraint. Events are persisted and the post-persist hook runs, as in `create_in_op`.",
+                "- **`Found`**: the insert hit a unique constraint, and the `new` entity's unique keys (id included) match exactly one stored entity. That entity is returned unchanged: `new`'s events are dropped, nothing is written, the hook does not run. The stored entity's id may differ from `new`'s id (it was found through another key). Callers take the id from the returned entity, never from the `new` they passed in.",
+                "- **`Rejected(KeysSpanEntities)`**: the `new` entity's keys match more than one stored entity (its id is held by one, its code by another). No single stored entity is the one the caller described. This rejection does not abort the caller's transaction: the insert was `DO NOTHING` and the lookup is a `SELECT`.",
+                "- **`Transient(OptimisticConflict)`**: the insert conflicted and the lookup found nothing. Not reachable under READ COMMITTED (the lookup runs as a second statement and sees the committed row); kept for REPEATABLE READ / SERIALIZABLE, where the insert itself usually raises 40001 first (`Transient(SerializationFailure)`).",
+                "",
+                "`Found` compares nothing but keys: a `new` entity whose non-key fields differ from the stored entity still gets the stored entity. Ensure never updates.",
+            ]
+            .map(|line| format!(" {line}"));
+            let on_span = match &self.ensure_rejection {
+                Some(rejection) => quote! {
+                    let __keys: Vec<&'static str> = [#(#key_names),*]
+                        .into_iter()
+                        .zip(__matched)
+                        .filter(|(_, matched)| *matched)
+                        .map(|(key, _)| key)
+                        .collect();
+                    return Err(es_entity::errlanes::Fail::Rejected(
+                        #rejection::KeysSpanEntities { ids: __found_ids, keys: __keys },
+                    ));
+                },
+                None => quote! {
+                    return Err(es_entity::errlanes::Fatal::invariant(
+                        "the unique keys match more than one row",
+                    )
+                    .with_context(#spanning_context)
+                    .into());
+                },
+            };
+            let (matched_decl, track_matches) = if self.ensure_rejection.is_some() {
+                (
+                    quote! { let mut __matched = [false; #n_keys]; },
+                    quote! {
+                        for (i, matched) in __matched.iter_mut().enumerate() {
+                            *matched |= row.try_get::<bool, _>(i + 1)?;
+                        }
+                    },
+                )
+            } else {
+                (quote! {}, quote! {})
+            };
             quote! {
-                #[doc = #docs]
-                pub async fn #fn_name<OP>(
+                #(#[doc = #docs])*
+                pub async fn create_or_find_in_op<OP>(
                     &self,
                     op: &mut OP,
                     new_entity: <#entity as es_entity::EsEntity>::New
@@ -346,18 +408,33 @@ impl ToTokens for CreateFn<'_> {
                         #map_error;
 
                     if rows.is_empty() {
-                        let __found_id: Option<#id_ty> = sqlx::query_scalar_with(#lookup_query, __key_args)
-                            .fetch_optional(op.as_executor())
+                        let __lookup = sqlx::query_with(#lookup_query, __key_args)
+                            .fetch_all(op.as_executor())
                             .await?;
-                        let Some(__found_id) = __found_id else {
-                            return Err(es_entity::errlanes::Transient::new(
-                                es_entity::errlanes::TransientKind::OptimisticConflict,
-                            )
-                            .with_context(#missing_context)
-                            .into());
-                        };
-                        let entity = self.find_by_id_in_op(&mut *op, __found_id).await?;
-                        return Ok(es_entity::Ensured::Found(entity));
+                        let mut __found_ids: Vec<#id_ty> = Vec::new();
+                        #matched_decl
+                        for row in &__lookup {
+                            __found_ids.push(row.try_get(0)?);
+                            #track_matches
+                        }
+                        match __found_ids.len() {
+                            0 => {
+                                return Err(es_entity::errlanes::Transient::new(
+                                    es_entity::errlanes::TransientKind::OptimisticConflict,
+                                )
+                                .with_context(#missing_context)
+                                .into());
+                            }
+                            1 => {
+                                let entity = self
+                                    .find_by_id_in_op(&mut *op, __found_ids.remove(0))
+                                    .await?;
+                                return Ok(es_entity::Ensured::Found(entity));
+                            }
+                            _ => {
+                                #on_span
+                            }
+                        }
                     }
 
                     #forgettable_code
@@ -458,7 +535,7 @@ impl ToTokens for CreateFn<'_> {
                 __result
             }
 
-            #(#ensure_fns)*
+            #ensure_fn
         });
     }
 }
@@ -496,6 +573,7 @@ mod tests {
             can_reject: true,
             write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             ensure_keys: Vec::new(),
+            ensure_rejection: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -616,6 +694,7 @@ mod tests {
             can_reject: false,
             write_error_ty: quote! { es_entity::RepoFault },
             ensure_keys: Vec::new(),
+            ensure_rejection: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -680,6 +759,7 @@ mod tests {
             can_reject: true,
             write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             ensure_keys: Vec::new(),
+            ensure_rejection: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

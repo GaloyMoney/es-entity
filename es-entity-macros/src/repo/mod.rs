@@ -525,6 +525,49 @@ mod tests {
         assert!(derive(input).is_ok());
     }
 
+    #[test]
+    fn create_or_find_in_op_is_generated_once_with_its_rustdoc_contract() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Widget",
+                migrations_dir = "tests/fixtures/ensure_keys",
+                columns(
+                    code(ty = "String"),
+                    account(ty = "String"),
+                    currency(ty = "String"),
+                    reference(ty = "String"),
+                    lowered(ty = "String")
+                )
+            )]
+            struct Widgets {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = derive(input).unwrap().to_string();
+        assert_eq!(out.matches("fn create_or_find_in_op").count(), 1, "{out}");
+        assert!(out.contains("pub enum WidgetEnsureRejection"), "{out}");
+        assert!(
+            out.contains("The stored entity's id may differ from `new`'s id"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_id_only_repo_gets_create_or_find_in_op_returning_repo_fault() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Widget", migrations_dir = "tests/fixtures/no_such_dir")]
+            struct Widgets {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = derive(input).unwrap().to_string();
+        assert!(!out.contains("EnsureRejection"), "{out}");
+        assert!(
+            out.contains("Result < es_entity :: Ensured < Widget > , es_entity :: RepoFault >"),
+            "{out}"
+        );
+    }
+
     /// The combined-write classifiers are emitted once per repo, not rendered
     /// into every write path. `classify_update_write` is gated to repos that
     /// actually have a caller — an uncalled private helper is dead code, and
@@ -548,11 +591,11 @@ mod tests {
             1,
             "write classifier should be defined exactly once"
         );
-        // Both create paths call the shared fn rather than inlining a match.
+        // Every create path calls the shared fn rather than inlining a match.
         assert_eq!(
             out.matches("Self :: classify_create_write").count(),
-            2,
-            "create and create_all should both call the shared classifier"
+            3,
+            "create, create_all and create_or_find_in_op should all call the shared classifier"
         );
 
         // No index columns to persist and no soft delete → nothing calls the
