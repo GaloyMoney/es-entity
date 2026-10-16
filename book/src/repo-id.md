@@ -85,7 +85,7 @@ is the one it inserts under; if they differ the create fails with
 `Fatal(Invariant)`.
 
 For entities that may already exist, the id is one of the keys of
-[`create_or_find_in_op`](./repo-create.md#create_or_find_in_op).
+[`create_or_find_in_op`](./repo-create-or-find.md).
 
 ## A mismatch does not compile
 
