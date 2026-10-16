@@ -34,6 +34,8 @@ pub struct CreateFn<'a> {
     /// `Some` when `create_or_find_in_op` can reject, see
     /// `RepositoryOptions::ensure_can_reject`.
     ensure_rejection: Option<syn::Ident>,
+    /// `{Entity}Scope` on a scoped repo.
+    scope_ty: Option<syn::Ident>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -46,6 +48,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
             write_error_ty: opts.create_error_ty(),
             ensure_keys: opts.ensure_keys(),
             ensure_rejection: opts.ensure_can_reject().then(|| opts.ensure_rejection()),
+            scope_ty: (!opts.columns.scope_columns().is_empty()).then(|| opts.scope_type_ident()),
             in_op_only: opts.in_op_only(),
             table_name: opts.table_name(),
             entity: opts.entity(),
@@ -309,11 +312,13 @@ impl ToTokens for CreateFn<'_> {
                     }
                 })
                 .collect();
+            let scope_columns = self.columns.scope_columns();
             let lookup_query = format!(
                 "SELECT id, {} FROM {} WHERE {}",
                 conditions
                     .iter()
                     .map(|c| format!("COALESCE({c}, FALSE)"))
+                    .chain(scope_columns.iter().map(|c| c.name().to_string()))
                     .collect::<Vec<_>>()
                     .join(", "),
                 table_name,
@@ -371,6 +376,51 @@ impl ToTokens for CreateFn<'_> {
             } else {
                 (quote! {}, quote! {})
             };
+            let push_found = quote! {
+                __found_ids.push(row.try_get(0)?);
+                #track_matches
+            };
+            let (scope_capture, scope_decl, collect_row, on_outside, find_scope) =
+                match (&self.scope_ty, &self.ensure_rejection) {
+                    (Some(scope_ty), Some(rejection)) => {
+                        let names: Vec<_> = scope_columns.iter().map(|c| c.name()).collect();
+                        let tys: Vec<_> = scope_columns.iter().map(|c| c.ty()).collect();
+                        let vars: Vec<_> = names
+                            .iter()
+                            .map(|n| quote::format_ident!("__scope_{}", n))
+                            .collect();
+                        let idxs = (0..scope_columns.len()).map(|i| i + n_keys + 1);
+                        let key_names = self.ensure_keys.iter().map(|k| k.name.as_str());
+                        (
+                            quote! { #(let #vars: #tys = <#tys as Clone>::clone(#names);)* },
+                            quote! { let mut __outside = [false; #n_keys]; },
+                            quote! {
+                                if #(row.try_get::<#tys, _>(#idxs)? == #vars)&&* {
+                                    #push_found
+                                } else {
+                                    for (i, outside) in __outside.iter_mut().enumerate() {
+                                        *outside |= row.try_get::<bool, _>(i + 1)?;
+                                    }
+                                }
+                            },
+                            quote! {
+                                if __outside.iter().any(|outside| *outside) {
+                                    let __keys: Vec<&'static str> = [#(#key_names),*]
+                                        .into_iter()
+                                        .zip(__outside)
+                                        .filter(|(_, outside)| *outside)
+                                        .map(|(key, _)| key)
+                                        .collect();
+                                    return Err(es_entity::errlanes::Fail::Rejected(
+                                        #rejection::KeysHeldOutsideScope { keys: __keys },
+                                    ));
+                                }
+                            },
+                            quote! { #scope_ty::All, },
+                        )
+                    }
+                    _ => (quote! {}, quote! {}, push_found, quote! {}, quote! {}),
+                };
             quote! {
                 #(#[doc = #docs])*
                 pub async fn create_or_find_in_op<OP>(
@@ -394,6 +444,7 @@ impl ToTokens for CreateFn<'_> {
 
                     let mut __key_args = sqlx::postgres::PgArguments::default();
                     #(__key_args.add(#key_columns as &#key_types).map_err(sqlx::Error::Encode)?;)*
+                    #scope_capture
 
                     let mut events = Self::convert_new(new_entity, #builder);
                     #caller_id_check
@@ -413,10 +464,11 @@ impl ToTokens for CreateFn<'_> {
                             .await?;
                         let mut __found_ids: Vec<#id_ty> = Vec::new();
                         #matched_decl
+                        #scope_decl
                         for row in &__lookup {
-                            __found_ids.push(row.try_get(0)?);
-                            #track_matches
+                            #collect_row
                         }
+                        #on_outside
                         match __found_ids.len() {
                             0 => {
                                 return Err(es_entity::errlanes::Transient::new(
@@ -427,7 +479,7 @@ impl ToTokens for CreateFn<'_> {
                             }
                             1 => {
                                 let entity = self
-                                    .find_by_id_in_op(&mut *op, __found_ids.remove(0))
+                                    .find_by_id_in_op(&mut *op, #find_scope __found_ids.remove(0))
                                     .await?;
                                 return Ok(es_entity::Ensured::Found(entity));
                             }
@@ -574,6 +626,7 @@ mod tests {
             write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             ensure_keys: Vec::new(),
             ensure_rejection: None,
+            scope_ty: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -695,6 +748,7 @@ mod tests {
             write_error_ty: quote! { es_entity::RepoFault },
             ensure_keys: Vec::new(),
             ensure_rejection: None,
+            scope_ty: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -760,6 +814,7 @@ mod tests {
             write_error_ty: quote! { es_entity::RepoWriteError<EntityConstraintViolation> },
             ensure_keys: Vec::new(),
             ensure_rejection: None,
+            scope_ty: None,
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

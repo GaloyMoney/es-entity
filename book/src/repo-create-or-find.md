@@ -56,8 +56,17 @@ schema catalog is ensured by id alone. A repo whose only key is the id returns
 A conflict on a partial or expression index whose columns are not also a full
 unique key cannot be looked up, so it ends in `Transient(OptimisticConflict)`.
 
-Scoped and soft-deleting repos get no method. The lookup cannot name a scope,
-and a soft-deleted row still holds its key but is invisible to the lookup.
+Soft-deleting repos get no method: a soft-deleted row still holds its key but
+is invisible to the lookup.
 
 `<Entity>EnsureRejection` also keeps the repo's check-constraint members and
 nested children's rejections. Its own code is `<table>_keys_span_entities`.
+
+## Scoped repos
+
+A [scoped repo](./scoped-repositories.md) keeps the unscoped signature, like
+`create`. The lookup also reads the scope columns of every match and compares
+them with the `new` entity's. A match in another scope rejects with
+`KeysHeldOutsideScope { keys }` (code `<table>_keys_held_outside_scope`). It
+carries key names only, never the other scope's ids, and it wins over any match
+inside the scope.

@@ -287,6 +287,14 @@ impl<'a> ErrorTypes<'a> {
             let residual = opts.ensure_rejection();
             let id_ty = opts.id();
             let code = format!("{}_keys_span_entities", table.replace('.', "_"));
+            let outside_scope = (!opts.columns.scope_columns().is_empty()).then(|| {
+                let code = format!("{}_keys_held_outside_scope", table.replace('.', "_"));
+                quote! {
+                    #[error("the unique keys are held by an entity outside the new entity's scope")]
+                    #[rejection(code = #code, description = "The entity's unique keys are held by an entity in another scope.")]
+                    KeysHeldOutsideScope { keys: Vec<&'static str> },
+                }
+            });
             let definitions = check_variants.iter().map(|(_, definition)| definition);
             let idents: Vec<_> = check_variants.iter().map(|(ident, _)| ident).collect();
             quote! {
@@ -296,6 +304,7 @@ impl<'a> ErrorTypes<'a> {
                     #[error("the unique keys match more than one stored entity")]
                     #[rejection(code = #code, description = "The entity's unique keys are held by more than one stored entity.")]
                     KeysSpanEntities { ids: Vec<#id_ty>, keys: Vec<&'static str> },
+                    #outside_scope
                     #(#definitions),*
                 }
                 impl #residual {

@@ -480,17 +480,23 @@ impl RepositoryOptions {
 
     /// The disjuncts of the `create_or_find_in_op` lookup, id first.
     ///
-    /// Empty on a scoped repo (`find_by_id_in_op` of a scoped repo needs a
-    /// scope the create has no way to name) and on a soft-deleting one (a
-    /// soft-deleted row still holds its key but is invisible to the lookup),
-    /// and when the id is not a column the create writes as-is.
+    /// Empty on a soft-deleting repo (a soft-deleted row still holds its key
+    /// but is invisible to the lookup), when the id is not a column the create
+    /// writes as-is, and when a scope column is not (a stored row's scope
+    /// could not be compared with the `new` entity's).
     ///
     /// Besides the id, a key is a unique constraint or non-partial unique
     /// index that the migrations declare for the table, on columns the create
     /// writes as-is. Without a catalog entry for the table nothing but the id
     /// is known to be unique.
     pub fn ensure_keys(&self) -> Vec<EnsureKey> {
-        if !self.columns.scope_columns().is_empty() || self.delete.is_soft() {
+        if self.delete.is_soft()
+            || !self
+                .columns
+                .scope_columns()
+                .iter()
+                .all(|c| c.is_ensurable())
+        {
             return Vec::new();
         }
         let table = self.table_name();
@@ -542,11 +548,13 @@ impl RepositoryOptions {
     }
 
     /// Whether `create_or_find_in_op` can reject: more than one disjunct can
-    /// match more than one stored entity, a check constraint can reject the
+    /// match more than one stored entity, a scoped repo's keys can be held
+    /// outside the `new` entity's scope, a check constraint can reject the
     /// insert, and a nested child's create can reject.
     pub fn ensure_can_reject(&self) -> bool {
         self.any_nested()
             || self.ensure_keys().len() > 1
+            || !self.columns.scope_columns().is_empty()
             || crate::repo::error_types::enumerate_constraints(self)
                 .iter()
                 .any(|(_, kind, _)| matches!(kind, crate::index_catalog::ConstraintKind::Check))
@@ -1094,6 +1102,27 @@ mod ensure_key_tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn a_scoped_repo_has_keys_and_can_reject() {
+        let columns = format!(r#"{COLUMNS}, tenant(ty = "String", scope)"#);
+        let opts = options("", &columns, "tests/fixtures/no_such_dir");
+        assert_eq!(
+            opts.ensure_keys()
+                .into_iter()
+                .map(|k| k.name)
+                .collect::<Vec<_>>(),
+            ["id"]
+        );
+        assert!(opts.ensure_can_reject());
+    }
+
+    #[test]
+    fn a_scope_column_the_create_does_not_write_leaves_no_keys() {
+        let columns =
+            format!(r#"{COLUMNS}, tenant(ty = "String", scope, create(persist = false))"#);
+        assert!(names("", &columns, "tests/fixtures/ensure_keys").is_empty());
     }
 
     #[test]

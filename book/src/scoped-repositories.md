@@ -284,6 +284,10 @@ that stamped the scope column). Scope enforcement happens at the boundary that
 turns ids and queries into entity data; once you hold the entity, custody of
 the value is the guarantee.
 
+`create_or_find_in_op` also keeps the unscoped signature, but it only returns
+a stored entity in the `new` entity's own scope; see
+[create_or_find_in_op](./repo-create-or-find.md#scoped-repos).
+
 ## Cursors carry no filter authority
 
 Pagination cursors are position markers only. Every page executes with the
