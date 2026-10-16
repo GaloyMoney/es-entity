@@ -100,7 +100,7 @@ fn unique_email() -> String {
 }
 
 #[tokio::test]
-async fn found_within_the_new_entitys_scope() -> anyhow::Result<()> {
+async fn found_within_the_scope_of_new() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let repo = EnsureMembers { pool: pool.clone() };
     let tenant = TenantId::new();
