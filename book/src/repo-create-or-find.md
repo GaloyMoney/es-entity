@@ -21,6 +21,8 @@ pub async fn create_or_find_in_op<OP>(&self, op: &mut OP, new: NewAccount)
   stored entity, for example the code is held by one and the email by another. The
   rejection carries the ids and key names, never values. The caller's
   transaction is not aborted.
+- **`Rejected(KeysHeldByDeleted { ids, keys })`**: soft-delete repos only, when
+  no live entity but only soft-deleted ones hold a key.
 - **`Rejected(<constraint member>)`**: the insert conflicted on a unique
   arbiter the lookup cannot see, see [Other arbiters](#other-arbiters).
 - **`Transient`**: only under `REPEATABLE READ` / `SERIALIZABLE`, where the
@@ -63,32 +65,6 @@ members of unique constraints that are not keys, and nested children's
 rejections. Its own code is `<table>_keys_span_entities`. A repo whose table
 declares a unique constraint that is not a key returns
 `RepoWriteError<..EnsureRejection>` even with a single key.
-
-## Soft-delete repos
-
-Repos with `delete = "soft"` or `delete = "soft_without_queries"` get the
-method too, with the same `Ensured` return type. Enabling soft delete only adds
-a member to the rejection enum.
-
-A soft-deleted row still holds its primary key and any full unique constraint,
-so the lookup also reads deleted rows. A row is live when `deleted = FALSE`,
-as for the other finders, so a `NULL` `deleted` counts as deleted. Live matches
-win:
-
-- **`Found`**: exactly one live entity holds one of the keys. Deleted matches are
-  ignored.
-- **`KeysSpanEntities`**: more than one live match. Deleted rows do not count.
-- **`Rejected(KeysHeldByDeleted { ids, keys })`**: no live entity holds a key,
-  and one or more soft-deleted entities do. Nothing is written and the
-  transaction stays usable. The rejection carries the deleted holders' ids and
-  the key names (code `<table>_keys_held_by_deleted`), never values. Ensure
-  never returns a deleted entity and never resurrects one.
-
-A partial unique index whose predicate is a soft-delete liveness test is a key
-that a deleted row does not hold. The recognised spellings are
-`WHERE deleted = FALSE`, `deleted = false`, `deleted IS FALSE` and
-`NOT deleted`, with or without the table qualifier. Other predicates are not
-keys, see below.
 
 ## Other arbiters
 

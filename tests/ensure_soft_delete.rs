@@ -146,7 +146,7 @@ async fn created_and_deleted(
 }
 
 fn held_by_deleted(
-    err: Fail<EnsureSoftMemberEnsureRejection>,
+    err: RepoWriteError<EnsureSoftMemberEnsureRejection>,
 ) -> (BTreeSet<EnsureSoftMemberId>, BTreeSet<&'static str>) {
     let Fail::Rejected(EnsureSoftMemberEnsureRejection::KeysHeldByDeleted { ids, keys }) = err
     else {
@@ -384,8 +384,14 @@ async fn soft_without_queries_repo_has_the_method() -> anyhow::Result<()> {
         .await
         .err()
         .expect("a deleted holder must reject");
-    let (ids, keys) = held_by_deleted(err);
-    assert_eq!(ids, BTreeSet::from([id]));
-    assert_eq!(keys, BTreeSet::from(["email"]));
+    let Fail::Rejected(without_queries::EnsureSoftMemberEnsureRejection::KeysHeldByDeleted {
+        ids,
+        keys,
+    }) = err
+    else {
+        panic!("expected KeysHeldByDeleted, got {err:?}");
+    };
+    assert_eq!(ids, vec![id]);
+    assert_eq!(keys, vec!["email"]);
     Ok(())
 }
