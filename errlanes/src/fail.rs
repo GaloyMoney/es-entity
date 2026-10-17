@@ -407,6 +407,42 @@ impl<D, L: LaneProfile<Fatal = Fatal>> Fail<D, L> {
     }
 }
 
+impl<L: LaneProfile> Fail<core::convert::Infallible, L> {
+    /// The carrier switch for a `Fail` that cannot reject: lane for lane
+    /// into `Fault<L>`. There is no rejection to narrow, so nothing is
+    /// demoted and nothing is lost — this is the `Fail`-side twin of
+    /// [`ResultExt::into_fault`](crate::ResultExt::into_fault).
+    ///
+    /// Only defined where the rejection type is `Infallible`. A `Fail` that
+    /// can reject has no `into_fault`: say what happens to the rejection with
+    /// [`narrow_rejected`](Fail::narrow_rejected) or `lift()`.
+    ///
+    /// ```
+    /// use std::convert::Infallible;
+    /// use errlanes::{Fail, Fatal, Fault, lanes};
+    ///
+    /// let fail: Fail<Infallible, lanes!(Fatal)> = Fail::Fatal(Fatal::invariant("x"));
+    /// let fault: Fault<lanes!(Fatal)> = fail.into_fault();
+    /// assert!(fault.is_fatal());
+    /// ```
+    ///
+    /// A `Fail` carrying a rejection does not have it:
+    ///
+    /// ```compile_fail,E0599
+    /// use errlanes::{Fail, Fatal, lanes};
+    ///
+    /// #[derive(Debug, errlanes::Rejection)]
+    /// #[rejection(code = "NOPE")]
+    /// struct Nope;
+    ///
+    /// let fail: Fail<Nope, lanes!(Fatal)> = Fail::Rejected(Nope);
+    /// let _ = fail.into_fault();
+    /// ```
+    pub fn into_fault(self) -> Fault<L> {
+        crate::carrier::fail_into_fault(self)
+    }
+}
+
 impl<L: LaneProfile> fmt::Display for Fault<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
