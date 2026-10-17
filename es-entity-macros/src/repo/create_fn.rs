@@ -38,9 +38,6 @@ pub struct CreateFn<'a> {
     scope_ty: Option<syn::Ident>,
     /// `delete = "soft"` or `"soft_without_queries"`.
     soft: bool,
-    any_nested: bool,
-    tbl_prefix: Option<&'a syn::LitStr>,
-    snapshot_table_name: Option<&'a str>,
     /// The catalog names of the constraints behind `ensure_keys`.
     key_constraints: Vec<String>,
     #[cfg(feature = "instrument")]
@@ -57,9 +54,6 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
             ensure_rejection: opts.ensure_can_reject().then(|| opts.ensure_rejection()),
             scope_ty: (!opts.columns.scope_columns().is_empty()).then(|| opts.scope_type_ident()),
             soft: opts.delete.is_soft(),
-            any_nested: opts.any_nested(),
-            tbl_prefix: opts.table_prefix(),
-            snapshot_table_name: opts.snapshot_table_name(),
             key_constraints: opts.ensure_key_constraint_names(),
             in_op_only: opts.in_op_only(),
             table_name: opts.table_name(),
@@ -761,9 +755,6 @@ mod tests {
             ensure_rejection: None,
             scope_ty: None,
             soft: false,
-            any_nested: false,
-            tbl_prefix: None,
-            snapshot_table_name: None,
             key_constraints: Vec::new(),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -888,9 +879,6 @@ mod tests {
             ensure_rejection: None,
             scope_ty: None,
             soft: false,
-            any_nested: false,
-            tbl_prefix: None,
-            snapshot_table_name: None,
             key_constraints: Vec::new(),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
@@ -959,9 +947,6 @@ mod tests {
             ensure_rejection: None,
             scope_ty: None,
             soft: false,
-            any_nested: false,
-            tbl_prefix: None,
-            snapshot_table_name: None,
             key_constraints: Vec::new(),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
