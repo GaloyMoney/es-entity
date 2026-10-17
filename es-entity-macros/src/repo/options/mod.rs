@@ -595,10 +595,12 @@ impl RepositoryOptions {
     /// Whether `create_or_find_in_op` can reject: more than one disjunct can
     /// match more than one stored entity, the table declares a unique
     /// constraint that is not a lookup key, a scoped repo's keys can be held
-    /// outside the `new` entity's scope, a check constraint can reject the
-    /// insert, and a nested child's create can reject.
+    /// outside the `new` entity's scope, a soft-deleted entity can hold a key,
+    /// a check constraint can reject the insert, and a nested child's create
+    /// can reject.
     pub fn ensure_can_reject(&self) -> bool {
         self.any_nested()
+            || self.delete.is_soft()
             || self.ensure_keys().len() > 1
             || self.has_non_key_unique()
             || !self.columns.scope_columns().is_empty()

@@ -1,5 +1,6 @@
 mod helpers;
 
+use es_entity::errlanes::Fail;
 use es_entity::*;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -150,7 +151,7 @@ pub struct EnsureSoftNotes {
 }
 
 #[tokio::test]
-async fn found_deleted_carries_the_deleted_children() -> anyhow::Result<()> {
+async fn deleted_holder_with_children_is_rejected() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let repo = EnsureSoftBoxes {
         pool: pool.clone(),
@@ -160,7 +161,7 @@ async fn found_deleted_carries_the_deleted_children() -> anyhow::Result<()> {
 
     let mut op = DbOp::init(&pool).await?;
     let id = EnsureSoftBoxId::new();
-    let EnsuredOrDeleted::Created(mut created) = repo
+    let Ensured::Created(mut created) = repo
         .create_or_find_in_op(
             &mut op,
             NewEnsureSoftBox {
@@ -179,7 +180,7 @@ async fn found_deleted_carries_the_deleted_children() -> anyhow::Result<()> {
     assert_eq!(loaded.n_notes(), 2);
     repo.delete_in_op(&mut op, loaded).await?;
 
-    let ensured = repo
+    let err = repo
         .create_or_find_in_op(
             &mut op,
             NewEnsureSoftBox {
@@ -187,12 +188,14 @@ async fn found_deleted_carries_the_deleted_children() -> anyhow::Result<()> {
                 label,
             },
         )
-        .await?;
-    let EnsuredOrDeleted::FoundDeleted(found) = ensured else {
-        panic!("expected FoundDeleted");
+        .await
+        .err()
+        .expect("a deleted holder must reject");
+    let Fail::Rejected(EnsureSoftBoxEnsureRejection::KeysHeldByDeleted { ids, keys }) = err else {
+        panic!("expected KeysHeldByDeleted, got {err:?}");
     };
-    assert_eq!(found.id, id);
-    assert_eq!(found.n_notes(), 2);
+    assert_eq!(ids, vec![id]);
+    assert_eq!(keys, vec!["label"]);
     Ok(())
 }
 
@@ -221,7 +224,7 @@ async fn null_deleted_row_is_not_live() -> anyhow::Result<()> {
         .await?;
     assert!(repo.maybe_find_by_id_in_op(&mut op, id).await?.is_none());
 
-    let ensured = repo
+    let err = repo
         .create_or_find_in_op(
             &mut op,
             NewEnsureSoftBox {
@@ -229,10 +232,12 @@ async fn null_deleted_row_is_not_live() -> anyhow::Result<()> {
                 label,
             },
         )
-        .await?;
-    let EnsuredOrDeleted::FoundDeleted(found) = ensured else {
-        panic!("expected FoundDeleted");
+        .await
+        .err()
+        .expect("a NULL deleted holder must reject");
+    let Fail::Rejected(EnsureSoftBoxEnsureRejection::KeysHeldByDeleted { ids, .. }) = err else {
+        panic!("expected KeysHeldByDeleted, got {err:?}");
     };
-    assert_eq!(found.id, id);
+    assert_eq!(ids, vec![id]);
     Ok(())
 }

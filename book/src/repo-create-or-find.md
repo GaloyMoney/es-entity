@@ -67,14 +67,8 @@ declares a unique constraint that is not a key returns
 ## Soft-delete repos
 
 Repos with `delete = "soft"` or `delete = "soft_without_queries"` get the
-method too, returning a separate type:
-
-```rust,ignore
-pub enum EnsuredOrDeleted<E> { Created(E), Found(E), FoundDeleted(E) }
-
-pub async fn create_or_find_in_op<OP>(&self, op: &mut OP, new: NewAccount)
-    -> Result<EnsuredOrDeleted<Account>, es_entity::RepoWriteError<AccountEnsureRejection>>
-```
+method too, with the same `Ensured` return type. Enabling soft delete only adds
+a member to the rejection enum.
 
 A soft-deleted row still holds its primary key and any full unique constraint,
 so the lookup also reads deleted rows. A row is live when `deleted = FALSE`,
@@ -83,16 +77,12 @@ win:
 
 - **`Found`**: exactly one live entity holds one of the keys. Deleted matches are
   ignored.
-- **`FoundDeleted`**: no live entity holds a key, and exactly one soft-deleted
-  entity does. It is returned unchanged, loaded as the `_include_deleted`
-  finders load it (nested children included). Nothing is written and the
-  post-persist hook does not run. Resurrecting it is a command on the returned
-  entity, never something ensure does.
-- **`KeysSpanEntities`**: more than one live match, or no live match and more
-  than one deleted match.
-
-`EnsuredOrDeleted` has no `into_inner`: use `into_live()`, which is `None` on
-`FoundDeleted`, or match.
+- **`KeysSpanEntities`**: more than one live match. Deleted rows do not count.
+- **`Rejected(KeysHeldByDeleted { ids, keys })`**: no live entity holds a key,
+  and one or more soft-deleted entities do. Nothing is written and the
+  transaction stays usable. The rejection carries the deleted holders' ids and
+  the key names (code `<table>_keys_held_by_deleted`), never values. Ensure
+  never returns a deleted entity and never resurrects one.
 
 A partial unique index whose predicate is a soft-delete liveness test is a key
 that a deleted row does not hold. The recognised spellings are

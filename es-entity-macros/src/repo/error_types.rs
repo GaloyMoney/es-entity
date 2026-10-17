@@ -297,6 +297,14 @@ impl<'a> ErrorTypes<'a> {
                     KeysHeldOutsideScope { keys: Vec<&'static str> },
                 }
             });
+            let held_by_deleted = opts.delete.is_soft().then(|| {
+                let code = format!("{}_keys_held_by_deleted", table.replace('.', "_"));
+                quote! {
+                    #[error("the unique keys are held by soft-deleted entities")]
+                    #[rejection(code = #code, description = "The entity's unique keys are held only by soft-deleted entities.")]
+                    KeysHeldByDeleted { ids: Vec<#id_ty>, keys: Vec<&'static str> },
+                }
+            });
             let definitions = check_variants.iter().map(|(_, definition)| definition);
             let idents: Vec<_> = check_variants.iter().map(|(ident, _)| ident).collect();
             quote! {
@@ -306,6 +314,7 @@ impl<'a> ErrorTypes<'a> {
                     #[error("the unique keys match more than one stored entity")]
                     #[rejection(code = #code, description = "The entity's unique keys are held by more than one stored entity.")]
                     KeysSpanEntities { ids: Vec<#id_ty>, keys: Vec<&'static str> },
+                    #held_by_deleted
                     #outside_scope
                     #(#definitions),*
                 }

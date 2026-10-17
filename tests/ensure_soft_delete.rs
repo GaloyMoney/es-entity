@@ -145,8 +145,18 @@ async fn created_and_deleted(
     Ok(id)
 }
 
+fn held_by_deleted(
+    err: Fail<EnsureSoftMemberEnsureRejection>,
+) -> (BTreeSet<EnsureSoftMemberId>, BTreeSet<&'static str>) {
+    let Fail::Rejected(EnsureSoftMemberEnsureRejection::KeysHeldByDeleted { ids, keys }) = err
+    else {
+        panic!("expected KeysHeldByDeleted, got {err:?}");
+    };
+    (ids.into_iter().collect(), keys.into_iter().collect())
+}
+
 #[tokio::test]
-async fn found_deleted_through_caller_id() -> anyhow::Result<()> {
+async fn deleted_holder_of_caller_id_is_rejected() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let repo = EnsureSoftMembers { pool: pool.clone() };
     let email = unique("email");
@@ -158,18 +168,27 @@ async fn found_deleted_through_caller_id() -> anyhow::Result<()> {
     assert_eq!(events_before, 1);
 
     let mut op = DbOp::init(&pool).await?;
-    let ensured = repo
+    let err = repo
         .create_or_find_in_op(
             &mut op,
             member(id, &unique("other-email"), &unique("other-handle")),
         )
-        .await?;
-    assert!(ensured.is_found_deleted());
-    let EnsuredOrDeleted::FoundDeleted(found) = ensured else {
-        panic!("expected FoundDeleted");
-    };
-    assert_eq!(found.id, id);
-    assert_eq!(found.email, email);
+        .await
+        .err()
+        .expect("a deleted holder must reject");
+    let (ids, keys) = held_by_deleted(err);
+    assert_eq!(ids, BTreeSet::from([id]));
+    assert_eq!(keys, BTreeSet::from(["id"]));
+
+    repo.create_in_op(
+        &mut op,
+        member(
+            EnsureSoftMemberId::new(),
+            &unique("email"),
+            &unique("handle"),
+        ),
+    )
+    .await?;
     op.commit().await?;
 
     assert_eq!(event_count(&pool, id).await?, events_before);
@@ -178,7 +197,7 @@ async fn found_deleted_through_caller_id() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn found_deleted_through_full_unique_key() -> anyhow::Result<()> {
+async fn deleted_holder_of_full_unique_key_is_rejected() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let repo = EnsureSoftMembers { pool: pool.clone() };
     let email = unique("email");
@@ -186,17 +205,17 @@ async fn found_deleted_through_full_unique_key() -> anyhow::Result<()> {
     let mut op = DbOp::init(&pool).await?;
     let dead = created_and_deleted(&repo, &mut op, &email, &unique("handle")).await?;
 
-    let ensured = repo
+    let err = repo
         .create_or_find_in_op(
             &mut op,
             member(EnsureSoftMemberId::new(), &email, &unique("handle")),
         )
-        .await?;
-    let EnsuredOrDeleted::FoundDeleted(found) = ensured else {
-        panic!("expected FoundDeleted");
-    };
-    assert_eq!(found.id, dead);
-    assert!(EnsuredOrDeleted::FoundDeleted(found).into_live().is_none());
+        .await
+        .err()
+        .expect("a deleted holder must reject");
+    let (ids, keys) = held_by_deleted(err);
+    assert_eq!(ids, BTreeSet::from([dead]));
+    assert_eq!(keys, BTreeSet::from(["email"]));
     Ok(())
 }
 
@@ -214,7 +233,7 @@ async fn deleted_row_does_not_hold_the_live_partial_key() -> anyhow::Result<()> 
         .create_or_find_in_op(&mut op, member(id, &unique("email"), &handle))
         .await?;
     assert!(ensured.is_created());
-    assert_eq!(ensured.into_live().expect("created is live").id, id);
+    assert_eq!(ensured.into_inner().id, id);
     Ok(())
 }
 
@@ -235,7 +254,7 @@ async fn live_duplicate_on_the_promoted_partial_key_is_found() -> anyhow::Result
             member(EnsureSoftMemberId::new(), &unique("email"), &handle),
         )
         .await?;
-    let EnsuredOrDeleted::Found(found) = ensured else {
+    let Ensured::Found(found) = ensured else {
         panic!("expected Found");
     };
     assert_eq!(found.id, holder);
@@ -257,7 +276,7 @@ async fn live_match_wins_over_deleted_match() -> anyhow::Result<()> {
     let ensured = repo
         .create_or_find_in_op(&mut op, member(dead, &email, &unique("handle")))
         .await?;
-    let EnsuredOrDeleted::Found(found) = ensured else {
+    let Ensured::Found(found) = ensured else {
         panic!("expected Found");
     };
     assert_eq!(found.id, live);
@@ -265,7 +284,7 @@ async fn live_match_wins_over_deleted_match() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn two_deleted_matches_span() -> anyhow::Result<()> {
+async fn two_deleted_holders_are_rejected_together() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let repo = EnsureSoftMembers { pool: pool.clone() };
     let email = unique("email");
@@ -279,18 +298,9 @@ async fn two_deleted_matches_span() -> anyhow::Result<()> {
         .await
         .err()
         .expect("two deleted holders must reject");
-    let Fail::Rejected(rejection) = err else {
-        panic!("expected a rejection, got {err:?}");
-    };
-    let EnsureSoftMemberEnsureRejection::KeysSpanEntities { ids, keys } = rejection;
-    assert_eq!(
-        ids.into_iter().collect::<BTreeSet<_>>(),
-        BTreeSet::from([x, y])
-    );
-    assert_eq!(
-        keys.into_iter().collect::<BTreeSet<_>>(),
-        BTreeSet::from(["id", "email"])
-    );
+    let (ids, keys) = held_by_deleted(err);
+    assert_eq!(ids, BTreeSet::from([x, y]));
+    assert_eq!(keys, BTreeSet::from(["id", "email"]));
 
     repo.create_in_op(
         &mut op,
@@ -366,15 +376,16 @@ async fn soft_without_queries_repo_has_the_method() -> anyhow::Result<()> {
         .execute(op.as_executor())
         .await?;
 
-    let ensured = repo
+    let err = repo
         .create_or_find_in_op(
             &mut op,
             member(EnsureSoftMemberId::new(), &email, &unique("handle")),
         )
-        .await?;
-    let EnsuredOrDeleted::FoundDeleted(found) = ensured else {
-        panic!("expected FoundDeleted");
-    };
-    assert_eq!(found.id, id);
+        .await
+        .err()
+        .expect("a deleted holder must reject");
+    let (ids, keys) = held_by_deleted(err);
+    assert_eq!(ids, BTreeSet::from([id]));
+    assert_eq!(keys, BTreeSet::from(["email"]));
     Ok(())
 }

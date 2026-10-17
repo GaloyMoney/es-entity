@@ -384,11 +384,6 @@ impl ToTokens for CreateFn<'_> {
                 table_name,
                 conditions.join(" OR ")
             );
-            let ensure_enum = if self.soft {
-                quote! { EnsuredOrDeleted }
-            } else {
-                quote! { Ensured }
-            };
             let spanning_context = format!("{table_name}: the unique keys match more than one row");
             let key_columns = self.ensure_keys.iter().flat_map(|k| k.columns.iter());
             let key_types = self.ensure_keys.iter().flat_map(|k| k.column_types.iter());
@@ -402,10 +397,10 @@ impl ToTokens for CreateFn<'_> {
                 "- **`Found`**: the insert hit a unique constraint, and the `new` entity's unique keys (a caller-chosen id included) match exactly one live stored entity. That entity is returned unchanged: `new`'s events are dropped, nothing is written, the hook does not run. The stored entity's id may differ from `new`'s id (it was found through another key). Callers take the id from the returned entity, never from the `new` they passed in. Live matches win: deleted matches are ignored when a live entity holds a key.",
             ];
             if self.soft {
-                docs.push("- **`FoundDeleted`**: no live entity holds any of `new`'s keys, but exactly one soft-deleted entity does. It is returned unchanged, loaded as the `_include_deleted` finders load it: `new`'s events are dropped, nothing is written, the post-persist hook does not run (the post-hydrate hook does). Its id may differ from `new`'s id. Resurrecting it is a domain command on the returned entity, never something ensure does.");
+                docs.push("- **`Rejected(KeysHeldByDeleted)`**: no live entity holds any of `new`'s keys, but one or more soft-deleted entities do. Nothing is written and the transaction stays usable. The rejection carries the ids of the deleted holders and the key names, never values.");
             }
             docs.extend([
-                "- **`Rejected(KeysSpanEntities)`**: the `new` entity's keys match more than one stored entity (one holds its code, another its email). No single stored entity is the one the caller described. On a soft-delete repo: more than one live match, or no live match and more than one deleted match. This rejection does not abort the caller's transaction: the insert was `DO NOTHING` and the lookup is a `SELECT`.",
+                "- **`Rejected(KeysSpanEntities)`**: the `new` entity's keys match more than one stored entity (one holds its code, another its email). No single stored entity is the one the caller described. On a soft-delete repo only live entities count. This rejection does not abort the caller's transaction: the insert was `DO NOTHING` and the lookup is a `SELECT`.",
                 "- **`Rejected(<constraint member>)`**: the insert conflicted on a unique arbiter that is not a lookup key (a partial or expression unique index, a unique on a column the create does not write as-is). It is the member `create_in_op` would reject with. The conflicting insert runs in a savepoint, so the caller's transaction stays usable.",
                 "- **`Transient(OptimisticConflict)`**: the insert conflicted on a lookup key the lookup could not see. Not reachable under READ COMMITTED (the lookup runs as a second statement and sees the committed row); kept for REPEATABLE READ / SERIALIZABLE, where the insert itself usually raises 40001 first (`Transient(SerializationFailure)`).",
                 "",
@@ -478,86 +473,29 @@ impl ToTokens for CreateFn<'_> {
             };
             let scope_offset = n_keys + 1 + usize::from(self.soft);
             let on_span_live = on_span(quote! { __found_ids }, quote! { __matched });
-            let found_deleted = if self.soft {
-                let on_span_deleted = on_span(quote! { __deleted_ids }, quote! { __deleted_matched });
-                quote! {
-                    if __deleted_ids.len() == 1 {
-                        let entity = self
-                            .__find_by_id_any_in_op(&mut *op, __deleted_ids.remove(0))
-                            .await?;
-                        return Ok(es_entity::EnsuredOrDeleted::FoundDeleted(entity));
-                    }
-                    if __deleted_ids.len() > 1 {
-                        #on_span_deleted
+            let held_by_deleted = match (&self.ensure_rejection, self.soft) {
+                (Some(rejection), true) => {
+                    let keys = quote! {
+                        [#(#key_names),*]
+                            .into_iter()
+                            .zip(__deleted_matched)
+                            .filter(|(_, matched)| *matched)
+                            .map(|(key, _)| key)
+                            .collect::<Vec<&'static str>>()
+                    };
+                    quote! {
+                        if !__deleted_ids.is_empty() {
+                            return Err(es_entity::errlanes::Fail::Rejected(
+                                #rejection::KeysHeldByDeleted {
+                                    ids: __deleted_ids,
+                                    keys: #keys,
+                                },
+                            ));
+                        }
                     }
                 }
-            } else {
-                quote! {}
+                _ => quote! {},
             };
-            let find_any = self.soft.then(|| {
-                let forgettable_tbl_arg = match self.forgettable_table_name {
-                    Some(tbl) => quote! { forgettable_tbl = #tbl, },
-                    None => quote! {},
-                };
-                let snapshot_tbl_arg = match self.snapshot_table_name {
-                    Some(tbl) => quote! { snapshot_tbl = #tbl, },
-                    None => quote! {},
-                };
-                let query = format!("SELECT id FROM {table_name} WHERE id = $1");
-                let es_query_call = match self.tbl_prefix {
-                    Some(prefix) => quote! {
-                        es_entity::es_query!(
-                            tbl_prefix = #prefix,
-                            #forgettable_tbl_arg
-                            #snapshot_tbl_arg
-                            #query,
-                            id as &#id_ty,
-                        )
-                    },
-                    None => quote! {
-                        es_entity::es_query!(
-                            entity = #entity,
-                            #forgettable_tbl_arg
-                            #snapshot_tbl_arg
-                            #query,
-                            id as &#id_ty,
-                        )
-                    },
-                };
-                let fetch_method = if self.any_nested {
-                    quote! { fetch_optional_include_deleted }
-                } else {
-                    quote! { fetch_optional }
-                };
-                let hook = if self.post_hydrate_hook {
-                    quote! { self.execute_post_hydrate_hook(&__entity)?; }
-                } else {
-                    quote! {}
-                };
-                quote! {
-                    #[doc(hidden)]
-                    async fn __find_by_id_any_in_op<OP>(
-                        &self,
-                        op: &mut OP,
-                        id: #id_ty,
-                    ) -> Result<#entity, es_entity::RepoFault>
-                    where
-                        OP: es_entity::AtomicOperation + ?Sized
-                    {
-                        let id = &id;
-                        let __entity = #es_query_call
-                            .#fetch_method(op.as_executor())
-                            .await?
-                            .ok_or_else(|| {
-                                es_entity::errlanes::Fatal::invariant(
-                                    "the entity found by the lookup is gone",
-                                )
-                            })?;
-                        #hook
-                        Ok(__entity)
-                    }
-                }
-            });
             let (scope_capture, scope_decl, collect_row, on_outside, find_scope) =
                 match (&self.scope_ty, &self.ensure_rejection) {
                     (Some(scope_ty), Some(rejection)) => {
@@ -604,7 +542,7 @@ impl ToTokens for CreateFn<'_> {
                     &self,
                     op: &mut OP,
                     new_entity: <#entity as es_entity::EsEntity>::New
-                ) -> Result<es_entity::#ensure_enum<#entity>, #error_ty>
+                ) -> Result<es_entity::Ensured<#entity>, #error_ty>
                 where
                     OP: es_entity::AtomicOperation + ?Sized
                 {
@@ -652,7 +590,7 @@ impl ToTokens for CreateFn<'_> {
                         #on_outside
                         match __found_ids.len() {
                             0 => {
-                                #found_deleted
+                                #held_by_deleted
                                 let __fallback = sqlx::query_with(#create_query, __query_args);
                                 let mut __savepoint =
                                     es_entity::SavepointOperation::begin_savepoint(&mut *op).await?;
@@ -674,7 +612,7 @@ impl ToTokens for CreateFn<'_> {
                                 let entity = self
                                     .find_by_id_in_op(&mut *op, #find_scope __found_ids.remove(0))
                                     .await?;
-                                return Ok(es_entity::#ensure_enum::Found(entity));
+                                return Ok(es_entity::Ensured::Found(entity));
                             }
                             _ => {
                                 #on_span_live
@@ -697,10 +635,8 @@ impl ToTokens for CreateFn<'_> {
 
                     #post_hydrate_check
                     #post_persist_check
-                    Ok(es_entity::#ensure_enum::Created(entity))
+                    Ok(es_entity::Ensured::Created(entity))
                 }
-
-                #find_any
             }
         });
 

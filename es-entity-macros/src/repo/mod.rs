@@ -580,11 +580,13 @@ mod tests {
     }
 
     #[test]
-    fn a_soft_delete_repo_gets_create_or_find_in_op_returning_ensured_or_deleted() {
+    fn a_soft_delete_repo_gets_create_or_find_in_op_returning_ensured() {
         let out = soft_widgets("soft", false);
         assert_eq!(out.matches("fn create_or_find_in_op").count(), 1, "{out}");
-        assert!(out.contains("EnsuredOrDeleted < Widget >"), "{out}");
-        assert!(out.contains("fn __find_by_id_any_in_op"), "{out}");
+        assert!(out.contains("es_entity :: Ensured < Widget >"), "{out}");
+        assert!(!out.contains("EnsuredOrDeleted"), "{out}");
+        assert!(out.contains("KeysHeldByDeleted"), "{out}");
+        assert!(!out.contains("__find_by_id_any_in_op"), "{out}");
         assert!(
             out.contains("code = $1 OR (handle = $2 AND deleted = FALSE)"),
             "{out}"
@@ -597,17 +599,17 @@ mod tests {
     fn a_soft_without_queries_repo_gets_the_method_and_no_include_deleted_finder() {
         let out = soft_widgets("soft_without_queries", false);
         assert_eq!(out.matches("fn create_or_find_in_op").count(), 1, "{out}");
-        assert!(out.contains("EnsuredOrDeleted < Widget >"), "{out}");
-        assert!(out.contains("fn __find_by_id_any_in_op"), "{out}");
+        assert!(out.contains("es_entity :: Ensured < Widget >"), "{out}");
+        assert!(out.contains("KeysHeldByDeleted"), "{out}");
         assert!(!out.contains("fn find_by_id_include_deleted"), "{out}");
         assert!(!out.contains("_include_deleted_in_op"), "{out}");
     }
 
     #[test]
-    fn a_nested_soft_delete_repo_loads_the_deleted_entity_with_its_deleted_children() {
+    fn a_nested_soft_delete_repo_does_not_load_deleted_entities_in_ensure() {
         let out = soft_widgets("soft", true);
-        assert!(out.contains("fn __find_by_id_any_in_op"), "{out}");
-        assert!(out.contains("fetch_optional_include_deleted"), "{out}");
+        assert!(out.contains("KeysHeldByDeleted"), "{out}");
+        assert!(!out.contains("__find_by_id_any_in_op"), "{out}");
     }
 
     #[test]
@@ -625,7 +627,7 @@ mod tests {
         .unwrap()
         .to_string();
         assert!(!out.contains("EnsuredOrDeleted"), "{out}");
-        assert!(!out.contains("__find_by_id_any_in_op"), "{out}");
+        assert!(!out.contains("KeysHeldByDeleted"), "{out}");
         assert!(out.contains("es_entity :: Ensured < Widget >"), "{out}");
     }
 
