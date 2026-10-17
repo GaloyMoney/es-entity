@@ -481,10 +481,10 @@ impl RepositoryOptions {
     /// The disjuncts of the `create_or_find_in_op` lookup, a caller-chosen id
     /// first.
     ///
-    /// Empty on a soft-deleting repo (a soft-deleted row still holds its key
-    /// but is invisible to the lookup), when the id is not a column the create
-    /// writes as-is, and when a scope column is not (a stored row's scope
-    /// could not be compared with the `new` entity's).
+    /// Empty when the id is not a column the create writes as-is, and when a
+    /// scope column is not (a stored row's scope could not be compared with
+    /// the `new` entity's). On a soft-deleting repo a partial unique index
+    /// whose predicate is a soft-delete liveness test is a `live_only` key.
     ///
     /// A repo-generated id is fresh, so no key contains it. Besides a
     /// caller-chosen id, a key is a unique constraint or non-partial unique
@@ -492,12 +492,11 @@ impl RepositoryOptions {
     /// writes as-is. Without a catalog entry for the table nothing but a
     /// caller-chosen id is known to be unique.
     pub fn ensure_keys(&self) -> Vec<EnsureKey> {
-        if self.delete.is_soft()
-            || !self
-                .columns
-                .scope_columns()
-                .iter()
-                .all(|c| c.is_ensurable())
+        if !self
+            .columns
+            .scope_columns()
+            .iter()
+            .all(|c| c.is_ensurable())
         {
             return Vec::new();
         }
@@ -516,7 +515,9 @@ impl RepositoryOptions {
         let repo_ids = self.id_source().is_repo();
         let mut keys = Vec::new();
         if !repo_ids {
-            keys.push(EnsureKey::of(&[*id]));
+            let mut key = EnsureKey::of(&[*id]);
+            key.constraint_name = Some(catalog.pkey_constraint_name(table, &id.name().to_string()));
+            keys.push(key);
         }
         for (name, kind, col_names) in &constraints {
             if !matches!(kind, crate::index_catalog::ConstraintKind::Unique) {
@@ -527,7 +528,11 @@ impl RepositoryOptions {
                     && c.name == *name
                     && matches!(c.kind, crate::index_catalog::ConstraintKind::Unique)
             });
-            if !declared || catalog.is_partial_unique(&catalog_table, name) || col_names.is_empty()
+            let live_only =
+                self.delete.is_soft() && catalog.deleted_false_partial_unique(&catalog_table, name);
+            if !declared
+                || (catalog.is_partial_unique(&catalog_table, name) && !live_only)
+                || col_names.is_empty()
             {
                 continue;
             }
@@ -543,7 +548,9 @@ impl RepositoryOptions {
             {
                 continue;
             }
-            let key = EnsureKey::of(&key_columns);
+            let mut key = EnsureKey::of(&key_columns);
+            key.live_only = live_only;
+            key.constraint_name = Some(name.clone());
             if keys.iter().any(|k| k.name == key.name) {
                 continue;
             }
@@ -552,13 +559,50 @@ impl RepositoryOptions {
         keys
     }
 
+    /// Whether the catalog declares a unique constraint or index on the table
+    /// that is not a lookup key: an arbiter the lookup cannot see, whose
+    /// conflict the fallback insert reports as that constraint's rejection.
+    fn has_non_key_unique(&self) -> bool {
+        let table = self.table_name();
+        let catalog = self.index_catalog();
+        let catalog_table = table.to_lowercase();
+        let key_constraints = self.ensure_key_constraint_names();
+        crate::repo::error_types::enumerate_constraints(self)
+            .iter()
+            .filter(|(_, kind, _)| matches!(kind, crate::index_catalog::ConstraintKind::Unique))
+            .filter(|(name, _, _)| {
+                catalog.constraints.iter().any(|c| {
+                    c.table == catalog_table
+                        && c.name == *name
+                        && matches!(c.kind, crate::index_catalog::ConstraintKind::Unique)
+                })
+            })
+            .filter(|(name, kind, col_names)| {
+                !(self.id_source().is_repo()
+                    && crate::repo::error_types::is_id_pkey(self, name, kind, col_names))
+            })
+            .any(|(name, _, _)| !key_constraints.contains(name))
+    }
+
+    /// The catalog names of the constraints behind [`Self::ensure_keys`].
+    pub fn ensure_key_constraint_names(&self) -> Vec<String> {
+        self.ensure_keys()
+            .into_iter()
+            .filter_map(|k| k.constraint_name)
+            .collect()
+    }
+
     /// Whether `create_or_find_in_op` can reject: more than one disjunct can
-    /// match more than one stored entity, a scoped repo's keys can be held
-    /// outside the `new` entity's scope, a check constraint can reject the
-    /// insert, and a nested child's create can reject.
+    /// match more than one stored entity, the table declares a unique
+    /// constraint that is not a lookup key, a scoped repo's keys can be held
+    /// outside the `new` entity's scope, a soft-deleted entity can hold a key,
+    /// a check constraint can reject the insert, and a nested child's create
+    /// can reject.
     pub fn ensure_can_reject(&self) -> bool {
         self.any_nested()
+            || self.delete.is_soft()
             || self.ensure_keys().len() > 1
+            || self.has_non_key_unique()
             || !self.columns.scope_columns().is_empty()
             || crate::repo::error_types::enumerate_constraints(self)
                 .iter()
@@ -1009,11 +1053,17 @@ pub struct EnsureKey {
     pub name: String,
     pub columns: Vec<syn::Ident>,
     pub column_types: Vec<syn::Type>,
+    /// A partial unique index on live rows: a deleted row does not hold it.
+    pub live_only: bool,
+    /// The catalog name of the constraint behind the key.
+    pub constraint_name: Option<String>,
 }
 
 impl EnsureKey {
     fn of(columns: &[&Column]) -> Self {
         Self {
+            live_only: false,
+            constraint_name: None,
             name: columns
                 .iter()
                 .map(|c| c.name().to_string())
@@ -1104,15 +1154,68 @@ mod ensure_key_tests {
     }
 
     #[test]
-    fn a_soft_deleting_repo_has_no_keys() {
-        assert!(
-            names(
-                r#", delete = "soft""#,
-                COLUMNS,
-                "tests/fixtures/ensure_keys"
-            )
-            .is_empty()
+    fn a_soft_deleting_repo_keys_include_the_live_partial_index() {
+        let opts = options(
+            r#", delete = "soft""#,
+            r#"code(ty = "String"), handle(ty = "String")"#,
+            "tests/fixtures/ensure_keys_soft",
         );
+        let keys = opts.ensure_keys();
+        assert_eq!(
+            keys.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(),
+            ["code", "handle"]
+        );
+        assert_eq!(
+            keys.iter().map(|k| k.live_only).collect::<Vec<_>>(),
+            [false, true]
+        );
+        assert_eq!(
+            keys[1].constraint_name.as_deref(),
+            Some("widgets_live_handle_idx")
+        );
+        assert!(opts.ensure_can_reject());
+    }
+
+    #[test]
+    fn a_non_soft_repo_does_not_promote_a_deleted_partial_index() {
+        let keys = names(
+            "",
+            r#"code(ty = "String"), handle(ty = "String")"#,
+            "tests/fixtures/ensure_keys_soft",
+        );
+        assert_eq!(keys, ["code"]);
+    }
+
+    #[test]
+    fn a_soft_repo_does_not_promote_other_partial_indexes() {
+        let keys = names(
+            r#", delete = "soft""#,
+            r#"code(ty = "String"), handle(ty = "String")"#,
+            "tests/fixtures/ensure_keys_one_partial",
+        );
+        assert_eq!(keys, ["code"]);
+    }
+
+    #[test]
+    fn a_single_key_with_a_non_key_unique_index_can_reject() {
+        let opts = options(
+            "",
+            r#"code(ty = "String"), handle(ty = "String")"#,
+            "tests/fixtures/ensure_keys_one_partial",
+        );
+        assert_eq!(opts.ensure_keys().len(), 1);
+        assert!(opts.ensure_can_reject());
+    }
+
+    #[test]
+    fn a_single_key_with_only_full_keys_cannot_reject() {
+        let opts = options(
+            "",
+            r#"code(ty = "String"), handle(ty = "String")"#,
+            "tests/fixtures/ensure_keys_full",
+        );
+        assert_eq!(opts.ensure_keys().len(), 1);
+        assert!(!opts.ensure_can_reject());
     }
 
     #[test]

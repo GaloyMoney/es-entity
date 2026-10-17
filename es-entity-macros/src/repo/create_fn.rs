@@ -36,6 +36,10 @@ pub struct CreateFn<'a> {
     ensure_rejection: Option<syn::Ident>,
     /// `{Entity}Scope` on a scoped repo.
     scope_ty: Option<syn::Ident>,
+    /// `delete = "soft"` or `"soft_without_queries"`.
+    soft: bool,
+    /// The catalog names of the constraints behind `ensure_keys`.
+    key_constraints: Vec<String>,
     #[cfg(feature = "instrument")]
     repo_name_snake: String,
 }
@@ -49,6 +53,8 @@ impl<'a> From<&'a RepositoryOptions> for CreateFn<'a> {
             ensure_keys: opts.ensure_keys(),
             ensure_rejection: opts.ensure_can_reject().then(|| opts.ensure_rejection()),
             scope_ty: (!opts.columns.scope_columns().is_empty()).then(|| opts.scope_type_ident()),
+            soft: opts.delete.is_soft(),
+            key_constraints: opts.ensure_key_constraint_names(),
             in_op_only: opts.in_op_only(),
             table_name: opts.table_name(),
             entity: opts.entity(),
@@ -270,34 +276,75 @@ impl ToTokens for CreateFn<'_> {
         let create_query = query("");
         let create_nested = nested(&quote! { #constraint_violation });
         let ensure_fn = (!self.ensure_keys.is_empty()).then(|| {
-            let (error_ty, target, ensure_constraint_values, map_error) = match &self.ensure_rejection {
-                Some(rejection) => (
-                    quote! { es_entity::RepoWriteError<#rejection> },
-                    quote! { #rejection },
-                    self.columns.constraint_values(entity, true),
-                    quote! {
-                        .map_err(|e| {
-                            let __fail = #classify_create;
+            let missing_context = format!(
+                "{table_name}: ON CONFLICT DO NOTHING inserted no row and no unique key matches a stored row"
+            );
+            let ensure_classify = if generated {
+                classify_create.clone()
+            } else {
+                quote! {
+                    Self::classify_create_write(e, {
+                        let __attempted = __attempted_id.clone();
+                        move |_| Some(__attempted)
+                    })
+                }
+            };
+            let key_constraints = &self.key_constraints;
+            let (error_ty, target, ensure_constraint_values, first_err, fallback_err) =
+                match &self.ensure_rejection {
+                    Some(rejection) => (
+                        quote! { es_entity::RepoWriteError<#rejection> },
+                        quote! { #rejection },
+                        self.columns.constraint_values(entity, true),
+                        quote! {{
+                            let __fail = #ensure_classify;
                             #rejection::narrow_write(
                                 __fail.map_rejected(|r| r.with_attempted(__constraint_values)),
                             )
-                        })?
-                    },
-                ),
-                None => (
-                    quote! { es_entity::RepoFault },
-                    quote! { #constraint_violation },
-                    quote! {},
-                    quote! { .map_err(|e| #classify_create.narrow_rejected())? },
-                ),
-            };
+                        }},
+                        quote! {
+                            #rejection::narrow_fallback(
+                                #ensure_classify,
+                                #missing_context,
+                            )
+                        },
+                    ),
+                    None => (
+                        quote! { es_entity::RepoFault },
+                        quote! { #constraint_violation },
+                        quote! {},
+                        quote! { #ensure_classify.narrow_rejected() },
+                        quote! {
+                            match #ensure_classify.rejected() {
+                                Ok(__violation) => {
+                                    let __name = __violation.constraint_name();
+                                    let __keys: &[&str] = &[#(#key_constraints),*];
+                                    if __keys.contains(&__name) {
+                                        es_entity::errlanes::Transient::new(
+                                            es_entity::errlanes::TransientKind::OptimisticConflict,
+                                        )
+                                        .with_context(#missing_context)
+                                        .into()
+                                    } else {
+                                        es_entity::errlanes::Fatal::invariant(
+                                            "an unexpected unique constraint conflicted",
+                                        )
+                                        .with_context(__name.to_owned())
+                                        .into()
+                                    }
+                                }
+                                Err(fault) => fault.into(),
+                            }
+                        },
+                    ),
+                };
             let ensure_query = query(" ON CONFLICT DO NOTHING");
             let mut next_param = 0;
             let conditions: Vec<String> = self
                 .ensure_keys
                 .iter()
                 .map(|key| {
-                    let parts: Vec<String> = key
+                    let mut parts: Vec<String> = key
                         .columns
                         .iter()
                         .map(|c| {
@@ -305,6 +352,9 @@ impl ToTokens for CreateFn<'_> {
                             format!("{c} = ${next_param}")
                         })
                         .collect();
+                    if key.live_only {
+                        parts.push("deleted = FALSE".to_string());
+                    }
                     if parts.len() == 1 {
                         parts.join("")
                     } else {
@@ -313,47 +363,54 @@ impl ToTokens for CreateFn<'_> {
                 })
                 .collect();
             let scope_columns = self.columns.scope_columns();
+            let deleted_column = self
+                .soft
+                .then(|| "deleted IS DISTINCT FROM FALSE".to_string());
             let lookup_query = format!(
                 "SELECT id, {} FROM {} WHERE {}",
                 conditions
                     .iter()
                     .map(|c| format!("COALESCE({c}, FALSE)"))
+                    .chain(deleted_column)
                     .chain(scope_columns.iter().map(|c| c.name().to_string()))
                     .collect::<Vec<_>>()
                     .join(", "),
                 table_name,
                 conditions.join(" OR ")
             );
-            let missing_context = format!(
-                "{table_name}: ON CONFLICT DO NOTHING inserted no row and no unique key matches a stored row"
-            );
             let spanning_context = format!("{table_name}: the unique keys match more than one row");
             let key_columns = self.ensure_keys.iter().flat_map(|k| k.columns.iter());
             let key_types = self.ensure_keys.iter().flat_map(|k| k.column_types.iter());
-            let key_names = self.ensure_keys.iter().map(|k| k.name.as_str());
+            let key_names: Vec<&str> = self.ensure_keys.iter().map(|k| k.name.as_str()).collect();
             let n_keys = self.ensure_keys.len();
             let ensure_nested = nested(&target);
-            let docs = [
+            let mut docs = vec![
                 "Creates the entity, or returns the stored one when the `new` entity's unique keys (a caller-chosen id included) already name it.",
                 "",
                 "- **`Created`**: the insert hit no unique constraint. Events are persisted and the post-persist hook runs, as in `create_in_op`.",
-                "- **`Found`**: the insert hit a unique constraint, and the `new` entity's unique keys (a caller-chosen id included) match exactly one stored entity. That entity is returned unchanged: `new`'s events are dropped, nothing is written, the hook does not run. The stored entity's id may differ from `new`'s id (it was found through another key). Callers take the id from the returned entity, never from the `new` they passed in.",
-                "- **`Rejected(KeysSpanEntities)`**: the `new` entity's keys match more than one stored entity (one holds its code, another its email). No single stored entity is the one the caller described. This rejection does not abort the caller's transaction: the insert was `DO NOTHING` and the lookup is a `SELECT`.",
-                "- **`Transient(OptimisticConflict)`**: the insert conflicted and the lookup found nothing. Not reachable under READ COMMITTED (the lookup runs as a second statement and sees the committed row); kept for REPEATABLE READ / SERIALIZABLE, where the insert itself usually raises 40001 first (`Transient(SerializationFailure)`).",
+                "- **`Found`**: the insert hit a unique constraint, and the `new` entity's unique keys (a caller-chosen id included) match exactly one live stored entity. That entity is returned unchanged: `new`'s events are dropped, nothing is written, the hook does not run. The stored entity's id may differ from `new`'s id (it was found through another key). Callers take the id from the returned entity, never from the `new` they passed in. Live matches win: deleted matches are ignored when a live entity holds a key.",
+            ];
+            if self.soft {
+                docs.push("- **`Rejected(KeysHeldByDeleted)`**: no live entity holds any of `new`'s keys, but one or more soft-deleted entities do. Nothing is written and the transaction stays usable. The rejection carries the ids of the deleted holders and the key names, never values.");
+            }
+            docs.extend([
+                "- **`Rejected(KeysSpanEntities)`**: the `new` entity's keys match more than one stored entity (one holds its code, another its email). No single stored entity is the one the caller described. On a soft-delete repo only live entities count. This rejection does not abort the caller's transaction: the insert was `DO NOTHING` and the lookup is a `SELECT`.",
+                "- **`Rejected(<constraint member>)`**: the insert conflicted on a unique arbiter that is not a lookup key (a partial or expression unique index, a unique on a column the create does not write as-is). It is the member `create_in_op` would reject with. The conflicting insert runs in a savepoint, so the caller's transaction stays usable.",
+                "- **`Transient(OptimisticConflict)`**: the insert conflicted on a lookup key the lookup could not see. Not reachable under READ COMMITTED (the lookup runs as a second statement and sees the committed row); kept for REPEATABLE READ / SERIALIZABLE, where the insert itself usually raises 40001 first (`Transient(SerializationFailure)`).",
                 "",
                 "`Found` compares nothing but keys: a `new` entity whose non-key fields differ from the stored entity still gets the stored entity. Ensure never updates.",
-            ]
-            .map(|line| format!(" {line}"));
-            let on_span = match &self.ensure_rejection {
+            ]);
+            let docs: Vec<String> = docs.into_iter().map(|line| format!(" {line}")).collect();
+            let on_span = |ids: TokenStream, matched: TokenStream| match &self.ensure_rejection {
                 Some(rejection) => quote! {
                     let __keys: Vec<&'static str> = [#(#key_names),*]
                         .into_iter()
-                        .zip(__matched)
+                        .zip(#matched)
                         .filter(|(_, matched)| *matched)
                         .map(|(key, _)| key)
                         .collect();
                     return Err(es_entity::errlanes::Fail::Rejected(
-                        #rejection::KeysSpanEntities { ids: __found_ids, keys: __keys },
+                        #rejection::KeysSpanEntities { ids: #ids, keys: __keys },
                     ));
                 },
                 None => quote! {
@@ -364,21 +421,74 @@ impl ToTokens for CreateFn<'_> {
                     .into());
                 },
             };
-            let (matched_decl, track_matches) = if self.ensure_rejection.is_some() {
-                (
-                    quote! { let mut __matched = [false; #n_keys]; },
+            let track = |matched: TokenStream| {
+                if self.ensure_rejection.is_some() {
                     quote! {
-                        for (i, matched) in __matched.iter_mut().enumerate() {
+                        for (i, matched) in #matched.iter_mut().enumerate() {
                             *matched |= row.try_get::<bool, _>(i + 1)?;
                         }
-                    },
+                    }
+                } else {
+                    quote! {}
+                }
+            };
+            let (matched_decl, deleted_decl) = if self.ensure_rejection.is_some() {
+                (
+                    quote! { let mut __matched = [false; #n_keys]; },
+                    quote! { let mut __deleted_matched = [false; #n_keys]; },
                 )
             } else {
                 (quote! {}, quote! {})
             };
-            let push_found = quote! {
+            let track_matches = track(quote! { __matched });
+            let push_live = quote! {
                 __found_ids.push(row.try_get(0)?);
                 #track_matches
+            };
+            let (deleted_decl, push_found) = if self.soft {
+                let track_deleted = track(quote! { __deleted_matched });
+                let deleted_idx = n_keys + 1;
+                (
+                    quote! {
+                        let mut __deleted_ids: Vec<#id_ty> = Vec::new();
+                        #deleted_decl
+                    },
+                    quote! {
+                        if row.try_get::<bool, _>(#deleted_idx)? {
+                            __deleted_ids.push(row.try_get(0)?);
+                            #track_deleted
+                        } else {
+                            #push_live
+                        }
+                    },
+                )
+            } else {
+                (quote! {}, push_live)
+            };
+            let scope_offset = n_keys + 1 + usize::from(self.soft);
+            let on_span_live = on_span(quote! { __found_ids }, quote! { __matched });
+            let held_by_deleted = match (&self.ensure_rejection, self.soft) {
+                (Some(rejection), true) => {
+                    let keys = quote! {
+                        [#(#key_names),*]
+                            .into_iter()
+                            .zip(__deleted_matched)
+                            .filter(|(_, matched)| *matched)
+                            .map(|(key, _)| key)
+                            .collect::<Vec<&'static str>>()
+                    };
+                    quote! {
+                        if !__deleted_ids.is_empty() {
+                            return Err(es_entity::errlanes::Fail::Rejected(
+                                #rejection::KeysHeldByDeleted {
+                                    ids: __deleted_ids,
+                                    keys: #keys,
+                                },
+                            ));
+                        }
+                    }
+                }
+                _ => quote! {},
             };
             let (scope_capture, scope_decl, collect_row, on_outside, find_scope) =
                 match (&self.scope_ty, &self.ensure_rejection) {
@@ -389,8 +499,7 @@ impl ToTokens for CreateFn<'_> {
                             .iter()
                             .map(|n| quote::format_ident!("__scope_{}", n))
                             .collect();
-                        let idxs = (0..scope_columns.len()).map(|i| i + n_keys + 1);
-                        let key_names = self.ensure_keys.iter().map(|k| k.name.as_str());
+                        let idxs = (0..scope_columns.len()).map(|i| i + scope_offset);
                         (
                             quote! { #(let #vars: #tys = <#tys as Clone>::clone(#names);)* },
                             quote! { let mut __outside = [false; #n_keys]; },
@@ -453,17 +562,21 @@ impl ToTokens for CreateFn<'_> {
                     #ctx_var
                     #(#event_arg_adds)*
 
-                    let rows = sqlx::query_with(#ensure_query, __query_args)
+                    let rows = match sqlx::query_with(#ensure_query, __query_args.clone())
                         .fetch_all(op.as_executor())
                         .await
-                        #map_error;
+                    {
+                        Ok(rows) => rows,
+                        Err(e) => return Err(#first_err.into()),
+                    };
 
-                    if rows.is_empty() {
+                    let rows = if rows.is_empty() {
                         let __lookup = sqlx::query_with(#lookup_query, __key_args)
                             .fetch_all(op.as_executor())
                             .await?;
                         let mut __found_ids: Vec<#id_ty> = Vec::new();
                         #matched_decl
+                        #deleted_decl
                         #scope_decl
                         for row in &__lookup {
                             #collect_row
@@ -471,11 +584,23 @@ impl ToTokens for CreateFn<'_> {
                         #on_outside
                         match __found_ids.len() {
                             0 => {
-                                return Err(es_entity::errlanes::Transient::new(
-                                    es_entity::errlanes::TransientKind::OptimisticConflict,
-                                )
-                                .with_context(#missing_context)
-                                .into());
+                                #held_by_deleted
+                                let __fallback = sqlx::query_with(#create_query, __query_args);
+                                let mut __savepoint =
+                                    es_entity::SavepointOperation::begin_savepoint(&mut *op).await?;
+                                match __fallback
+                                    .fetch_all(es_entity::AtomicOperation::as_executor(&mut __savepoint))
+                                    .await
+                                {
+                                    Ok(rows) => {
+                                        __savepoint.release().await?;
+                                        rows
+                                    }
+                                    Err(e) => {
+                                        __savepoint.rollback().await?;
+                                        return Err(#fallback_err);
+                                    }
+                                }
                             }
                             1 => {
                                 let entity = self
@@ -484,10 +609,12 @@ impl ToTokens for CreateFn<'_> {
                                 return Ok(es_entity::Ensured::Found(entity));
                             }
                             _ => {
-                                #on_span
+                                #on_span_live
                             }
                         }
-                    }
+                    } else {
+                        rows
+                    };
 
                     #forgettable_code
 
@@ -627,6 +754,8 @@ mod tests {
             ensure_keys: Vec::new(),
             ensure_rejection: None,
             scope_ty: None,
+            soft: false,
+            key_constraints: Vec::new(),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -749,6 +878,8 @@ mod tests {
             ensure_keys: Vec::new(),
             ensure_rejection: None,
             scope_ty: None,
+            soft: false,
+            key_constraints: Vec::new(),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };
@@ -815,6 +946,8 @@ mod tests {
             ensure_keys: Vec::new(),
             ensure_rejection: None,
             scope_ty: None,
+            soft: false,
+            key_constraints: Vec::new(),
             #[cfg(feature = "instrument")]
             repo_name_snake: "test_repo".to_string(),
         };

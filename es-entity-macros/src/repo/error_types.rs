@@ -148,6 +148,7 @@ impl<'a> ErrorTypes<'a> {
         let table = opts.table_name();
         let columns: Vec<_> = opts.columns.column_enum_columns().collect();
         let constraints = enumerate_constraints(opts);
+        let key_constraints = opts.ensure_key_constraint_names();
         let mut taken = HashSet::new();
         let mut variants = Vec::new();
         let mut check_variants: Vec<(syn::Ident, TokenStream)> = Vec::new();
@@ -247,6 +248,7 @@ impl<'a> ErrorTypes<'a> {
                 None => (quote!(()), quote!(None)),
             };
             let is_check = matches!(kind, ConstraintKind::Check);
+            let is_unique = matches!(kind, ConstraintKind::Unique);
             let kind = match kind {
                 ConstraintKind::Unique => quote!(Unique),
                 ConstraintKind::ForeignKey => quote!(ForeignKey),
@@ -258,7 +260,7 @@ impl<'a> ErrorTypes<'a> {
                 #[rejection(code = #name, description = #description)]
                 #variant(#[source] es_entity::ConstraintConflict<#ty>)
             };
-            if is_check {
+            if is_check || (is_unique && !key_constraints.contains(&name)) {
                 check_variants.push((variant.clone(), variant_def.clone()));
             }
             variants.push(variant_def);
@@ -295,6 +297,14 @@ impl<'a> ErrorTypes<'a> {
                     KeysHeldOutsideScope { keys: Vec<&'static str> },
                 }
             });
+            let held_by_deleted = opts.delete.is_soft().then(|| {
+                let code = format!("{}_keys_held_by_deleted", table.replace('.', "_"));
+                quote! {
+                    #[error("the unique keys are held by soft-deleted entities")]
+                    #[rejection(code = #code, description = "The entity's unique keys are held only by soft-deleted entities.")]
+                    KeysHeldByDeleted { ids: Vec<#id_ty>, keys: Vec<&'static str> },
+                }
+            });
             let definitions = check_variants.iter().map(|(_, definition)| definition);
             let idents: Vec<_> = check_variants.iter().map(|(ident, _)| ident).collect();
             quote! {
@@ -304,6 +314,7 @@ impl<'a> ErrorTypes<'a> {
                     #[error("the unique keys match more than one stored entity")]
                     #[rejection(code = #code, description = "The entity's unique keys are held by more than one stored entity.")]
                     KeysSpanEntities { ids: Vec<#id_ty>, keys: Vec<&'static str> },
+                    #held_by_deleted
                     #outside_scope
                     #(#definitions),*
                 }
@@ -313,6 +324,23 @@ impl<'a> ErrorTypes<'a> {
                         match violation {
                             #(#cv::#idents(conflict) => Ok(Self::#idents(conflict)),)*
                             other => Err(other),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn narrow_fallback(
+                        fail: es_entity::RepoWriteError<#cv>,
+                        key_conflict: &'static str,
+                    ) -> es_entity::RepoWriteError<Self> {
+                        match fail.rejected() {
+                            Ok(violation) => match Self::from_own(violation) {
+                                Ok(rejection) => es_entity::errlanes::Fail::Rejected(rejection),
+                                Err(_) => es_entity::errlanes::Transient::new(
+                                    es_entity::errlanes::TransientKind::OptimisticConflict,
+                                )
+                                .with_context(key_conflict)
+                                .into(),
+                            },
+                            Err(fault) => es_entity::errlanes::Fail::from(fault),
                         }
                     }
                     #[doc(hidden)]

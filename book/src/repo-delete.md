@@ -19,6 +19,8 @@ If you don't need the `_include_deleted` query variants, use `delete = "soft_wit
 #[es_repo(entity = "User", columns(name = "String"), delete = "soft_without_queries")]
 ```
 
+Both options also generate [`create_or_find_in_op`](./repo-create-or-find.md#outcomes), which rejects with `KeysHeldByDeleted` when only soft-deleted rows hold a key.
+
 As a prerequisite the `index` table must include a `deleted` column:
 ```sql
 CREATE TABLE users (
