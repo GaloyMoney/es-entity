@@ -589,7 +589,7 @@ mod tests {
             out.contains("code = $1 OR (handle = $2 AND deleted = FALSE)"),
             "{out}"
         );
-        assert!(out.contains("COALESCE(deleted, FALSE)"), "{out}");
+        assert!(out.contains("deleted IS DISTINCT FROM FALSE"), "{out}");
         assert!(!out.contains("fetch_optional_include_deleted"), "{out}");
     }
 

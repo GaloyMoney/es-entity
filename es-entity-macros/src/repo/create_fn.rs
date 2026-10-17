@@ -369,7 +369,9 @@ impl ToTokens for CreateFn<'_> {
                 })
                 .collect();
             let scope_columns = self.columns.scope_columns();
-            let deleted_column = self.soft.then(|| "COALESCE(deleted, FALSE)".to_string());
+            let deleted_column = self
+                .soft
+                .then(|| "deleted IS DISTINCT FROM FALSE".to_string());
             let lookup_query = format!(
                 "SELECT id, {} FROM {} WHERE {}",
                 conditions

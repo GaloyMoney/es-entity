@@ -195,3 +195,44 @@ async fn found_deleted_carries_the_deleted_children() -> anyhow::Result<()> {
     assert_eq!(found.n_notes(), 2);
     Ok(())
 }
+
+#[tokio::test]
+async fn null_deleted_row_is_not_live() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let repo = EnsureSoftBoxes {
+        pool: pool.clone(),
+        notes: EnsureSoftNotes { pool: pool.clone() },
+    };
+    let label = format!("label-{}", EnsureSoftBoxId::new());
+
+    let mut op = DbOp::init(&pool).await?;
+    let id = EnsureSoftBoxId::new();
+    repo.create_in_op(
+        &mut op,
+        NewEnsureSoftBox {
+            id,
+            label: label.clone(),
+        },
+    )
+    .await?;
+    sqlx::query("UPDATE ensure_soft_boxes SET deleted = NULL WHERE id = $1")
+        .bind(id)
+        .execute(op.as_executor())
+        .await?;
+    assert!(repo.maybe_find_by_id_in_op(&mut op, id).await?.is_none());
+
+    let ensured = repo
+        .create_or_find_in_op(
+            &mut op,
+            NewEnsureSoftBox {
+                id: EnsureSoftBoxId::new(),
+                label,
+            },
+        )
+        .await?;
+    let EnsuredOrDeleted::FoundDeleted(found) = ensured else {
+        panic!("expected FoundDeleted");
+    };
+    assert_eq!(found.id, id);
+    Ok(())
+}

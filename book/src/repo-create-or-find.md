@@ -77,7 +77,9 @@ pub async fn create_or_find_in_op<OP>(&self, op: &mut OP, new: NewAccount)
 ```
 
 A soft-deleted row still holds its primary key and any full unique constraint,
-so the lookup also reads deleted rows. Live matches win:
+so the lookup also reads deleted rows. A row is live when `deleted = FALSE`,
+as for the other finders, so a `NULL` `deleted` counts as deleted. Live matches
+win:
 
 - **`Found`**: exactly one live entity holds one of the keys. Deleted matches are
   ignored.
