@@ -1,3 +1,11 @@
+# [cala release v0.19.4](https://github.com/GaloyMoney/cala/releases/tag/0.19.4)
+
+
+
+### Features
+
+- Fail<Infallible, L>::into_fault (#283)
+
 # [cala release v0.19.3](https://github.com/GaloyMoney/cala/releases/tag/0.19.3)
 
 
