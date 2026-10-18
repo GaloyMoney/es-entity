@@ -1,0 +1,5 @@
+error: an enum-level arm needs `to = Variant`, `into` (`Self: From<Payload>`) or `with` (`fn(Source) -> Self`)
+ --> tests/v2/lift_forward_plain.rs:8:8
+  |
+8 | #[lift(Source::Value)]
+  |        ^^^^^^

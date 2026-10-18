@@ -117,77 +117,179 @@ pub(crate) struct Mapping {
     pub field: Option<syn::Ident>,
     pub into: bool,
     pub when: Option<Path>,
+    pub to: Option<syn::Ident>,
 }
+
+const ARM_KEYS: [&str; 5] = ["with", "field", "into", "when", "to"];
+
+/// An enum-level `#[lift(..)]` is an arm, not a source registration, when a
+/// mapping key follows its case.
+pub(crate) fn is_arm(attr: &syn::Attribute) -> syn::Result<bool> {
+    attr.parse_args_with(|input: syn::parse::ParseStream| {
+        let fork = input.fork();
+        let arm = fork.parse::<Case>().is_ok()
+            && fork.parse::<Token![,]>().is_ok()
+            && fork
+                .parse::<syn::Ident>()
+                .is_ok_and(|key| ARM_KEYS.iter().any(|arm| key == arm));
+        input.parse::<TokenStream>()?;
+        Ok(arm)
+    })
+}
+
+/// The source registration an enum-level `#[lift(..)]` makes, or `None` when
+/// it is an arm.
+pub(crate) fn registration(attr: &syn::Attribute) -> syn::Result<Option<Registration>> {
+    if is_arm(attr)? {
+        return Ok(None);
+    }
+    attr.parse_args().map(Some)
+}
+
 impl Parse for Mapping {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let case = input.parse()?;
-        let mut with = None;
-        let mut field = None;
-        let mut into = false;
-        let mut when = None;
+        let mut mapping = Self {
+            case,
+            with: None,
+            field: None,
+            into: false,
+            when: None,
+            to: None,
+        };
+        let mut shape: Option<String> = None;
         while input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
             let key: syn::Ident = input.parse()?;
-            if key == "when" {
-                if when.is_some() {
+            let name = key.to_string();
+            if name == "to" {
+                if mapping.to.is_some() {
+                    return Err(syn::Error::new_spanned(key, "duplicate `to`"));
+                }
+                input.parse::<Token![=]>()?;
+                mapping.to = Some(input.parse()?);
+                continue;
+            }
+            if name == "when" {
+                if mapping.when.is_some() {
                     return Err(syn::Error::new_spanned(key, "duplicate `when`"));
                 }
                 input.parse::<Token![=]>()?;
-                when = Some(input.parse()?);
+                mapping.when = Some(input.parse()?);
                 continue;
             }
-            if key == "into" {
-                if into {
-                    return Err(syn::Error::new_spanned(key, "duplicate `into`"));
-                }
-                if with.is_some() || field.is_some() {
-                    return Err(syn::Error::new_spanned(
-                        key,
-                        "`into` cannot be combined with `field` or `with`",
-                    ));
-                }
-                into = true;
-                continue;
-            }
-            if into && (key == "field" || key == "with") {
+            if !matches!(name.as_str(), "with" | "field" | "into") {
                 return Err(syn::Error::new_spanned(
                     key,
-                    "`into` cannot be combined with `field` or `with`",
+                    "expected `with = mapper`, `field = name`, `into`, \
+                     `when = predicate`, or `to = Variant`",
                 ));
             }
-            input.parse::<Token![=]>()?;
-            if key == "with" {
-                if field.is_some() {
-                    return Err(syn::Error::new_spanned(
-                        key,
-                        "`field` and `with` cannot be combined",
-                    ));
-                }
-                with = Some(input.parse()?);
-            } else if key == "field" {
-                if with.is_some() {
-                    return Err(syn::Error::new_spanned(
-                        key,
-                        "`field` and `with` cannot be combined",
-                    ));
-                }
-                field = Some(input.parse()?);
-            } else {
+            if let Some(previous) = &shape {
                 return Err(syn::Error::new_spanned(
                     key,
-                    "expected `with = mapper`, `field = name`, `into`, or `when = predicate`",
+                    if *previous == name {
+                        format!("duplicate `{name}`")
+                    } else {
+                        format!("`{name}` cannot be combined with `{previous}`")
+                    },
                 ));
             }
+            match name.as_str() {
+                "into" => mapping.into = true,
+                _ => {
+                    input.parse::<Token![=]>()?;
+                    match name.as_str() {
+                        "with" => mapping.with = Some(input.parse()?),
+                        _ => mapping.field = Some(input.parse()?),
+                    }
+                }
+            }
+            shape = Some(name);
         }
-        Ok(Self {
-            case,
-            with,
-            field,
-            into,
-            when,
-        })
+        Ok(mapping)
     }
 }
+struct Arm<'a> {
+    owner: Path,
+    whole_value: bool,
+    dest: Option<&'a syn::Variant>,
+    mapping: Mapping,
+    attr: &'a syn::Attribute,
+}
+
+fn admit(
+    registrations: &[Registration],
+    unguarded: &mut Vec<String>,
+    attr: &syn::Attribute,
+    mapping: &Mapping,
+    enum_level: bool,
+) -> syn::Result<(Path, bool)> {
+    let key = mapping.case.key();
+    let must_follow = |unguarded_key: &str| {
+        syn::Error::new_spanned(
+            attr,
+            format!(
+                "unguarded arm for `{}` must come after its guarded arms",
+                unguarded_key.replace(' ', "")
+            ),
+        )
+    };
+    if unguarded.contains(&key) {
+        return Err(if mapping.when.is_some() {
+            must_follow(&key)
+        } else {
+            syn::Error::new_spanned(attr, "source variant mapped more than once")
+        });
+    }
+    if let Some(ancestor) = mapping
+        .case
+        .ancestor_keys()
+        .into_iter()
+        .find(|ancestor| unguarded.contains(ancestor))
+    {
+        return Err(must_follow(&ancestor));
+    }
+    if mapping.when.is_none() {
+        unguarded.push(key);
+    }
+    // `#[lift(Payload)]` (the registered source itself, no variant
+    // suffix) is a whole-value arm: the entire value becomes the one field
+    // of the destination variant. `#[lift(Source::Variant)]` is the
+    // per-variant forwarding arm. A bare source matching a registration wins
+    // the whole-value reading; otherwise the last segment is popped off and
+    // matched as a variant, as before. An enum-level arm always names a case.
+    let case_key = mapping.case.path().to_token_stream().to_string();
+    let whole_value = !enum_level
+        && registrations
+            .iter()
+            .any(|r| r.source.to_token_stream().to_string() == case_key);
+    if whole_value && mapping.case.is_nested() {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "a whole-value lift cannot be nested",
+        ));
+    }
+    let owner = if whole_value {
+        mapping.case.path().clone()
+    } else {
+        let mut owner = mapping.case.path().clone();
+        owner.segments.pop();
+        owner.segments.pop_punct();
+        owner
+    };
+    if !registrations
+        .iter()
+        .any(|r| r.source.to_token_stream().to_string() == owner.to_token_stream().to_string())
+    {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "source family requires enum-level #[lift(Source)] registration",
+        ));
+    }
+    Ok((owner, whole_value))
+}
+
 pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
     if let syn::Data::Struct(data) = &input.data {
         return derive_struct(input, data);
@@ -199,13 +301,72 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         ));
     };
     let mut registrations = Vec::new();
+    let mut enum_arms = Vec::new();
     for attr in &input.attrs {
-        if attr.path().is_ident("lift") {
-            registrations.push(attr.parse_args::<Registration>()?);
+        if !attr.path().is_ident("lift") {
+            continue;
+        }
+        match registration(attr)? {
+            Some(registration) => registrations.push(registration),
+            None => enum_arms.push(attr),
         }
     }
-    let mut mappings = Vec::new();
+    for registration in &registrations {
+        let mut owner = registration.source.clone();
+        owner.segments.pop();
+        owner.segments.pop_punct();
+        let owner = owner.to_token_stream().to_string();
+        if registrations
+            .iter()
+            .any(|other| other.source.to_token_stream().to_string() == owner)
+        {
+            return Err(syn::Error::new_spanned(
+                &registration.source,
+                "an enum-level arm needs `to = Variant`, `into` (`Self: From<Payload>`) or \
+                 `with` (`fn(Source) -> Self`)",
+            ));
+        }
+    }
+    let mut arms: Vec<Arm> = Vec::new();
     let mut unguarded: Vec<String> = Vec::new();
+    for attr in enum_arms {
+        let mapping = attr.parse_args::<Mapping>()?;
+        let dest = match &mapping.to {
+            Some(to) => Some(
+                data.variants
+                    .iter()
+                    .find(|variant| variant.ident == *to)
+                    .ok_or_else(|| {
+                        syn::Error::new_spanned(to, format!("no variant `{to}` to lift into"))
+                    })?,
+            ),
+            None => {
+                if mapping.field.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        "an enum-level arm without `to` forwards the whole source case; \
+                         use `into` or `with`",
+                    ));
+                }
+                if !mapping.into && mapping.with.is_none() {
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        "an enum-level arm needs `to = Variant`, `into` (`Self: From<Payload>`) \
+                         or `with` (`fn(Source) -> Self`)",
+                    ));
+                }
+                None
+            }
+        };
+        let (owner, whole_value) = admit(&registrations, &mut unguarded, attr, &mapping, true)?;
+        arms.push(Arm {
+            owner,
+            whole_value,
+            dest,
+            mapping,
+            attr,
+        });
+    }
     for variant in &data.variants {
         for field in &variant.fields {
             if let Some(attr) = field.attrs.iter().find(|a| a.path().is_ident("lift")) {
@@ -220,68 +381,21 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 continue;
             }
             let mapping = attr.parse_args::<Mapping>()?;
-            let key = mapping.case.key();
-            let must_follow = |unguarded_key: &str| {
-                syn::Error::new_spanned(
-                    attr,
-                    format!(
-                        "unguarded arm for `{}` must come after its guarded arms",
-                        unguarded_key.replace(' ', "")
-                    ),
-                )
-            };
-            if unguarded.contains(&key) {
-                return Err(if mapping.when.is_some() {
-                    must_follow(&key)
-                } else {
-                    syn::Error::new_spanned(attr, "source variant mapped more than once")
-                });
-            }
-            if let Some(ancestor) = mapping
-                .case
-                .ancestor_keys()
-                .into_iter()
-                .find(|ancestor| unguarded.contains(ancestor))
-            {
-                return Err(must_follow(&ancestor));
-            }
-            if mapping.when.is_none() {
-                unguarded.push(key);
-            }
-            // `#[lift(Payload)]` (the registered source itself, no variant
-            // suffix) is a whole-value arm: `Payload` is a struct source,
-            // and the entire value becomes the one field of the destination
-            // variant. `#[lift(Source::Variant)]` is the per-variant
-            // forwarding arm. A bare source matching a registration wins the
-            // whole-value reading; otherwise the last segment is popped off
-            // and matched as a variant, as before.
-            let case_key = mapping.case.path().to_token_stream().to_string();
-            let whole_value = registrations
-                .iter()
-                .any(|r| r.source.to_token_stream().to_string() == case_key);
-            if whole_value && mapping.case.is_nested() {
+            if let Some(to) = &mapping.to {
                 return Err(syn::Error::new_spanned(
-                    attr,
-                    "a whole-value lift cannot be nested",
+                    to,
+                    "`to` belongs on an enum-level arm; a variant arm already names its destination",
                 ));
             }
-            let owner = if whole_value {
-                mapping.case.path().clone()
-            } else {
-                let mut owner = mapping.case.path().clone();
-                owner.segments.pop();
-                owner.segments.pop_punct();
-                owner
-            };
-            if !registrations.iter().any(|r| {
-                r.source.to_token_stream().to_string() == owner.to_token_stream().to_string()
-            }) {
-                return Err(syn::Error::new_spanned(
-                    attr,
-                    "source family requires enum-level #[lift(Source)] registration",
-                ));
-            }
-            mappings.push((owner, whole_value, variant, mapping, attr));
+            let (owner, whole_value) =
+                admit(&registrations, &mut unguarded, attr, &mapping, false)?;
+            arms.push(Arm {
+                owner,
+                whole_value,
+                dest: Some(variant),
+                mapping,
+                attr,
+            });
         }
     }
     let mut out = TokenStream::new();
@@ -292,11 +406,12 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         if !owners.insert(key.clone()) {
             return Err(syn::Error::new_spanned(source, "duplicate lift source"));
         }
-        let mut arms = Vec::new();
-        for (owner, _, _, mapping, attr) in &mappings {
-            if owner.to_token_stream().to_string() != key {
-                continue;
-            }
+        let own: Vec<_> = arms
+            .iter()
+            .filter(|arm| arm.owner.to_token_stream().to_string() == key)
+            .collect();
+        for arm in &own {
+            let Arm { mapping, attr, .. } = arm;
             if mapping.case.is_nested() && !registration.partial {
                 return Err(syn::Error::new_spanned(
                     attr,
@@ -315,8 +430,8 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             }
             if let Some(when) = &mapping.when {
                 let case_key = mapping.case.key();
-                let caught = mappings.iter().any(|(_, _, _, other, _)| {
-                    other.when.is_none() && other.case.key() == case_key
+                let caught = arms.iter().any(|other| {
+                    other.mapping.when.is_none() && other.mapping.case.key() == case_key
                 });
                 if !registration.partial && !caught {
                     return Err(syn::Error::new_spanned(
@@ -331,143 +446,185 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 }
             }
         }
-        for (owner, whole_value, variant, mapping, _) in &mappings {
-            if owner.to_token_stream().to_string() != key {
-                continue;
-            }
-            let case = &mapping.case;
-            let dest = &variant.ident;
-            let cfg: Vec<_> = variant
-                .attrs
-                .iter()
-                .filter(|a| a.path().is_ident("cfg"))
-                .collect();
-            let guard = mapping.when.as_ref().map(|pred| quote!(if #pred(&payload)));
-            let bound = case.nest(&|leaf| quote!(#leaf(payload)));
-            let arm = if let Some(mapper) = &mapping.with {
-                // The mapper consumes the whole selected source; supports genuine shape changes.
-                let whole = case.nest(&|leaf| quote!(#leaf { .. }));
-                match &mapping.when {
-                    Some(pred) if *whole_value => {
-                        quote! { value @ #whole if #pred(&value) => Ok(#mapper(value)) }
-                    }
-                    Some(pred) => {
-                        quote! { #bound if #pred(&payload) => Ok(#mapper(#bound)) }
-                    }
-                    None => quote! { value @ #whole => Ok(#mapper(value)) },
-                }
-            } else if mapping.into {
-                if *whole_value {
-                    return Err(syn::Error::new_spanned(
-                        case.path(),
-                        "an `into` lift requires a source variant (`Source::Variant`)",
-                    ));
-                }
-                // Only the payload is converted. The tuple pattern makes rustc
-                // check that the source also has exactly one unnamed field.
-                let converted = quote!(::core::convert::Into::into(payload));
-                match &variant.fields {
-                    Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
-                        quote! { #bound #guard => Ok(Self::#dest(#converted)) }
-                    }
-                    Fields::Named(fields) if fields.named.len() == 1 => {
-                        let field = &fields.named[0].ident;
-                        quote! { #bound #guard => Ok(Self::#dest { #field: #converted }) }
-                    }
-                    _ => {
-                        return Err(syn::Error::new_spanned(
-                            &variant.ident,
-                            "an `into` lift needs exactly one destination field",
-                        ));
-                    }
-                }
-            } else if let Some(field) = &mapping.field {
-                // A projection of one field out of the source variant's
-                // payload. `#case(payload)` is a tuple-destructuring
-                // pattern, not `#case { .. }`: the source variant must be a
-                // single-field tuple variant, and a named-field or unit
-                // source variant fails right here as an ordinary type
-                // error — the derive cannot know a foreign variant's field
-                // names, so it cannot validate the shape ahead of time.
-                match &variant.fields {
-                    Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
-                        quote! { #bound #guard => Ok(Self::#dest(payload.#field)) }
-                    }
-                    Fields::Named(fields) if fields.named.len() == 1 => {
-                        let dest_field = &fields.named[0].ident;
-                        quote! {
-                            #bound #guard => Ok(Self::#dest { #dest_field: payload.#field })
-                        }
-                    }
-                    _ => {
-                        return Err(syn::Error::new_spanned(
-                            &variant.ident,
-                            "a `field` lift needs exactly one destination field",
-                        ));
-                    }
-                }
-            } else if *whole_value {
-                // `Payload` is a struct source: the whole value becomes the
-                // one field of the destination variant.
-                let case = case.path();
-                let guard = mapping.when.as_ref().map(|pred| quote!(if #pred(&value)));
-                match &variant.fields {
-                    Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
-                        quote! { value @ #case { .. } #guard => Ok(Self::#dest(value)) }
-                    }
-                    Fields::Named(fields) if fields.named.len() == 1 => {
-                        let field = &fields.named[0].ident;
-                        quote! { value @ #case { .. } #guard => Ok(Self::#dest { #field: value }) }
-                    }
-                    _ => {
-                        return Err(syn::Error::new_spanned(
-                            &variant.ident,
-                            "a whole-value lift (`#[lift(Source)]` with no variant) needs \
-                             exactly one destination field to hold the source value",
-                        ));
-                    }
-                }
-            } else if mapping.when.is_some() {
-                match &variant.fields {
-                    Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
-                        quote! { #bound #guard => Ok(Self::#dest(payload)) }
-                    }
-                    Fields::Named(fields) if fields.named.len() == 1 => {
-                        let field = &fields.named[0].ident;
-                        quote! { #bound #guard => Ok(Self::#dest { #field: payload }) }
-                    }
-                    _ => {
-                        return Err(syn::Error::new_spanned(
-                            &variant.ident,
-                            "a guarded plain arm needs exactly one destination field",
-                        ));
-                    }
-                }
-            } else {
-                match &variant.fields {
-                    Fields::Unit => {
-                        let pattern = case.nest(&|leaf| quote!(#leaf));
-                        quote! { #pattern => Ok(Self::#dest) }
-                    }
-                    Fields::Unnamed(fields) => {
-                        let args: Vec<_> = (0..fields.unnamed.len())
-                            .map(|i| format_ident!("field_{i}"))
-                            .collect();
-                        let pattern = case.nest(&|leaf| quote!(#leaf(#(#args),*)));
-                        quote! { #pattern => Ok(Self::#dest(#(#args),*)) }
-                    }
-                    Fields::Named(fields) => {
-                        let args: Vec<_> = fields.named.iter().map(|f| &f.ident).collect();
-                        let pattern = case.nest(&|leaf| quote!(#leaf { #(#args),* }));
-                        quote! { #pattern => Ok(Self::#dest { #(#args),* }) }
-                    }
-                }
-            };
-            arms.push(quote! { #(#cfg)* #arm });
+        // An unguarded whole-value `into` accepts every value, so it is the
+        // entire conversion: any other arm or catch-all after it is dead.
+        if let Some(whole) = own
+            .iter()
+            .find(|arm| arm.whole_value && arm.mapping.when.is_none() && arm.mapping.into)
+            && (registration.partial
+                || own.iter().any(|arm| {
+                    !(arm.whole_value && arm.mapping.when.is_some()) && !std::ptr::eq(*arm, *whole)
+                }))
+        {
+            return Err(syn::Error::new_spanned(
+                whole.attr,
+                "a whole-value `into` over an enum source is the entire conversion; \
+                 it cannot be combined with other arms or `unhandled = fatal`",
+            ));
         }
-        out.extend(conversion_impl(input, &source, registration.partial, &arms));
+        let mut tokens = Vec::new();
+        for arm in own {
+            let (cfg, arm_tokens) = match arm.dest {
+                Some(variant) => (
+                    variant
+                        .attrs
+                        .iter()
+                        .filter(|a| a.path().is_ident("cfg"))
+                        .collect(),
+                    variant_arm(&arm.mapping, arm.whole_value, variant)?,
+                ),
+                None => (Vec::new(), forwarding_arm(&arm.mapping)),
+            };
+            tokens.push(quote! { #(#cfg)* #arm_tokens });
+        }
+        out.extend(conversion_impl(
+            input,
+            &source,
+            registration.partial,
+            &tokens,
+        ));
     }
     Ok(out)
+}
+
+/// The whole source case becomes `Self`: `Self: From<Payload>` for `into`, or
+/// a `fn(Source) -> Self` for `with`.
+fn forwarding_arm(mapping: &Mapping) -> TokenStream {
+    let case = &mapping.case;
+    let payload_guard = mapping.when.as_ref().map(|pred| quote!(if #pred(&payload)));
+    let bound = case.nest(&|leaf| quote!(#leaf(payload)));
+    if let Some(mapper) = &mapping.with {
+        let whole = case.nest(&|leaf| quote!(#leaf { .. }));
+        return match &mapping.when {
+            Some(pred) => quote! { #bound if #pred(&payload) => Ok(#mapper(#bound)) },
+            None => quote! { value @ #whole => Ok(#mapper(value)) },
+        };
+    }
+    quote! { #bound #payload_guard => Ok(::core::convert::Into::into(payload)) }
+}
+
+/// `Self::Dest(value)` or `Self::Dest { field: value }` for a destination
+/// variant that holds exactly one field.
+fn single_field(
+    variant: &syn::Variant,
+    value: TokenStream,
+    what: &str,
+) -> syn::Result<TokenStream> {
+    let dest = &variant.ident;
+    match &variant.fields {
+        Fields::Unnamed(fields) if fields.unnamed.len() == 1 => Ok(quote! { Self::#dest(#value) }),
+        Fields::Named(fields) if fields.named.len() == 1 => {
+            let field = &fields.named[0].ident;
+            Ok(quote! { Self::#dest { #field: #value } })
+        }
+        _ => Err(syn::Error::new_spanned(
+            &variant.ident,
+            format!("{what} needs exactly one destination field"),
+        )),
+    }
+}
+
+fn variant_arm(
+    mapping: &Mapping,
+    whole_value: bool,
+    variant: &syn::Variant,
+) -> syn::Result<TokenStream> {
+    let case = &mapping.case;
+    let dest = &variant.ident;
+    let guard = mapping.when.as_ref().map(|pred| quote!(if #pred(&payload)));
+    let bound = case.nest(&|leaf| quote!(#leaf(payload)));
+    if let Some(mapper) = &mapping.with {
+        // The mapper consumes the whole selected source; supports genuine shape changes.
+        let whole = case.nest(&|leaf| quote!(#leaf { .. }));
+        return Ok(match &mapping.when {
+            Some(pred) if whole_value => {
+                quote! { value @ #whole if #pred(&value) => Ok(#mapper(value)) }
+            }
+            Some(pred) => {
+                quote! { #bound if #pred(&payload) => Ok(#mapper(#bound)) }
+            }
+            None => quote! { value @ #whole => Ok(#mapper(value)) },
+        });
+    }
+    if mapping.into {
+        if whole_value {
+            // The binding takes the place of the source pattern, so the
+            // source may be a struct or an enum.
+            let guard = mapping.when.as_ref().map(|pred| quote!(if #pred(&value)));
+            let converted = single_field(
+                variant,
+                quote!(::core::convert::Into::into(value)),
+                "an `into` lift",
+            )?;
+            return Ok(quote! { value #guard => Ok(#converted) });
+        }
+        // Only the payload is converted. The tuple pattern makes rustc
+        // check that the source also has exactly one unnamed field.
+        let converted = single_field(
+            variant,
+            quote!(::core::convert::Into::into(payload)),
+            "an `into` lift",
+        )?;
+        return Ok(quote! { #bound #guard => Ok(#converted) });
+    }
+    if let Some(member) = &mapping.field {
+        if whole_value {
+            return Err(syn::Error::new_spanned(
+                case.path(),
+                "a `field` lift requires a source variant (`Source::Variant`)",
+            ));
+        }
+        // A projection of one field out of the source variant's
+        // payload. `#case(payload)` is a tuple-destructuring
+        // pattern, not `#case { .. }`: the source variant must be a
+        // single-field tuple variant, and a named-field or unit
+        // source variant fails right here as an ordinary type
+        // error — the derive cannot know a foreign variant's field
+        // names, so it cannot validate the shape ahead of time.
+        let projected = single_field(variant, quote!(payload.#member), "a `field` lift")?;
+        return Ok(quote! { #bound #guard => Ok(#projected) });
+    }
+    if whole_value {
+        // `Payload` is a struct source: the whole value becomes the
+        // one field of the destination variant.
+        let case = case.path();
+        let guard = mapping.when.as_ref().map(|pred| quote!(if #pred(&value)));
+        let held = single_field(
+            variant,
+            quote!(value),
+            "a whole-value lift (`#[lift(Source)]` with no variant)",
+        )
+        .map_err(|_| {
+            syn::Error::new_spanned(
+                &variant.ident,
+                "a whole-value lift (`#[lift(Source)]` with no variant) needs \
+                 exactly one destination field to hold the source value",
+            )
+        })?;
+        return Ok(quote! { value @ #case { .. } #guard => Ok(#held) });
+    }
+    if mapping.when.is_some() {
+        let kept = single_field(variant, quote!(payload), "a guarded plain arm")?;
+        return Ok(quote! { #bound #guard => Ok(#kept) });
+    }
+    Ok(match &variant.fields {
+        Fields::Unit => {
+            let pattern = case.nest(&|leaf| quote!(#leaf));
+            quote! { #pattern => Ok(Self::#dest) }
+        }
+        Fields::Unnamed(fields) => {
+            let args: Vec<_> = (0..fields.unnamed.len())
+                .map(|i| format_ident!("field_{i}"))
+                .collect();
+            let pattern = case.nest(&|leaf| quote!(#leaf(#(#args),*)));
+            quote! { #pattern => Ok(Self::#dest(#(#args),*)) }
+        }
+        Fields::Named(fields) => {
+            let args: Vec<_> = fields.named.iter().map(|f| &f.ident).collect();
+            let pattern = case.nest(&|leaf| quote!(#leaf { #(#args),* }));
+            quote! { #pattern => Ok(Self::#dest { #(#args),* }) }
+        }
+    })
 }
 
 fn conversion_impl(

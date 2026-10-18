@@ -331,7 +331,45 @@ assert!(matches!(payment, Payment::Outstanding(_)));
 ```
 
 A struct source lifts as a whole value: `#[lift(Payload)]` with no variant
-suffix, on both the enum and the variant that receives it.
+suffix, on both the enum and the variant that receives it. Adding `into`
+(`#[lift(Payload, into)]`) converts the whole value through `Into` first; the
+source may then be an enum too, and an unguarded whole-value `into` is the
+entire conversion.
+
+A case whose payload the destination already accepts forwards with an
+enum-level `#[lift(Source::Case, into)]`, and a case that belongs in a
+composed-in variant, which has no declaration to annotate, is
+`#[lift(Source::Case, to = Variant)]`:
+
+```rust
+use errlanes::Lift;
+
+#[derive(Debug, errlanes::Rejection)]
+enum Transition {
+    #[rejection(code = "STALE")]
+    Stale,
+}
+
+#[derive(Debug, errlanes::Rejection)]
+enum Update {
+    #[rejection(delegate)]
+    Transition(Transition),
+    #[rejection(code = "INVALID")]
+    Invalid,
+}
+
+#[errlanes::compose(Transition)]
+#[derive(Debug)]
+#[lift(Update, unhandled = fatal)]
+#[lift(Update::Transition, into)]
+enum UpdateFamily {}
+
+assert!(matches!(
+    UpdateFamily::lift(Update::Transition(Transition::Stale)),
+    Ok(UpdateFamily::Stale)
+));
+assert!(UpdateFamily::lift(Update::Invalid).is_err());
+```
 
 When one source variant carries several cases, `when = predicate` guards an
 arm: the predicate is a path to a `fn(&Payload) -> bool` over the variant's

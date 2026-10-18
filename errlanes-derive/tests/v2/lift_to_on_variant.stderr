@@ -1,0 +1,5 @@
+error: `to` belongs on an enum-level arm; a variant arm already names its destination
+ --> tests/v2/lift_to_on_variant.rs:9:32
+  |
+9 |     #[lift(Source::Value, to = Destination)]
+  |                                ^^^^^^^^^^^

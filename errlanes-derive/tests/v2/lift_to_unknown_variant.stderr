@@ -1,0 +1,5 @@
+error: no variant `Missing` to lift into
+ --> tests/v2/lift_to_unknown_variant.rs:8:28
+  |
+8 | #[lift(Source::Value, to = Missing)]
+  |                            ^^^^^^^

@@ -152,3 +152,123 @@ fn lift_alone_uses_trait_conversion_and_moves_the_payload() {
     let Destination::Value(value) = Destination::from(Source::Value(Payload("owned".into())));
     assert_eq!(value, "owned");
 }
+
+#[derive(Debug, PartialEq)]
+struct Terms {
+    floor: u64,
+}
+
+#[derive(Debug, PartialEq)]
+struct TermsError {
+    floor: u64,
+}
+
+impl From<Terms> for TermsError {
+    fn from(terms: Terms) -> Self {
+        Self { floor: terms.floor }
+    }
+}
+
+fn is_low(terms: &Terms) -> bool {
+    terms.floor < 10
+}
+
+#[derive(Debug, PartialEq, errlanes::Lift)]
+#[lift(Terms)]
+enum WholeStruct {
+    #[lift(Terms, into)]
+    Invalid(TermsError),
+}
+
+#[derive(Debug, PartialEq, errlanes::Lift)]
+#[lift(Terms, unhandled = fatal)]
+enum WholeStructGuarded {
+    #[lift(Terms, when = is_low, into)]
+    Low { error: TermsError },
+}
+
+#[test]
+fn whole_value_into_converts_a_struct_source() {
+    assert_eq!(
+        WholeStruct::from(Terms { floor: 3 }),
+        WholeStruct::Invalid(TermsError { floor: 3 })
+    );
+}
+
+#[test]
+fn guarded_whole_value_into_falls_through_when_the_guard_fails() {
+    assert_eq!(
+        WholeStructGuarded::lift(Terms { floor: 3 }),
+        Ok(WholeStructGuarded::Low {
+            error: TermsError { floor: 3 }
+        })
+    );
+    assert!(WholeStructGuarded::lift(Terms { floor: 30 }).is_err());
+}
+
+#[derive(Debug)]
+enum Bad {
+    Negative,
+    Zero,
+}
+
+#[derive(Debug, PartialEq)]
+struct BadError(&'static str);
+
+impl From<Bad> for BadError {
+    fn from(bad: Bad) -> Self {
+        match bad {
+            Bad::Negative => Self("negative"),
+            Bad::Zero => Self("zero"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, errlanes::Lift)]
+#[lift(Bad)]
+enum WholeEnum {
+    #[lift(Bad, into)]
+    Bad(BadError),
+}
+
+#[test]
+fn whole_value_into_converts_an_enum_source() {
+    assert_eq!(WholeEnum::from(Bad::Zero), WholeEnum::Bad(BadError("zero")));
+    assert_eq!(
+        WholeEnum::from(Bad::Negative),
+        WholeEnum::Bad(BadError("negative"))
+    );
+}
+
+#[derive(Debug, errlanes::Rejection)]
+#[rejection(code = "BAD_TERMS")]
+struct BadTerms(&'static str);
+
+impl From<Bad> for BadTerms {
+    fn from(bad: Bad) -> Self {
+        match bad {
+            Bad::Negative => Self("negative"),
+            Bad::Zero => Self("zero"),
+        }
+    }
+}
+
+#[derive(Debug, errlanes::Classify, errlanes::Lift)]
+#[lift(Bad)]
+enum ProposalError {
+    #[classify(delegate, from)]
+    #[lift(Bad, into)]
+    Invalid(BadTerms),
+    #[classify(fatal(Invariant), from)]
+    Uninitialized(#[source] std::io::Error),
+}
+
+#[test]
+fn whole_value_into_lands_in_a_classify_delegate() {
+    use errlanes::Classify as _;
+    let error: ProposalError = Bad::Negative.into();
+    let Fail::Rejected(rejected) = error.classify() else {
+        panic!("expected the delegate's rejection");
+    };
+    assert_eq!(Into::<&'static str>::into(rejected.code()), "BAD_TERMS");
+}

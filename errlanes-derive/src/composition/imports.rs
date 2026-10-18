@@ -125,7 +125,8 @@ pub(super) fn start(args: TokenStream, item: ItemEnum) -> syn::Result<TokenStrea
         }
         for attr in &item.attrs {
             if attr.path().is_ident("lift")
-                && key(&attr.parse_args::<crate::lift::Registration>()?.source) == key(&import.path)
+                && crate::lift::registration(attr)?
+                    .is_some_and(|registration| key(&registration.source) == key(&import.path))
             {
                 return Err(syn::Error::new_spanned(
                     attr,
