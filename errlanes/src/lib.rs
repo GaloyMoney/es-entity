@@ -38,7 +38,7 @@ pub use classify::{Classify, RejectedSlot, RejectedUnion};
 pub use fail::__catalogue;
 pub use fail::{
     CodeInfo, Fail, Fault, Laned, Level, Lift, Rejection, RejectionCode, RejectionField,
-    RejectionMetadata, UnmappedInto,
+    RejectionMetadata, RejectionPayload, RejectionSource, UnmappedInto,
 };
 pub use lane::{Denied, Exhausted, Fatal, FatalKind, Lane, Transient, TransientKind};
 pub use result_ext::ResultExt;

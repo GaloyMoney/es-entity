@@ -292,8 +292,84 @@ let Fail::Rejected(timeout) = result.unwrap_err() else { panic!("expected timeou
 assert_eq!((timeout.applied, timeout.frontier), (3, 8));
 ```
 
+The `From` an `into` arm needs is derived on the payload type when its shape
+is mechanical: `#[lift(Source)]` on a unit struct drops the value, on a
+single-field tuple struct wraps it, and `#[lift(Source, field = name)]` (or
+`field = 0`) keeps one field, converting it through `Into`.
+
+```rust
+use errlanes::{Lift, Rejection};
+
+#[derive(Debug)]
+struct LimitExceeded { limit: u64 }
+
+#[derive(Debug, errlanes::Rejection)]
+enum Limit {
+    #[rejection(code = "LIMIT_EXCEEDED")]
+    Exceeded(LimitExceeded),
+}
+
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+#[rejection(code = "PAYMENT_EXCEEDS_OUTSTANDING")]
+#[lift(LimitExceeded)]
+struct PaymentExceedsOutstanding;
+
+fn is_large(exceeded: &LimitExceeded) -> bool { exceeded.limit > 100 }
+
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+#[lift(Limit)]
+enum Payment {
+    #[lift(Limit::Exceeded, when = is_large, into)]
+    #[rejection(code = "PAYMENT_EXCEEDS_OUTSTANDING")]
+    Outstanding(PaymentExceedsOutstanding),
+    #[lift(Limit::Exceeded)]
+    Exceeded(LimitExceeded),
+}
+
+let payment = Payment::lift(Limit::Exceeded(LimitExceeded { limit: 500 })).unwrap();
+assert!(matches!(payment, Payment::Outstanding(_)));
+```
+
 A struct source lifts as a whole value: `#[lift(Payload)]` with no variant
-suffix, on both the enum and the variant that receives it.
+suffix, on both the enum and the variant that receives it. Adding `into`
+(`#[lift(Payload, into)]`) converts the whole value through `Into` first; the
+source may then be an enum too, and an unguarded whole-value `into` is the
+entire conversion.
+
+A case whose payload the destination already accepts forwards with an
+enum-level `#[lift(Source::Case, into)]`, and a case that belongs in a
+composed-in variant, which has no declaration to annotate, is
+`#[lift(Source::Case, to = Variant)]`:
+
+```rust
+use errlanes::Lift;
+
+#[derive(Debug, errlanes::Rejection)]
+enum Transition {
+    #[rejection(code = "STALE")]
+    Stale,
+}
+
+#[derive(Debug, errlanes::Rejection)]
+enum Update {
+    #[rejection(delegate)]
+    Transition(Transition),
+    #[rejection(code = "INVALID")]
+    Invalid,
+}
+
+#[errlanes::compose(Transition)]
+#[derive(Debug)]
+#[lift(Update, unhandled = fatal)]
+#[lift(Update::Transition, into)]
+enum UpdateFamily {}
+
+assert!(matches!(
+    UpdateFamily::lift(Update::Transition(Transition::Stale)),
+    Ok(UpdateFamily::Stale)
+));
+assert!(UpdateFamily::lift(Update::Invalid).is_err());
+```
 
 When one source variant carries several cases, `when = predicate` guards an
 arm: the predicate is a path to a `fn(&Payload) -> bool` over the variant's
@@ -798,3 +874,23 @@ Composition includes new source cases automatically. Explicit lifts are
 useful when each addition needs review or individual cases need different
 names. When an outer layer adds no semantics of its own, it can simply reuse
 the inner rejection type.
+
+Composition is transitive: a family that composes `Posting` is also `From`
+everything `Posting` composes or strictly lifts, so a bare `Validation` reaches
+an outer family without every layer re-declaring the hop. The composing family
+never has to spell the deeper source's path; it asks the family it imports for
+the type. `#[errlanes::compose(Posting(no_from))]` imports `Posting`'s cases
+only. Reach for it when the outer family maps one of `Posting`'s sources
+differently, and the compiler reports two `From` impls for the same source.
+
+A source is identified by the path as the family that converts from it wrote it.
+If two imported families reach one type under different spellings, they export it
+twice and the outer family gets two identical impls (E0119). Either import one of
+them with `(no_from)`, or register that source once on the outer family with
+`#[lift(Source)]`, spelled the same way as one of them.
+
+An imported case keeps the `from` its source declares, so `Composed::from(leaf)`
+works for every payload any source accepts by `from`. Two imported variants with
+the same payload type are a conflicting-`From` error: merge them into one
+variant (`#[compose(merge(..))]`) or import one source `(no_leaf_from)`.
+`Source(no_from)` imports the cases only — no leaf `From`, no transitive `From`.

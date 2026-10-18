@@ -1,0 +1,9 @@
+error[E0277]: the trait bound `Composed: From<Leaf>` is not satisfied
+  --> tests/v2/compose_no_leaf_from.rs:17:13
+   |
+17 |     let _ = Composed::from(Leaf(1));
+   |             ^^^^^^^^ unsatisfied trait bound
+   |
+   = help: the trait `From<Leaf>` is not implemented for `Composed`
+           but trait `From<Accounts>` is implemented for it
+   = help: for that trait implementation, expected `Accounts`, found `Leaf`

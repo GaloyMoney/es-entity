@@ -20,3 +20,15 @@ pub enum Combined {
 pub fn combined_limit() -> Combined {
     renamed::Secondary::Limit(renamed::domain::Limit(43)).into()
 }
+
+#[lanes_runtime::compose(Posting)]
+#[derive(Debug)]
+pub enum Wrapped {}
+
+#[lanes_runtime::compose(renamed::Enforcement as Velocity)]
+#[derive(Debug)]
+pub enum Forwarding {}
+
+#[lanes_runtime::compose(renamed::Enforcement as Velocity(no_leaf_from))]
+#[derive(Debug)]
+pub enum Quiet {}

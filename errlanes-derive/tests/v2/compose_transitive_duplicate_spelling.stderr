@@ -1,0 +1,13 @@
+error[E0119]: conflicting implementations of trait `From<Raw>` for type `Top`
+  --> tests/v2/compose_transitive_duplicate_spelling.rs:19:17
+   |
+19 | #[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+   |                 ^^^^^^^^^^^^^^^^^^^
+   |                 |
+   |                 first implementation here
+   |                 conflicting implementation for `Top`
+...
+28 | #[errlanes::compose(Left, Right)]
+   | --------------------------------- in this attribute macro expansion
+   |
+   = note: this error originates in the derive macro `errlanes::Lift` which comes from the expansion of the attribute macro `errlanes::compose` (in Nightly builds, run with -Z macro-backtrace for more info)

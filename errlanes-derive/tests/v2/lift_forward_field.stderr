@@ -1,0 +1,5 @@
+error: an enum-level arm without `to` forwards the whole source case; use `into` or `with`
+ --> tests/v2/lift_forward_field.rs:8:1
+  |
+8 | #[lift(Source::Value, field = value)]
+  | ^

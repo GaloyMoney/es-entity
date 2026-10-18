@@ -1,0 +1,5 @@
+error: `no_leaf_from` is implied by `no_from`
+ --> tests/v2/compose_modifier_implied.rs:6:35
+  |
+6 | #[errlanes::compose(Leaf(no_from, no_leaf_from))]
+  |                                   ^^^^^^^^^^^^

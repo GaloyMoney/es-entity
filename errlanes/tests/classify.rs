@@ -382,3 +382,60 @@ fn an_override_of_a_blessed_foreign_classification_needs_the_same_care() {
         other => panic!("expected Fatal(CorruptState), got {other:?}"),
     }
 }
+
+// A `delegate` payload only has to be `IntoLanes`: a `Fail` or a `Fault`
+// delegates lane-for-lane like a `Classify` type does.
+#[derive(Debug, errlanes::Classify)]
+enum Carrying {
+    #[classify(delegate, from)]
+    Query(Fail<ConstraintViolation, lanes!(Transient, Fatal)>),
+    #[classify(delegate, from)]
+    Store(Fault<lanes!(Fatal)>),
+}
+
+fn lane_error(kind: errlanes::FatalKind) -> Fault<lanes!(Fatal)> {
+    Fault::Fatal(errlanes::Fatal::new(kind))
+}
+
+#[test]
+fn a_fail_payload_delegates_lane_for_lane() {
+    let rejected: Carrying =
+        Fail::<_, lanes!(Transient, Fatal)>::Rejected(ConstraintViolation("pkey")).into();
+    let Fail::Rejected(violation) = rejected.classify() else {
+        panic!("expected the payload's rejection");
+    };
+    assert_eq!(violation.0, "pkey");
+
+    let fatal: Carrying = Fail::<ConstraintViolation, lanes!(Transient, Fatal)>::Fatal(
+        errlanes::Fatal::new(errlanes::FatalKind::Config),
+    )
+    .into();
+    match fatal.classify() {
+        Fail::Fatal(f) => assert_eq!(f.kind, errlanes::FatalKind::Config),
+        other => panic!("expected Fatal(Config), got {other:?}"),
+    }
+}
+
+#[test]
+fn a_fault_payload_delegates_lane_for_lane() {
+    let wrapped: Carrying = lane_error(errlanes::FatalKind::CorruptState).into();
+    match wrapped.classify() {
+        Fail::Fatal(f) => assert_eq!(f.kind, errlanes::FatalKind::CorruptState),
+        other => panic!("expected Fatal(CorruptState), got {other:?}"),
+    }
+}
+
+#[derive(Debug, errlanes::Classify)]
+enum NarrowedFail {
+    #[classify(delegate, narrow(Denied))]
+    Upstream(Fail<ConstraintViolation, lanes!(Denied, Fatal)>),
+}
+
+#[test]
+fn narrow_denied_applies_to_a_fail_payload() {
+    let denied = NarrowedFail::Upstream(Fail::Denied(errlanes::Denied::new()));
+    match denied.classify() {
+        Fail::Fatal(f) => assert_eq!(f.kind, errlanes::FatalKind::Denied),
+        other => panic!("expected Fatal(Denied), got {other:?}"),
+    }
+}

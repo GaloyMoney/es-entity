@@ -1,0 +1,5 @@
+error: expected `no_from` or `no_leaf_from`
+ --> tests/v2/compose_modifier_unknown.rs:6:26
+  |
+6 | #[errlanes::compose(Leaf(deep))]
+  |                          ^^^^

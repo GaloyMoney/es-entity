@@ -4,6 +4,7 @@ fn ui() {
     t.compile_fail("tests/v2/*.rs");
     t.pass("tests/trybuild/rejection_pass.rs");
     t.pass("tests/trybuild/rejection_multi_lift.rs");
+    t.pass("tests/trybuild/lift_into_whole_value_pass.rs");
     t.pass("tests/trybuild/error_format_args_pass.rs");
     t.compile_fail("tests/trybuild/shared_code_unused.rs");
     t.compile_fail("tests/trybuild/shared_code_variant_description.rs");

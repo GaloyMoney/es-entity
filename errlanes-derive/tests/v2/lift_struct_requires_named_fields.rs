@@ -1,5 +1,5 @@
 #[derive(errlanes::Lift)]
-struct Unit;
+struct Pair(u32, u32);
 
 #[derive(errlanes::Lift)]
 struct Tuple(u32);

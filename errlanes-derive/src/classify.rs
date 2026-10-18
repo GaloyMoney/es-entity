@@ -182,7 +182,7 @@ fn rename_classify_attrs(attrs: &mut [syn::Attribute]) {
 
 /// The lane-profile *type* a single variant/struct contributes to the
 /// enclosing `Lanes` union — `errlanes::lanes!(..)` for a static lane, or
-/// `<FieldTy as errlanes::Classify>::Lanes` (optionally projected through
+/// `<FieldTy as errlanes::IntoLanes>::Lanes` (optionally projected through
 /// `WithoutDenied`) for a `delegate`.
 fn lane_profile_ty(meta: &ClassifyMeta, field_ty: Option<&syn::Type>) -> syn::Result<TokenStream> {
     if let Some(lane) = &meta.lane {
@@ -196,9 +196,9 @@ fn lane_profile_ty(meta: &ClassifyMeta, field_ty: Option<&syn::Type>) -> syn::Re
         let field_ty = field_ty.expect("delegate requires a field");
         return Ok(match meta.narrow {
             Some(Narrow::Denied) => quote! {
-                <<#field_ty as errlanes::Classify>::Lanes as errlanes::LaneProfile>::WithoutDenied
+                <<#field_ty as errlanes::IntoLanes>::Lanes as errlanes::LaneProfile>::WithoutDenied
             },
-            _ => quote! { <#field_ty as errlanes::Classify>::Lanes },
+            _ => quote! { <#field_ty as errlanes::IntoLanes>::Lanes },
         });
     }
     unreachable!("lane_profile_ty called on a variant with neither a lane nor delegate")
@@ -619,7 +619,7 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
     for r in &resolved {
         if r.meta.delegate && r.meta.narrow != Some(Narrow::Rejected) {
             let field_ty = r.payload.as_ref().unwrap().ty;
-            let contribution = quote! { <#field_ty as errlanes::Classify>::Rejected };
+            let contribution = quote! { <#field_ty as errlanes::IntoLanes>::Rejected };
             rejected_ty = quote! { <#rejected_ty as errlanes::RejectedUnion<#contribution>>::Out };
         }
     }
@@ -642,7 +642,7 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
             let field_ty = payload.ty;
             let pattern = &payload.pattern;
             let classify_call = quote! {
-                <#field_ty as errlanes::Classify>::classify(p)
+                <#field_ty as errlanes::IntoLanes>::into_lanes(p)
             };
             let narrowed = match r.meta.narrow {
                 Some(Narrow::Denied) => quote! { #classify_call.narrow_denied() },

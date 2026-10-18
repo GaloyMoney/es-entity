@@ -1,0 +1,5 @@
+error: modifiers follow the prefix: `Source as Prefix(no_from)`
+ --> tests/v2/compose_modifier_before_prefix.rs:6:35
+  |
+6 | #[errlanes::compose(Leaf(no_from) as Other)]
+  |                                   ^^

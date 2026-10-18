@@ -1,4 +1,4 @@
-error: `field` and `with` cannot be combined
+error: `with` cannot be combined with `field`
   --> tests/v2/lift_field_with_conflict.rs:15:48
    |
 15 |     #[lift(Child::Conflict, field = attempted, with = transform)]
