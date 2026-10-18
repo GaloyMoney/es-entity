@@ -1,7 +1,6 @@
 struct Source { value: u32 }
 
 #[derive(errlanes::Lift)]
-#[lift(Source)]
 struct Missing(u32);
 
 #[derive(errlanes::Lift)]

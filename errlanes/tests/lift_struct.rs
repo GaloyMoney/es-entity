@@ -173,3 +173,22 @@ fn renames_do_not_capture_other_source_fields() {
     assert_eq!(result.right, "left");
     assert_eq!(result.kind, "kind");
 }
+
+#[derive(Debug, errlanes::Rejection)]
+enum Narrow {
+    Counted { count: u8 },
+}
+
+#[derive(Debug, PartialEq, errlanes::Rejection, errlanes::Lift)]
+#[rejection(code = "WIDENED")]
+#[lift(Narrow, variant = Counted)]
+struct Widened {
+    #[lift(from = count)]
+    total: u32,
+}
+
+#[test]
+fn renamed_field_converts_through_into() {
+    let widened = Widened::from(Narrow::Counted { count: 9 });
+    assert_eq!(widened, Widened { total: 9 });
+}

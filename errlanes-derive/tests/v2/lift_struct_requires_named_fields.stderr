@@ -1,10 +1,10 @@
-error: a struct lift requires named fields or a single-field tuple struct
- --> tests/v2/lift_struct_requires_named_fields.rs:2:1
+error: a tuple struct lift requires exactly one field
+ --> tests/v2/lift_struct_requires_named_fields.rs:2:12
   |
-2 | struct Unit;
-  | ^^^^^^
+2 | struct Pair(u32, u32);
+  |            ^^^^^^^^^^
 
-error: a tuple struct lift requires #[lift(Source, field = name)]
+error: a tuple struct lift requires #[lift(Source)] or #[lift(Source, field = name)]
  --> tests/v2/lift_struct_requires_named_fields.rs:5:8
   |
 5 | struct Tuple(u32);

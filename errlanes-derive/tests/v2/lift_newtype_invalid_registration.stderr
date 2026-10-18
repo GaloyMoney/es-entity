@@ -1,47 +1,47 @@
-error: a tuple struct lift requires `field = name`
+error: a tuple struct lift requires #[lift(Source)] or #[lift(Source, field = name)]
  --> tests/v2/lift_newtype_invalid_registration.rs:4:8
   |
-4 | #[lift(Source)]
-  |        ^^^^^^
+4 | struct Missing(u32);
+  |        ^^^^^^^
 
 error: duplicate `field`
- --> tests/v2/lift_newtype_invalid_registration.rs:8:31
+ --> tests/v2/lift_newtype_invalid_registration.rs:7:31
   |
-8 | #[lift(Source, field = value, field = value)]
+7 | #[lift(Source, field = value, field = value)]
   |                               ^^^^^
 
 error: a struct lift supports exactly one source registration
-  --> tests/v2/lift_newtype_invalid_registration.rs:13:1
+  --> tests/v2/lift_newtype_invalid_registration.rs:12:1
    |
-13 | #[lift(Source, field = value)]
+12 | #[lift(Source, field = value)]
    | ^
 
 error: a tuple struct lift supports only `field = name`
-  --> tests/v2/lift_newtype_invalid_registration.rs:17:16
+  --> tests/v2/lift_newtype_invalid_registration.rs:16:16
    |
-17 | #[lift(Source, variant = Value, field = value)]
+16 | #[lift(Source, variant = Value, field = value)]
    |                ^^^^^^^
 
 error: a tuple struct lift supports only `field = name`
-  --> tests/v2/lift_newtype_invalid_registration.rs:21:31
+  --> tests/v2/lift_newtype_invalid_registration.rs:20:31
    |
-21 | #[lift(Source, field = value, unhandled = fatal)]
+20 | #[lift(Source, field = value, unhandled = fatal)]
    |                               ^^^^^^^^^
 
 error: a tuple struct lift supports only `field = name`
-  --> tests/v2/lift_newtype_invalid_registration.rs:25:31
+  --> tests/v2/lift_newtype_invalid_registration.rs:24:31
    |
-25 | #[lift(Source, field = value, into)]
+24 | #[lift(Source, field = value, into)]
    |                               ^^^^
 
 error: a tuple struct lift supports only `field = name`
-  --> tests/v2/lift_newtype_invalid_registration.rs:29:31
+  --> tests/v2/lift_newtype_invalid_registration.rs:28:31
    |
-29 | #[lift(Source, field = value, with = mapper)]
+28 | #[lift(Source, field = value, with = mapper)]
    |                               ^^^^
 
 error: put the field projection on the struct: #[lift(Source, field = name)]
-  --> tests/v2/lift_newtype_invalid_registration.rs:34:23
+  --> tests/v2/lift_newtype_invalid_registration.rs:33:23
    |
-34 | struct FieldAttribute(#[lift(from = value)] u32);
+33 | struct FieldAttribute(#[lift(from = value)] u32);
    |                       ^

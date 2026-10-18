@@ -151,3 +151,46 @@ fn generated_from_supplies_total_lift_without_a_fatal_lane() {
     let Fail::Rejected(projected) = result.unwrap_err();
     assert_eq!(projected.0, "expand");
 }
+
+#[derive(Debug, errlanes::Rejection)]
+#[rejection(code = "SOURCE")]
+struct Wrapped {
+    value: u8,
+}
+
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+#[rejection(code = "WRAP")]
+#[lift(Wrapped)]
+struct Wrapper(#[source] Wrapped);
+
+#[test]
+fn newtype_without_field_wraps_the_whole_source() {
+    let wrapper = Wrapper::from(Wrapped { value: 7 });
+    assert_eq!(wrapper.0.value, 7);
+}
+
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+#[rejection(code = "WIDE")]
+#[lift(Wrapped, field = value)]
+struct Wide(u16);
+
+#[test]
+fn projection_converts_the_field_through_into() {
+    assert_eq!(Wide::from(Wrapped { value: 200 }).0, 200u16);
+}
+
+struct Pair(&'static str, u8);
+
+#[derive(errlanes::Lift)]
+#[lift(Pair, field = 0)]
+struct First(String);
+
+#[derive(errlanes::Lift)]
+#[lift(Pair, field = 1)]
+struct Second(u32);
+
+#[test]
+fn projection_accepts_a_tuple_index() {
+    assert_eq!(First::from(Pair("a", 1)).0, "a");
+    assert_eq!(Second::from(Pair("a", 9)).0, 9);
+}

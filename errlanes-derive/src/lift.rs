@@ -604,6 +604,9 @@ fn derive_struct(input: &syn::DeriveInput, data: &syn::DataStruct) -> syn::Resul
     if let Fields::Unnamed(fields) = &data.fields {
         return derive_newtype(input, fields);
     }
+    if matches!(data.fields, Fields::Unit) {
+        return derive_unit(input);
+    }
     let Fields::Named(fields) = &data.fields else {
         return Err(syn::Error::new_spanned(
             input,
@@ -657,7 +660,7 @@ fn derive_struct(input: &syn::DeriveInput, data: &syn::DataStruct) -> syn::Resul
         }
         let binding = format_ident!("__lift_field_{i}");
         bindings.push(quote! { #from: #binding });
-        assignments.push(quote! { #dest: #binding });
+        assignments.push(quote! { #dest: ::core::convert::Into::into(#binding) });
     }
     // No `..`: rustc checks the complete source payload, including missing
     // fields and shape/type mismatches. No fields are silently discarded.
@@ -665,11 +668,61 @@ fn derive_struct(input: &syn::DeriveInput, data: &syn::DataStruct) -> syn::Resul
     Ok(conversion_impl(input, &source, partial, &[arm]))
 }
 
-/// A newtype explicitly projects one field from a source struct. Unlike the
-/// named-field enum-variant mapping, this intentionally drops the other fields.
+/// A unit struct lifts a whole source value and drops it. Only the source
+/// path is accepted: a case of an enum source is routed by the family's arm.
+struct UnitRegistration {
+    source: Path,
+}
+
+impl Parse for UnitRegistration {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let source: Path = input.parse()?;
+        if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+            if let Some(key) = input.parse::<Option<syn::Ident>>()? {
+                return Err(syn::Error::new_spanned(
+                    &key,
+                    if key == "variant" {
+                        "a unit struct lifts a whole value; a case of an enum source is routed by the family's arm, `with` if it has no payload"
+                    } else {
+                        "a unit struct lift takes only the source path"
+                    },
+                ));
+            }
+        }
+        Ok(Self { source })
+    }
+}
+
+fn derive_unit(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
+    let mut attrs = input.attrs.iter().filter(|a| a.path().is_ident("lift"));
+    let attr = attrs.next().ok_or_else(|| {
+        syn::Error::new_spanned(&input.ident, "a unit struct lift requires #[lift(Source)]")
+    })?;
+    if let Some(extra) = attrs.next() {
+        return Err(syn::Error::new_spanned(
+            extra,
+            "a struct lift supports exactly one source registration",
+        ));
+    }
+    let UnitRegistration { source } = attr.parse_args()?;
+    let name = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    Ok(quote! {
+        impl #impl_generics From<#source> for #name #ty_generics #where_clause {
+            fn from(_: #source) -> Self {
+                Self
+            }
+        }
+    })
+}
+
+/// A newtype either wraps the whole source or explicitly projects one field
+/// of a source struct. Unlike the named-field enum-variant mapping, the
+/// projection intentionally drops the other fields.
 struct NewtypeRegistration {
     source: Path,
-    field: syn::Ident,
+    field: Option<syn::Member>,
 }
 
 impl Parse for NewtypeRegistration {
@@ -694,9 +747,6 @@ impl Parse for NewtypeRegistration {
             input.parse::<Token![=]>()?;
             field = Some(input.parse()?);
         }
-        let field = field.ok_or_else(|| {
-            syn::Error::new_spanned(&source, "a tuple struct lift requires `field = name`")
-        })?;
         Ok(Self { source, field })
     }
 }
@@ -723,7 +773,7 @@ fn derive_newtype(
     let attr = attrs.next().ok_or_else(|| {
         syn::Error::new_spanned(
             &input.ident,
-            "a tuple struct lift requires #[lift(Source, field = name)]",
+            "a tuple struct lift requires #[lift(Source)] or #[lift(Source, field = name)]",
         )
     })?;
     if let Some(extra) = attrs.next() {
@@ -735,10 +785,14 @@ fn derive_newtype(
     let NewtypeRegistration { source, field } = attr.parse_args()?;
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let value = match field {
+        Some(field) => quote!(::core::convert::Into::into(source.#field)),
+        None => quote!(source),
+    };
     Ok(quote! {
         impl #impl_generics From<#source> for #name #ty_generics #where_clause {
             fn from(source: #source) -> Self {
-                Self(source.#field)
+                Self(#value)
             }
         }
     })

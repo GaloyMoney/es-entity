@@ -292,6 +292,44 @@ let Fail::Rejected(timeout) = result.unwrap_err() else { panic!("expected timeou
 assert_eq!((timeout.applied, timeout.frontier), (3, 8));
 ```
 
+The `From` an `into` arm needs is derived on the payload type when its shape
+is mechanical: `#[lift(Source)]` on a unit struct drops the value, on a
+single-field tuple struct wraps it, and `#[lift(Source, field = name)]` (or
+`field = 0`) keeps one field, converting it through `Into`.
+
+```rust
+use errlanes::{Lift, Rejection};
+
+#[derive(Debug)]
+struct LimitExceeded { limit: u64 }
+
+#[derive(Debug, errlanes::Rejection)]
+enum Limit {
+    #[rejection(code = "LIMIT_EXCEEDED")]
+    Exceeded(LimitExceeded),
+}
+
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+#[rejection(code = "PAYMENT_EXCEEDS_OUTSTANDING")]
+#[lift(LimitExceeded)]
+struct PaymentExceedsOutstanding;
+
+fn is_large(exceeded: &LimitExceeded) -> bool { exceeded.limit > 100 }
+
+#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
+#[lift(Limit)]
+enum Payment {
+    #[lift(Limit::Exceeded, when = is_large, into)]
+    #[rejection(code = "PAYMENT_EXCEEDS_OUTSTANDING")]
+    Outstanding(PaymentExceedsOutstanding),
+    #[lift(Limit::Exceeded)]
+    Exceeded(LimitExceeded),
+}
+
+let payment = Payment::lift(Limit::Exceeded(LimitExceeded { limit: 500 })).unwrap();
+assert!(matches!(payment, Payment::Outstanding(_)));
+```
+
 A struct source lifts as a whole value: `#[lift(Payload)]` with no variant
 suffix, on both the enum and the variant that receives it.
 
