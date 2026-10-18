@@ -849,6 +849,15 @@ pub trait RejectionField<const VARIANT: u64, const FIELD: usize> {
     type Type;
 }
 
+/// Compile-time source metadata used by the rejection composition protocol: a
+/// family exports each source it converts from, keyed by the hash of the path
+/// as the family spelled it, so a composing family can name that source
+/// without resolving the path itself.
+#[doc(hidden)]
+pub trait RejectionSource<Destination, const SOURCE: u64> {
+    type Type;
+}
+
 /// Borrowed metadata protocol; forwarding does not clone or reconstruct errors.
 #[doc(hidden)]
 pub trait RejectionMetadata<const VARIANT: u64>: Rejection {

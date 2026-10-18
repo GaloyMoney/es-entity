@@ -1,0 +1,5 @@
+error: `no_from` is an import modifier; write `Source(no_from)`
+ --> tests/v2/compose_modifier_trailing.rs:6:27
+  |
+6 | #[errlanes::compose(Leaf, no_from)]
+  |                           ^^^^^^^

@@ -1,0 +1,9 @@
+error[E0277]: the trait bound `Top: From<Leaf>` is not satisfied
+  --> tests/v2/compose_no_from_no_transitive.rs:18:13
+   |
+18 |     let _ = Top::from(Leaf::Disabled);
+   |             ^^^ unsatisfied trait bound
+   |
+   = help: the trait `From<Leaf>` is not implemented for `Top`
+           but trait `From<Middle>` is implemented for it
+   = help: for that trait implementation, expected `Middle`, found `Leaf`

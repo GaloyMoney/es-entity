@@ -359,6 +359,7 @@ name = "composition-consumer"
 version = "0.19.5-dev"
 dependencies = [
  "composition-middle",
+ "composition-source",
  "errlanes",
 ]
 

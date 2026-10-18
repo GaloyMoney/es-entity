@@ -874,3 +874,17 @@ Composition includes new source cases automatically. Explicit lifts are
 useful when each addition needs review or individual cases need different
 names. When an outer layer adds no semantics of its own, it can simply reuse
 the inner rejection type.
+
+Composition is transitive: a family that composes `Posting` is also `From`
+everything `Posting` composes or strictly lifts, so a bare `Validation` reaches
+an outer family without every layer re-declaring the hop. The composing family
+never has to spell the deeper source's path; it asks the family it imports for
+the type. `#[errlanes::compose(Posting(no_from))]` imports `Posting`'s cases
+only. Reach for it when the outer family maps one of `Posting`'s sources
+differently, and the compiler reports two `From` impls for the same source.
+
+A source is identified by the path as the family that converts from it wrote it.
+If two imported families reach one type under different spellings, they export it
+twice and the outer family gets two identical impls (E0119). Either import one of
+them with `(no_from)`, or register that source once on the outer family with
+`#[lift(Source)]`, spelled the same way as one of them.

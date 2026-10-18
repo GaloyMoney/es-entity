@@ -87,6 +87,34 @@ pub fn schema(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             )?;
         }
     }
+    // Every source this family converts from (a strict `#[lift(X)]`, which
+    // compose pushes for each import, or a transitive `via` record) is
+    // exported under the hash of its path as written here, so a composing
+    // family can name the type without resolving the path itself.
+    let mut source_ids = Vec::new();
+    for attr in &input.attrs {
+        if !attr.path().is_ident("lift") {
+            continue;
+        }
+        if crate::lift::is_via(attr)? {
+            let crate::lift::Via { via, id } = attr.parse_args()?;
+            fields.extend(quote! {
+                impl<__ErrlanesDestination> errlanes::RejectionSource<__ErrlanesDestination, #id> for #name {
+                    type Type = <#via as errlanes::RejectionSource<__ErrlanesDestination, #id>>::Type;
+                }
+            });
+            source_ids.push(id);
+        } else if let Some(registration) = crate::lift::registration(attr)?
+            && !registration.partial
+        {
+            let id = variant_id(&imports::key(&registration.source));
+            let source = &registration.source;
+            fields.extend(quote! {
+                impl<__ErrlanesDestination> errlanes::RejectionSource<__ErrlanesDestination, #id> for #name { type Type = #source; }
+            });
+            source_ids.push(id);
+        }
+    }
     let schema = quote!(#variants).to_string();
     // The source is a macro metavariable, substituted into schema by the callback.
     Ok(quote! {
@@ -95,7 +123,7 @@ pub fn schema(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         #[macro_export]
         macro_rules! #helper {
             ($callback:path, [$($context:tt)*], $source:ty) => {
-                $callback! { [$($context)*] [$source] #schema }
+                $callback! { [$($context)*] [$source] #schema [#(#source_ids),*] }
             };
         }
         #[doc(hidden)]
@@ -162,6 +190,7 @@ struct Callback {
     context: imports::Context,
     source: syn::Type,
     schema: syn::LitStr,
+    ids: Vec<u64>,
 }
 impl Parse for Callback {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
@@ -169,10 +198,20 @@ impl Parse for Callback {
         syn::bracketed!(context in input);
         let source;
         syn::bracketed!(source in input);
+        let schema = input.parse()?;
+        let mut ids = Vec::new();
+        if input.peek(syn::token::Bracket) {
+            let list;
+            syn::bracketed!(list in input);
+            for id in list.parse_terminated(syn::LitInt::parse, Token![,])? {
+                ids.push(id.base10_parse()?);
+            }
+        }
         Ok(Self {
             context: context.parse()?,
             source: source.parse()?,
-            schema: input.parse()?,
+            schema,
+            ids,
         })
     }
 }
@@ -181,6 +220,7 @@ pub fn callback(input: TokenStream) -> syn::Result<TokenStream> {
         context,
         source,
         schema,
+        ids,
     } = syn::parse2(input)?;
     fn substitute(tokens: TokenStream, source: &syn::Type) -> TokenStream {
         use proc_macro2::{Group, TokenTree};
@@ -200,7 +240,7 @@ pub fn callback(input: TokenStream) -> syn::Result<TokenStream> {
     }
     let variants = substitute(schema.value().parse()?, &source);
     let parsed: ItemEnum = syn::parse2(quote!(enum Schema { #variants }))?;
-    context.receive(parsed.variants)
+    context.receive(parsed.variants, ids)
 }
 
 fn origin(variant: &syn::Variant) -> syn::Result<Option<String>> {

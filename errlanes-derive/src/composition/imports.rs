@@ -8,12 +8,15 @@ use syn::{
 
 type Variants = Punctuated<Variant, Token![,]>;
 
+const MODIFIERS: [&str; 1] = ["no_from"];
+
 /// One entry of `#[errlanes::compose(Source, Other as Prefix)]`. A bare path
 /// imports the family under its original variant names; `as Prefix` keeps its
 /// cases distinct by prefixing every imported name.
 struct Import {
     path: Path,
     prefix: Option<Ident>,
+    no_from: bool,
 }
 
 impl Parse for Import {
@@ -25,7 +28,34 @@ impl Parse for Import {
         } else {
             None
         };
-        Ok(Self { path, prefix })
+        let mut no_from = false;
+        if input.peek(syn::token::Paren) {
+            let group;
+            let paren = syn::parenthesized!(group in input);
+            if group.is_empty() {
+                return Err(syn::Error::new(
+                    paren.span.join(),
+                    "empty modifier list; drop the parentheses",
+                ));
+            }
+            for name in group.parse_terminated(Ident::parse, Token![,])? {
+                if name != "no_from" {
+                    return Err(syn::Error::new_spanned(name, "expected `no_from`"));
+                }
+                if no_from {
+                    return Err(syn::Error::new_spanned(name, "duplicate `no_from`"));
+                }
+                no_from = true;
+            }
+            if input.peek(Token![as]) {
+                return Err(input.error("modifiers follow the prefix: `Source as Prefix(no_from)`"));
+            }
+        }
+        Ok(Self {
+            path,
+            prefix,
+            no_from,
+        })
     }
 }
 
@@ -36,6 +66,9 @@ impl ToTokens for Import {
         self.path.to_tokens(tokens);
         if let Some(prefix) = &self.prefix {
             tokens.extend(quote!(as #prefix));
+        }
+        if self.no_from {
+            tokens.extend(quote!((no_from)));
         }
     }
 }
@@ -50,6 +83,21 @@ impl Parse for Arguments {
         if imports.is_empty() {
             return Err(input.error("compose requires at least one source enum"));
         }
+        // A modifier written as its own argument would otherwise parse as a
+        // source path and fail later on a missing helper macro.
+        for (index, import) in imports.iter().enumerate() {
+            if index > 0
+                && import.prefix.is_none()
+                && !import.no_from
+                && let Some(name) = import.path.get_ident()
+                && MODIFIERS.iter().any(|modifier| name == modifier)
+            {
+                return Err(syn::Error::new_spanned(
+                    name,
+                    format!("`{name}` is an import modifier; write `Source({name})`"),
+                ));
+            }
+        }
         Ok(Self { imports })
     }
 }
@@ -57,6 +105,8 @@ impl Parse for Arguments {
 struct Source {
     path: Path,
     prefix: Option<Ident>,
+    no_from: bool,
+    ids: Vec<u64>,
     variants: Variants,
 }
 
@@ -82,6 +132,10 @@ impl Parse for Context {
             syn::bracketed!(path in sources);
             let prefix;
             syn::bracketed!(prefix in sources);
+            let no_from;
+            syn::bracketed!(no_from in sources);
+            let ids;
+            syn::bracketed!(ids in sources);
             let variants;
             syn::braced!(variants in sources);
             collected.push(Source {
@@ -91,6 +145,12 @@ impl Parse for Context {
                 } else {
                     Some(prefix.parse()?)
                 },
+                no_from: !no_from.is_empty(),
+                ids: ids
+                    .parse_terminated(syn::LitInt::parse, Token![,])?
+                    .iter()
+                    .map(|id| id.base10_parse())
+                    .collect::<syn::Result<_>>()?,
                 variants: variants.parse_terminated(Variant::parse, Token![,])?,
             });
         }
@@ -158,8 +218,13 @@ impl Context {
             |Source {
                  path,
                  prefix,
+                 no_from,
+                 ids,
                  variants,
-             }| quote! { [#path] [#prefix] { #variants } },
+             }| {
+                let no_from = no_from.then(|| quote!(no_from));
+                quote! { [#path] [#prefix] [#no_from] [#(#ids),*] { #variants } }
+            },
         );
         Ok(quote! {
             #helper!(errlanes::__compose_rejection,
@@ -167,11 +232,17 @@ impl Context {
         })
     }
 
-    pub(super) fn receive(mut self, variants: Variants) -> syn::Result<TokenStream> {
-        let Import { path, prefix } = self.remaining.first().unwrap();
+    pub(super) fn receive(mut self, variants: Variants, ids: Vec<u64>) -> syn::Result<TokenStream> {
+        let Import {
+            path,
+            prefix,
+            no_from,
+        } = self.remaining.first().unwrap();
         self.sources.push(Source {
             path: path.clone(),
             prefix: prefix.clone(),
+            no_from: *no_from,
+            ids,
             variants,
         });
         self.remaining = self.remaining.into_iter().skip(1).collect();
@@ -179,7 +250,7 @@ impl Context {
     }
 }
 
-fn key(value: &impl ToTokens) -> String {
+pub(super) fn key(value: &impl ToTokens) -> String {
     value.to_token_stream().to_string()
 }
 
@@ -314,12 +385,38 @@ fn finish(mut item: ItemEnum, sources: Vec<Source>) -> syn::Result<TokenStream> 
     let mut names: HashSet<_> = item.variants.iter().map(|v| v.ident.to_string()).collect();
     let mut origins = HashMap::new();
     let mut collected = Vec::new();
+    // A source the composing enum already converts from, by its own
+    // spelling, is not re-exported through an import that also reaches it.
+    let mut covered = HashSet::new();
+    for attr in &item.attrs {
+        if attr.path().is_ident("lift")
+            && let Some(registration) = crate::lift::registration(attr)?
+        {
+            covered.insert(super::variant_id(&key(&registration.source)));
+        }
+    }
+    for source in &sources {
+        covered.insert(super::variant_id(&key(&source.path)));
+    }
+    let mut vias = Vec::new();
     for Source {
         path,
         prefix,
+        no_from,
+        ids,
         variants,
     } in sources
     {
+        if !no_from {
+            for id in ids {
+                if covered.insert(id) {
+                    vias.push(crate::lift::Via {
+                        via: path.clone(),
+                        id,
+                    });
+                }
+            }
+        }
         for mut variant in variants {
             let name = variant.ident.clone();
             let case: Path = parse_quote!(#path::#name);
@@ -377,6 +474,9 @@ fn finish(mut item: ItemEnum, sources: Vec<Source>) -> syn::Result<TokenStream> 
             }
         }
         item.attrs.push(parse_quote!(#[lift(#path, strict)]));
+    }
+    for via in vias {
+        item.attrs.push(parse_quote!(#[lift(#via)]));
     }
     for index in merges {
         if !used.contains(&index) {

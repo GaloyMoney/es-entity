@@ -1,0 +1,5 @@
+error: duplicate `no_from`
+ --> tests/v2/compose_modifier_duplicate.rs:6:35
+  |
+6 | #[errlanes::compose(Leaf(no_from, no_from))]
+  |                                   ^^^^^^^

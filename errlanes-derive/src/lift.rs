@@ -4,7 +4,47 @@ use syn::{Fields, Path, Token, parse::Parse, spanned::Spanned};
 
 pub(crate) struct Registration {
     pub(crate) source: Path,
-    partial: bool,
+    pub(crate) partial: bool,
+}
+
+/// `#[lift(via = Family, id = N)]`: composition's record that `Family`
+/// converts from the source it exports under `N`, so the composing enum is
+/// `From` that source too.
+pub(crate) struct Via {
+    pub(crate) via: Path,
+    pub(crate) id: u64,
+}
+impl Parse for Via {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let key: syn::Ident = input.parse()?;
+        if key != "via" {
+            return Err(syn::Error::new_spanned(key, "expected `via = Family`"));
+        }
+        input.parse::<Token![=]>()?;
+        let via = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let key: syn::Ident = input.parse()?;
+        if key != "id" {
+            return Err(syn::Error::new_spanned(key, "expected `id = N`"));
+        }
+        input.parse::<Token![=]>()?;
+        let id = input.parse::<syn::LitInt>()?.base10_parse()?;
+        Ok(Self { via, id })
+    }
+}
+impl ToTokens for Via {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let (via, id) = (&self.via, self.id);
+        tokens.extend(quote!(via = #via, id = #id));
+    }
+}
+
+pub(crate) fn is_via(attr: &syn::Attribute) -> syn::Result<bool> {
+    attr.parse_args_with(|input: syn::parse::ParseStream| {
+        let via = input.peek(syn::Ident) && input.peek2(Token![=]);
+        input.parse::<TokenStream>()?;
+        Ok(via)
+    })
 }
 impl Parse for Registration {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
@@ -140,7 +180,7 @@ pub(crate) fn is_arm(attr: &syn::Attribute) -> syn::Result<bool> {
 /// The source registration an enum-level `#[lift(..)]` makes, or `None` when
 /// it is an arm.
 pub(crate) fn registration(attr: &syn::Attribute) -> syn::Result<Option<Registration>> {
-    if is_arm(attr)? {
+    if is_arm(attr)? || is_via(attr)? {
         return Ok(None);
     }
     attr.parse_args().map(Some)
@@ -302,8 +342,13 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
     };
     let mut registrations = Vec::new();
     let mut enum_arms = Vec::new();
+    let mut vias = Vec::new();
     for attr in &input.attrs {
         if !attr.path().is_ident("lift") {
+            continue;
+        }
+        if is_via(attr)? {
+            vias.push(attr.parse_args::<Via>()?);
             continue;
         }
         match registration(attr)? {
@@ -453,7 +498,8 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             .find(|arm| arm.whole_value && arm.mapping.when.is_none() && arm.mapping.into)
             && (registration.partial
                 || own.iter().any(|arm| {
-                    !(arm.whole_value && arm.mapping.when.is_some()) && !std::ptr::eq(*arm, *whole)
+                    let guarded_whole = arm.whole_value && arm.mapping.when.is_some();
+                    !(guarded_whole || std::ptr::eq(*arm, *whole))
                 }))
         {
             return Err(syn::Error::new_spanned(
@@ -483,6 +529,24 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             registration.partial,
             &tokens,
         ));
+    }
+    let name = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    for Via { via, id } in vias {
+        out.extend(quote! {
+            impl #impl_generics
+                From<<#via as errlanes::RejectionSource<#name #ty_generics, #id>>::Type>
+                for #name #ty_generics #where_clause
+            {
+                fn from(
+                    source: <#via as errlanes::RejectionSource<#name #ty_generics, #id>>::Type,
+                ) -> Self {
+                    <Self as From<#via>>::from(<#via as From<
+                        <#via as errlanes::RejectionSource<#name #ty_generics, #id>>::Type,
+                    >>::from(source))
+                }
+            }
+        });
     }
     Ok(out)
 }

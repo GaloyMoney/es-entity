@@ -9,3 +9,4 @@ extra = ["middle/extra"]
 [dependencies]
 middle = { package = "composition-middle", path = "../middle" }
 errlanes = { path = "../../..", features = ["derive"] }
+renamed = { package = "composition-source", path = "../source" }

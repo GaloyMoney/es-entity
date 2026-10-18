@@ -86,3 +86,35 @@ pub fn check_union() {
         UnionApi::Extra
     ));
 }
+
+#[errlanes::compose(middle::Wrapped)]
+#[derive(Debug)]
+pub enum Deep {}
+
+pub fn check_transitive() {
+    let direct = Api::from(renamed::Enforcement::Disabled);
+    assert!(matches!(direct, Api::PostVelocityDisabled));
+    assert_eq!(
+        Into::<&'static str>::into(direct.code()),
+        "VELOCITY_DISABLED"
+    );
+    let limit = Api::from(renamed::Enforcement::Limit(renamed::domain::Limit(5)));
+    assert_eq!(limit.level(), errlanes::Level::Warn);
+    assert_eq!(
+        std::error::Error::source(&limit).unwrap().to_string(),
+        "limit 5"
+    );
+
+    let deep = Deep::from(renamed::Enforcement::Limit(renamed::domain::Limit(7)));
+    assert!(matches!(deep, Deep::VelocityLimit(ref value) if value.0 == 7));
+    assert_eq!(Into::<&'static str>::into(deep.code()), "VELOCITY_LIMIT");
+    assert_eq!(deep.level(), errlanes::Level::Warn);
+    assert_eq!(
+        std::error::Error::source(&deep).unwrap().to_string(),
+        "limit 7"
+    );
+    assert!(matches!(
+        Deep::from(middle::Posting::VelocityDisabled),
+        Deep::VelocityDisabled
+    ));
+}

@@ -1,0 +1,5 @@
+error: empty modifier list; drop the parentheses
+ --> tests/v2/compose_modifier_empty.rs:6:25
+  |
+6 | #[errlanes::compose(Leaf())]
+  |                         ^^
