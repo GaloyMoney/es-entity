@@ -118,3 +118,42 @@ pub fn check_transitive() {
         Deep::VelocityDisabled
     ));
 }
+
+#[errlanes::compose(middle::Forwarding)]
+#[derive(Debug)]
+pub enum Leaves {}
+
+pub fn check_leaf_from() {
+    let error = Leaves::from(renamed::domain::Limit(3));
+    assert!(matches!(error, Leaves::VelocityLimit(ref value) if value.0 == 3));
+    assert_eq!(Into::<&'static str>::into(error.code()), "VELOCITY_LIMIT");
+    assert_eq!(error.level(), errlanes::Level::Warn);
+}
+
+#[errlanes::compose(middle::Quiet)]
+#[derive(Debug)]
+pub enum Silent {}
+
+struct Probe<T>(std::marker::PhantomData<T>);
+
+trait Absent {
+    fn converts_from_leaf(&self) -> bool {
+        false
+    }
+}
+impl<T> Absent for Probe<T> {}
+
+impl<T: From<renamed::domain::Limit>> Probe<T> {
+    fn converts_from_leaf(&self) -> bool {
+        true
+    }
+}
+
+/// `no_leaf_from` in `middle` round-trips through the protocol: the family
+/// `From` and the cases survive, the leaf `From` does not.
+pub fn check_no_leaf_from() {
+    assert!(Probe::<Leaves>(std::marker::PhantomData).converts_from_leaf());
+    assert!(!Probe::<Silent>(std::marker::PhantomData).converts_from_leaf());
+    let family = Silent::from(middle::Quiet::VelocityDisabled);
+    assert!(matches!(family, Silent::VelocityDisabled));
+}

@@ -849,6 +849,14 @@ pub trait RejectionField<const VARIANT: u64, const FIELD: usize> {
     type Type;
 }
 
+/// Compile-time payload metadata for a variant a composing family converts
+/// from: like [`RejectionField`], with the destination as a trait argument so
+/// the projection can appear in the destination's `From` impl header.
+#[doc(hidden)]
+pub trait RejectionPayload<Destination, const VARIANT: u64, const FIELD: usize> {
+    type Type;
+}
+
 /// Compile-time source metadata used by the rejection composition protocol: a
 /// family exports each source it converts from, keyed by the hash of the path
 /// as the family spelled it, so a composing family can name that source

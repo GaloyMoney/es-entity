@@ -7,4 +7,8 @@ enum Leaf {
 #[derive(Debug)]
 enum Trailing {}
 
+#[errlanes::compose(Leaf, no_leaf_from)]
+#[derive(Debug)]
+enum TrailingLeaf {}
+
 fn main() {}

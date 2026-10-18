@@ -888,3 +888,9 @@ If two imported families reach one type under different spellings, they export i
 twice and the outer family gets two identical impls (E0119). Either import one of
 them with `(no_from)`, or register that source once on the outer family with
 `#[lift(Source)]`, spelled the same way as one of them.
+
+An imported case keeps the `from` its source declares, so `Composed::from(leaf)`
+works for every payload any source accepts by `from`. Two imported variants with
+the same payload type are a conflicting-`From` error: merge them into one
+variant (`#[compose(merge(..))]`) or import one source `(no_leaf_from)`.
+`Source(no_from)` imports the cases only — no leaf `From`, no transitive `From`.

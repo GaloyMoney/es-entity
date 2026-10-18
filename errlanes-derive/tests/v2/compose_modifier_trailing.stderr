@@ -3,3 +3,9 @@ error: `no_from` is an import modifier; write `Source(no_from)`
   |
 6 | #[errlanes::compose(Leaf, no_from)]
   |                           ^^^^^^^
+
+error: `no_leaf_from` is an import modifier; write `Source(no_leaf_from)`
+  --> tests/v2/compose_modifier_trailing.rs:10:27
+   |
+10 | #[errlanes::compose(Leaf, no_leaf_from)]
+   |                           ^^^^^^^^^^^^

@@ -68,9 +68,11 @@ pub fn schema(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         variant
             .attrs
             .retain(|a| !a.path().is_ident("lift") && !a.path().is_ident("rejection"));
-        variant
-            .attrs
-            .push(parse_quote!(#[rejection(origin = #origin)]));
+        variant.attrs.push(if from {
+            parse_quote!(#[rejection(origin = #origin, from)])
+        } else {
+            parse_quote!(#[rejection(origin = #origin)])
+        });
         for (index, field) in variant.fields.iter_mut().enumerate() {
             let ty = &field.ty;
             fields.extend(quote! {
@@ -82,9 +84,26 @@ pub fn schema(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 field.attrs.push(parse_quote!(#[source]));
             }
             // The caller-supplied source type is hygienic across renamed dependencies.
-            field.ty = syn::parse2(
-                quote!(<__ErrlanesSource as errlanes::RejectionField<#id, #index>>::Type),
-            )?;
+            if from && payload_index == Some(index) {
+                let generic = generic_destination(ty, name);
+                fields.extend(quote! {
+                    impl<__ErrlanesDestination>
+                        errlanes::RejectionPayload<__ErrlanesDestination, #id, #index>
+                        for #name
+                    {
+                        type Type = #generic;
+                    }
+                });
+                field.ty = syn::parse2(quote!(
+                    <__ErrlanesSource as errlanes::RejectionPayload<
+                        __ErrlanesDestination, #id, #index
+                    >>::Type
+                ))?;
+            } else {
+                field.ty = syn::parse2(
+                    quote!(<__ErrlanesSource as errlanes::RejectionField<#id, #index>>::Type),
+                )?;
+            }
         }
     }
     // Every source this family converts from (a strict `#[lift(X)]`, which
@@ -222,15 +241,24 @@ pub fn callback(input: TokenStream) -> syn::Result<TokenStream> {
         schema,
         ids,
     } = syn::parse2(input)?;
-    fn substitute(tokens: TokenStream, source: &syn::Type) -> TokenStream {
+    fn substitute(
+        tokens: TokenStream,
+        source: &syn::Type,
+        destination: &syn::Ident,
+    ) -> TokenStream {
         use proc_macro2::{Group, TokenTree};
         tokens
             .into_iter()
             .flat_map(|token| match token {
                 TokenTree::Ident(name) if name == "__ErrlanesSource" => source.to_token_stream(),
+                TokenTree::Ident(name) if name == "__ErrlanesDestination" => {
+                    destination.to_token_stream()
+                }
                 TokenTree::Group(group) => {
-                    let mut result =
-                        Group::new(group.delimiter(), substitute(group.stream(), source));
+                    let mut result = Group::new(
+                        group.delimiter(),
+                        substitute(group.stream(), source, destination),
+                    );
                     result.set_span(group.span());
                     TokenStream::from(TokenTree::Group(result))
                 }
@@ -238,7 +266,7 @@ pub fn callback(input: TokenStream) -> syn::Result<TokenStream> {
             })
             .collect()
     }
-    let variants = substitute(schema.value().parse()?, &source);
+    let variants = substitute(schema.value().parse()?, &source, context.destination());
     let parsed: ItemEnum = syn::parse2(quote!(enum Schema { #variants }))?;
     context.receive(parsed.variants, ids)
 }
@@ -258,4 +286,23 @@ fn origin(variant: &syn::Variant) -> syn::Result<Option<String>> {
         }
     }
     Ok(origin)
+}
+
+/// A payload this family itself imported is a `RejectionPayload` projection
+/// naming this family as its destination; re-exported, it must stay generic
+/// over whichever family imports it next.
+fn generic_destination(ty: &syn::Type, owner: &syn::Ident) -> syn::Type {
+    let mut ty = ty.clone();
+    if let syn::Type::Path(path) = &mut ty
+        && let Some(qself) = &path.qself
+        && let Some(segment) = path.path.segments.iter_mut().nth(qself.position - 1)
+        && segment.ident == "RejectionPayload"
+        && let syn::PathArguments::AngleBracketed(arguments) = &mut segment.arguments
+        && let Some(syn::GenericArgument::Type(syn::Type::Path(destination))) =
+            arguments.args.first_mut()
+        && destination.path.is_ident(owner)
+    {
+        *destination = parse_quote!(__ErrlanesDestination);
+    }
+    ty
 }

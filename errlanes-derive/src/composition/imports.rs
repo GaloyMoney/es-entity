@@ -8,7 +8,7 @@ use syn::{
 
 type Variants = Punctuated<Variant, Token![,]>;
 
-const MODIFIERS: [&str; 1] = ["no_from"];
+const MODIFIERS: [&str; 2] = ["no_from", "no_leaf_from"];
 
 /// One entry of `#[errlanes::compose(Source, Other as Prefix)]`. A bare path
 /// imports the family under its original variant names; `as Prefix` keeps its
@@ -17,6 +17,7 @@ struct Import {
     path: Path,
     prefix: Option<Ident>,
     no_from: bool,
+    no_leaf_from: bool,
 }
 
 impl Parse for Import {
@@ -29,6 +30,7 @@ impl Parse for Import {
             None
         };
         let mut no_from = false;
+        let mut no_leaf_from = false;
         if input.peek(syn::token::Paren) {
             let group;
             let paren = syn::parenthesized!(group in input);
@@ -39,13 +41,29 @@ impl Parse for Import {
                 ));
             }
             for name in group.parse_terminated(Ident::parse, Token![,])? {
-                if name != "no_from" {
-                    return Err(syn::Error::new_spanned(name, "expected `no_from`"));
+                let flag = match name.to_string().as_str() {
+                    "no_from" => &mut no_from,
+                    "no_leaf_from" => &mut no_leaf_from,
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            name,
+                            "expected `no_from` or `no_leaf_from`",
+                        ));
+                    }
+                };
+                if *flag {
+                    return Err(syn::Error::new_spanned(
+                        &name,
+                        format!("duplicate `{name}`"),
+                    ));
                 }
-                if no_from {
-                    return Err(syn::Error::new_spanned(name, "duplicate `no_from`"));
+                *flag = true;
+                if no_from && no_leaf_from {
+                    return Err(syn::Error::new_spanned(
+                        name,
+                        "`no_leaf_from` is implied by `no_from`",
+                    ));
                 }
-                no_from = true;
             }
             if input.peek(Token![as]) {
                 return Err(input.error("modifiers follow the prefix: `Source as Prefix(no_from)`"));
@@ -55,6 +73,7 @@ impl Parse for Import {
             path,
             prefix,
             no_from,
+            no_leaf_from,
         })
     }
 }
@@ -67,8 +86,13 @@ impl ToTokens for Import {
         if let Some(prefix) = &self.prefix {
             tokens.extend(quote!(as #prefix));
         }
-        if self.no_from {
-            tokens.extend(quote!((no_from)));
+        let modifiers = [
+            self.no_from.then(|| quote!(no_from)),
+            self.no_leaf_from.then(|| quote!(no_leaf_from)),
+        ];
+        let modifiers: Vec<_> = modifiers.into_iter().flatten().collect();
+        if !modifiers.is_empty() {
+            tokens.extend(quote!((#(#modifiers),*)));
         }
     }
 }
@@ -89,8 +113,9 @@ impl Parse for Arguments {
             if index > 0
                 && import.prefix.is_none()
                 && !import.no_from
+                && !import.no_leaf_from
                 && let Some(name) = import.path.get_ident()
-                && MODIFIERS.iter().any(|modifier| name == modifier)
+                && MODIFIERS.iter().any(|m| name == m)
             {
                 return Err(syn::Error::new_spanned(
                     name,
@@ -106,6 +131,7 @@ struct Source {
     path: Path,
     prefix: Option<Ident>,
     no_from: bool,
+    no_leaf_from: bool,
     ids: Vec<u64>,
     variants: Variants,
 }
@@ -132,8 +158,10 @@ impl Parse for Context {
             syn::bracketed!(path in sources);
             let prefix;
             syn::bracketed!(prefix in sources);
-            let no_from;
-            syn::bracketed!(no_from in sources);
+            let modifiers;
+            syn::bracketed!(modifiers in sources);
+            let modifiers = modifiers.parse::<TokenStream>()?.to_string();
+            let modifier = |name| modifiers.split_whitespace().any(|found| found == name);
             let ids;
             syn::bracketed!(ids in sources);
             let variants;
@@ -145,7 +173,8 @@ impl Parse for Context {
                 } else {
                     Some(prefix.parse()?)
                 },
-                no_from: !no_from.is_empty(),
+                no_from: modifier("no_from"),
+                no_leaf_from: modifier("no_leaf_from"),
                 ids: ids
                     .parse_terminated(syn::LitInt::parse, Token![,])?
                     .iter()
@@ -219,11 +248,13 @@ impl Context {
                  path,
                  prefix,
                  no_from,
+                 no_leaf_from,
                  ids,
                  variants,
              }| {
                 let no_from = no_from.then(|| quote!(no_from));
-                quote! { [#path] [#prefix] [#no_from] [#(#ids),*] { #variants } }
+                let no_leaf_from = no_leaf_from.then(|| quote!(no_leaf_from));
+                quote! { [#path] [#prefix] [#no_from #no_leaf_from] [#(#ids),*] { #variants } }
             },
         );
         Ok(quote! {
@@ -232,16 +263,22 @@ impl Context {
         })
     }
 
+    pub(super) fn destination(&self) -> &Ident {
+        &self.item.ident
+    }
+
     pub(super) fn receive(mut self, variants: Variants, ids: Vec<u64>) -> syn::Result<TokenStream> {
         let Import {
             path,
             prefix,
             no_from,
+            no_leaf_from,
         } = self.remaining.first().unwrap();
         self.sources.push(Source {
             path: path.clone(),
             prefix: prefix.clone(),
             no_from: *no_from,
+            no_leaf_from: *no_leaf_from,
             ids,
             variants,
         });
@@ -403,6 +440,7 @@ fn finish(mut item: ItemEnum, sources: Vec<Source>) -> syn::Result<TokenStream> 
         path,
         prefix,
         no_from,
+        no_leaf_from,
         ids,
         variants,
     } in sources
@@ -466,6 +504,14 @@ fn finish(mut item: ItemEnum, sources: Vec<Source>) -> syn::Result<TokenStream> 
                     ));
                 }
                 variant.ident = imported;
+                if (no_from || no_leaf_from)
+                    && let Some(origin) = super::origin(&variant)?
+                {
+                    variant.attrs.retain(|a| !a.path().is_ident("rejection"));
+                    variant
+                        .attrs
+                        .push(parse_quote!(#[rejection(origin = #origin)]));
+                }
                 variant.attrs.push(parse_quote!(#[lift(#case)]));
                 variant
                     .attrs
