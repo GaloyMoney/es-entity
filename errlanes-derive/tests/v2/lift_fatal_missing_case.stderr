@@ -1,0 +1,15 @@
+error[E0004]: non-exhaustive patterns: `Source::C` not covered
+ --> tests/v2/lift_fatal_missing_case.rs:8:16
+  |
+8 | #[lift(Source, fatal(B))]
+  |                ^^^^^ pattern `Source::C` not covered
+  |
+note: `Source` defined here
+ --> tests/v2/lift_fatal_missing_case.rs:1:6
+  |
+1 | enum Source {
+  |      ^^^^^^
+...
+4 |     C,
+  |     - not covered
+  = note: the matched value is of type `Source`

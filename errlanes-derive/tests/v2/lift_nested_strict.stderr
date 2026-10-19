@@ -1,4 +1,4 @@
-error: a nested lift case leaves `Outer::A` partially mapped; register `#[lift(Outer, unhandled = fatal)]`
+error: a nested lift case leaves `Outer::A` partially mapped; register `#[lift(Outer, unhandled = fatal)]` or list the remaining cases in `fatal(..)`
   --> tests/v2/lift_nested_strict.rs:14:5
    |
 14 |     #[lift(Outer::A(Mid::B))]

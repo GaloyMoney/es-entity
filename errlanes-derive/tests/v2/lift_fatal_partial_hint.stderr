@@ -1,0 +1,11 @@
+error: a nested lift case leaves `Source::A` partially mapped; register `#[lift(Source, unhandled = fatal)]` or list the remaining cases in `fatal(..)`
+  --> tests/v2/lift_fatal_partial_hint.rs:14:5
+   |
+14 |     #[lift(Source::A(Inner::X))]
+   |     ^
+
+error: guards leave `Guarded::Value` partially mapped; add an unguarded arm for it, register `#[lift(Guarded, unhandled = fatal)]`, or list the remaining cases in `fatal(..)`
+  --> tests/v2/lift_fatal_partial_hint.rs:29:35
+   |
+29 |     #[lift(Guarded::Value, when = is_even)]
+   |                                   ^^^^^^^
