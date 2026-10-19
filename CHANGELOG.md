@@ -1,3 +1,11 @@
+# [cala release v0.19.6](https://github.com/GaloyMoney/cala/releases/tag/0.19.6)
+
+
+
+### Features
+
+- Explicit fatal(..) cases on a partial lift (#285)
+
 # [cala release v0.19.5](https://github.com/GaloyMoney/cala/releases/tag/0.19.5)
 
 
