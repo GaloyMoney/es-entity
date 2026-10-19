@@ -1,60 +1,10 @@
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use syn::{Fields, Path, Token, parse::Parse, spanned::Spanned};
 
-const ONE_MODE: &str = "choose one of `strict`, `unhandled = fatal`, `fatal(..)`";
-
-pub(crate) enum Partial {
-    No,
-    CatchAll,
-    Cases { span: Span, cases: Vec<Case> },
-}
-impl Partial {
-    pub(crate) fn is_partial(&self) -> bool {
-        !matches!(self, Self::No)
-    }
-
-    fn parse_cases(keyword: syn::Ident, input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let content;
-        let paren = syn::parenthesized!(content in input);
-        let cases = content.parse_terminated(Case::parse, Token![,])?;
-        if cases.is_empty() {
-            return Err(syn::Error::new(
-                paren.span.join(),
-                "`fatal(..)` names at least one case; an empty list is `strict`",
-            ));
-        }
-        for case in &cases {
-            let top = &case.path;
-            if top.leading_colon.is_some()
-                || top.segments.len() != 1
-                || !top.segments[0].arguments.is_none()
-            {
-                return Err(syn::Error::new_spanned(
-                    top,
-                    "a `fatal(..)` case names a variant of the source; the source path is not repeated",
-                ));
-            }
-        }
-        Ok(Self::Cases {
-            span: keyword.span(),
-            cases: cases.into_iter().collect(),
-        })
-    }
-
-    fn parse_unhandled(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        input.parse::<Token![=]>()?;
-        let fatal: syn::Ident = input.parse()?;
-        if fatal != "fatal" {
-            return Err(syn::Error::new_spanned(fatal, "expected fatal"));
-        }
-        Ok(Self::CatchAll)
-    }
-}
-
 pub(crate) struct Registration {
     pub(crate) source: Path,
-    pub(crate) partial: Partial,
+    pub(crate) partial: bool,
 }
 
 /// `#[lift(via = Family, id = N)]`: composition's record that `Family`
@@ -99,33 +49,27 @@ pub(crate) fn is_via(attr: &syn::Attribute) -> syn::Result<bool> {
 impl Parse for Registration {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let source = input.parse()?;
-        let mut partial = None;
-        while input.peek(Token![,]) {
+        let mut partial = false;
+        if input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
             let mode: syn::Ident = input.parse()?;
-            if partial.is_some() {
-                return Err(syn::Error::new_spanned(mode, ONE_MODE));
-            }
-            partial = Some(if mode == "unhandled" {
-                Partial::parse_unhandled(input)?
-            } else if mode == "fatal" {
-                Partial::parse_cases(mode, input)?
-            } else if mode == "strict" {
-                Partial::No
-            } else {
+            if mode == "unhandled" {
+                input.parse::<Token![=]>()?;
+                let fatal: syn::Ident = input.parse()?;
+                if fatal != "fatal" {
+                    return Err(syn::Error::new_spanned(fatal, "expected fatal"));
+                }
+                partial = true;
+            } else if mode != "strict" {
                 return Err(syn::Error::new_spanned(
                     mode,
-                    "expected strict, unhandled = fatal, or fatal(..)",
+                    "expected strict or unhandled = fatal",
                 ));
-            });
+            }
         }
-        Ok(Self {
-            source,
-            partial: partial.unwrap_or(Partial::No),
-        })
+        Ok(Self { source, partial })
     }
 }
-#[derive(Clone)]
 pub(crate) struct Case {
     path: Path,
     inner: Option<Box<Case>>,
@@ -174,16 +118,6 @@ impl Case {
                     })
             })
             .collect()
-    }
-
-    fn under(&self, source: &Path) -> Case {
-        let mut path = source.clone();
-        path.segments.last_mut().expect("source path").arguments = syn::PathArguments::None;
-        path.segments.push(self.path.segments[0].clone());
-        Case {
-            path,
-            inner: self.inner.clone(),
-        }
     }
 
     fn nest(&self, leaf: &dyn Fn(&Path) -> TokenStream) -> TokenStream {
@@ -523,13 +457,12 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             .collect();
         for arm in &own {
             let Arm { mapping, attr, .. } = arm;
-            if mapping.case.is_nested() && !registration.partial.is_partial() {
+            if mapping.case.is_nested() && !registration.partial {
                 return Err(syn::Error::new_spanned(
                     attr,
                     format!(
                         "a nested lift case leaves `{}` partially mapped; register \
-                         `#[lift({}, unhandled = fatal)]` or list the remaining cases \
-                         in `fatal(..)`",
+                         `#[lift({}, unhandled = fatal)]`",
                         mapping
                             .case
                             .path()
@@ -545,13 +478,12 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 let caught = arms.iter().any(|other| {
                     other.mapping.when.is_none() && other.mapping.case.key() == case_key
                 });
-                if !registration.partial.is_partial() && !caught {
+                if !registration.partial && !caught {
                     return Err(syn::Error::new_spanned(
                         when,
                         format!(
-                            "guards leave `{0}` partially mapped; add an unguarded arm for it, \
-                             register `#[lift({1}, unhandled = fatal)]`, or list the remaining \
-                             cases in `fatal(..)`",
+                            "guards leave `{0}` partially mapped; add an unguarded arm for it \
+                             or register `#[lift({1}, unhandled = fatal)]`",
                             case_key.replace(' ', ""),
                             key.replace(' ', ""),
                         ),
@@ -564,7 +496,7 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         if let Some(whole) = own
             .iter()
             .find(|arm| arm.whole_value && arm.mapping.when.is_none() && arm.mapping.into)
-            && (registration.partial.is_partial()
+            && (registration.partial
                 || own.iter().any(|arm| {
                     let guarded_whole = arm.whole_value && arm.mapping.when.is_some();
                     !(guarded_whole || std::ptr::eq(*arm, *whole))
@@ -573,16 +505,8 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             return Err(syn::Error::new_spanned(
                 whole.attr,
                 "a whole-value `into` over an enum source is the entire conversion; \
-                 it cannot be combined with other arms, `unhandled = fatal` or `fatal(..)`",
+                 it cannot be combined with other arms or `unhandled = fatal`",
             ));
-        }
-        if let Partial::Cases { cases, .. } = &registration.partial {
-            let mapped: Vec<String> = own
-                .iter()
-                .filter(|arm| arm.mapping.when.is_none())
-                .map(|arm| arm.mapping.case.key())
-                .collect();
-            check_listed(&source, cases, &mapped)?;
         }
         let mut tokens = Vec::new();
         for arm in own {
@@ -602,7 +526,7 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         out.extend(conversion_impl(
             input,
             &source,
-            &registration.partial,
+            registration.partial,
             &tokens,
         ));
     }
@@ -767,43 +691,10 @@ fn variant_arm(
     })
 }
 
-fn check_listed(source: &Path, cases: &[Case], mapped: &[String]) -> syn::Result<()> {
-    let display = |key: &str| key.replace(' ', "");
-    let mut seen: Vec<String> = Vec::new();
-    for case in cases {
-        let qualified = case.under(source);
-        let key = qualified.key();
-        let covered_by = |keys: &[String]| {
-            keys.contains(&key)
-                || qualified
-                    .ancestor_keys()
-                    .iter()
-                    .any(|ancestor| keys.contains(ancestor))
-        };
-        if covered_by(mapped) {
-            return Err(syn::Error::new_spanned(
-                &case.path,
-                format!("`{}` is mapped and fatal", display(&key)),
-            ));
-        }
-        if covered_by(&seen) {
-            return Err(syn::Error::new_spanned(
-                &case.path,
-                format!(
-                    "`{}` is listed in `fatal(..)` more than once",
-                    display(&key)
-                ),
-            ));
-        }
-        seen.push(key);
-    }
-    Ok(())
-}
-
 fn conversion_impl(
     input: &syn::DeriveInput,
     source: &Path,
-    partial: &Partial,
+    partial: bool,
     arms: &[TokenStream],
 ) -> TokenStream {
     let name = &input.ident;
@@ -812,27 +703,13 @@ fn conversion_impl(
     // Lift<X> for P` supplies the `Lift` view with `Unmapped = Infallible`,
     // so one call-site method (`lift`) covers strict and partial alike.
     // Emitting both here would collide with that blanket (E0119).
-    if let Partial::CatchAll = partial {
+    if partial {
         let unhandled = syn::Ident::new("unhandled", source.span());
         quote! {
             impl #impl_generics errlanes::Lift<#source> for #name #ty_generics #where_clause {
                 type Unmapped = #source;
                 fn lift(source: #source) -> Result<Self, Self::Unmapped> {
                     match source { #(#arms,)* #unhandled => Err(#unhandled) }
-                }
-            }
-        }
-    } else if let Partial::Cases { span, cases } = partial {
-        let fatal = cases.iter().map(|case| {
-            let pattern = case.under(source).nest(&|leaf| quote!(#leaf { .. }));
-            quote! { unhandled @ #pattern => Err(unhandled) }
-        });
-        let scrutinee = syn::Ident::new("source", *span);
-        quote! {
-            impl #impl_generics errlanes::Lift<#source> for #name #ty_generics #where_clause {
-                type Unmapped = #source;
-                fn lift(source: #source) -> Result<Self, Self::Unmapped> {
-                    match #scrutinee { #(#arms,)* #(#fatal,)* }
                 }
             }
         }
@@ -867,7 +744,7 @@ fn conversion_impl(
 struct StructRegistration {
     source: Path,
     variant: syn::Ident,
-    partial: Partial,
+    partial: bool,
 }
 
 impl Parse for StructRegistration {
@@ -889,22 +766,26 @@ impl Parse for StructRegistration {
                     input.parse::<Token![=]>()?;
                     variant = Some(input.parse()?);
                 }
-                "strict" | "unhandled" | "fatal" => {
+                "strict" | "unhandled" => {
                     if partial.is_some() {
-                        return Err(syn::Error::new_spanned(key, ONE_MODE));
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "choose either `strict` or `unhandled = fatal` once",
+                        ));
                     }
-                    partial = Some(if key == "unhandled" {
-                        Partial::parse_unhandled(input)?
-                    } else if key == "fatal" {
-                        Partial::parse_cases(key, input)?
-                    } else {
-                        Partial::No
-                    });
+                    partial = Some(key == "unhandled");
+                    if key == "unhandled" {
+                        input.parse::<Token![=]>()?;
+                        let fatal: syn::Ident = input.parse()?;
+                        if fatal != "fatal" {
+                            return Err(syn::Error::new_spanned(fatal, "expected fatal"));
+                        }
+                    }
                 }
                 _ => {
                     return Err(syn::Error::new_spanned(
                         key,
-                        "expected `variant = Case`, `strict`, `unhandled = fatal`, or `fatal(..)`",
+                        "expected `variant = Case`, `strict`, or `unhandled = fatal`",
                     ));
                 }
             }
@@ -915,7 +796,7 @@ impl Parse for StructRegistration {
         Ok(Self {
             source,
             variant,
-            partial: partial.unwrap_or(Partial::No),
+            partial: partial.unwrap_or(false),
         })
     }
 }
@@ -976,9 +857,6 @@ fn derive_struct(input: &syn::DeriveInput, data: &syn::DataStruct) -> syn::Resul
     // arguments are not permitted on variant patterns.
     case.segments.last_mut().expect("source path").arguments = syn::PathArguments::None;
     case.segments.push(variant.into());
-    if let Partial::Cases { cases, .. } = &partial {
-        check_listed(&source, cases, &[case.to_token_stream().to_string()])?;
-    }
     let mut bindings = Vec::new();
     let mut assignments = Vec::new();
     let mut sources = std::collections::HashSet::new();
@@ -1008,7 +886,7 @@ fn derive_struct(input: &syn::DeriveInput, data: &syn::DataStruct) -> syn::Resul
     // No `..`: rustc checks the complete source payload, including missing
     // fields and shape/type mismatches. No fields are silently discarded.
     let arm = quote! { #case { #(#bindings),* } => Ok(Self { #(#assignments),* }) };
-    Ok(conversion_impl(input, &source, &partial, &[arm]))
+    Ok(conversion_impl(input, &source, partial, &[arm]))
 }
 
 /// A unit struct lifts a whole source value and drops it. Only the source

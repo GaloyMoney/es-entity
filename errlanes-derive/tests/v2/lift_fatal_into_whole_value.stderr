@@ -1,5 +1,0 @@
-error: a whole-value `into` over an enum source is the entire conversion; it cannot be combined with other arms, `unhandled = fatal` or `fatal(..)`
- --> tests/v2/lift_fatal_into_whole_value.rs:6:5
-  |
-6 |     #[lift(Source, into)]
-  |     ^

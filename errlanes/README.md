@@ -371,42 +371,6 @@ assert!(matches!(
 assert!(UpdateFamily::lift(Update::Invalid).is_err());
 ```
 
-A registration takes one of three modes. Use strict (the default) when every
-source case has a home. Use `fatal(A, B(Inner::X))` when some cases cannot reach
-this use case and you want adding a case upstream to be a decision here: the
-listed cases are returned unmapped exactly as with `unhandled = fatal`, but the
-generated `match` has no wildcard, so a source case that is neither mapped nor
-listed is a compile error (`E0004`) on the `fatal(..)` entry. A listed case
-names a variant of the source without repeating the source path, and a nested
-case wraps the inner pattern as in a nested arm; a coarse entry such as `B`
-catches every other case of `B`. `unhandled = fatal` is the legacy catch-all.
-A registration carries only one of the three modes, and the same `fatal(..)`
-form works on struct registrations.
-
-```rust
-use errlanes::Lift;
-
-#[derive(Debug, PartialEq, errlanes::Rejection)]
-enum Quota {
-    #[rejection(code = "QUOTA_EXCEEDED")]
-    Exceeded,
-    #[rejection(code = "QUOTA_LOCKED")]
-    Locked,
-    #[rejection(code = "QUOTA_UNKNOWN")]
-    Unknown,
-}
-
-#[derive(Debug, errlanes::Rejection, errlanes::Lift)]
-#[lift(Quota, fatal(Locked, Unknown))]
-enum Spend {
-    #[lift(Quota::Exceeded)]
-    Exceeded,
-}
-
-assert!(matches!(Spend::lift(Quota::Exceeded), Ok(Spend::Exceeded)));
-assert_eq!(Spend::lift(Quota::Locked).unwrap_err(), Quota::Locked);
-```
-
 When one source variant carries several cases, `when = predicate` guards an
 arm: the predicate is a path to a `fn(&Payload) -> bool` over the variant's
 single payload, and a payload no guard accepts falls through to the next arm

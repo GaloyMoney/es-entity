@@ -124,7 +124,7 @@ pub fn schema(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             });
             source_ids.push(id);
         } else if let Some(registration) = crate::lift::registration(attr)?
-            && !registration.partial.is_partial()
+            && !registration.partial
         {
             let id = variant_id(&imports::key(&registration.source));
             let source = &registration.source;
