@@ -63,10 +63,3 @@ fn error_format_args_render_composite_field_member() {
         "undecodable event 7 at sequence 42: missing field `foo`"
     );
 }
-
-#[test]
-fn carrier_ui() {
-    let t = trybuild::TestCases::new();
-    t.pass("tests/trybuild/carrier_forms_pass.rs");
-    t.compile_fail("tests/carrier_ui/*.rs");
-}

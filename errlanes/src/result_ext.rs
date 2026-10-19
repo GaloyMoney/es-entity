@@ -7,7 +7,7 @@
 use std::convert::Infallible;
 
 use crate::{
-    carrier::{Carrier, IntoLanes, fail_into_fault, kind},
+    carrier::{IntoLanes, fail_into_fault, kind},
     classify::Classify,
     fail::{Fail, Fault, Laned, Lift, Rejection, UnmappedInto},
     lane::{Denied, Fatal},
@@ -16,14 +16,13 @@ use crate::{
 
 /// Sealed. The error-level engine for [`ResultExt::narrow_rejected`] — keyed
 /// on the source shape: a `Fail` narrows to
-/// the `Fault` of its own profile, a bare `Rejection` to the bare `Fatal`, a
-/// carrier through its built-in. Both outputs are associated types, read off
+/// the `Fault` of its own profile, a bare `Rejection` to the bare `Fatal`.
+/// Both outputs are associated types, read off
 /// the source, so `.narrow_rejected()?` never needs a destination named at the
 /// call site.
 ///
 /// One impl over `S: IntoLanes`, handing off to [`NarrowRejectedBy`] on the
-/// concrete shape type. A separate `C: Carrier` impl would overlap the
-/// `R: Rejection` one (generic against generic).
+/// concrete shape type.
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no rejected lane to narrow",
@@ -76,16 +75,6 @@ impl<R: Rejection> NarrowRejectedBy<R> for kind::Source {
     }
 }
 
-impl<C: Carrier> NarrowRejectedBy<C> for kind::CarrierShape
-where
-    C::Repr: NarrowRejectedLane,
-{
-    type Narrowed = <C::Repr as NarrowRejectedLane>::Narrowed;
-    fn narrow(s: C) -> Self::Narrowed {
-        s.into_repr().narrow_rejected()
-    }
-}
-
 /// Sealed. The error-level engine for [`ResultExt::narrow_denied`], shared by
 /// both carriers — `Fail` and `Fault` each still have a denied lane to
 /// narrow.
@@ -126,20 +115,6 @@ where
     type Narrowed = Fault<WithoutDenied<L>>;
     fn narrow_denied(self) -> Self::Narrowed {
         Fault::narrow_denied(self)
-    }
-}
-
-/// A carrier narrows through its built-in, so its own lane set governs
-/// availability: a carrier with no `Denied` lane has a `Repr` with a disabled
-/// `Denied` slot, and `narrow_denied` is not callable on it. The result is
-/// the narrowed *built-in*, which `?` carries on.
-impl<C: Carrier> NarrowDeniedLane for C
-where
-    C::Repr: NarrowDeniedLane,
-{
-    type Narrowed = <C::Repr as NarrowDeniedLane>::Narrowed;
-    fn narrow_denied(self) -> Self::Narrowed {
-        self.into_repr().narrow_denied()
     }
 }
 

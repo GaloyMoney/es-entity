@@ -1,0 +1,15 @@
+error[E0271]: type mismatch resolving `<Profile<false, true, true> as LaneProfile>::Denied == Denied`
+ --> tests/coherence/negative/narrow_denied_without_denied.rs:5:15
+  |
+5 |     let _ = r.narrow_denied();
+  |               ^^^^^^^^^^^^^ expected `Denied`, found `Infallible`
+  |
+  = note: required for `errlanes::Fault<Profile<false, true, true>>` to implement `NarrowDeniedLane`
+note: required by a bound in `errlanes::ResultExt::narrow_denied`
+ --> src/result_ext.rs
+  |
+  |     fn narrow_denied(self) -> Result<T, E::Narrowed>
+  |        ------------- required by a bound in this associated function
+  |     where
+  |         E: NarrowDeniedLane;
+  |            ^^^^^^^^^^^^^^^^ required by this bound in `ResultExt::narrow_denied`

@@ -688,15 +688,15 @@ conversion depends on what changes:
 | From | To | Use |
 |---|---|---|
 | the same error type | itself | `?` |
-| a lane payload (`Transient`, `Fatal`, `Denied`) | a built-in or carrier enabling it | `?` |
+| a lane payload (`Transient`, `Fatal`, `Denied`) | a `Fault` or `Fail` enabling it | `?` |
 | `Fault<S>` | `Fault<D>` or `Fail<R, D>`, `S ⊆ D` | `?` |
 | `Fail<R, S>` | `Fail<R, D>`, `S ⊆ D` | `?` |
 | a bare rejection `C` | `Fail<R, D>`, given a total `R: From<C>` | `?` |
 | `W: Classify` | `Fail<R, D>`, given a total `R: From<W::Rejected>` and `W::Lanes ⊆ D` | `?` |
 | `W: Classify<Rejected = Infallible>` | `Fault<D>`, `W::Lanes ⊆ D` | `?` |
-| a rejecting result (`Fail`, bare rejection, wrapper, carrier) | `Fail<P, D>` or a `Fail`-like carrier, with `Fatal` enabled and a total or partial `P: Lift<R>` | `.lift()?` |
-| a never-rejecting result | its own `Fault<W::Lanes>` at a box or foreign carrier boundary | `.into_fault()?` |
-| a rejecting result | its own `Fail<R, W::Lanes>` at a foreign carrier boundary | `.into_fail()?` |
+| a rejecting result (`Fail`, bare rejection, wrapper) | `Fail<P, D>`, with `Fatal` enabled and a total or partial `P: Lift<R>` | `.lift()?` |
+| a never-rejecting result | its own `Fault<W::Lanes>` where `?` has no destination to infer (a box) | `.into_fault()?` |
+| a rejecting result | its own `Fail<R, W::Lanes>` where `?` has no destination to infer | `.into_fail()?` |
 | `Result<T, Foreign>` | `Result<T, W>` | `.classify::<W>()`, given `W: Classify + From<Foreign>` |
 | `Result<T, Fail<R, L>>` | `Result<T, Fault<L>>` | `.narrow_rejected()` |
 | `Result<T, Fail<R, L>>` | `Result<T, Fault<L>>`, recovering some members and narrowing the rest | `.narrow_rejected_with(\|r\| ..)` |
@@ -713,123 +713,6 @@ the following `?`, so an unmapped case has a place to go. Consequently its
 destination must enable `Fatal`. For a total `Fail` lift into a signature
 without `Fatal`, use the value-level `Fail::lift::<P, D>` explicitly. Narrowing
 removes a lane by name after its outcome has been handled.
-
-## Carriers: your own `Fault` / `Fail`
-
-`Fault<L>` and `Fail<R, L>` are one type per profile, so two crates that both
-return `Fault<lanes!(Transient, Fatal)>` share it, and a `thiserror` enum that
-wants `#[from]` for both collides. A **carrier** is a crate-local type that
-stands in for one of them:
-
-```rust
-# use errlanes::Rejection;
-# #[derive(Debug, errlanes::Rejection)]
-# pub enum CustomerRejection { Closed }
-#[derive(Debug, errlanes::Carrier)]
-pub enum HostFault {
-    Transient(errlanes::Transient),
-    Fatal(errlanes::Fatal),
-}
-
-#[derive(Debug, errlanes::Carrier)]
-pub enum CustomerError {
-    Rejected(CustomerRejection),
-    Transient(errlanes::Transient),
-    Fatal(errlanes::Fatal),
-}
-
-#[derive(Debug, errlanes::Carrier)]
-pub enum RepoWriteError<R> {
-    Rejected(R),
-    Transient(errlanes::Transient),
-    Fatal(errlanes::Fatal),
-}
-
-#[derive(Debug, errlanes::Carrier)]
-#[carrier(from(HostFault))]
-pub enum PartyFault {
-    Denied(errlanes::Denied),
-    Transient(errlanes::Transient),
-    Fatal(errlanes::Fatal),
-}
-```
-
-Each is an **enum with exactly the declared lanes**, so it matches like the
-built-in, and a lane it does not declare is not a variant at all:
-
-```rust
-# #[derive(Debug, errlanes::Carrier)]
-# pub enum HostFault {
-#     Transient(errlanes::Transient),
-#     Fatal(errlanes::Fatal),
-# }
-fn page(e: HostFault) -> &'static str {
-    match e {
-        HostFault::Transient(_) => "retry",
-        HostFault::Fatal(_) => "page",
-    }
-}
-# assert_eq!(page(HostFault::Fatal(errlanes::Fatal::invariant("x"))), "page");
-```
-
-What `?` does, in and out of a carrier `E`:
-
-- **In:** any lane payload `E` declares; a `Fault<S>` with `S ⊆ E`'s lanes; for
-  a `Fail`-like carrier, a `Fail<R, S>` with the same rejection; any
-  `Classify` wrapper whose lanes fit; a bare `Rejection` that lifts totally
-  (`Fail`-like only); and each carrier listed in `from(..)`.
-- **Out:** into `Fault<M>` (`Fault`-like carriers, `S ⊆ M`), into `Fail<D, M>`, into
-  a bare `Fatal` / `Transient` when it has just that lane, and into a foreign
-  enum with `#[from] E`.
-- `.lift()`, `into_fault`, `into_fail`, `narrow_transient`, `narrow_denied`, `narrow_rejected`,
-  `narrow_rejected_with`, `rejected` and `map_rejected` work on `Result<T, E>`. A narrowing returns the
-  narrowed **built-in** (`Fault<..>` / `Fail<..>`), which `?` carries on.
-  `E: Laned` for retry, `record` and `#[errlanes::instrument]`.
-
-**Carrier to carrier is not automatic.** `?` is `From::from`, and a blanket
-`impl From<AnyCarrier> for E` would also cover `E` itself, which overlaps the
-standard library's reflexive `impl<T> From<T> for T`. So the conversion you
-want is listed: `#[carrier(from(HostFault))]` adds `impl From<HostFault> for E`. The list
-only works for carriers declared in the *same crate* as `E` (see below). The
-list-free route works for any carrier, in any crate: hand it over as its
-built-in, and the outer `?` absorbs that.
-
-```rust
-# use errlanes::{ResultExt};
-# #[derive(Debug, errlanes::Carrier)]
-# pub enum HostFault {
-#     Transient(errlanes::Transient),
-#     Fatal(errlanes::Fatal),
-# }
-# #[derive(Debug, errlanes::Carrier)]
-# pub enum PartyFault {
-#     Denied(errlanes::Denied),
-#     Transient(errlanes::Transient),
-#     Fatal(errlanes::Fatal),
-# }
-fn host() -> Result<u8, HostFault> {
-    Ok(1)
-}
-
-fn party() -> Result<u8, PartyFault> {
-    let v = host().into_fault()?;
-    Ok(v)
-}
-# assert_eq!(party().unwrap(), 1);
-```
-
-The variant names (`Rejected`, `Denied`, `Transient`, `Fatal`) are the
-profile: each is a one-field tuple variant, at most one of each, and
-`Rejected(T)` makes the carrier `Fail`-like. Variants may carry doc comments,
-and `Debug` is yours to derive.
-
-**Limitation.** `from(..)` cannot list a carrier declared in another crate,
-and neither can a hand-written `impl From<OtherCrate::Carrier> for E`: the
-carrier's one blanket inbound `From` overlaps it, because rustc cannot know
-the other crate's carrier is not a plain lane source. Use
-`.into_fault()?` or `.into_fail()?` across crates, and in generic code over a foreign
-carrier, bound on its built-in (`E: From<Fault<lanes!(Transient, Fatal)>>`)
-rather than on the carrier.
 
 ## Composing rejection families
 

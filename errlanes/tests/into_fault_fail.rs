@@ -20,19 +20,6 @@ fn decode() -> Result<u8, Undecodable> {
 #[rejection(code = "ACCOUNT_CLOSED")]
 struct AccountClosed;
 
-#[derive(Debug, errlanes::Carrier)]
-enum HostFault {
-    Transient(errlanes::Transient),
-    Fatal(errlanes::Fatal),
-}
-
-#[derive(Debug, errlanes::Carrier)]
-enum PartyFault {
-    Denied(errlanes::Denied),
-    Transient(errlanes::Transient),
-    Fatal(errlanes::Fatal),
-}
-
 /// Every link of a boxed chain, outermost first, as `Display` text.
 fn chain(e: &(dyn Error + 'static)) -> Vec<String> {
     let mut out = Vec::new();
@@ -58,8 +45,6 @@ fn find<'a, T: Error + 'static>(e: &'a (dyn Error + 'static)) -> Option<&'a T> {
 #[test]
 fn the_built_in_is_the_sources_own_profile() {
     let _: Result<u8, Fault<lanes!(Fatal)>> = decode().into_fault();
-    let _: Result<u8, Fault<lanes!(Transient, Fatal)>> =
-        Err::<u8, _>(HostFault::Fatal(errlanes::Fatal::invariant("x"))).into_fault();
     let _: Result<u8, Fail<AccountClosed, errlanes::NoLanes>> =
         Err::<u8, _>(AccountClosed).into_fail();
     let _: Result<u8, Fault<lanes!(Transient)>> =
@@ -113,25 +98,9 @@ fn boxing_the_wrapper_raw_is_what_loses_the_kind() {
     );
 }
 
-#[test]
-fn a_carrier_reaches_a_carrier_it_cannot_convert_into_directly() {
-    // `HostFault -> PartyFault` has no `From` (no `from(..)` here); the
-    // built-in is the hop every carrier absorbs.
-    fn host() -> Result<u8, HostFault> {
-        Err(HostFault::Transient(Transient::new(
-            TransientKind::Deadlock,
-        )))
-    }
-    fn party() -> Result<u8, PartyFault> {
-        let v = host().into_fault()?;
-        Ok(v)
-    }
-    assert!(matches!(party(), Err(PartyFault::Transient(t)) if t.kind == TransientKind::Deadlock));
-}
-
-/// Into a carrier, a `Fail`, or a box. Into a built-in `Fault` it is not
-/// needed (and does not apply): a wrapper or carrier `?`s straight into any
-/// `Fault` whose lanes fit, including another built-in `Fault`.
+/// Into a `Fail` or a box. Into a built-in `Fault` it is not needed (and does
+/// not apply): a wrapper `?`s straight into any `Fault` whose lanes fit, and a
+/// `Fault` `?`s straight into a `Fail`.
 #[test]
 fn into_fail_by_question_mark_and_into_fault_needs_no_hop() {
     fn into_fault() -> Result<u8, Fault> {
@@ -139,7 +108,7 @@ fn into_fail_by_question_mark_and_into_fault_needs_no_hop() {
         Ok(0)
     }
     fn into_fail() -> Result<u8, Fail<AccountClosed, lanes!(Transient, Fatal)>> {
-        Err::<u8, _>(HostFault::Fatal(errlanes::Fatal::invariant("x"))).into_fault()?;
+        Err::<u8, Fault<lanes!(Transient, Fatal)>>(errlanes::Fatal::invariant("x").into())?;
         Ok(0)
     }
     assert_eq!(into_fault().unwrap_err().lane(), Lane::Fatal);

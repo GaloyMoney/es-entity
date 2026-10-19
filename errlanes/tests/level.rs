@@ -14,14 +14,6 @@ enum Levelled {
     Quiet,
 }
 
-#[derive(Debug, errlanes::Carrier)]
-enum Carried {
-    Rejected(Levelled),
-    Denied(errlanes::Denied),
-    Transient(errlanes::Transient),
-    Fatal(errlanes::Fatal),
-}
-
 #[test]
 fn each_lane_has_its_default_level() {
     assert_eq!(Lane::Rejected.level(), Level::Warn);
@@ -54,30 +46,4 @@ fn a_rejection_overrides_the_lane_default_through_rejection_level() {
     assert_eq!(Laned::level(&quiet), Level::Info);
     assert_ne!(Laned::level(&quiet), Lane::Rejected.level());
     assert_eq!(quiet.lanes().level(), Level::Info);
-}
-
-#[test]
-fn a_carrier_reports_its_built_ins_level() {
-    let pairs: Vec<(Carried, Fail<Levelled>)> = vec![
-        (
-            Carried::Rejected(Levelled::Warned),
-            Fail::Rejected(Levelled::Warned),
-        ),
-        (
-            Carried::Rejected(Levelled::Defaulted),
-            Fail::Rejected(Levelled::Defaulted),
-        ),
-        (Carried::Denied(Denied::default()), Denied::default().into()),
-        (
-            Carried::Transient(Transient::new(TransientKind::Deadlock)),
-            Transient::new(TransientKind::Deadlock).into(),
-        ),
-        (
-            Carried::Fatal(Fatal::new(FatalKind::Config)),
-            Fatal::new(FatalKind::Config).into(),
-        ),
-    ];
-    for (carrier, builtin) in pairs {
-        assert_eq!(Laned::level(&carrier), Laned::level(&builtin));
-    }
 }

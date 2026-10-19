@@ -550,8 +550,8 @@ impl<D, L: LaneProfile> Fail<D, L> {
     }
 
     /// Narrows to the domain outcome, or the non-domain fault. `let d =
-    /// e.rejected()?;` propagates the fault into any enclosing `Fail<_, L>` (or
-    /// a [`Carrier`](crate::Carrier)) via the blanket `From<Fault<L>>`.
+    /// e.rejected()?;` propagates the fault into any enclosing `Fail<_, L>` via
+    /// the blanket `From<Fault<L>>`.
     pub fn rejected(self) -> Result<D, Fault<L>> {
         match self {
             Fail::Rejected(d) => Ok(d),
@@ -687,13 +687,11 @@ pub(crate) mod sealed {
     pub trait Sealed {}
     impl<D: super::Rejection, L: super::LaneProfile> Sealed for super::Fail<D, L> {}
     impl<L: super::LaneProfile> Sealed for super::Fault<L> {}
-    impl<C: crate::Carrier> Sealed for C {}
 }
 
 /// Sealed. The thing `retry`/`record` need from any error they are handed:
 /// its lane, and how to narrow it. Implemented by [`Fail<D, L>`], by
-/// [`Fault<L>`] — the two shapes a generated repo op can return — and by every
-/// [`Carrier`](crate::Carrier) whose built-in is `Laned`.
+/// [`Fault<L>`] — the two shapes a generated repo op can return.
 pub trait Laned: sealed::Sealed + Error + Send + Sync + 'static + Sized {
     type WithoutTransient: Error + Send + Sync + 'static;
 
@@ -770,43 +768,6 @@ where
     #[cfg(feature = "tracing")]
     fn emit_event(&self) {
         self.lanes().emit();
-    }
-}
-
-/// A carrier is `Laned` exactly when its built-in is, and narrows through it.
-/// Disjoint from the two built-in impls above: `Fault` / `Fail` are not
-/// carriers, and downstream cannot implement `Carrier` for them (orphan rule).
-impl<C: crate::Carrier> Laned for C
-where
-    C::Repr: Laned,
-    <C as crate::IntoLanes>::Rejected: crate::carrier::LaneRejected,
-{
-    type WithoutTransient = <C::Repr as Laned>::WithoutTransient;
-
-    fn lane(&self) -> Lane {
-        crate::Carrier::lanes(self).lane()
-    }
-
-    fn level(&self) -> Level {
-        crate::Carrier::lanes(self).level()
-    }
-
-    fn narrow_transient(self, attempts: u32) -> Self::WithoutTransient {
-        self.into_repr().narrow_transient(attempts)
-    }
-
-    fn message(&self) -> String {
-        crate::Carrier::lanes(self).message()
-    }
-
-    #[cfg(feature = "tracing")]
-    fn record(&self, span: &tracing::Span) {
-        crate::Carrier::lanes(self).record(span);
-    }
-
-    #[cfg(feature = "tracing")]
-    fn emit_event(&self) {
-        crate::Carrier::lanes(self).emit();
     }
 }
 

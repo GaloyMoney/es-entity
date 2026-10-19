@@ -1,19 +1,10 @@
-//! Carriers: crate-local enums that stand in for [`Fault<L>`] / [`Fail<R, L>`].
-//!
-//! A carrier is declared with `#[derive(errlanes::Carrier)]` on a hand-written
-//! lane enum. It is a distinct
-//! nominal type, so two of them can sit in one enum behind separate `#[from]`s,
-//! but it converts, lifts, narrows, records and retries the way its built-in
-//! does. Everything in this module except [`Carrier`] and [`LaneRef`] is hidden
-//! plumbing for that derive and for errlanes' own blanket impls.
-//!
-//! The coherence argument for the tag design (`Kind` for consumers, `Shape` for
-//! errlanes itself) is in the `design-options-errlanes-carrier-newtypes` note;
-//! read its §2 before touching any blanket impl in this file.
+//! How values enter the two carriers, [`Fault<L>`] and [`Fail<R, L>`]: the
+//! [`IntoLanes`] trait, the blanket `?` conversions keyed on its `Shape` tag,
+//! and the borrowed [`LaneRef`] view. Everything in this module except
+//! [`LaneRef`] is hidden plumbing for errlanes' own blanket impls.
 
 use std::{
     convert::Infallible,
-    error::Error,
     fmt::{self, Debug},
 };
 
@@ -28,12 +19,6 @@ use crate::{
 /// errlanes' own blankets name them.
 #[doc(hidden)]
 pub mod kind {
-    /// `Kind`: what a *consumer's* single inbound blanket keys on, by equality
-    /// on one value. Everything that is not a carrier is `Plain`.
-    pub struct Plain;
-    /// `Kind` of a carrier.
-    pub struct Carrier;
-
     /// `Shape`: what errlanes' own blankets key on, through the sealed marker
     /// traits below. Anything [`Classify`](crate::Classify).
     pub struct Source;
@@ -43,41 +28,34 @@ pub mod kind {
     pub struct Fault;
     /// [`Fail<D, L>`](crate::Fail).
     pub struct Fail;
-    /// A carrier.
-    pub struct CarrierShape;
 
     /// Shapes `?` may carry into a `Fault<M>`.
     pub trait IntoFault {}
     impl IntoFault for Source {}
     impl IntoFault for Payload {}
-    impl IntoFault for CarrierShape {}
 
     /// Shapes `?` may carry into a `Fail<D, M>`.
     pub trait IntoFail {}
     impl IntoFail for Source {}
     impl IntoFail for Payload {}
     impl IntoFail for Fault {}
-    impl IntoFail for CarrierShape {}
 
     /// Shapes `?` may carry into the bare `Fatal` / `Transient` payloads.
     pub trait IntoBareLane {}
     impl IntoBareLane for Source {}
-    impl IntoBareLane for CarrierShape {}
 }
 
-/// Every value that can enter the lanes. Hidden: written by errlanes and by
-/// the `Carrier` derive, never by hand.
+/// Every value that can enter the lanes. Hidden: written by errlanes, never
+/// by hand.
 ///
 /// [`Classify`] itself is unchanged; this is the one trait errlanes' blankets
-/// and the carrier derive key on.
+/// key on.
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not enter the lanes",
-    note = "implement `errlanes::Classify` (or derive `Rejection` / `Classify`), or declare \
-            a carrier with `#[derive(errlanes::Carrier)]` on a lane enum"
+    note = "implement `errlanes::Classify` (or derive `Rejection` / `Classify`)"
 )]
 pub trait IntoLanes: Sized {
-    type Kind;
     type Shape;
     type Rejected;
     type Lanes: LaneProfile;
@@ -85,7 +63,6 @@ pub trait IntoLanes: Sized {
 }
 
 impl<W: Classify> IntoLanes for W {
-    type Kind = kind::Plain;
     type Shape = kind::Source;
     type Rejected = W::Rejected;
     type Lanes = W::Lanes;
@@ -95,7 +72,6 @@ impl<W: Classify> IntoLanes for W {
 }
 
 impl<L: LaneProfile> IntoLanes for Fault<L> {
-    type Kind = kind::Plain;
     type Shape = kind::Fault;
     type Rejected = Infallible;
     type Lanes = L;
@@ -109,7 +85,6 @@ impl<L: LaneProfile> IntoLanes for Fault<L> {
 }
 
 impl<D, L: LaneProfile> IntoLanes for Fail<D, L> {
-    type Kind = kind::Plain;
     type Shape = kind::Fail;
     type Rejected = D;
     type Lanes = L;
@@ -121,7 +96,6 @@ impl<D, L: LaneProfile> IntoLanes for Fail<D, L> {
 macro_rules! payload {
     ($ty:ty, $d:literal, $t:literal, $f:literal, $variant:ident) => {
         impl IntoLanes for $ty {
-            type Kind = kind::Plain;
             type Shape = kind::Payload;
             type Rejected = Infallible;
             type Lanes = Profile<$d, $t, $f>;
@@ -136,7 +110,6 @@ payload!(Fatal, false, false, true, Fatal);
 payload!(Denied, true, false, false, Denied);
 
 impl IntoLanes for Exhausted {
-    type Kind = kind::Plain;
     type Shape = kind::Payload;
     type Rejected = Infallible;
     type Lanes = Profile<false, false, true>;
@@ -146,7 +119,6 @@ impl IntoLanes for Exhausted {
 }
 
 impl IntoLanes for Infallible {
-    type Kind = kind::Plain;
     type Shape = kind::Payload;
     type Rejected = Infallible;
     type Lanes = NoLanes;
@@ -278,7 +250,7 @@ profile_inclusion!((false,true,true) => (true,true,true));
 
 /// A source that only ever ends in the fatal lane converts into that bare
 /// payload directly, so `-> Result<T, Fatal>` is a legal, narrowest signature
-/// for a fault-only wrapper (or a single-lane carrier).
+/// for a fault-only wrapper.
 impl<W: IntoLanes<Rejected = Infallible, Lanes = Profile<false, false, true>>> From<W> for Fatal
 where
     W::Shape: kind::IntoBareLane,
@@ -308,87 +280,8 @@ where
     }
 }
 
-/// The consumer-side inbound engine: total absorption of `W` into a built-in.
-/// A carrier's single blanket `From` is `Repr: Absorb<W>` plus
-/// `W: IntoLanes<Kind = Plain>`.
-///
-/// The rejection must match; a different rejection needs `.lift()?`. A
-/// lane the target does not declare must be narrowed first.
-#[doc(hidden)]
-#[diagnostic::on_unimplemented(
-    message = "`{W}` cannot be absorbed into this carrier by `?`",
-    note = "a rejection needs a total `Lift`; a lane the carrier does not declare must be \
-            narrowed first; another carrier must be listed in `from(..)`"
-)]
-pub trait Absorb<W> {
-    fn absorb(w: W) -> Self;
-}
-
-impl<W: IntoLanes<Rejected = Infallible>, M: LaneProfile> Absorb<W> for Fault<M>
-where
-    <W::Lanes as LaneProfile>::Denied: Into<M::Denied>,
-    <W::Lanes as LaneProfile>::Transient: Into<M::Transient>,
-    <W::Lanes as LaneProfile>::Fatal: Into<M::Fatal>,
-{
-    fn absorb(w: W) -> Self {
-        fail_into_fault(w.into_lanes())
-    }
-}
-
-impl<P, W: IntoLanes, M: LaneProfile> Absorb<W> for Fail<P, M>
-where
-    W::Shape: AbsorbFailBy<W, P, M>,
-{
-    fn absorb(w: W) -> Self {
-        <W::Shape as AbsorbFailBy<W, P, M>>::absorb(w)
-    }
-}
-
-/// Shape dispatch keeps a built-in `Fail`'s rejection fixed while allowing
-/// fault-only and total plain sources into a carrier.
-#[doc(hidden)]
-pub trait AbsorbFailBy<W: IntoLanes, P, M: LaneProfile> {
-    fn absorb(w: W) -> Fail<P, M>;
-}
-
-impl<P, W: IntoLanes<Rejected = P>, M: LaneProfile> AbsorbFailBy<W, P, M> for kind::Fail
-where
-    <W::Lanes as LaneProfile>::Denied: Into<M::Denied>,
-    <W::Lanes as LaneProfile>::Transient: Into<M::Transient>,
-    <W::Lanes as LaneProfile>::Fatal: Into<M::Fatal>,
-{
-    fn absorb(w: W) -> Fail<P, M> {
-        match w.into_lanes() {
-            Fail::Rejected(r) => Fail::Rejected(r),
-            Fail::Denied(d) => Fail::Denied(d.into()),
-            Fail::Transient(t) => Fail::Transient(t.into()),
-            Fail::Fatal(f) => Fail::Fatal(f.into()),
-        }
-    }
-}
-
-macro_rules! absorb_other_shape {
-    ($shape:ty) => {
-        impl<P: Lift<W::Rejected, Unmapped = Infallible>, W: IntoLanes, M: LaneProfile>
-            AbsorbFailBy<W, P, M> for $shape
-        where
-            <W::Lanes as LaneProfile>::Denied: Into<M::Denied>,
-            <W::Lanes as LaneProfile>::Transient: Into<M::Transient>,
-            <W::Lanes as LaneProfile>::Fatal: Into<M::Fatal>,
-        {
-            fn absorb(w: W) -> Fail<P, M> {
-                fail_absorb(w.into_lanes())
-            }
-        }
-    };
-}
-absorb_other_shape!(kind::Source);
-absorb_other_shape!(kind::Payload);
-absorb_other_shape!(kind::Fault);
-absorb_other_shape!(kind::CarrierShape);
-
-/// A borrowed view of a carrier's current lane. `Fault::lanes`, `Fail::lanes`
-/// and `Carrier::lanes` all return one, so `record`, `message` and `lane` have
+/// A borrowed view of a carrier's current lane. `Fault::lanes` and
+/// `Fail::lanes` both return one, so `record`, `message` and `lane` have
 /// a single implementation over it.
 ///
 /// `R` is the rejection type; it is [`Infallible`] for a fault-only value,
@@ -526,64 +419,4 @@ impl<D, L: LaneProfile> Fail<D, L> {
             Fail::Fatal(x) => LaneRef::Fatal(x.marker()),
         }
     }
-}
-
-mod repr_sealed {
-    use super::{Fail, Fault, LaneProfile};
-    pub trait Sealed {}
-    impl<L: LaneProfile> Sealed for Fault<L> {}
-    impl<D, L: LaneProfile> Sealed for Fail<D, L> {}
-}
-
-/// The built-ins a [`Carrier`] converts to and from: exactly [`Fault<L>`] and
-/// [`Fail<R, L>`]. Sealed.
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` is not `Fault<L>` or `Fail<R, L>`",
-    note = "a carrier's `Repr` is the built-in it stands in for"
-)]
-pub trait Repr: repr_sealed::Sealed + IntoLanes<Kind = kind::Plain> {}
-impl<L: LaneProfile> Repr for Fault<L> {}
-impl<D, L: LaneProfile> Repr for Fail<D, L> {}
-
-/// A crate-local enum that stands in for `Fault<L>` / `Fail<R, L>`.
-/// Implemented by `#[derive(errlanes::Carrier)]` on a lane enum; do not
-/// implement it by hand.
-///
-/// Generic machinery (retry, `record`, `#[errlanes::instrument]`) is written
-/// against [`Laned`](crate::Laned), which every carrier whose profile is
-/// retryable implements. This trait is for code that needs to move a carrier
-/// to or from its built-in.
-///
-/// ```
-/// use errlanes::{Carrier, Fault, lanes};
-///
-/// #[derive(Debug, errlanes::Carrier)]
-/// pub enum HostFault {
-///     Transient(errlanes::Transient),
-///     Fatal(errlanes::Fatal),
-/// }
-///
-/// fn to_builtin<C: Carrier>(c: C) -> C::Repr {
-///     c.into_repr()
-/// }
-///
-/// let fault: Fault<lanes!(Transient, Fatal)> =
-///     to_builtin(HostFault::Fatal(errlanes::Fatal::invariant("boom")));
-/// assert!(fault.is_fatal());
-/// ```
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` is not a carrier",
-    note = "declare one with `#[derive(errlanes::Carrier)]` on a lane enum"
-)]
-pub trait Carrier:
-    Error + Send + Sync + Sized + 'static + IntoLanes<Kind = kind::Carrier, Shape = kind::CarrierShape>
-{
-    /// The built-in this carrier converts to and from, by value.
-    type Repr: Repr<Rejected = <Self as IntoLanes>::Rejected, Lanes = <Self as IntoLanes>::Lanes>;
-
-    fn from_repr(r: Self::Repr) -> Self;
-    fn into_repr(self) -> Self::Repr;
-
-    /// A borrowed view of the current lane.
-    fn lanes(&self) -> LaneRef<'_, <Self as IntoLanes>::Rejected>;
 }

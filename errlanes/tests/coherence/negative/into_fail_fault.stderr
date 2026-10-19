@@ -1,5 +1,5 @@
 error[E0277]: the trait bound `Infallible: Rejection` is not satisfied
- --> tests/coherence/carrier_fail/into_fail_fault.rs:5:20
+ --> tests/coherence/negative/into_fail_fault.rs:5:20
   |
 5 |     let _ = source.into_fail();
   |                    ^^^^^^^^^ the trait `Rejection` is not implemented for `Infallible`

@@ -1,5 +1,5 @@
 error[E0271]: type mismatch resolving `<Rejected as IntoLanes>::Rejected == Infallible`
- --> tests/coherence/carrier_fail/into_fault_rejecting.rs:8:36
+ --> tests/coherence/negative/into_fault_rejecting.rs:8:36
   |
 8 |     let _ = Err::<(), _>(Rejected).into_fault();
   |                                    ^^^^^^^^^^ expected `Infallible`, found `Rejected`

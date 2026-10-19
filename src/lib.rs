@@ -65,9 +65,8 @@ pub mod prelude {
 pub use context::*;
 pub use errlanes;
 pub use errlanes::{
-    Carrier, CodeInfo, Denied, Fail, Fatal, FatalKind, Fault, Lane, Laned, Lift, Rejection,
-    RejectionCode, ResultExt, Transient, TransientKind, WithDenied, WithoutDenied,
-    WithoutTransient,
+    CodeInfo, Denied, Fail, Fatal, FatalKind, Fault, Lane, Laned, Lift, Rejection, RejectionCode,
+    ResultExt, Transient, TransientKind, WithDenied, WithoutDenied, WithoutTransient,
 };
 #[doc(inline)]
 pub use error::*;
