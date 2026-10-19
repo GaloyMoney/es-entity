@@ -1,0 +1,29 @@
+error: `Source::A` is mapped and fatal
+  --> tests/v2/lift_fatal_mapped_and_fatal.rs:12:22
+   |
+12 | #[lift(Source, fatal(A))]
+   |                      ^
+
+error: `Source::B(Inner::X)` is mapped and fatal
+  --> tests/v2/lift_fatal_mapped_and_fatal.rs:19:22
+   |
+19 | #[lift(Source, fatal(B(Inner::X)))]
+   |                      ^
+
+error: `Source::A` is listed in `fatal(..)` more than once
+  --> tests/v2/lift_fatal_mapped_and_fatal.rs:28:25
+   |
+28 | #[lift(Source, fatal(A, A))]
+   |                         ^
+
+error: `Source::B(Inner::Y)` is listed in `fatal(..)` more than once
+  --> tests/v2/lift_fatal_mapped_and_fatal.rs:35:25
+   |
+35 | #[lift(Source, fatal(B, B(Inner::Y)))]
+   |                         ^
+
+error: `Source::A` is mapped and fatal
+  --> tests/v2/lift_fatal_mapped_and_fatal.rs:42:35
+   |
+42 | #[lift(Source, variant = A, fatal(A))]
+   |                                   ^
