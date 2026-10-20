@@ -108,7 +108,7 @@ fn a_sibling_of_a_nested_case_stays_unmapped() {
 }
 
 #[test]
-fn the_unit_leafs_code_reaches_the_family_catalogue() {
+fn the_code_of_a_unit_leaf_reaches_the_family_catalogue() {
     assert_eq!(catalogue::<Settlement>(), ["SETTLEMENT_ACCOUNT_LOCKED"]);
 }
 
