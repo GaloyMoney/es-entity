@@ -10,6 +10,8 @@
 //! Keeping it in the built-in table preserves the information either way;
 //! narrowing it is one attribute at the call site.
 
+use std::{error::Error, io::ErrorKind};
+
 use crate::{
     fail::{Fail, Fault},
     lane::{Denied, Fatal, FatalKind, Transient, TransientKind},
@@ -23,6 +25,21 @@ fn lane_table(e: &::reqwest::Error) -> Fault<crate::lanes!(Denied, Transient, Fa
     }
     if e.is_connect() {
         return Transient::new(TransientKind::ConnectionLost).into();
+    }
+    // A reset while sending on an established connection is a request error,
+    // not a connect error. Preserve its transport classification instead of
+    // falling through to the malformed-request invariant below.
+    if e.is_request() {
+        let mut source = e.source();
+        while let Some(error) = source {
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == ErrorKind::ConnectionReset)
+            {
+                return Transient::new(TransientKind::ConnectionLost).into();
+            }
+            source = error.source();
+        }
     }
     if let Some(status) = e.status() {
         if status.as_u16() == 429 {

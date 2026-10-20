@@ -32,6 +32,7 @@ composition-consumer = { path = "tests/composition/consumer" }
 downstream = { path = "tests/coherence/downstream" }
 upstream = { path = "tests/coherence/upstream" }
 http = "1"
+socket2 = "0.6"
 tokio = { workspace = true }
 trybuild = "1"
 thiserror = "2"
