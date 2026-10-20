@@ -364,7 +364,7 @@
         CARGO_MANIFEST_DIR=$(pwd) mdbook test book -L ''${CARGO_TARGET_DIR:-./target}/mdbook-test,''${CARGO_TARGET_DIR:-./target}/mdbook-test/deps
 
         echo "Running nextest..."
-        cargo nextest run --workspace --verbose
+        cargo nextest run --workspace --features errlanes/classify-reqwest --verbose
 
         echo "Running doc tests..."
         cargo test --doc --workspace

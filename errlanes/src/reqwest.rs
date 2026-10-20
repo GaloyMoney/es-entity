@@ -9,6 +9,15 @@
 //! with the caller's *own* token is the case that keeps `Denied` as-is.
 //! Keeping it in the built-in table preserves the information either way;
 //! narrowing it is one attribute at the call site.
+//!
+//! A request error whose source chain contains `io::ErrorKind::ConnectionReset`
+//! maps to `Transient(ConnectionLost)`, even after the connection was established
+//! and `reqwest::Error::is_connect` is false. This mapping covers request-side
+//! TCP resets (RST), not every interrupted transfer: other I/O kinds, hyper's
+//! incomplete-message errors, and response-body failures retain their existing
+//! classification.
+
+use std::{error::Error, io};
 
 use crate::{
     fail::{Fail, Fault},
@@ -23,6 +32,20 @@ fn lane_table(e: &::reqwest::Error) -> Fault<crate::lanes!(Denied, Transient, Fa
     }
     if e.is_connect() {
         return Transient::new(TransientKind::ConnectionLost).into();
+    }
+    // A reset while sending on an established connection is a request error,
+    // not a connect error. Preserve its transport classification instead of
+    // falling through to the malformed-request invariant below.
+    if e.is_request() {
+        let mut cur = e.source();
+        while let Some(x) = cur {
+            if x.downcast_ref::<io::Error>()
+                .is_some_and(|error| error.kind() == io::ErrorKind::ConnectionReset)
+            {
+                return Transient::new(TransientKind::ConnectionLost).into();
+            }
+            cur = x.source();
+        }
     }
     if let Some(status) = e.status() {
         if status.as_u16() == 429 {

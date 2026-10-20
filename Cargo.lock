@@ -735,6 +735,7 @@ dependencies = [
  "http",
  "reqwest",
  "serde_json",
+ "socket2",
  "sqlx",
  "thiserror",
  "tokio",
