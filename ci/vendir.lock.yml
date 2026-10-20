@@ -2,14 +2,14 @@ apiVersion: vendir.k14s.io/v1alpha1
 directories:
 - contents:
   - git:
-      commitTitle: 'Merge pull request #31 from GaloyMoney/fix/spelling-typos-action'
-      sha: 8aaee2b5105fe0d131292f3f3c7ace40741a0c61
+      commitTitle: 'Merge pull request #33 from GaloyMoney/feat--bump-shared-actions...'
+      sha: e70b475dc5f1bda2f33f22f9de59b35c534c419b
     path: .
   path: ../.github/workflows/vendor
 - contents:
   - git:
-      commitTitle: 'Merge pull request #31 from GaloyMoney/fix/spelling-typos-action'
-      sha: 8aaee2b5105fe0d131292f3f3c7ace40741a0c61
+      commitTitle: 'Merge pull request #33 from GaloyMoney/feat--bump-shared-actions...'
+      sha: e70b475dc5f1bda2f33f22f9de59b35c534c419b
     path: .
   path: vendor
 kind: LockConfig
