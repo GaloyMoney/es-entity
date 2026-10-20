@@ -62,6 +62,14 @@ impl<T> Idempotent<T> {
         matches!(self, Idempotent::Executed(_))
     }
 
+    /// Returns `Some(value)` if the operation was executed, `None` if it was ignored.
+    pub fn into_executed(self) -> Option<T> {
+        match self {
+            Idempotent::Executed(t) => Some(t),
+            Idempotent::AlreadyApplied => None,
+        }
+    }
+
     /// Unwraps the value if executed, panics if ignored.
     pub fn unwrap(self) -> T {
         match self {
@@ -99,5 +107,16 @@ impl<T, E> FromAlreadyApplied for Result<Idempotent<T>, E> {
     /// to handle `Result<Idempotent<T>, E>` return type
     fn from_already_applied() -> Self {
         Ok(Idempotent::AlreadyApplied)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn into_executed() {
+        assert_eq!(Idempotent::Executed(1).into_executed(), Some(1));
+        assert_eq!(Idempotent::<u32>::AlreadyApplied.into_executed(), None);
     }
 }
