@@ -73,8 +73,16 @@ impl Parse for Registration {
 pub(crate) struct Case {
     path: Path,
     inner: Option<Box<Case>>,
+    binds_nothing: bool,
 }
 impl Case {
+    fn leaf_binds_nothing(&self) -> bool {
+        match &self.inner {
+            Some(inner) => inner.leaf_binds_nothing(),
+            None => self.binds_nothing,
+        }
+    }
+
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
@@ -134,6 +142,23 @@ impl Case {
 impl Parse for Case {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let path = input.parse()?;
+        let binds_nothing = input.peek(syn::token::Brace);
+        if binds_nothing {
+            let content;
+            let brace = syn::braced!(content in input);
+            if content.parse::<Token![..]>().is_err() || !content.is_empty() {
+                return Err(syn::Error::new(
+                    brace.span.join(),
+                    "a leaf pattern takes only `..`",
+                ));
+            }
+            if input.peek(syn::token::Paren) {
+                return Err(syn::Error::new(
+                    brace.span.join(),
+                    "`{ .. }` goes on the leaf",
+                ));
+            }
+        }
         let inner = if input.peek(syn::token::Paren) {
             let content;
             let paren = syn::parenthesized!(content in input);
@@ -148,7 +173,11 @@ impl Parse for Case {
         } else {
             None
         };
-        Ok(Self { path, inner })
+        Ok(Self {
+            path,
+            inner,
+            binds_nothing,
+        })
     }
 }
 pub(crate) struct Mapping {
@@ -457,6 +486,7 @@ pub fn derive(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             .collect();
         for arm in &own {
             let Arm { mapping, attr, .. } = arm;
+            binds_nothing_conflict(mapping)?;
             if mapping.case.is_nested() && !registration.partial {
                 return Err(syn::Error::new_spanned(
                     attr,
@@ -588,6 +618,59 @@ fn single_field(
     }
 }
 
+fn binds_nothing_conflict(mapping: &Mapping) -> syn::Result<()> {
+    if !mapping.case.leaf_binds_nothing() {
+        return Ok(());
+    }
+    let message = if mapping.with.is_some() {
+        "`{ .. }` is the derived form of a `with` hook that drops the payload; \
+         use one or the other"
+    } else if mapping.into || mapping.field.is_some() || mapping.when.is_some() {
+        "`{ .. }` binds nothing; `into`/`field`/`when` need the payload"
+    } else {
+        return Ok(());
+    };
+    Err(syn::Error::new_spanned(mapping.case.leaf_path(), message))
+}
+
+/// A `Source::Variant { .. }` arm drops the payload: the destination is a unit
+/// variant, or a variant holding one unit leaf named by its field type.
+fn binds_nothing_arm(
+    mapping: &Mapping,
+    whole_value: bool,
+    variant: &syn::Variant,
+) -> syn::Result<TokenStream> {
+    let case = &mapping.case;
+    let dest = &variant.ident;
+    if whole_value {
+        return Err(syn::Error::new_spanned(
+            case.leaf_path(),
+            "a whole-value lift has no case to bind; `{ .. }` goes on a source variant",
+        ));
+    }
+    let pattern = case.nest(&|leaf| quote!(#leaf { .. }));
+    let built = match &variant.fields {
+        Fields::Unit => quote!(Self::#dest),
+        Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
+            let leaf = &fields.unnamed[0].ty;
+            quote!(Self::#dest(#leaf))
+        }
+        Fields::Named(fields) if fields.named.len() == 1 => {
+            let field = &fields.named[0].ident;
+            let leaf = &fields.named[0].ty;
+            quote!(Self::#dest { #field: #leaf })
+        }
+        _ => {
+            return Err(syn::Error::new_spanned(
+                &variant.ident,
+                "a `{ .. }` arm binds nothing: the destination is a unit variant or \
+                 holds one unit leaf",
+            ));
+        }
+    };
+    Ok(quote! { #pattern => Ok(#built) })
+}
+
 fn variant_arm(
     mapping: &Mapping,
     whole_value: bool,
@@ -595,6 +678,9 @@ fn variant_arm(
 ) -> syn::Result<TokenStream> {
     let case = &mapping.case;
     let dest = &variant.ident;
+    if case.leaf_binds_nothing() {
+        return binds_nothing_arm(mapping, whole_value, variant);
+    }
     let guard = mapping.when.as_ref().map(|pred| quote!(if #pred(&payload)));
     let bound = case.nest(&|leaf| quote!(#leaf(payload)));
     if let Some(mapper) = &mapping.with {
@@ -904,7 +990,7 @@ impl Parse for UnitRegistration {
                 return Err(syn::Error::new_spanned(
                     &key,
                     if key == "variant" {
-                        "a unit struct lifts a whole value; a case of an enum source is routed by the family's arm, `with` if it has no payload"
+                        "a unit struct lifts a whole value; a case of an enum source is routed by the family's arm: write `S::V { .. }` on the arm to drop its payload"
                     } else {
                         "a unit struct lift takes only the source path"
                     },

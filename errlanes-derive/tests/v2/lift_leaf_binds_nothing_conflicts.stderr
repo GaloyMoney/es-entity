@@ -1,0 +1,23 @@
+error: `{ .. }` binds nothing; `into`/`field`/`when` need the payload
+  --> tests/v2/lift_leaf_binds_nothing_conflicts.rs:24:12
+   |
+24 |     #[lift(Source::Value { .. }, into)]
+   |            ^^^^^^
+
+error: `{ .. }` binds nothing; `into`/`field`/`when` need the payload
+  --> tests/v2/lift_leaf_binds_nothing_conflicts.rs:31:12
+   |
+31 |     #[lift(Source::Value { .. }, field = value)]
+   |            ^^^^^^
+
+error: `{ .. }` binds nothing; `into`/`field`/`when` need the payload
+  --> tests/v2/lift_leaf_binds_nothing_conflicts.rs:38:12
+   |
+38 |     #[lift(Source::Value { .. }, when = big)]
+   |            ^^^^^^
+
+error: `{ .. }` is the derived form of a `with` hook that drops the payload; use one or the other
+  --> tests/v2/lift_leaf_binds_nothing_conflicts.rs:45:12
+   |
+45 |     #[lift(Source::Value { .. }, with = mapper)]
+   |            ^^^^^^

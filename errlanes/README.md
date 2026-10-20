@@ -253,6 +253,14 @@ code and level, which is why `AmountNotPositive` above still reports
 `#[rejection(code = "...")]` instead, or `#[rejection(delegate)]` to take
 them from the converted payload.
 
+`#[lift(Source::Variant { .. })]` means the case became this leaf: the arm
+binds nothing and drops the payload. The destination is a unit variant, or a
+variant holding one unit leaf (`AccountLocked(SettlementAccountLocked)`); the
+leaf's own `#[rejection(code = "...")]` supplies the code. The braces go on
+the innermost case (`Outer::Mid(Mid::Leaf { .. })`) and take only `..`; they
+combine with `to = Variant` but not with `with`, `into`, `field` or `when`,
+which need the payload. Without the braces nothing is dropped implicitly.
+
 Sometimes only a subset of the source cases makes sense in the destination
 domain. `#[lift(Source, unhandled = fatal)]` allows a partial mapping: an
 unmapped rejection becomes `Fatal(Invariant)` with the original as its source,

@@ -1,0 +1,17 @@
+error: a leaf pattern takes only `..`
+ --> tests/v2/lift_leaf_binds_nothing_pattern.rs:8:26
+  |
+8 |     #[lift(Source::Value { x })]
+  |                          ^^^^^
+
+error: a leaf pattern takes only `..`
+  --> tests/v2/lift_leaf_binds_nothing_pattern.rs:15:26
+   |
+15 |     #[lift(Source::Value { .., })]
+   |                          ^^^^^^^
+
+error: a leaf pattern takes only `..`
+  --> tests/v2/lift_leaf_binds_nothing_pattern.rs:22:26
+   |
+22 |     #[lift(Source::Value {})]
+   |                          ^^
