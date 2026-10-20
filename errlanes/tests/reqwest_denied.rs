@@ -1,5 +1,10 @@
 #![cfg(feature = "classify-reqwest")]
-use std::error::Error;
+use std::{
+    error::Error,
+    io::{self, Read},
+    net::TcpListener,
+    time::Duration,
+};
 
 use errlanes::{Classify, Fail, FatalKind, Fault, Lane, TransientKind, lanes};
 
@@ -11,10 +16,10 @@ fn status_error(code: u16) -> reqwest::Error {
         .unwrap_err()
 }
 
-fn reqwest_in<'a>(e: &'a (dyn Error + 'static)) -> Option<&'a reqwest::Error> {
+fn source_in<'a, T: Error + 'static>(e: &'a (dyn Error + 'static)) -> Option<&'a T> {
     let mut cur = Some(e);
     while let Some(x) = cur {
-        if let Some(r) = x.downcast_ref::<reqwest::Error>() {
+        if let Some(r) = x.downcast_ref::<T>() {
             return Some(r);
         }
         cur = x.source();
@@ -32,7 +37,8 @@ fn owned(e: reqwest::Error) -> Fault<Lanes> {
 }
 
 fn assert_retains_native(e: &(dyn Error + 'static), code: u16) {
-    let native = reqwest_in(e).expect("the native reqwest::Error is in the source chain");
+    let native =
+        source_in::<reqwest::Error>(e).expect("the native reqwest::Error is in the source chain");
     assert_eq!(native.status().map(|s| s.as_u16()), Some(code));
     assert!(
         native.url().is_some(),
@@ -141,5 +147,92 @@ async fn transport_failure_keeps_its_lane_and_source() {
         panic!("connect failure is transient");
     };
     assert_eq!(t.kind, TransientKind::ConnectionLost);
-    assert!(reqwest_in(&t).is_some());
+    assert!(source_in::<reqwest::Error>(&t).is_some());
+}
+
+#[tokio::test]
+async fn reset_after_connect_is_transient_and_preserves_the_source() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        // A client timeout cannot interrupt a blocking accept in this thread.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "client did not connect"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("accept failed: {error}"),
+            }
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut byte = [0];
+        assert_eq!(stream.read(&mut byte).unwrap(), 1);
+        socket2::SockRef::from(&stream)
+            .set_linger(Some(Duration::ZERO))
+            .unwrap();
+        // Abort the established connection after receiving the request.
+        drop(stream);
+    });
+    let error = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .retry(reqwest::retry::never())
+        .build()
+        .unwrap()
+        .get(format!("http://{address}/"))
+        .send()
+        .await
+        .unwrap_err();
+    server.join().unwrap();
+
+    assert!(error.is_request());
+    assert!(
+        !error.is_connect(),
+        "reset occurred after connection establishment"
+    );
+    assert!(!error.is_timeout());
+    assert_eq!(
+        source_in::<io::Error>(&error).unwrap().kind(),
+        io::ErrorKind::ConnectionReset
+    );
+
+    let borrowed = Fault::classify(&error);
+    assert!(
+        matches!(borrowed, Fault::Transient(ref t) if t.kind == TransientKind::ConnectionLost),
+        "{borrowed:?}"
+    );
+    let fault = owned(error);
+    let Fault::Transient(transient) = fault else {
+        panic!("expected connection lost, got {fault:?}");
+    };
+    assert_eq!(transient.kind, TransientKind::ConnectionLost);
+    assert_eq!(
+        source_in::<io::Error>(&transient).unwrap().kind(),
+        io::ErrorKind::ConnectionReset
+    );
+    assert!(source_in::<reqwest::Error>(&transient).is_some());
+}
+
+#[tokio::test]
+async fn malformed_request_remains_fatal() {
+    let error = reqwest::Client::new()
+        .get("http://127.0.0.1/")
+        .header("invalid header name", "value")
+        .send()
+        .await
+        .unwrap_err();
+    assert!(error.is_builder());
+    assert!(matches!(
+        owned(error),
+        Fault::Fatal(fatal) if fatal.kind == FatalKind::Invariant
+    ));
 }
