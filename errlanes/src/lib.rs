@@ -30,9 +30,9 @@ pub mod reqwest;
 #[cfg(feature = "tracing")]
 mod record;
 
+pub use carrier::LaneRef;
 #[doc(hidden)]
-pub use carrier::{Absorb, IntoLanes, LaneRejected, kind};
-pub use carrier::{Carrier, LaneRef, Repr};
+pub use carrier::{IntoLanes, LaneRejected, kind};
 pub use classify::{Classify, RejectedSlot, RejectedUnion};
 #[doc(hidden)]
 pub use fail::__catalogue;
@@ -51,7 +51,7 @@ pub use result_ext::{NarrowDeniedLane, NarrowRejectedBy, NarrowRejectedLane};
 pub use record::{FIELDS, emit};
 
 #[cfg(feature = "derive")]
-pub use errlanes_derive::{__compose_rejection, Carrier, Classify, Lift, Rejection, compose};
+pub use errlanes_derive::{__compose_rejection, Classify, Lift, Rejection, compose};
 
 #[cfg(all(feature = "derive", feature = "tracing"))]
 pub use errlanes_derive::instrument;

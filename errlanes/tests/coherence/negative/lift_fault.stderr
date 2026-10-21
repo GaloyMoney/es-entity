@@ -1,5 +1,5 @@
 error[E0277]: the trait bound `(): Rejection` is not satisfied
- --> tests/coherence/carrier_fail/lift_fault.rs:5:27
+ --> tests/coherence/negative/lift_fault.rs:5:27
   |
 5 |     let _ = source.lift::<()>();
   |                    ----   ^^ the trait `Rejection` is not implemented for `()`
@@ -16,7 +16,7 @@ note: required by a bound in `errlanes::ResultExt::lift`
   |            ^^^^^^^^^ required by this bound in `ResultExt::lift`
 
 error[E0277]: the trait bound `Infallible: Rejection` is not satisfied
- --> tests/coherence/carrier_fail/lift_fault.rs:5:20
+ --> tests/coherence/negative/lift_fault.rs:5:20
   |
 5 |     let _ = source.lift::<()>();
   |                    ^^^^ the trait `Rejection` is not implemented for `Infallible`

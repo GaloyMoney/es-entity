@@ -1,4 +1,4 @@
-error: guards leave `Source::Value` partially mapped; add an unguarded arm for it, register `#[lift(Source, unhandled = fatal)]`, or list the remaining cases in `fatal(..)`
+error: guards leave `Source::Value` partially mapped; add an unguarded arm for it or register `#[lift(Source, unhandled = fatal)]`
   --> tests/v2/lift_when_strict_without_catch_all.rs:12:34
    |
 12 |     #[lift(Source::Value, when = is_even)]

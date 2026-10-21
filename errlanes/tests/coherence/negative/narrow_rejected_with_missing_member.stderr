@@ -1,11 +1,11 @@
 error[E0004]: non-exhaustive patterns: `Outcome::Corrupt` not covered
-  --> tests/coherence/carrier_fail/narrow_rejected_with_missing_member.rs:11:49
+  --> tests/coherence/negative/narrow_rejected_with_missing_member.rs:11:49
    |
 11 |     value.narrow_rejected_with(|rejected| match rejected {
    |                                                 ^^^^^^^^ pattern `Outcome::Corrupt` not covered
    |
 note: `Outcome` defined here
-  --> tests/coherence/carrier_fail/narrow_rejected_with_missing_member.rs:5:6
+  --> tests/coherence/negative/narrow_rejected_with_missing_member.rs:5:6
    |
  5 | enum Outcome {
    |      ^^^^^^^

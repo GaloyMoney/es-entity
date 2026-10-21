@@ -1,0 +1,20 @@
+error[E0271]: type mismatch resolving `<Fail<Closed, Profile<false, true, true>> as IntoLanes>::Rejected == Infallible`
+  --> tests/coherence/negative/fail_into_fault.rs:10:6
+   |
+10 |     r?;
+   |      ^ expected `Infallible`, found `Closed`
+   |
+   = note: required for `errlanes::Fault<Profile<false, true, true>>` to implement `From<errlanes::Fail<Closed, Profile<false, true, true>>>`
+
+error[E0277]: `?` couldn't convert the error: `errlanes::kind::Fail: IntoFault` is not satisfied
+  --> tests/coherence/negative/fail_into_fault.rs:10:6
+   |
+ 9 | fn f(r: Result<(), Fail<Closed, lanes!(Transient, Fatal)>>) -> Result<(), Fault<lanes!(Transient, Fatal)>> {
+   |                                                                ------------------------------------------- required `errlanes::kind::Fail: IntoFault` because of this
+10 |     r?;
+   |     -^ the trait `IntoFault` is not implemented for `errlanes::kind::Fail`
+   |     |
+   |     this can't be annotated with `?` because it has type `Result<_, errlanes::Fail<Closed, Profile<false, true, true>>>`
+   |
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+   = note: required for `errlanes::Fault<Profile<false, true, true>>` to implement `From<errlanes::Fail<Closed, Profile<false, true, true>>>`

@@ -1,5 +1,5 @@
 error[E0277]: `?` couldn't convert the error: `errlanes::kind::Fail: IntoFail` is not satisfied
-  --> tests/coherence/carrier_fail/fail_rejection_change_question_mark.rs:14:10
+  --> tests/coherence/negative/fail_rejection_change_question_mark.rs:14:10
    |
 13 | fn outer(inner: Result<(), Fail<Child, lanes!(Fatal)>>) -> Result<(), Fail<Parent, lanes!(Fatal)>> {
    |                                                            --------------------------------------- required `errlanes::kind::Fail: IntoFail` because of this

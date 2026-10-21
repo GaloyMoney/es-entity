@@ -22,7 +22,7 @@ error: duplicate `variant`
 14 | #[lift(Source, variant = Value, variant = Other)]
    |                                 ^^^^^^^
 
-error: choose one of `strict`, `unhandled = fatal`, `fatal(..)`
+error: choose either `strict` or `unhandled = fatal` once
   --> tests/v2/lift_struct_invalid_registration.rs:18:41
    |
 18 | #[lift(Source, variant = Value, strict, unhandled = fatal)]
@@ -34,7 +34,7 @@ error: expected fatal
 22 | #[lift(Source, variant = Value, unhandled = ignored)]
    |                                             ^^^^^^^
 
-error: expected `variant = Case`, `strict`, `unhandled = fatal`, or `fatal(..)`
+error: expected `variant = Case`, `strict`, or `unhandled = fatal`
   --> tests/v2/lift_struct_invalid_registration.rs:26:33
    |
 26 | #[lift(Source, variant = Value, with = mapper)]

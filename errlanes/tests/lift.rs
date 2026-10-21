@@ -23,22 +23,11 @@ impl From<Child> for ParentTotal {
     }
 }
 
-#[derive(Debug, errlanes::Carrier)]
-enum ParentCarrier {
-    Rejected(Parent),
-    Fatal(errlanes::Fatal),
-}
-
 fn bare(child: Child) -> Result<(), Child> {
     Err(child)
 }
 
 fn into_fail(child: Child) -> Result<(), Fail<Parent, lanes!(Transient, Fatal)>> {
-    bare(child).lift()?;
-    Ok(())
-}
-
-fn into_carrier(child: Child) -> Result<(), ParentCarrier> {
     bare(child).lift()?;
     Ok(())
 }
@@ -49,20 +38,12 @@ fn total_without_fatal() -> Result<(), Fail<ParentTotal, lanes!()>> {
 }
 
 #[test]
-fn partial_bare_lift_uses_the_fatal_lane_and_infers_into_a_carrier() {
+fn partial_bare_lift_uses_the_fatal_lane() {
     assert!(matches!(
         into_fail(Child::Mapped),
         Err(Fail::Rejected(Parent::Mapped))
     ));
     assert!(matches!(into_fail(Child::Unmapped), Err(Fail::Fatal(_))));
-    assert!(matches!(
-        into_carrier(Child::Mapped),
-        Err(ParentCarrier::Rejected(Parent::Mapped))
-    ));
-    assert!(matches!(
-        into_carrier(Child::Unmapped),
-        Err(ParentCarrier::Fatal(_))
-    ));
     assert!(matches!(
         total_without_fatal(),
         Err(Fail::Rejected(ParentTotal))
