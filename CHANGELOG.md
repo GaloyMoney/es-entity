@@ -1,3 +1,24 @@
+# [cala release v0.19.7](https://github.com/GaloyMoney/cala/releases/tag/0.19.7)
+
+
+
+### Bug Fixes
+
+- Bump rustls to 0.23.46 (#290)
+- Classify request-side TCP resets as transient (#287)
+
+### Features
+
+- Into_executed (#291)
+
+### Miscellaneous Tasks
+
+- Bump the all-dependencies group across 1 directory with 4 updates (#278)
+
+### Refactor
+
+- Remove fatal(..) lift cases and carrier types (#286)
+
 # [cala release v0.19.6](https://github.com/GaloyMoney/cala/releases/tag/0.19.6)
 
 
