@@ -63,7 +63,7 @@ fn a_nested_named_field_case_builds_the_leaf_from_the_bound_field() {
 }
 
 #[test]
-fn the_built_leafs_code_reaches_the_family_catalogue() {
+fn the_code_of_the_built_leaf_reaches_the_family_catalogue() {
     assert_eq!(catalogue::<Holding>(), ["HOLDING_ACCOUNT_LOCKED"]);
 }
 
