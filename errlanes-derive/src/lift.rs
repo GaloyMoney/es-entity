@@ -132,6 +132,10 @@ impl Braces {
     }
 }
 impl Case {
+    pub(crate) fn leaf_is_braced(&self) -> bool {
+        self.leaf_braces().is_some()
+    }
+
     fn leaf_braces(&self) -> Option<&Braces> {
         match &self.inner {
             Some(inner) => inner.leaf_braces(),

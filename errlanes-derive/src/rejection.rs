@@ -487,6 +487,13 @@ pub fn derive(ast: &syn::DeriveInput) -> darling::Result<TokenStream> {
                 )
                 .with_span(&v.ident));
             }
+            if mappings.iter().any(|mapping| mapping.case.leaf_is_braced()) {
+                return Err(darling::Error::custom(
+                    "a lift arm with a braced leaf drops or rebuilds the payload and \
+                     requires an explicit rejection code or `#[rejection(delegate)]`",
+                )
+                .with_span(&v.ident));
+            }
             if v.level.is_none() && mappings.len() > 1 {
                 return Err(darling::Error::custom(
                     "multiple source variants require an explicit canonical rejection code",

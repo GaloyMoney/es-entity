@@ -1,0 +1,11 @@
+error: a lift arm with a braced leaf drops or rebuilds the payload and requires an explicit rejection code or `#[rejection(delegate)]`
+  --> tests/v2/lift_leaf_binds_nothing_requires_metadata.rs:23:5
+   |
+23 |     Value(Leaf),
+   |     ^^^^^
+
+error: a lift arm with a braced leaf drops or rebuilds the payload and requires an explicit rejection code or `#[rejection(delegate)]`
+  --> tests/v2/lift_leaf_binds_nothing_requires_metadata.rs:32:5
+   |
+32 |     Value(BoundLeaf),
+   |     ^^^^^
