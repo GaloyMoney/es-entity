@@ -1,3 +1,11 @@
+# [cala release v0.19.8](https://github.com/GaloyMoney/cala/releases/tag/0.19.8)
+
+
+
+### Features
+
+- A case leaf written { .. } binds nothing (#288)
+
 # [cala release v0.19.7](https://github.com/GaloyMoney/cala/releases/tag/0.19.7)
 
 
