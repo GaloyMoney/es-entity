@@ -1,0 +1,29 @@
+error: a leaf pattern takes `..`, or field names optionally followed by `..`
+ --> tests/v2/lift_leaf_binds_nothing_pattern.rs:8:26
+  |
+8 |     #[lift(Source::Value {})]
+  |                          ^^
+
+error: `..` goes last in a leaf pattern
+  --> tests/v2/lift_leaf_binds_nothing_pattern.rs:15:26
+   |
+15 |     #[lift(Source::Value { .., })]
+   |                          ^^^^^^^
+
+error: `..` goes last in a leaf pattern
+  --> tests/v2/lift_leaf_binds_nothing_pattern.rs:22:26
+   |
+22 |     #[lift(Source::Value { .., a })]
+   |                          ^^^^^^^^^
+
+error: a leaf pattern binds field names; it does not rename them
+  --> tests/v2/lift_leaf_binds_nothing_pattern.rs:29:28
+   |
+29 |     #[lift(Source::Value { a: b })]
+   |                            ^
+
+error: `a` is bound twice
+  --> tests/v2/lift_leaf_binds_nothing_pattern.rs:36:31
+   |
+36 |     #[lift(Source::Value { a, a })]
+   |                               ^

@@ -1,4 +1,4 @@
-error: a unit struct lifts a whole value; a case of an enum source is routed by the family's arm, `with` if it has no payload
+error: a unit struct lifts a whole value; a case of an enum source is routed by the family's arm: write `S::V { .. }` on the arm to drop its payload
  --> tests/v2/lift_unit_variant.rs:4:16
   |
 4 | #[lift(Source, variant = Value)]

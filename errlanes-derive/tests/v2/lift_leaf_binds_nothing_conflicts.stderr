@@ -1,0 +1,47 @@
+error: `{ .. }` binds nothing; `into`/`field`/`when` need the payload
+  --> tests/v2/lift_leaf_binds_nothing_conflicts.rs:24:12
+   |
+24 |     #[lift(Source::Value { .. }, into)]
+   |            ^^^^^^
+
+error: `{ .. }` binds nothing; `into`/`field`/`when` need the payload
+  --> tests/v2/lift_leaf_binds_nothing_conflicts.rs:31:12
+   |
+31 |     #[lift(Source::Value { .. }, field = value)]
+   |            ^^^^^^
+
+error: `{ .. }` binds nothing; `into`/`field`/`when` need the payload
+  --> tests/v2/lift_leaf_binds_nothing_conflicts.rs:38:12
+   |
+38 |     #[lift(Source::Value { .. }, when = big)]
+   |            ^^^^^^
+
+error: `{ .. }` is the derived form of a `with` hook that drops the payload; use one or the other
+  --> tests/v2/lift_leaf_binds_nothing_conflicts.rs:45:12
+   |
+45 |     #[lift(Source::Value { .. }, with = mapper)]
+   |            ^^^^^^
+
+error: a leaf that binds fields builds the destination; `with`/`into`/`field`/`when` are not combined with it
+  --> tests/v2/lift_leaf_binds_nothing_conflicts.rs:52:12
+   |
+52 |     #[lift(Source::Value { a, .. }, into)]
+   |            ^^^^^^
+
+error: a leaf that binds fields builds the destination; `with`/`into`/`field`/`when` are not combined with it
+  --> tests/v2/lift_leaf_binds_nothing_conflicts.rs:59:12
+   |
+59 |     #[lift(Source::Value { a, .. }, field = value)]
+   |            ^^^^^^
+
+error: a leaf that binds fields builds the destination; `with`/`into`/`field`/`when` are not combined with it
+  --> tests/v2/lift_leaf_binds_nothing_conflicts.rs:66:12
+   |
+66 |     #[lift(Source::Value { a, .. }, when = big)]
+   |            ^^^^^^
+
+error: a leaf that binds fields builds the destination; `with`/`into`/`field`/`when` are not combined with it
+  --> tests/v2/lift_leaf_binds_nothing_conflicts.rs:73:12
+   |
+73 |     #[lift(Source::Value { a, .. }, with = mapper)]
+   |            ^^^^^^

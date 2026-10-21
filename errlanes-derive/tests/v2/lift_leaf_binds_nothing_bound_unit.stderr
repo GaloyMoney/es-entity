@@ -1,0 +1,11 @@
+error: a leaf that binds fields builds the destination; a unit variant has nowhere to put them
+ --> tests/v2/lift_leaf_binds_nothing_bound_unit.rs:9:5
+  |
+9 |     Gone,
+  |     ^^^^
+
+error: a leaf that binds fields needs a destination with exactly those named fields, or one field whose type is built from them
+  --> tests/v2/lift_leaf_binds_nothing_bound_unit.rs:16:5
+   |
+16 |     Gone(u8, u8),
+   |     ^^^^

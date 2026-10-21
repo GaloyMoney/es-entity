@@ -1,0 +1,11 @@
+error: a `{ .. }` arm binds nothing: the destination is a unit variant or holds one unit leaf
+  --> tests/v2/lift_leaf_binds_nothing_destination_shape.rs:11:5
+   |
+11 |     Value(Gone, Gone),
+   |     ^^^^^
+
+error: a `{ .. }` arm binds nothing: the destination is a unit variant or holds one unit leaf
+  --> tests/v2/lift_leaf_binds_nothing_destination_shape.rs:18:5
+   |
+18 |     Value { first: Gone, second: Gone },
+   |     ^^^^^

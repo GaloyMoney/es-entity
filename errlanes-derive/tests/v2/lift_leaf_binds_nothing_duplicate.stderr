@@ -1,0 +1,11 @@
+error: source variant mapped more than once
+  --> tests/v2/lift_leaf_binds_nothing_duplicate.rs:10:5
+   |
+10 |     #[lift(Source::Value)]
+   |     ^
+
+error: source variant mapped more than once
+  --> tests/v2/lift_leaf_binds_nothing_duplicate.rs:23:5
+   |
+23 |     #[lift(Source::Value { .. })]
+   |     ^

@@ -1,0 +1,10 @@
+error[E0423]: expected value, found struct `Leaf`
+  --> tests/v2/lift_leaf_binds_nothing_struct_leaf.rs:13:10
+   |
+ 5 | / struct Leaf {
+ 6 | |     code: u32,
+ 7 | | }
+   | |_- `Leaf` defined here
+...
+13 |       Gone(Leaf),
+   |            ^^^^ help: use struct literal syntax instead: `Leaf { code: val }`

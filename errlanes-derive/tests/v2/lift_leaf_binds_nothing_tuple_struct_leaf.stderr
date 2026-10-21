@@ -1,0 +1,23 @@
+error[E0308]: mismatched types
+  --> tests/v2/lift_leaf_binds_nothing_tuple_struct_leaf.rs:11:11
+   |
+ 5 | struct Leaf(u32);
+   | ----------- `Leaf` defines a struct constructor here, which should be called
+ 6 |
+ 7 | #[derive(errlanes::Lift)]
+   |          -------------- arguments to this enum variant are incorrect
+...
+11 |     Value(Leaf),
+   |           ^^^^ expected `Leaf`, found struct constructor
+   |
+   = note:          expected struct `Leaf`
+           found struct constructor `fn(u32) -> Leaf {Leaf}`
+note: tuple variant defined here
+  --> tests/v2/lift_leaf_binds_nothing_tuple_struct_leaf.rs:11:5
+   |
+11 |     Value(Leaf),
+   |     ^^^^^
+help: use parentheses to construct this tuple struct
+   |
+11 |     Value(Leaf(/* u32 */)),
+   |               +++++++++++

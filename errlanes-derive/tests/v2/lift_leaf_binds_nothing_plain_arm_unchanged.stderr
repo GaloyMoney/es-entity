@@ -1,0 +1,8 @@
+error[E0532]: expected unit struct, unit variant or constant, found tuple variant `Source::Held`
+ --> tests/v2/lift_leaf_binds_nothing_plain_arm_unchanged.rs:8:12
+  |
+2 |     Held(u8),
+  |     -------- `Source::Held` defined here
+...
+8 |     #[lift(Source::Held)]
+  |            ^^^^^^^^^^^^ help: use the tuple variant pattern syntax instead: `Source::Held(_)`

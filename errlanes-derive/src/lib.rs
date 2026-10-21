@@ -83,6 +83,13 @@ pub fn derive_classify(input: TokenStream) -> TokenStream {
 /// Derive error conversion mappings. A single-field tuple struct can project
 /// a source struct field with `#[lift(Source, field = name)]`, generating
 /// `From<Source>` independently of rejection metadata.
+///
+/// An enum arm whose innermost case is written `Source::Variant { .. }` binds
+/// nothing and drops the payload: the destination is a unit variant, or a
+/// variant holding one unit leaf. It combines with `to = Variant` but not with
+/// `with`, `into`, `field` or `when`. Naming fields, `Source::Variant { a, .. }`,
+/// builds the destination from them: a variant with exactly those named fields,
+/// or one field whose struct type has exactly those fields.
 #[proc_macro_derive(Lift, attributes(lift))]
 pub fn derive_lift(input: TokenStream) -> TokenStream {
     expand(input, |ast| lift::derive(ast).map_err(darling::Error::from))

@@ -1,0 +1,5 @@
+error[E0063]: missing field `b` in initializer of `Leaf`
+  --> tests/v2/lift_leaf_binds_nothing_bound_leaf_fields.rs:14:10
+   |
+14 |     Gone(Leaf),
+   |          ^^^^ missing `b`
