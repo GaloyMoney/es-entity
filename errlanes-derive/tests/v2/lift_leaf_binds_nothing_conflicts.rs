@@ -46,6 +46,34 @@ enum WithWith {
     Value(Gone),
 }
 
+#[derive(errlanes::Lift)]
+#[lift(Source)]
+enum BoundWithInto {
+    #[lift(Source::Value { a, .. }, into)]
+    Value(Gone),
+}
+
+#[derive(errlanes::Lift)]
+#[lift(Source)]
+enum BoundWithField {
+    #[lift(Source::Value { a, .. }, field = value)]
+    Value(Gone),
+}
+
+#[derive(errlanes::Lift)]
+#[lift(Source)]
+enum BoundWithWhen {
+    #[lift(Source::Value { a, .. }, when = big)]
+    Value(Gone),
+}
+
+#[derive(errlanes::Lift)]
+#[lift(Source)]
+enum BoundWithWith {
+    #[lift(Source::Value { a, .. }, with = mapper)]
+    Value(Gone),
+}
+
 enum Destination {
     Plain,
 }

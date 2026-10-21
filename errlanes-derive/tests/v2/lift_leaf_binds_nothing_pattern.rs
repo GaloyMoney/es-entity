@@ -4,8 +4,8 @@ enum Source {
 
 #[derive(errlanes::Lift)]
 #[lift(Source)]
-enum Named {
-    #[lift(Source::Value { x })]
+enum Empty {
+    #[lift(Source::Value {})]
     Value,
 }
 
@@ -18,8 +18,22 @@ enum Trailing {
 
 #[derive(errlanes::Lift)]
 #[lift(Source)]
-enum Empty {
-    #[lift(Source::Value {})]
+enum RestFirst {
+    #[lift(Source::Value { .., a })]
+    Value,
+}
+
+#[derive(errlanes::Lift)]
+#[lift(Source)]
+enum Renamed {
+    #[lift(Source::Value { a: b })]
+    Value,
+}
+
+#[derive(errlanes::Lift)]
+#[lift(Source)]
+enum Twice {
+    #[lift(Source::Value { a, a })]
     Value,
 }
 

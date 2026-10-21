@@ -1,4 +1,4 @@
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 use syn::{Fields, Path, Token, parse::Parse, spanned::Spanned};
 
@@ -73,14 +73,74 @@ impl Parse for Registration {
 pub(crate) struct Case {
     path: Path,
     inner: Option<Box<Case>>,
-    binds_nothing: bool,
+    braces: Option<Braces>,
+}
+
+/// The braces after a leaf: `{ .. }`, or field names optionally followed by
+/// `..`.
+struct Braces {
+    bound: Vec<syn::Ident>,
+    rest: bool,
+}
+impl Braces {
+    const SHAPE: &'static str =
+        "a leaf pattern takes `..`, or field names optionally followed by `..`";
+
+    fn parse(content: syn::parse::ParseStream, span: Span) -> syn::Result<Self> {
+        let mut bound: Vec<syn::Ident> = Vec::new();
+        let mut rest = false;
+        while !content.is_empty() {
+            if content.peek(Token![..]) {
+                content.parse::<Token![..]>()?;
+                rest = true;
+                if !content.is_empty() {
+                    return Err(syn::Error::new(span, "`..` goes last in a leaf pattern"));
+                }
+                break;
+            }
+            let name: syn::Ident = content
+                .parse()
+                .map_err(|_| syn::Error::new(span, Self::SHAPE))?;
+            if content.peek(Token![:]) {
+                return Err(syn::Error::new_spanned(
+                    name,
+                    "a leaf pattern binds field names; it does not rename them",
+                ));
+            }
+            if bound.contains(&name) {
+                return Err(syn::Error::new_spanned(
+                    &name,
+                    format!("`{name}` is bound twice"),
+                ));
+            }
+            bound.push(name);
+            if content.is_empty() {
+                break;
+            }
+            content.parse::<Token![,]>()?;
+        }
+        if bound.is_empty() && !rest {
+            return Err(syn::Error::new(span, Self::SHAPE));
+        }
+        Ok(Self { bound, rest })
+    }
+
+    fn pattern(&self) -> TokenStream {
+        let bound = &self.bound;
+        let rest = self.rest.then(|| quote!(..));
+        quote!({ #(#bound,)* #rest })
+    }
 }
 impl Case {
-    fn leaf_binds_nothing(&self) -> bool {
+    fn leaf_braces(&self) -> Option<&Braces> {
         match &self.inner {
-            Some(inner) => inner.leaf_binds_nothing(),
-            None => self.binds_nothing,
+            Some(inner) => inner.leaf_braces(),
+            None => self.braces.as_ref(),
         }
+    }
+
+    fn leaf_bound(&self) -> &[syn::Ident] {
+        self.leaf_braces().map_or(&[], |braces| &braces.bound)
     }
 
     pub(crate) fn path(&self) -> &Path {
@@ -142,23 +202,20 @@ impl Case {
 impl Parse for Case {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let path = input.parse()?;
-        let binds_nothing = input.peek(syn::token::Brace);
-        if binds_nothing {
+        let braces = if input.peek(syn::token::Brace) {
             let content;
             let brace = syn::braced!(content in input);
-            if content.parse::<Token![..]>().is_err() || !content.is_empty() {
-                return Err(syn::Error::new(
-                    brace.span.join(),
-                    "a leaf pattern takes only `..`",
-                ));
-            }
+            let braces = Braces::parse(&content, brace.span.join())?;
             if input.peek(syn::token::Paren) {
                 return Err(syn::Error::new(
                     brace.span.join(),
                     "`{ .. }` goes on the leaf",
                 ));
             }
-        }
+            Some(braces)
+        } else {
+            None
+        };
         let inner = if input.peek(syn::token::Paren) {
             let content;
             let paren = syn::parenthesized!(content in input);
@@ -176,7 +233,7 @@ impl Parse for Case {
         Ok(Self {
             path,
             inner,
-            binds_nothing,
+            braces,
         })
     }
 }
@@ -619,10 +676,21 @@ fn single_field(
 }
 
 fn binds_nothing_conflict(mapping: &Mapping) -> syn::Result<()> {
-    if !mapping.case.leaf_binds_nothing() {
+    if mapping.case.leaf_braces().is_none() {
         return Ok(());
     }
-    let message = if mapping.with.is_some() {
+    let binds_fields = !mapping.case.leaf_bound().is_empty();
+    let message = if binds_fields
+        && (mapping.with.is_some()
+            || mapping.into
+            || mapping.field.is_some()
+            || mapping.when.is_some())
+    {
+        "a leaf that binds fields builds the destination; \
+         `with`/`into`/`field`/`when` are not combined with it"
+    } else if binds_fields {
+        return Ok(());
+    } else if mapping.with.is_some() {
         "`{ .. }` is the derived form of a `with` hook that drops the payload; \
          use one or the other"
     } else if mapping.into || mapping.field.is_some() || mapping.when.is_some() {
@@ -633,9 +701,19 @@ fn binds_nothing_conflict(mapping: &Mapping) -> syn::Result<()> {
     Err(syn::Error::new_spanned(mapping.case.leaf_path(), message))
 }
 
+/// `Leaf { a: Into::into(a), .. }` for each bound field.
+fn assignments(bound: &[syn::Ident]) -> Vec<TokenStream> {
+    bound
+        .iter()
+        .map(|name| quote!(#name: ::core::convert::Into::into(#name)))
+        .collect()
+}
+
 /// A `Source::Variant { .. }` arm drops the payload: the destination is a unit
-/// variant, or a variant holding one unit leaf named by its field type.
-fn binds_nothing_arm(
+/// variant, or a variant holding one unit leaf named by its field type. A
+/// `Source::Variant { a, .. }` arm builds the destination from the named
+/// fields.
+fn braced_arm(
     mapping: &Mapping,
     whole_value: bool,
     variant: &syn::Variant,
@@ -645,26 +723,70 @@ fn binds_nothing_arm(
     if whole_value {
         return Err(syn::Error::new_spanned(
             case.leaf_path(),
-            "a whole-value lift has no case to bind; `{ .. }` goes on a source variant",
+            "a whole-value lift has no case to bind; a leaf pattern goes on a source variant",
         ));
     }
-    let pattern = case.nest(&|leaf| quote!(#leaf { .. }));
+    let braces = case.leaf_braces().expect("braced leaf");
+    let leaf_pattern = braces.pattern();
+    let pattern = case.nest(&|leaf| quote!(#leaf #leaf_pattern));
+    let bound = &braces.bound;
+    if bound.is_empty() {
+        let built = match &variant.fields {
+            Fields::Unit => quote!(Self::#dest),
+            Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
+                let leaf = &fields.unnamed[0].ty;
+                quote!(Self::#dest(#leaf))
+            }
+            Fields::Named(fields) if fields.named.len() == 1 => {
+                let field = &fields.named[0].ident;
+                let leaf = &fields.named[0].ty;
+                quote!(Self::#dest { #field: #leaf })
+            }
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    &variant.ident,
+                    "a `{ .. }` arm binds nothing: the destination is a unit variant or \
+                     holds one unit leaf",
+                ));
+            }
+        };
+        return Ok(quote! { #pattern => Ok(#built) });
+    }
     let built = match &variant.fields {
-        Fields::Unit => quote!(Self::#dest),
+        Fields::Named(fields)
+            if fields.named.len() == bound.len()
+                && fields
+                    .named
+                    .iter()
+                    .all(|field| bound.iter().any(|name| Some(name) == field.ident.as_ref())) =>
+        {
+            let direct = fields.named.iter().filter_map(|field| field.ident.as_ref());
+            let direct = direct.map(|name| quote!(#name: ::core::convert::Into::into(#name)));
+            quote!(Self::#dest { #(#direct),* })
+        }
         Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
             let leaf = &fields.unnamed[0].ty;
-            quote!(Self::#dest(#leaf))
+            let fields = assignments(bound);
+            quote!(Self::#dest(#leaf { #(#fields),* }))
         }
         Fields::Named(fields) if fields.named.len() == 1 => {
             let field = &fields.named[0].ident;
             let leaf = &fields.named[0].ty;
-            quote!(Self::#dest { #field: #leaf })
+            let fields = assignments(bound);
+            quote!(Self::#dest { #field: #leaf { #(#fields),* } })
+        }
+        Fields::Unit => {
+            return Err(syn::Error::new_spanned(
+                &variant.ident,
+                "a leaf that binds fields builds the destination; a unit variant has \
+                 nowhere to put them",
+            ));
         }
         _ => {
             return Err(syn::Error::new_spanned(
                 &variant.ident,
-                "a `{ .. }` arm binds nothing: the destination is a unit variant or \
-                 holds one unit leaf",
+                "a leaf that binds fields needs a destination with exactly those named \
+                 fields, or one field whose type is built from them",
             ));
         }
     };
@@ -678,8 +800,8 @@ fn variant_arm(
 ) -> syn::Result<TokenStream> {
     let case = &mapping.case;
     let dest = &variant.ident;
-    if case.leaf_binds_nothing() {
-        return binds_nothing_arm(mapping, whole_value, variant);
+    if case.leaf_braces().is_some() {
+        return braced_arm(mapping, whole_value, variant);
     }
     let guard = mapping.when.as_ref().map(|pred| quote!(if #pred(&payload)));
     let bound = case.nest(&|leaf| quote!(#leaf(payload)));
