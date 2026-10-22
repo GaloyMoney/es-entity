@@ -1,3 +1,11 @@
+# [cala release v0.20.0](https://github.com/GaloyMoney/cala/releases/tag/0.20.0)
+
+
+
+### Features
+
+- [**breaking**] EsEntity generates {Entity}Hydrator; bon replaces derive_builder (#292)
+
 # [cala release v0.19.8](https://github.com/GaloyMoney/cala/releases/tag/0.19.8)
 
 
