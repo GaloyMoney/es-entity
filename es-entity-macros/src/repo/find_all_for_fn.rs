@@ -19,6 +19,7 @@ pub struct FindAllForFn<'a> {
     table_name: &'a str,
     delete: DeleteOption,
     cursor_mod: syn::Ident,
+    any_nested: bool,
     post_hydrate_hook: bool,
     forgettable_table_name: Option<&'a str>,
     snapshot_table_name: Option<&'a str>,
@@ -48,6 +49,7 @@ impl<'a> FindAllForFn<'a> {
             table_name: opts.table_name(),
             delete: opts.delete,
             cursor_mod: opts.cursor_mod(),
+            any_nested: opts.any_nested(),
             post_hydrate_hook: opts.post_hydrate_hook.is_some(),
             forgettable_table_name: opts.forgettable_table_name(),
             snapshot_table_name: opts.snapshot_table_name(),
@@ -225,9 +227,14 @@ impl ToTokens for FindAllForFn<'_> {
                     } else {
                         quote! { es_entity::ListDirection::Descending }
                     };
+                    let fetch_method = if delete == DeleteOption::Soft && self.any_nested {
+                        quote! { fetch_n_include_deleted }
+                    } else {
+                        quote! { fetch_n }
+                    };
                     query_arms.append_all(quote! {
                         #direction_pattern => {
-                            #es_query_call.fetch_n(op, usize::MAX).await?
+                            #es_query_call.#fetch_method(op, usize::MAX).await?
                         },
                     });
                 }
@@ -426,6 +433,29 @@ mod tests {
         assert!(tokens.contains("pub async fn find_all_for_currencies_include_deleted <"));
         assert!(tokens.contains("pub async fn find_all_for_currencies_include_deleted_in_op <"));
         assert!(tokens.contains("WHERE currency = ANY($1) ORDER BY currency, id ASC"));
+    }
+
+    #[test]
+    fn nested_soft_delete_repo_includes_deleted_children_only_on_include_deleted() {
+        let tokens = tokens(parse_quote! {
+            #[es_repo(
+                entity = "Order",
+                delete = "soft",
+                columns(status(ty = "String", list_for))
+            )]
+            struct Orders {
+                pool: sqlx::PgPool,
+                #[es_repo(nested)]
+                items: OrderItems,
+            }
+        });
+
+        let (visible, include_deleted) = tokens
+            .split_once("pub async fn find_all_for_statuses_include_deleted <")
+            .expect("include_deleted variant");
+        assert!(visible.contains("fetch_n (op , usize :: MAX)"));
+        assert!(!visible.contains("fetch_n_include_deleted"));
+        assert!(include_deleted.contains("fetch_n_include_deleted (op , usize :: MAX)"));
     }
 
     #[test]
