@@ -867,6 +867,10 @@ impl Column {
         self.opts.is_id
     }
 
+    pub fn is_forgettable(&self) -> bool {
+        self.opts.forgettable
+    }
+
     /// Whether the column's value is known to the create statement and
     /// stored as-is, so a conflict on it can be targeted and looked up.
     pub fn is_ensurable(&self) -> bool {
@@ -1010,6 +1014,19 @@ impl Column {
 
     pub fn accessor(&self) -> proc_macro2::TokenStream {
         self.opts.update_accessor(&self.name)
+    }
+
+    /// The expression that reads this column's value off a hydrated entity.
+    ///
+    /// A column persisted on update already declares an entity-side accessor
+    /// for it. A column with `update(persist = false)` declares none, so its
+    /// `create(accessor = ..)` stands in.
+    pub fn entity_key_accessor(&self) -> proc_macro2::TokenStream {
+        if self.opts.persist_on_update() {
+            self.opts.update_accessor(&self.name)
+        } else {
+            self.opts.create_accessor(&self.name)
+        }
     }
 
     pub fn parent_accessor(&self) -> proc_macro2::TokenStream {
