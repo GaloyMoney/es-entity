@@ -69,11 +69,12 @@ impl Field {
 #[darling(supports(struct_named), attributes(es_entity))]
 pub struct EsEntity {
     ident: syn::Ident,
-    vis: syn::Visibility,
     #[darling(default, rename = "new")]
     new_entity_ident: Option<syn::Ident>,
     #[darling(default, rename = "event")]
     event_ident: Option<syn::Ident>,
+    #[darling(default, rename = "hydrator")]
+    hydrator_vis: Option<syn::Visibility>,
     data: darling::ast::Data<(), Field>,
 }
 
@@ -146,7 +147,10 @@ impl EsEntity {
 
     fn hydrator_tokens(&self, event: &syn::Ident, snapshot: &TokenStream) -> TokenStream {
         let ident = &self.ident;
-        let vis = &self.vis;
+        let vis = self
+            .hydrator_vis
+            .clone()
+            .unwrap_or(syn::Visibility::Inherited);
         let hydrator = syn::Ident::new(&format!("{ident}Hydrator"), ident.span());
         let events_field = self
             .find_events_field()
@@ -340,7 +344,7 @@ mod tests {
             #[doc = "Accumulates the fields of a [`User`] while its events are replayed."]
             #[derive(Default)]
             #[allow(dead_code)]
-            pub struct UserHydrator {
+            struct UserHydrator {
                 id: Option<UserId>,
                 email: Option<String>,
             }
@@ -348,25 +352,25 @@ mod tests {
             #[allow(dead_code)]
             impl User {
                 #[doc = "Starts an empty [`UserHydrator`]."]
-                pub fn hydrator() -> UserHydrator {
+                fn hydrator() -> UserHydrator {
                     UserHydrator::default()
                 }
             }
 
             #[allow(dead_code)]
             impl UserHydrator {
-                pub fn id(&mut self, id: UserId) -> &mut Self {
+                fn id(&mut self, id: UserId) -> &mut Self {
                     self.id = Some(id);
                     self
                 }
-                pub fn email(&mut self, email: String) -> &mut Self {
+                fn email(&mut self, email: String) -> &mut Self {
                     self.email = Some(email);
                     self
                 }
 
                 /// Builds the entity, failing with `MissingField` for the first required
                 /// field no event has set.
-                pub fn build(
+                fn build(
                     self,
                     events: es_entity::EntityEvents<UserEvent, es_entity::NoSnapshot>,
                 ) -> Result<User, es_entity::EntityHydrationError> {
@@ -418,28 +422,28 @@ mod tests {
             #[doc = "Accumulates the fields of a [`User`] while its events are replayed."]
             #[derive(Default)]
             #[allow(dead_code)]
-            pub struct UserHydrator {
+            struct UserHydrator {
                 id: Option<UserId>,
             }
 
             #[allow(dead_code)]
             impl User {
                 #[doc = "Starts an empty [`UserHydrator`]."]
-                pub fn hydrator() -> UserHydrator {
+                fn hydrator() -> UserHydrator {
                     UserHydrator::default()
                 }
             }
 
             #[allow(dead_code)]
             impl UserHydrator {
-                pub fn id(&mut self, id: UserId) -> &mut Self {
+                fn id(&mut self, id: UserId) -> &mut Self {
                     self.id = Some(id);
                     self
                 }
 
                 /// Builds the entity, failing with `MissingField` for the first required
                 /// field no event has set.
-                pub fn build(
+                fn build(
                     self,
                     events: es_entity::EntityEvents<UserEvent, es_entity::NoSnapshot>,
                 ) -> Result<User, es_entity::EntityHydrationError> {
@@ -489,7 +493,7 @@ mod tests {
             #[doc = "Accumulates the fields of a [`User`] while its events are replayed."]
             #[derive(Default)]
             #[allow(dead_code)]
-            pub struct UserHydrator {
+            struct UserHydrator {
                 id: Option<UserId>,
                 children: Option<Nested<ChildEntity> >,
             }
@@ -497,25 +501,25 @@ mod tests {
             #[allow(dead_code)]
             impl User {
                 #[doc = "Starts an empty [`UserHydrator`]."]
-                pub fn hydrator() -> UserHydrator {
+                fn hydrator() -> UserHydrator {
                     UserHydrator::default()
                 }
             }
 
             #[allow(dead_code)]
             impl UserHydrator {
-                pub fn id(&mut self, id: UserId) -> &mut Self {
+                fn id(&mut self, id: UserId) -> &mut Self {
                     self.id = Some(id);
                     self
                 }
-                pub fn children(&mut self, children: Nested<ChildEntity>) -> &mut Self {
+                fn children(&mut self, children: Nested<ChildEntity>) -> &mut Self {
                     self.children = Some(children);
                     self
                 }
 
                 /// Builds the entity, failing with `MissingField` for the first required
                 /// field no event has set.
-                pub fn build(
+                fn build(
                     self,
                     events: es_entity::EntityEvents<UserEvent, es_entity::NoSnapshot>,
                 ) -> Result<User, es_entity::EntityHydrationError> {
@@ -587,11 +591,11 @@ mod tests {
 
         let expected_members = quote! { email: Option<String>, }.to_string();
         let expected_setters = quote! {
-            pub fn email(&mut self, email: String) -> &mut Self {
+            fn email(&mut self, email: String) -> &mut Self {
                 self.email = Some(email);
                 self
             }
-            pub fn maybe_email(&mut self, email: Option<String>) -> &mut Self {
+            fn maybe_email(&mut self, email: Option<String>) -> &mut Self {
                 self.email = email;
                 self
             }
@@ -617,7 +621,7 @@ mod tests {
 
         let expected_members = quote! { tags: Option<Vec<Tag> >, }.to_string();
         let expected_setter = quote! {
-            pub fn tags(&mut self, tags: Vec<Tag>) -> &mut Self {
+            fn tags(&mut self, tags: Vec<Tag>) -> &mut Self {
                 self.tags = Some(tags);
                 self
             }
@@ -630,11 +634,11 @@ mod tests {
     }
 
     #[test]
-    fn test_hydrator_follows_entity_visibility() {
+    fn test_hydrator_is_private_regardless_of_entity_visibility() {
         let section = hydrator_section(parse_quote! {
             #[derive(EsEntity)]
-            struct User {
-                id: UserId,
+            pub struct User {
+                pub id: UserId,
                 events: EntityEvents<UserEvent>
             }
         });
@@ -647,11 +651,33 @@ mod tests {
         assert!(section.contains(&expected_setter), "{section}");
         assert!(section.contains("fn build (self"), "{section}");
         assert!(!section.contains("pub"), "{section}");
+    }
+
+    #[test]
+    fn test_hydrator_visibility_is_overridable() {
+        let section = hydrator_section(parse_quote! {
+            #[derive(EsEntity)]
+            #[es_entity(hydrator = "pub")]
+            pub struct User {
+                pub id: UserId,
+                events: EntityEvents<UserEvent>
+            }
+        });
+
+        let expected_struct =
+            quote! { pub struct UserHydrator { id: Option<UserId>, } }.to_string();
+        let expected_constructor = quote! { pub fn hydrator() -> UserHydrator }.to_string();
+        let expected_setter = quote! { pub fn id(&mut self, id: UserId) -> &mut Self }.to_string();
+        assert!(section.contains(&expected_struct), "{section}");
+        assert!(section.contains(&expected_constructor), "{section}");
+        assert!(section.contains(&expected_setter), "{section}");
+        assert!(section.contains("pub fn build (self"), "{section}");
 
         let section = hydrator_section(parse_quote! {
             #[derive(EsEntity)]
-            pub(crate) struct User {
-                id: UserId,
+            #[es_entity(hydrator = "pub(crate)")]
+            pub struct User {
+                pub id: UserId,
                 events: EntityEvents<UserEvent>
             }
         });

@@ -32,6 +32,8 @@ Other than the `events` field additional fields can be exposed and populated dur
 # }
 // `#[derive(EsEntity)]` generates `UserHydrator`
 // for hydrating in the `TryFromEvents` trait.
+// The hydrator is private to the module that declares the entity;
+// widen it with e.g. `#[es_entity(hydrator = "pub(crate)")]`.
 #[derive(EsEntity)]
 pub struct User {
     pub id: UserId,
