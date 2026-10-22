@@ -13,8 +13,13 @@ pub type RepoWriteError<C> = errlanes::Fail<C, errlanes::lanes!(Transient, Fatal
 /// Error type for entity hydration failures (reconstructing entities from events).
 #[derive(Debug, errlanes::Classify)]
 pub enum EntityHydrationError {
-    #[classify(fatal(CorruptState), from)]
-    UninitializedFieldError(derive_builder::UninitializedFieldError),
+    /// A field the entity requires had no value after replaying its events.
+    #[error("EntityHydrationError - MissingField: {entity}.{field} was never set by any event")]
+    #[classify(fatal(CorruptState))]
+    MissingField {
+        entity: &'static str,
+        field: &'static str,
+    },
     // Pinned explicitly, not `delegate`: a persisted event row's JSON
     // failing to decode is corrupt *stored* data specifically, regardless
     // of what errlanes' generic `serde_json::Error` classification defaults

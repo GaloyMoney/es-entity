@@ -52,14 +52,13 @@ async fn list_for_filters_none_skips_filter() -> anyhow::Result<()> {
             NewTask::builder()
                 .workspace_id(ws_id)
                 .status(&unique_status)
-                .build()
-                .unwrap(),
+                .build(),
         )
         .await?;
 
     // Create task WITHOUT workspace_id (NULL)
     let task_null_ws = tasks
-        .create(NewTask::builder().status(&unique_status).build().unwrap())
+        .create(NewTask::builder().status(&unique_status).build())
         .await?;
 
     // Filter: workspace_id=None (skip filter), status=Some(unique_status)
@@ -110,14 +109,13 @@ async fn list_for_filters_some_value_filters_correctly() -> anyhow::Result<()> {
             NewTask::builder()
                 .workspace_id(ws_id)
                 .status(&unique_status)
-                .build()
-                .unwrap(),
+                .build(),
         )
         .await?;
 
     // Create task WITHOUT workspace_id (NULL)
     let task_null_ws = tasks
-        .create(NewTask::builder().status(&unique_status).build().unwrap())
+        .create(NewTask::builder().status(&unique_status).build())
         .await?;
 
     // Filter: workspace_id=Some(Some(ws_id)), status=Some(unique_status)
@@ -158,18 +156,12 @@ async fn list_for_column_none_matches_only_null_rows() -> anyhow::Result<()> {
 
     // Create task WITH workspace_id
     let task_with_ws = tasks
-        .create(
-            NewTask::builder()
-                .workspace_id(ws_id)
-                .status("any")
-                .build()
-                .unwrap(),
-        )
+        .create(NewTask::builder().workspace_id(ws_id).status("any").build())
         .await?;
 
     // Create task WITHOUT workspace_id (NULL)
     let task_null_ws = tasks
-        .create(NewTask::builder().status("any").build().unwrap())
+        .create(NewTask::builder().status("any").build())
         .await?;
 
     // Call list_for_workspace_id_by_id directly with None
@@ -209,18 +201,12 @@ async fn list_for_column_some_excludes_null_rows() -> anyhow::Result<()> {
 
     // Create task WITH workspace_id
     let task_with_ws = tasks
-        .create(
-            NewTask::builder()
-                .workspace_id(ws_id)
-                .status("any")
-                .build()
-                .unwrap(),
-        )
+        .create(NewTask::builder().workspace_id(ws_id).status("any").build())
         .await?;
 
     // Create task WITHOUT workspace_id (NULL)
     let task_null_ws = tasks
-        .create(NewTask::builder().status("any").build().unwrap())
+        .create(NewTask::builder().status("any").build())
         .await?;
 
     let result = tasks
@@ -258,14 +244,13 @@ async fn list_for_filters_some_none_matches_only_null_rows() -> anyhow::Result<(
             NewTask::builder()
                 .workspace_id(ws_id)
                 .status(&unique_status)
-                .build()
-                .unwrap(),
+                .build(),
         )
         .await?;
 
     // Create task WITHOUT workspace_id (NULL)
     let task_null_ws = tasks
-        .create(NewTask::builder().status(&unique_status).build().unwrap())
+        .create(NewTask::builder().status(&unique_status).build())
         .await?;
 
     // Filter: workspace_id=Some(None) means "filter by NULL workspace_id"

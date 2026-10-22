@@ -20,7 +20,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use derive_builder::Builder;
 use es_entity::*;
 use helpers::init_pool;
 use serde::{Deserialize, Serialize};
@@ -44,8 +43,7 @@ pub enum GcGrandchildEvent {
     },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct GcGrandchild {
     pub id: GcGrandchildId,
     pub child_id: GcChildId,
@@ -65,32 +63,26 @@ impl TryFromEvents<GcGrandchildEvent> for GcGrandchild {
     fn try_from_events(
         events: EntityEvents<GcGrandchildEvent>,
     ) -> Result<Self, EntityHydrationError> {
-        let mut builder = GcGrandchildBuilder::default();
+        let mut hydrator = GcGrandchild::hydrator();
         for event in events.iter_all() {
             match event {
                 GcGrandchildEvent::Initialized { id, child_id, note } => {
-                    builder = builder.id(*id).child_id(*child_id).note(note.clone());
+                    hydrator.id(*id).child_id(*child_id).note(note.clone());
                 }
                 GcGrandchildEvent::NoteUpdated { note } => {
-                    builder = builder.note(note.clone());
+                    hydrator.note(note.clone());
                 }
             }
         }
-        builder.events(events).build()
+        hydrator.build(events)
     }
 }
 
-#[derive(Debug, Clone, Builder)]
+#[derive(Debug, Clone, bon::Builder)]
 pub struct NewGcGrandchild {
     pub child_id: GcChildId,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub note: String,
-}
-
-impl NewGcGrandchild {
-    pub fn builder() -> NewGcGrandchildBuilder {
-        NewGcGrandchildBuilder::default()
-    }
 }
 
 impl IntoEvents<GcGrandchildEvent> for NewGcGrandchild {
@@ -120,15 +112,13 @@ pub enum GcChildEvent {
     },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct GcChild {
     pub id: GcChildId,
     pub parent_id: GcParentId,
     events: EntityEvents<GcChildEvent>,
 
     #[es_entity(nested)]
-    #[builder(default)]
     grandchildren: Nested<GcGrandchild>,
 }
 
@@ -154,19 +144,19 @@ impl GcChild {
 
 impl TryFromEvents<GcChildEvent> for GcChild {
     fn try_from_events(events: EntityEvents<GcChildEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = GcChildBuilder::default();
+        let mut hydrator = GcChild::hydrator();
         for event in events.iter_all() {
             match event {
                 GcChildEvent::Initialized { id, parent_id } => {
-                    builder = builder.id(*id).parent_id(*parent_id);
+                    hydrator.id(*id).parent_id(*parent_id);
                 }
             }
         }
-        builder.events(events).build()
+        hydrator.build(events)
     }
 }
 
-#[derive(Debug, Clone, Builder)]
+#[derive(Debug, Clone, bon::Builder)]
 pub struct NewGcChild {
     pub parent_id: GcParentId,
 }
@@ -194,14 +184,12 @@ pub enum GcParentEvent {
     Initialized { id: GcParentId },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct GcParent {
     pub id: GcParentId,
     events: EntityEvents<GcParentEvent>,
 
     #[es_entity(nested)]
-    #[builder(default)]
     children: Nested<GcChild>,
 }
 
@@ -217,19 +205,19 @@ impl GcParent {
 
 impl TryFromEvents<GcParentEvent> for GcParent {
     fn try_from_events(events: EntityEvents<GcParentEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = GcParentBuilder::default();
+        let mut hydrator = GcParent::hydrator();
         for event in events.iter_all() {
             match event {
                 GcParentEvent::Initialized { id } => {
-                    builder = builder.id(*id);
+                    hydrator.id(*id);
                 }
             }
         }
-        builder.events(events).build()
+        hydrator.build(events)
     }
 }
 
-#[derive(Debug, Clone, Builder)]
+#[derive(Debug, Clone, bon::Builder)]
 pub struct NewGcParent {}
 
 impl IntoEvents<GcParentEvent> for NewGcParent {
@@ -353,12 +341,10 @@ async fn grandchild_batching_composes_across_the_whole_tree() -> anyhow::Result<
 
     let mut parent_ids = Vec::new();
     for _ in 0..N_PARENTS {
-        let mut parent = parents_repo
-            .create(NewGcParentBuilder::default().build()?)
-            .await?;
+        let mut parent = parents_repo.create(NewGcParent::builder().build()).await?;
         let parent_id = parent.id;
         for _ in 0..N_CHILDREN_PER_PARENT {
-            parent.add_child(NewGcChildBuilder::default().parent_id(parent_id).build()?);
+            parent.add_child(NewGcChild::builder().parent_id(parent_id).build());
         }
         parents_repo.update(&mut parent).await?;
         parent_ids.push(parent_id);
@@ -383,7 +369,7 @@ async fn grandchild_batching_composes_across_the_whole_tree() -> anyhow::Result<
             NewGcGrandchild::builder()
                 .child_id(child.id)
                 .note("initial")
-                .build()?,
+                .build(),
         );
     }
     children_repo.update_all(&mut children_vec).await?;
@@ -409,7 +395,7 @@ async fn grandchild_batching_composes_across_the_whole_tree() -> anyhow::Result<
                 NewGcGrandchild::builder()
                     .child_id(child.id)
                     .note("new")
-                    .build()?,
+                    .build(),
             );
         }
     }

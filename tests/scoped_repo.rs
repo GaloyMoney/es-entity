@@ -48,8 +48,7 @@ async fn seed_contacts(
             .partner_id(partner_id)
             .email(format!("{email}-{}@test.com", ContactId::new()))
             .status(*status)
-            .build()
-            .unwrap();
+            .build();
         // create is deliberately unscoped: the scope column is ordinary
         // NewEntity data.
         ids.push(repo.create(new).await?.id);

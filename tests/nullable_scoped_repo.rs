@@ -42,15 +42,14 @@ async fn seed_owned(
     let new = NewParty::builder()
         .customer_id(customer_id)
         .name(name)
-        .build()
-        .unwrap();
+        .build();
     Ok(repo.create(new).await?.id)
 }
 
 async fn seed_unowned(repo: &Parties, name: &str) -> anyhow::Result<PartyId> {
     // No `.customer_id(..)` call — the field stays `None`, persisted as SQL
     // NULL: this row belongs to no customer directly.
-    let new = NewParty::builder().name(name).build().unwrap();
+    let new = NewParty::builder().name(name).build();
     Ok(repo.create(new).await?.id)
 }
 

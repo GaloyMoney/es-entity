@@ -45,25 +45,23 @@ async fn create_order_and_add_items() -> anyhow::Result<()> {
     let orders = Orders::new(pool);
 
     // Create a new order with items
-    let new_order = NewOrderBuilder::default().build().unwrap();
+    let new_order = NewOrder::builder().build();
 
     let mut order = orders.create(new_order).await?;
     let order_id = order.id;
     for item in [
-        NewOrderItemBuilder::default()
+        NewOrderItem::builder()
             .order_id(order_id)
             .product_name("Laptop")
             .quantity(1)
             .price(999.99)
-            .build()
-            .unwrap(),
-        NewOrderItemBuilder::default()
+            .build(),
+        NewOrderItem::builder()
             .order_id(order_id)
             .product_name("Mouse")
             .quantity(2)
             .price(29.99)
-            .build()
-            .unwrap(),
+            .build(),
     ] {
         order.add_item(item);
     }
@@ -85,17 +83,16 @@ async fn update_item() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let orders = Orders::new(pool);
 
-    let new_order = NewOrderBuilder::default().build().unwrap();
+    let new_order = NewOrder::builder().build();
     let mut order = orders.create(new_order).await?;
     let order_id = order.id;
     order.add_item(
-        NewOrderItemBuilder::default()
+        NewOrderItem::builder()
             .order_id(order_id)
             .product_name("Keyboard")
             .quantity(1)
             .price(79.99)
-            .build()
-            .unwrap(),
+            .build(),
     );
     orders.update(&mut order).await?;
 
@@ -123,68 +120,57 @@ async fn find_all_with_nested_entities() -> anyhow::Result<()> {
     let orders = Orders::new(pool);
 
     // Create first order with laptop and mouse
-    let mut order1 = orders
-        .create(NewOrderBuilder::default().build().unwrap())
-        .await?;
+    let mut order1 = orders.create(NewOrder::builder().build()).await?;
     let order_id_1 = order1.id;
     order1.add_item(
-        NewOrderItemBuilder::default()
+        NewOrderItem::builder()
             .order_id(order_id_1)
             .product_name("Laptop")
             .quantity(1)
             .price(999.99)
-            .build()
-            .unwrap(),
+            .build(),
     );
     order1.add_item(
-        NewOrderItemBuilder::default()
+        NewOrderItem::builder()
             .order_id(order_id_1)
             .product_name("Mouse")
             .quantity(2)
             .price(29.99)
-            .build()
-            .unwrap(),
+            .build(),
     );
     orders.update(&mut order1).await?;
 
     // Create second order with keyboard
-    let mut order2 = orders
-        .create(NewOrderBuilder::default().build().unwrap())
-        .await?;
+    let mut order2 = orders.create(NewOrder::builder().build()).await?;
     let order_id_2 = order2.id;
     order2.add_item(
-        NewOrderItemBuilder::default()
+        NewOrderItem::builder()
             .order_id(order_id_2)
             .product_name("Keyboard")
             .quantity(1)
             .price(79.99)
-            .build()
-            .unwrap(),
+            .build(),
     );
     orders.update(&mut order2).await?;
 
     // Create third order with monitor and webcam
-    let mut order3 = orders
-        .create(NewOrderBuilder::default().build().unwrap())
-        .await?;
+    let mut order3 = orders.create(NewOrder::builder().build()).await?;
     let order_id_3 = order3.id;
     order3.add_item(
-        NewOrderItemBuilder::default()
+        NewOrderItem::builder()
             .order_id(order_id_3)
             .product_name("Monitor")
             .quantity(1)
             .price(299.99)
-            .build()
-            .unwrap(),
+            .build(),
     );
     order3.add_item(
-        NewOrderItemBuilder::default()
+        NewOrderItem::builder()
             .order_id(order_id_3)
             .product_name("Webcam")
             .quantity(1)
             .price(89.99)
-            .build()
-            .unwrap(),
+            .build(),
     );
     orders.update(&mut order3).await?;
 
@@ -236,27 +222,23 @@ async fn delete_parent_cascades_to_children() -> anyhow::Result<()> {
     let orders = Orders::new(pool.clone());
 
     // Create an order with items
-    let mut order = orders
-        .create(NewOrderBuilder::default().build().unwrap())
-        .await?;
+    let mut order = orders.create(NewOrder::builder().build()).await?;
     let order_id = order.id;
     order.add_item(
-        NewOrderItemBuilder::default()
+        NewOrderItem::builder()
             .order_id(order_id)
             .product_name("Laptop")
             .quantity(1)
             .price(999.99)
-            .build()
-            .unwrap(),
+            .build(),
     );
     order.add_item(
-        NewOrderItemBuilder::default()
+        NewOrderItem::builder()
             .order_id(order_id)
             .product_name("Mouse")
             .quantity(2)
             .price(29.99)
-            .build()
-            .unwrap(),
+            .build(),
     );
     orders.update(&mut order).await?;
 
@@ -289,33 +271,27 @@ async fn find_parent_after_delete_excludes_deleted_children() -> anyhow::Result<
     let orders = Orders::new(pool);
 
     // Create two orders, each with items
-    let mut order1 = orders
-        .create(NewOrderBuilder::default().build().unwrap())
-        .await?;
+    let mut order1 = orders.create(NewOrder::builder().build()).await?;
     let order_id_1 = order1.id;
     order1.add_item(
-        NewOrderItemBuilder::default()
+        NewOrderItem::builder()
             .order_id(order_id_1)
             .product_name("Laptop")
             .quantity(1)
             .price(999.99)
-            .build()
-            .unwrap(),
+            .build(),
     );
     orders.update(&mut order1).await?;
 
-    let mut order2 = orders
-        .create(NewOrderBuilder::default().build().unwrap())
-        .await?;
+    let mut order2 = orders.create(NewOrder::builder().build()).await?;
     let order_id_2 = order2.id;
     order2.add_item(
-        NewOrderItemBuilder::default()
+        NewOrderItem::builder()
             .order_id(order_id_2)
             .product_name("Keyboard")
             .quantity(1)
             .price(79.99)
-            .build()
-            .unwrap(),
+            .build(),
     );
     orders.update(&mut order2).await?;
 
@@ -347,27 +323,23 @@ async fn delete_parent_soft_deletes_children_via_child_repo() -> anyhow::Result<
     let items = OrderItems::new(pool);
 
     // Create a parent order with two children
-    let mut order = orders
-        .create(NewOrderBuilder::default().build().unwrap())
-        .await?;
+    let mut order = orders.create(NewOrder::builder().build()).await?;
     let order_id = order.id;
     order.add_item(
-        NewOrderItemBuilder::default()
+        NewOrderItem::builder()
             .order_id(order_id)
             .product_name("Laptop")
             .quantity(1)
             .price(999.99)
-            .build()
-            .unwrap(),
+            .build(),
     );
     order.add_item(
-        NewOrderItemBuilder::default()
+        NewOrderItem::builder()
             .order_id(order_id)
             .product_name("Mouse")
             .quantity(2)
             .price(29.99)
-            .build()
-            .unwrap(),
+            .build(),
     );
     orders.update(&mut order).await?;
     let reloaded = orders.find_by_id(order_id).await?;

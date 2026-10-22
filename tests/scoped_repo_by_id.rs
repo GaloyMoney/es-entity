@@ -34,8 +34,7 @@ async fn seed_partner(repo: &Partners, name: &str) -> anyhow::Result<PartnerId> 
     let new = NewPartner::builder()
         .id(id)
         .name(format!("{name}-{id}"))
-        .build()
-        .unwrap();
+        .build();
     // create is deliberately unscoped: the id is ordinary NewEntity data.
     repo.create(new).await?;
     Ok(id)
@@ -281,8 +280,7 @@ async fn id_scope_variant_override_dispatches_correctly() -> anyhow::Result<()> 
     let new = NewPartner::builder()
         .id(id)
         .name(format!("tenant-{id}"))
-        .build()
-        .unwrap();
+        .build();
     partners.create(new).await?;
 
     // raw id routes through `From<PartnerId> for PartnerScope` into the

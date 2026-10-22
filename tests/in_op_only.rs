@@ -27,10 +27,7 @@ use es_entity::{DbOp, *};
 pub struct Users {}
 
 fn new_user(name: &str) -> NewUser {
-    NewUser::builder()
-        .name(name.to_string())
-        .build()
-        .expect("failed to build user")
+    NewUser::builder().name(name.to_string()).build()
 }
 
 #[tokio::test]

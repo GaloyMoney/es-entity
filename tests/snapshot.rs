@@ -41,7 +41,6 @@ fn new_meter(label: &str) -> NewMeter {
         .site_id(SiteId::new())
         .label(label)
         .build()
-        .unwrap()
 }
 
 /// Round trip: create, 10 `record`s via `update` → reload: has a snapshot,

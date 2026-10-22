@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use derive_builder::Builder;
 use es_entity::*;
 use serde::{Deserialize, Serialize};
 
@@ -26,8 +25,7 @@ pub enum OrderItemEvent {
     },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct OrderItem {
     pub id: OrderItemId,
     pub order_id: OrderId,
@@ -55,7 +53,7 @@ impl OrderItem {
 
 impl TryFromEvents<OrderItemEvent> for OrderItem {
     fn try_from_events(events: EntityEvents<OrderItemEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = OrderItemBuilder::default();
+        let mut h = OrderItem::hydrator();
 
         for event in events.iter_all() {
             match event {
@@ -66,36 +64,29 @@ impl TryFromEvents<OrderItemEvent> for OrderItem {
                     quantity,
                     price,
                 } => {
-                    builder = builder
-                        .id(*id)
+                    h.id(*id)
                         .order_id(*order_id)
                         .product_name(product_name.clone())
                         .quantity(*quantity)
                         .price(*price);
                 }
                 OrderItemEvent::QuantityUpdated { quantity } => {
-                    builder = builder.quantity(*quantity);
+                    h.quantity(*quantity);
                 }
             }
         }
 
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(Debug, Clone, Builder)]
+#[derive(Debug, Clone, bon::Builder)]
 pub struct NewOrderItem {
     pub order_id: OrderId,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub product_name: String,
     pub quantity: i32,
     pub price: f64,
-}
-
-impl NewOrderItem {
-    pub fn builder() -> NewOrderItemBuilder {
-        NewOrderItemBuilder::default()
-    }
 }
 
 impl IntoEvents<OrderItemEvent> for NewOrderItem {
@@ -124,14 +115,12 @@ pub enum OrderEvent {
     Initialized { id: OrderId },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Order {
     pub id: OrderId,
     events: EntityEvents<OrderEvent>,
 
     #[es_entity(nested)]
-    #[builder(default)]
     items: Nested<OrderItem>,
 }
 
@@ -163,26 +152,22 @@ impl Order {
 
 impl TryFromEvents<OrderEvent> for Order {
     fn try_from_events(events: EntityEvents<OrderEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = OrderBuilder::default();
+        let mut h = Order::hydrator();
 
         for event in events.iter_all() {
             match event {
-                OrderEvent::Initialized { id } => builder = builder.id(*id),
+                OrderEvent::Initialized { id } => {
+                    h.id(*id);
+                }
             }
         }
 
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(Debug, Clone, Builder)]
+#[derive(Debug, Clone, bon::Builder)]
 pub struct NewOrder {}
-
-impl NewOrder {
-    pub fn builder() -> NewOrderBuilder {
-        NewOrderBuilder::default()
-    }
-}
 
 impl IntoEvents<OrderEvent> for NewOrder {
     type IdSource = FromRepo;

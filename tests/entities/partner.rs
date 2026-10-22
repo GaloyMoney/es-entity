@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
 use es_entity::*;
@@ -17,8 +16,7 @@ pub enum PartnerEvent {
     Initialized { id: PartnerId, name: String },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Partner {
     pub id: PartnerId,
     pub name: String,
@@ -28,30 +26,24 @@ pub struct Partner {
 
 impl TryFromEvents<PartnerEvent> for Partner {
     fn try_from_events(events: EntityEvents<PartnerEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = PartnerBuilder::default();
+        let mut h = Partner::hydrator();
         for event in events.iter_all() {
             match event {
                 PartnerEvent::Initialized { id, name } => {
-                    builder = builder.id(*id).name(name.clone());
+                    h.id(*id).name(name.clone());
                 }
             }
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewPartner {
-    #[builder(setter(into))]
+    #[builder(into)]
     pub id: PartnerId,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub name: String,
-}
-
-impl NewPartner {
-    pub fn builder() -> NewPartnerBuilder {
-        NewPartnerBuilder::default()
-    }
 }
 
 impl IntoEvents<PartnerEvent> for NewPartner {

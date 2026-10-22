@@ -88,7 +88,7 @@ async fn nested_parent_only_snapshot_one_statement() -> anyhow::Result<()> {
     let pool = init_pool().await?;
     let repo = ParentOnlySites::new(pool);
 
-    let mut site = repo.create(NewSite::builder().build().unwrap()).await?;
+    let mut site = repo.create(NewSite::builder().build()).await?;
     let site_id = site.id;
     site.add_meter(new_meter(site_id, "m"));
     repo.update(&mut site).await?;

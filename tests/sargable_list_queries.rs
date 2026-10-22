@@ -48,9 +48,8 @@ async fn seed_transfers(
         let mut new = NewTransfer::builder()
             .account_id(AccountId::from(*account_id))
             .status(*status)
-            .score(*score)
-            .build()
-            .unwrap();
+            .maybe_score(*score)
+            .build();
         new.reference = reference.map(|r| r.to_string());
         repo.create(new).await?;
     }

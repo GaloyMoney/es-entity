@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
 use es_entity::*;
@@ -23,8 +22,7 @@ pub enum ContactEvent {
     },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Contact {
     pub id: ContactId,
     pub partner_id: PartnerId,
@@ -36,7 +34,7 @@ pub struct Contact {
 
 impl TryFromEvents<ContactEvent> for Contact {
     fn try_from_events(events: EntityEvents<ContactEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = ContactBuilder::default();
+        let mut h = Contact::hydrator();
         for event in events.iter_all() {
             match event {
                 ContactEvent::Initialized {
@@ -45,32 +43,25 @@ impl TryFromEvents<ContactEvent> for Contact {
                     email,
                     status,
                 } => {
-                    builder = builder
-                        .id(*id)
+                    h.id(*id)
                         .partner_id(*partner_id)
                         .email(email.clone())
                         .status(status.clone());
                 }
             }
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewContact {
-    #[builder(setter(into))]
+    #[builder(into)]
     pub partner_id: PartnerId,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub email: String,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub status: String,
-}
-
-impl NewContact {
-    pub fn builder() -> NewContactBuilder {
-        NewContactBuilder::default()
-    }
 }
 
 impl IntoEvents<ContactEvent> for NewContact {

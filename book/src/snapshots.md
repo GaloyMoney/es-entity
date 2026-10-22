@@ -122,9 +122,7 @@ tail:
 # extern crate es_entity;
 # extern crate sqlx;
 # extern crate serde;
-# extern crate derive_builder;
 # use serde::{Deserialize, Serialize};
-# use derive_builder::Builder;
 # use es_entity::*;
 # es_entity::entity_id! { MeterId }
 # #[derive(EsEvent, Debug, Clone, Serialize, Deserialize)]
@@ -137,8 +135,7 @@ tail:
 # #[derive(EsSnapshot, Debug, Clone, Serialize, Deserialize)]
 # #[es_snapshot(version = 1)]
 # pub struct MeterSnapshot { pub id: MeterId, pub label: String, pub count: u32, pub total: i64 }
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Meter {
     pub id: MeterId,
     pub label: String,
@@ -171,15 +168,15 @@ impl HeadSnapshot for Meter {
 }
 # impl TryFromEvents<MeterEvent, MeterSnapshot> for Meter {
 #     fn try_from_events(events: EntityEvents<MeterEvent, MeterSnapshot>) -> Result<Self, EntityHydrationError> {
-#         let mut builder = MeterBuilder::default();
+#         let mut hydrator = Meter::hydrator();
 #         for r in events.replay() {
 #             match r {
-#                 Replay::Snapshot(s) => { builder = builder.id(s.id).label(s.label.clone()); }
-#                 Replay::Event(MeterEvent::Initialized { id, label }) => { builder = builder.id(*id).label(label.clone()); }
+#                 Replay::Snapshot(s) => { hydrator.id(s.id).label(s.label.clone()); }
+#                 Replay::Event(MeterEvent::Initialized { id, label }) => { hydrator.id(*id).label(label.clone()); }
 #                 Replay::Event(_) => {}
 #             }
 #         }
-#         builder.events(events).build()
+#         hydrator.build(events)
 #     }
 # }
 # pub struct NewMeter { pub label: String }

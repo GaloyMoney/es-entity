@@ -128,8 +128,7 @@ async fn forget_runs_post_persist_hook_for_staged_erasure_event() -> anyhow::Res
     let new_customer = NewCustomer::builder()
         .name("Hooked Hannah")
         .email("hooked@example.com")
-        .build()
-        .unwrap();
+        .build();
     let mut customer = customers.create(new_customer).await?;
     assert_eq!(customers.calls().len(), 1, "create fires the hook once");
 
@@ -156,8 +155,7 @@ async fn forget_without_staged_events_does_not_run_hook() -> anyhow::Result<()> 
     let new_customer = NewCustomer::builder()
         .name("Quiet Quinn")
         .email("quiet@example.com")
-        .build()
-        .unwrap();
+        .build();
     let customer = customers.create(new_customer).await?;
     assert_eq!(customers.calls().len(), 1);
 
@@ -177,8 +175,7 @@ async fn hook_sees_forgotten_payloads_for_staged_pii_events() -> anyhow::Result<
     let new_customer = NewCustomer::builder()
         .name("Leaky Lou")
         .email("leaky@example.com")
-        .build()
-        .unwrap();
+        .build();
     let mut customer = customers.create(new_customer).await?;
 
     // A staged-but-unpersisted PII event rides along with the erasure. The
@@ -209,8 +206,7 @@ async fn hook_error_rolls_back_the_entire_erasure() -> anyhow::Result<()> {
     let new_customer = NewCustomer::builder()
         .name("Rollback Rae")
         .email("rollback@example.com")
-        .build()
-        .unwrap();
+        .build();
     let mut customer = customers.create(new_customer).await?;
     let id = customer.id;
 
@@ -269,8 +265,7 @@ async fn stale_writer_pii_is_fenced_and_leaves_no_trace_after_forget() -> anyhow
     let new_customer = NewCustomer::builder()
         .name("Fenced Fran")
         .email("fenced@example.com")
-        .build()
-        .unwrap();
+        .build();
     let id = customers.create(new_customer).await?.id;
 
     let mut stale = customers.find_by_id(id).await?;

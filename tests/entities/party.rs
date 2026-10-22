@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
 use es_entity::*;
@@ -24,8 +23,7 @@ pub enum PartyEvent {
     },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Party {
     pub id: PartyId,
     pub customer_id: Option<CustomerId>,
@@ -36,7 +34,7 @@ pub struct Party {
 
 impl TryFromEvents<PartyEvent> for Party {
     fn try_from_events(events: EntityEvents<PartyEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = PartyBuilder::default();
+        let mut h = Party::hydrator();
         for event in events.iter_all() {
             match event {
                 PartyEvent::Initialized {
@@ -44,26 +42,20 @@ impl TryFromEvents<PartyEvent> for Party {
                     customer_id,
                     name,
                 } => {
-                    builder = builder.id(*id).customer_id(*customer_id).name(name.clone());
+                    h.id(*id).maybe_customer_id(*customer_id).name(name.clone());
                 }
             }
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewParty {
-    #[builder(setter(into, strip_option), default)]
+    #[builder(into)]
     pub customer_id: Option<CustomerId>,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub name: String,
-}
-
-impl NewParty {
-    pub fn builder() -> NewPartyBuilder {
-        NewPartyBuilder::default()
-    }
 }
 
 impl IntoEvents<PartyEvent> for NewParty {

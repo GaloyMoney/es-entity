@@ -11,10 +11,9 @@ This leverages the rust module system to enforce that the children cannot be acc
 # extern crate es_entity;
 # extern crate sqlx;
 # extern crate serde;
-# extern crate derive_builder;
+# extern crate bon;
 # extern crate tokio;
 # extern crate anyhow;
-# use derive_builder::Builder;
 # use es_entity::*;
 # use serde::{Deserialize, Serialize};
 # 
@@ -38,8 +37,7 @@ This leverages the rust module system to enforce that the children cannot be acc
 #     Closed,
 # }
 # 
-# #[derive(EsEntity, Builder)]
-# #[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+# #[derive(EsEntity)]
 # pub struct BillingPeriod {
 #     pub id: BillingPeriodId,
 #     pub subscription_id: SubscriptionId,
@@ -90,13 +88,14 @@ This leverages the rust module system to enforce that the children cannot be acc
 # 
 # impl TryFromEvents<BillingPeriodEvent> for BillingPeriod {
 #     fn try_from_events(events: EntityEvents<BillingPeriodEvent>) -> Result<Self, EntityHydrationError> {
-#         let mut builder = BillingPeriodBuilder::default().is_current(true);
+#         let mut hydrator = BillingPeriod::hydrator();
+#         hydrator.is_current(true);
 #         let mut line_items = Vec::new();
 # 
 #         for event in events.iter_all() {
 #             match event {
 #                 BillingPeriodEvent::Initialized { id, subscription_id } => {
-#                     builder = builder.id(*id).subscription_id(*subscription_id);
+#                     hydrator.id(*id).subscription_id(*subscription_id);
 #                 }
 #                 BillingPeriodEvent::LineItemAdded { amount, description } => {
 #                     line_items.push(LineItem {
@@ -105,15 +104,13 @@ This leverages the rust module system to enforce that the children cannot be acc
 #                     });
 #                 }
 #                 BillingPeriodEvent::Closed => {
-#                     builder = builder.is_current(false)
+#                     hydrator.is_current(false);
 #                 }
 #             }
 #         }
 # 
-#         builder
-#             .line_items(line_items)
-#             .events(events)
-#             .build()
+#         hydrator.line_items(line_items);
+#         hydrator.build(events)
 #     }
 # }
 # 
@@ -125,8 +122,7 @@ This leverages the rust module system to enforce that the children cannot be acc
 #     BillingPeriodStarted { period_id: BillingPeriodId },
 # }
 # 
-# #[derive(EsEntity, Builder)]
-# #[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+# #[derive(EsEntity)]
 # pub struct Subscription {
 #     pub id: SubscriptionId,
 #     current_period_id: Option<BillingPeriodId>,
@@ -134,10 +130,9 @@ This leverages the rust module system to enforce that the children cannot be acc
 #     
 #     // The key attribute - marks this field as containing nested entities
 #     // Must be of type `Nested<T>`
-#     // The #[builder(default)] will initialize it as empty as the repo loads
+#     // A nested field starts empty when hydrated; the repo loads
 #     // the children after the parent as been hydrated.
 #     #[es_entity(nested)]
-#     #[builder(default)]
 #     billing_periods: Nested<BillingPeriod>,
 # }
 # 
@@ -180,26 +175,24 @@ This leverages the rust module system to enforce that the children cannot be acc
 # 
 # impl TryFromEvents<SubscriptionEvent> for Subscription {
 #     fn try_from_events(events: EntityEvents<SubscriptionEvent>) -> Result<Self, EntityHydrationError> {
-#         let mut builder = SubscriptionBuilder::default();
+#         let mut hydrator = Subscription::hydrator();
 #         
 #         for event in events.iter_all() {
 #             match event {
 #                 SubscriptionEvent::Initialized { id } => {
-#                     builder = builder.id(*id);
+#                     hydrator.id(*id);
 #                 }
 #                 SubscriptionEvent::BillingPeriodStarted { period_id } => {
-#                     builder = builder.current_billing_period(Some(*period_id));
+#                     hydrator.current_period_id(*period_id);
 #                 }
 #             }
 #         }
 #         
-#         builder
-#             .events(events)
-#             .build()
+#         hydrator.build(events)
 #     }
 # }
 # 
-# #[derive(Debug, Clone, Builder)]
+# #[derive(Debug, Clone, bon::Builder)]
 # pub struct NewSubscription {}
 # 
 # impl IntoEvents<SubscriptionEvent> for NewSubscription {
@@ -246,10 +239,9 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 # extern crate es_entity;
 # extern crate sqlx;
 # extern crate serde;
-# extern crate derive_builder;
+# extern crate bon;
 # extern crate tokio;
 # extern crate anyhow;
-# use derive_builder::Builder;
 # use es_entity::*;
 # use serde::{Deserialize, Serialize};
 # es_entity::entity_id! {
@@ -270,8 +262,7 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     },
 #     Closed,
 # }
-# #[derive(EsEntity, Builder)]
-# #[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+# #[derive(EsEntity)]
 # pub struct BillingPeriod {
 #     pub id: BillingPeriodId,
 #     pub subscription_id: SubscriptionId,
@@ -316,13 +307,13 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 # }
 # impl TryFromEvents<BillingPeriodEvent> for BillingPeriod {
 #     fn try_from_events(events: EntityEvents<BillingPeriodEvent>) -> Result<Self, EntityHydrationError> {
-#         let mut builder = BillingPeriodBuilder::default();
+#         let mut hydrator = BillingPeriod::hydrator();
 #         let mut line_items = Vec::new();
 #         let mut is_current = true;
 #         for event in events.iter_all() {
 #             match event {
 #                 BillingPeriodEvent::Initialized { id, subscription_id } => {
-#                     builder = builder.id(*id).subscription_id(*subscription_id);
+#                     hydrator.id(*id).subscription_id(*subscription_id);
 #                 }
 #                 BillingPeriodEvent::LineItemAdded { amount, description } => {
 #                     line_items.push(LineItem {
@@ -335,14 +326,11 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #                 }
 #             }
 #         }
-#         builder
-#             .is_current(is_current)
-#             .line_items(line_items)
-#             .events(events)
-#             .build()
+#         hydrator.is_current(is_current).line_items(line_items);
+#         hydrator.build(events)
 #     }
 # }
-# #[derive(Debug, Clone, Builder)]
+# #[derive(Debug, Clone, bon::Builder)]
 # pub struct NewBillingPeriod {
 #     pub id: BillingPeriodId,
 #     pub subscription_id: SubscriptionId,
@@ -366,14 +354,12 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 #     Initialized { id: SubscriptionId },
 #     BillingPeriodStarted { period_id: BillingPeriodId },
 # }
-# #[derive(EsEntity, Builder)]
-# #[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+# #[derive(EsEntity)]
 # pub struct Subscription {
 #     pub id: SubscriptionId,
 #     current_period_id: Option<BillingPeriodId>,
 #     events: EntityEvents<SubscriptionEvent>,
 #     #[es_entity(nested)]
-#     #[builder(default)]
 #     billing_periods: Nested<BillingPeriod>,
 # }
 # impl Subscription {
@@ -411,25 +397,23 @@ Now we can use our aggregate with full type safety and automatic loading of nest
 # }
 # impl TryFromEvents<SubscriptionEvent> for Subscription {
 #     fn try_from_events(events: EntityEvents<SubscriptionEvent>) -> Result<Self, EntityHydrationError> {
-#         let mut builder = SubscriptionBuilder::default();
+#         let mut hydrator = Subscription::hydrator();
 #         let mut current_period_id = None;
 #         for event in events.iter_all() {
 #             match event {
 #                 SubscriptionEvent::Initialized { id } => {
-#                     builder = builder.id(*id);
+#                     hydrator.id(*id);
 #                 }
 #                 SubscriptionEvent::BillingPeriodStarted { period_id } => {
 #                     current_period_id = Some(*period_id);
 #                 }
 #             }
 #         }
-#         builder
-#             .current_period_id(current_period_id)
-#             .events(events)
-#             .build()
+#         hydrator.maybe_current_period_id(current_period_id);
+#         hydrator.build(events)
 #     }
 # }
-# #[derive(Debug, Clone, Builder)]
+# #[derive(Debug, Clone, bon::Builder)]
 # pub struct NewSubscription {}
 # impl IntoEvents<SubscriptionEvent> for NewSubscription {
 #     type IdSource = FromRepo;

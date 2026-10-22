@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
 use es_entity::*;
@@ -28,8 +27,7 @@ pub enum CustomerEvent {
     Forgot {},
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Customer {
     pub id: CustomerId,
     pub name: String,
@@ -65,12 +63,11 @@ impl Customer {
 
 impl TryFromEvents<CustomerEvent> for Customer {
     fn try_from_events(events: EntityEvents<CustomerEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = CustomerBuilder::default();
+        let mut h = Customer::hydrator();
         for event in events.iter_all() {
             match event {
                 CustomerEvent::Initialized { id, name, email } => {
-                    builder = builder
-                        .id(*id)
+                    h.id(*id)
                         .name(
                             name.value()
                                 .map(|r| r.clone())
@@ -80,33 +77,27 @@ impl TryFromEvents<CustomerEvent> for Customer {
                 }
                 CustomerEvent::NameUpdated { name } => {
                     if let Some(n) = name.value() {
-                        builder = builder.name(n.clone());
+                        h.name(n.clone());
                     }
                 }
                 CustomerEvent::EmailUpdated { email } => {
-                    builder = builder.email(email.clone());
+                    h.email(email.clone());
                 }
                 // Erasure event (client convention): payloads were deleted
                 // at this point in the stream. No state to apply.
                 CustomerEvent::Forgot { .. } => {}
             }
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewCustomer {
-    #[builder(setter(into))]
+    #[builder(into)]
     pub name: String,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub email: String,
-}
-
-impl NewCustomer {
-    pub fn builder() -> NewCustomerBuilder {
-        NewCustomerBuilder::default()
-    }
 }
 
 impl IntoEvents<CustomerEvent> for NewCustomer {

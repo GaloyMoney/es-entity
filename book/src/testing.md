@@ -29,8 +29,6 @@ module reads:
 # extern crate es_entity;
 # extern crate sqlx;
 # extern crate serde;
-# extern crate derive_builder;
-# use derive_builder::Builder;
 # use serde::{Deserialize, Serialize};
 # use es_entity::*;
 # es_entity::entity_id! { UserId }
@@ -49,8 +47,7 @@ module reads:
 #         builder.initial_events([UserEvent::Initialized { id, name: self.name }])
 #     }
 # }
-# #[derive(EsEntity, Builder)]
-# #[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+# #[derive(EsEntity)]
 # pub struct User {
 #     pub id: UserId,
 #     pub name: String,
@@ -71,18 +68,18 @@ module reads:
 # }
 # impl TryFromEvents<UserEvent> for User {
 #     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
-#         let mut builder = UserBuilder::default();
+#         let mut hydrator = User::hydrator();
 #         for event in events.iter_all() {
 #             match event {
 #                 UserEvent::Initialized { id, name } => {
-#                     builder = builder.id(*id).name(name.clone());
+#                     hydrator.id(*id).name(name.clone());
 #                 }
 #                 UserEvent::NameUpdated { name } => {
-#                     builder = builder.name(name.clone());
+#                     hydrator.name(name.clone());
 #                 }
 #             }
 #         }
-#         builder.events(events).build()
+#         hydrator.build(events)
 #     }
 # }
 use es_entity::testing::*;

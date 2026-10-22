@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
 use es_entity::*;
@@ -14,8 +13,7 @@ pub enum VfAccountEvent {
     Initialized { id: VfAccountId, status: String },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct VfAccount {
     pub id: VfAccountId,
     pub status: String,
@@ -25,28 +23,22 @@ pub struct VfAccount {
 
 impl TryFromEvents<VfAccountEvent> for VfAccount {
     fn try_from_events(events: EntityEvents<VfAccountEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = VfAccountBuilder::default();
+        let mut h = VfAccount::hydrator();
         for event in events.iter_all() {
             match event {
                 VfAccountEvent::Initialized { id, status } => {
-                    builder = builder.id(*id).status(status.clone());
+                    h.id(*id).status(status.clone());
                 }
             }
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewVfAccount {
-    #[builder(setter(into))]
+    #[builder(into)]
     pub status: String,
-}
-
-impl NewVfAccount {
-    pub fn builder() -> NewVfAccountBuilder {
-        NewVfAccountBuilder::default()
-    }
 }
 
 impl IntoEvents<VfAccountEvent> for NewVfAccount {

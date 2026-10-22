@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use derive_builder::Builder;
 use es_entity::*;
 use serde::{Deserialize, Serialize};
 
@@ -34,8 +33,7 @@ pub struct MeterSnapshot {
 }
 
 /// The snapshotted entity: `capture()` fires once the tail reaches 4 events.
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Meter {
     pub id: MeterId,
     pub site_id: SiteId,
@@ -132,33 +130,27 @@ impl TryFromEvents<MeterEvent, MeterSnapshot> for Meter {
     fn try_from_events(
         events: EntityEvents<MeterEvent, MeterSnapshot>,
     ) -> Result<Self, EntityHydrationError> {
-        let mut builder = MeterBuilder::default();
+        let mut h = Meter::hydrator();
         for r in events.replay() {
             match r {
                 Replay::Snapshot(s) => {
-                    builder = builder.id(s.id).site_id(s.site_id).label(s.label.clone());
+                    h.id(s.id).site_id(s.site_id).label(s.label.clone());
                 }
                 Replay::Event(MeterEvent::Initialized { id, site_id, label }) => {
-                    builder = builder.id(*id).site_id(*site_id).label(label.clone());
+                    h.id(*id).site_id(*site_id).label(label.clone());
                 }
                 Replay::Event(_) => {}
             }
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewMeter {
     pub site_id: SiteId,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub label: String,
-}
-
-impl NewMeter {
-    pub fn builder() -> NewMeterBuilder {
-        NewMeterBuilder::default()
-    }
 }
 
 impl IntoEvents<MeterEvent> for NewMeter {
@@ -179,8 +171,7 @@ impl IntoEvents<MeterEvent> for NewMeter {
 
 /// The non-snapshotted twin: same events, `iter_all()` still works. Reuses
 /// `NewMeter` as its `New` type (both implement `IntoEvents<MeterEvent>`).
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 #[es_entity(event = "MeterEvent", new = "NewMeter")]
 pub struct PlainMeter {
     pub id: MeterId,
@@ -225,12 +216,12 @@ impl PlainMeter {
 
 impl TryFromEvents<MeterEvent> for PlainMeter {
     fn try_from_events(events: EntityEvents<MeterEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = PlainMeterBuilder::default();
+        let mut h = PlainMeter::hydrator();
         for e in events.iter_all() {
             if let MeterEvent::Initialized { id, site_id, label } = e {
-                builder = builder.id(*id).site_id(*site_id).label(label.clone());
+                h.id(*id).site_id(*site_id).label(label.clone());
             }
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }

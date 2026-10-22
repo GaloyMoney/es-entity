@@ -7,7 +7,6 @@
 
 mod helpers;
 
-use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
@@ -35,8 +34,7 @@ pub enum SubscriberEvent {
     Forgot {},
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Subscriber {
     pub id: SubscriberId,
     pub email: Forgettable<String>,
@@ -72,39 +70,33 @@ impl TryFromEvents<SubscriberEvent> for Subscriber {
     fn try_from_events(
         events: EntityEvents<SubscriberEvent>,
     ) -> Result<Self, EntityHydrationError> {
-        let mut builder = SubscriberBuilder::default();
+        let mut hydrator = Subscriber::hydrator();
         for event in events.iter_all() {
             match event {
                 SubscriberEvent::Initialized { id, email, plan } => {
-                    builder = builder.id(*id).email(email.clone()).plan(plan.clone());
+                    hydrator.id(*id).email(email.clone()).plan(plan.clone());
                 }
                 SubscriberEvent::PlanChanged { plan } => {
-                    builder = builder.plan(plan.clone());
+                    hydrator.plan(plan.clone());
                 }
                 SubscriberEvent::EmailUpdated { email } => {
-                    builder = builder.email(email.clone());
+                    hydrator.email(email.clone());
                 }
                 // Erasure event (client convention): payloads were deleted
                 // at this point in the stream. No state to apply.
                 SubscriberEvent::Forgot { .. } => {}
             }
         }
-        builder.events(events).build()
+        hydrator.build(events)
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewSubscriber {
-    #[builder(setter(into))]
+    #[builder(into)]
     pub email: String,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub plan: String,
-}
-
-impl NewSubscriber {
-    pub fn builder() -> NewSubscriberBuilder {
-        NewSubscriberBuilder::default()
-    }
 }
 
 impl IntoEvents<SubscriberEvent> for NewSubscriber {
@@ -148,8 +140,7 @@ async fn new_subscriber(subscribers: &Subscribers) -> anyhow::Result<(Subscriber
     let new = NewSubscriber::builder()
         .email(email.clone())
         .plan("pro")
-        .build()
-        .unwrap();
+        .build();
     let subscriber = subscribers.create(new).await?;
     Ok((subscriber, email))
 }

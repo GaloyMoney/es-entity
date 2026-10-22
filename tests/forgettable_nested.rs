@@ -8,7 +8,6 @@
 
 mod helpers;
 
-use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
@@ -31,8 +30,7 @@ pub enum AccountHolderEvent {
     },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct AccountHolder {
     pub id: AccountHolderId,
     pub account_id: AccountId,
@@ -45,7 +43,7 @@ impl TryFromEvents<AccountHolderEvent> for AccountHolder {
     fn try_from_events(
         events: EntityEvents<AccountHolderEvent>,
     ) -> Result<Self, EntityHydrationError> {
-        let mut builder = AccountHolderBuilder::default();
+        let mut hydrator = AccountHolder::hydrator();
         for event in events.iter_all() {
             match event {
                 AccountHolderEvent::Initialized {
@@ -54,7 +52,7 @@ impl TryFromEvents<AccountHolderEvent> for AccountHolder {
                     name,
                     email,
                 } => {
-                    builder = builder
+                    hydrator
                         .id(*id)
                         .account_id(*account_id)
                         .name(name.clone())
@@ -62,23 +60,17 @@ impl TryFromEvents<AccountHolderEvent> for AccountHolder {
                 }
             }
         }
-        builder.events(events).build()
+        hydrator.build(events)
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewAccountHolder {
     pub account_id: AccountId,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub name: String,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub email: String,
-}
-
-impl NewAccountHolder {
-    pub fn builder() -> NewAccountHolderBuilder {
-        NewAccountHolderBuilder::default()
-    }
 }
 
 impl IntoEvents<AccountHolderEvent> for NewAccountHolder {
@@ -106,14 +98,12 @@ pub enum AccountEvent {
     Initialized { id: AccountId },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Account {
     pub id: AccountId,
     events: EntityEvents<AccountEvent>,
 
     #[es_entity(nested)]
-    #[builder(default)]
     holders: Nested<AccountHolder>,
 }
 
@@ -129,24 +119,20 @@ impl Account {
 
 impl TryFromEvents<AccountEvent> for Account {
     fn try_from_events(events: EntityEvents<AccountEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = AccountBuilder::default();
+        let mut hydrator = Account::hydrator();
         for event in events.iter_all() {
             match event {
-                AccountEvent::Initialized { id } => builder = builder.id(*id),
+                AccountEvent::Initialized { id } => {
+                    hydrator.id(*id);
+                }
             }
         }
-        builder.events(events).build()
+        hydrator.build(events)
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewAccount {}
-
-impl NewAccount {
-    pub fn builder() -> NewAccountBuilder {
-        NewAccountBuilder::default()
-    }
-}
 
 impl IntoEvents<AccountEvent> for NewAccount {
     type IdSource = FromRepo;
@@ -207,17 +193,14 @@ async fn cascade_delete_scrubs_forgettable_nested_children() -> anyhow::Result<(
     // and a forgettable index column).
     let email = format!("holder-{}@example.com", AccountHolderId::new());
 
-    let mut account = accounts
-        .create(NewAccount::builder().build().unwrap())
-        .await?;
+    let mut account = accounts.create(NewAccount::builder().build()).await?;
     let account_id = account.id;
     account.add_holder(
         NewAccountHolder::builder()
             .account_id(account_id)
             .name("Grace Hopper")
             .email(email.clone())
-            .build()
-            .unwrap(),
+            .build(),
     );
     accounts.update(&mut account).await?;
 

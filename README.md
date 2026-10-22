@@ -44,9 +44,8 @@ pub enum UserEvent {
 }
 
 // Define your entity
-// derive_builder::Builder is optional but useful for hydrating
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+// #[derive(EsEntity)] generates UserHydrator for hydrating
+#[derive(EsEntity)]
 pub struct User {
     pub id: UserId,
     pub name: String,
@@ -75,20 +74,20 @@ impl User {
 // TryFromEvents hydrates the user entity from persisted events.
 impl TryFromEvents<UserEvent> for User {
     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
-        // Using derive_builder::Builder to project the current state
+        // Using the generated UserHydrator to project the current state
         // while iterating over the persisted events
-        let mut builder = UserBuilder::default();
+        let mut hydrator = User::hydrator();
         for event in events.iter_all() {
             match event {
                 UserEvent::Initialized { id, name } => {
-                    builder = builder.id(*id).name(name.clone());
+                    hydrator.id(*id).name(name.clone());
                 }
                 UserEvent::NameUpdated { name } => {
-                    builder = builder.name(name.clone());
+                    hydrator.name(name.clone());
                 }
             }
         }
-        builder.events(events).build()
+        hydrator.build(events)
     }
 }
 ```
@@ -182,7 +181,7 @@ Add to your `Cargo.toml`:
 es-entity = "0.11"
 sqlx = "0.8" # Needs to be in scope for entity_id! macro
 serde = { version = "1.0", features = ["derive"] } # To serialize the `EntityEvent`
-derive_builder = "0.20" # For hydrating and building the entity state (optional)
+bon = "3" # for New* builders (optional)
 ```
 
 ## Advanced features

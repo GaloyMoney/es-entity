@@ -41,9 +41,10 @@ impl TryFromEvents<GadgetEvent> for Gadget {
             }
         }
         Ok(Gadget {
-            id: id.ok_or(EntityHydrationError::UninitializedFieldError(
-                derive_builder::UninitializedFieldError::new("id"),
-            ))?,
+            id: id.ok_or(EntityHydrationError::MissingField {
+                entity: "Gadget",
+                field: "id",
+            })?,
             name,
             events,
         })

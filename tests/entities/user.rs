@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
 use es_entity::*;
@@ -15,8 +14,7 @@ pub enum UserEvent {
     NameUpdated { name: String },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct User {
     pub id: UserId,
     pub name: String,
@@ -42,31 +40,25 @@ impl User {
 
 impl TryFromEvents<UserEvent> for User {
     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = UserBuilder::default();
+        let mut h = User::hydrator();
         for event in events.iter_all() {
             match event {
                 UserEvent::Initialized { id, name } => {
-                    builder = builder.id(*id).name(name.clone());
+                    h.id(*id).name(name.clone());
                 }
                 UserEvent::NameUpdated { name } => {
-                    builder = builder.name(name.clone());
+                    h.name(name.clone());
                 }
             }
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewUser {
-    #[builder(setter(into))]
+    #[builder(into)]
     pub name: String,
-}
-
-impl NewUser {
-    pub fn builder() -> NewUserBuilder {
-        NewUserBuilder::default()
-    }
 }
 
 impl IntoEvents<UserEvent> for NewUser {

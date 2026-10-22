@@ -36,38 +36,26 @@ async fn duplicate_nested_sku_hoists_through_the_parent_path() -> anyhow::Result
     let sku = format!("sku-{}", LaneParentId::new());
 
     let mut first = parents
-        .create(
-            NewLaneParent::builder()
-                .id(LaneParentId::new())
-                .build()
-                .unwrap(),
-        )
+        .create(NewLaneParent::builder().id(LaneParentId::new()).build())
         .await?;
     first.add_item(
         NewLaneItem::builder()
             .id(LaneItemId::new())
             .parent_id(first.id)
             .sku(sku.clone())
-            .build()
-            .unwrap(),
+            .build(),
     );
     parents.update(&mut first).await?;
 
     let mut second = parents
-        .create(
-            NewLaneParent::builder()
-                .id(LaneParentId::new())
-                .build()
-                .unwrap(),
-        )
+        .create(NewLaneParent::builder().id(LaneParentId::new()).build())
         .await?;
     second.add_item(
         NewLaneItem::builder()
             .id(LaneItemId::new())
             .parent_id(second.id)
             .sku(sku.clone())
-            .build()
-            .unwrap(),
+            .build(),
     );
     let err = parents
         .update(&mut second)
