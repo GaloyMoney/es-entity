@@ -29,10 +29,11 @@ pub struct FindAllForFn<'a> {
 }
 
 impl<'a> FindAllForFn<'a> {
-    /// `None` unless `for_column` is a physical, non-nullable, non-forgettable
-    /// `list_for` column with a resolvable first `by(..)` column.
+    /// `None` unless `for_column` opted in with `find_all_for` and has a
+    /// resolvable first `by(..)` column. `validate_find_all_for` rejects an
+    /// opted-in column that cannot back the lookup before this runs.
     pub fn new(for_column: &'a Column, opts: &'a RepositoryOptions) -> Option<Self> {
-        if for_column.is_nullable_column() || for_column.is_forgettable() {
+        if !for_column.find_all_for_enabled() {
             return None;
         }
         let by_column = for_column
@@ -148,7 +149,7 @@ impl ToTokens for FindAllForFn<'_> {
         let for_column_name = self.for_column.name();
         let keys_arg = syn::Ident::new(&self.plural_name(), Span::call_site());
         let key_ty = self.for_column.ty();
-        let key_accessor = self.for_column.entity_key_accessor();
+        let key_accessor = self.for_column.find_all_for_key_accessor();
 
         let cursor = self.cursor();
         let select_columns = cursor.select_columns(Some(for_column_name));
@@ -339,8 +340,11 @@ mod tests {
                 entity = "DepositAccount",
                 #extra_opts
                 columns(
-                    account_holder_id(ty = "AccountHolderId", list_for(by(created_at, id))),
-                    currency(ty = "Currency", list_for),
+                    account_holder_id(
+                        ty = "AccountHolderId",
+                        list_for(by(created_at, id), find_all_for)
+                    ),
+                    currency(ty = "Currency", list_for(by(id), find_all_for)),
                     nickname(ty = "Option<String>", list_for),
                 )
             )]
@@ -403,7 +407,7 @@ mod tests {
                 entity = "DepositAccount",
                 columns(
                     owner_id(ty = "OwnerId", scope),
-                    currency(ty = "Currency", list_for(by(created_at))),
+                    currency(ty = "Currency", list_for(by(created_at), find_all_for)),
                 )
             )]
             struct DepositAccounts {
@@ -441,7 +445,7 @@ mod tests {
             #[es_repo(
                 entity = "Order",
                 delete = "soft",
-                columns(status(ty = "String", list_for))
+                columns(status(ty = "String", list_for(by(id), find_all_for)))
             )]
             struct Orders {
                 pool: sqlx::PgPool,
@@ -468,18 +472,13 @@ mod tests {
     }
 
     #[test]
-    fn key_is_read_through_the_accessor_the_entity_declares() {
+    fn list_for_without_the_flag_emits_no_batch_lookup() {
         let tokens = tokens(parse_quote! {
             #[es_repo(
                 entity = "Doc",
                 columns(
-                    user_id(
-                        ty = "UserId",
-                        list_for,
-                        create(accessor = "owner_id"),
-                        update(persist = false)
-                    ),
-                    status(ty = "String", list_for, update(accessor = "state"))
+                    user_id(ty = "UserId", list_for(by(created_at))),
+                    status(ty = "String", list_for)
                 )
             )]
             struct Docs {
@@ -487,8 +486,106 @@ mod tests {
             }
         });
 
-        assert!(tokens.contains("let __key = __entity . owner_id . clone ()"));
-        assert!(tokens.contains("let __key = __entity . state . clone ()"));
+        assert!(tokens.contains("list_for_user_id_by_created_at"));
+        assert!(!tokens.contains("find_all_for_"));
+    }
+
+    #[test]
+    fn key_defaults_to_the_entity_field_named_after_the_column() {
+        let tokens = tokens(parse_quote! {
+            #[es_repo(
+                entity = "Doc",
+                columns(
+                    user_id(
+                        ty = "UserId",
+                        list_for(by(created_at), find_all_for),
+                        create(accessor = "owner_id"),
+                        update(accessor = "state")
+                    )
+                )
+            )]
+            struct Docs {
+                pool: sqlx::PgPool,
+            }
+        });
+
+        assert!(tokens.contains("let __key = __entity . user_id . clone ()"));
+        assert!(!tokens.contains("__entity . owner_id"));
+        assert!(!tokens.contains("__entity . state"));
+    }
+
+    #[test]
+    fn accessor_expression_is_evaluated_on_the_entity() {
+        let tokens = tokens(parse_quote! {
+            #[es_repo(
+                entity = "Entry",
+                columns(
+                    account_id(
+                        ty = "AccountId",
+                        list_for(by(created_at), find_all_for(accessor = "values().account_id")),
+                        update(persist = false)
+                    )
+                )
+            )]
+            struct Entries {
+                pool: sqlx::PgPool,
+            }
+        });
+
+        assert!(tokens.contains("let __key = __entity . values () . account_id . clone ()"));
+        assert!(tokens.contains("pub async fn find_all_for_account_ids <"));
+    }
+
+    #[test]
+    fn flag_on_an_optional_column_is_an_error_naming_the_column() {
+        let err = derive(parse_quote! {
+            #[es_repo(
+                entity = "DepositAccount",
+                columns(
+                    nickname(ty = "Option<String>", list_for(by(created_at), find_all_for))
+                )
+            )]
+            struct DepositAccounts {
+                pool: sqlx::PgPool,
+            }
+        })
+        .expect_err("optional column cannot opt in")
+        .to_string();
+
+        assert!(err.contains("column 'nickname'"), "unexpected error: {err}");
+        assert!(err.contains("find_all_for"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn flag_on_a_nullable_virtual_or_by_less_column_is_an_error() {
+        for (column, name) in [
+            (
+                quote::quote! { tier(ty = "Tier", nullable, list_for(by(created_at), find_all_for)) },
+                "tier",
+            ),
+            (
+                quote::quote! { flagged(ty = "bool", virtual = "TRUE", list_for(find_all_for)) },
+                "flagged",
+            ),
+            (
+                quote::quote! { currency(ty = "Currency", list_for(find_all_for)) },
+                "currency",
+            ),
+        ] {
+            let err = derive(parse_quote! {
+                #[es_repo(entity = "DepositAccount", columns(#column))]
+                struct DepositAccounts {
+                    pool: sqlx::PgPool,
+                }
+            })
+            .expect_err("column cannot opt in")
+            .to_string();
+
+            assert!(
+                err.contains(&format!("column '{name}'")),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

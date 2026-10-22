@@ -18,7 +18,7 @@ pub mod unscoped {
         columns(
             partner_id(ty = "PartnerId"),
             customer_id(ty = "CustomerId"),
-            status(ty = "String", list_for(by(created_at))),
+            status(ty = "String", list_for(by(created_at), find_all_for)),
         )
     )]
     pub struct UnscopedFacilities {
@@ -44,7 +44,7 @@ pub mod scoped {
         columns(
             partner_id(ty = "PartnerId", scope),
             customer_id(ty = "CustomerId"),
-            status(ty = "String", list_for(by(created_at))),
+            status(ty = "String", list_for(by(created_at), find_all_for)),
         )
     )]
     pub struct ScopedFacilities {
