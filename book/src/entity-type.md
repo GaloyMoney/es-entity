@@ -9,8 +9,6 @@ Other than the `events` field additional fields can be exposed and populated dur
 # extern crate es_entity;
 # extern crate sqlx;
 # extern crate serde;
-# extern crate derive_builder;
-# use derive_builder::Builder;
 # use serde::{Deserialize, Serialize};
 # use es_entity::*;
 # es_entity::entity_id! { UserId };
@@ -32,10 +30,9 @@ Other than the `events` field additional fields can be exposed and populated dur
 #         }])
 #     }
 # }
-// Using derive_builder is optional but useful for hydrating
-// in the `TryFromEvents` trait.
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+// `#[derive(EsEntity)]` generates `UserHydrator`
+// for hydrating in the `TryFromEvents` trait.
+#[derive(EsEntity)]
 pub struct User {
     pub id: UserId,
     pub name: String,
@@ -75,18 +72,18 @@ impl User {
 // This trait is what hydrates entities after loading the events from the database
 impl TryFromEvents<UserEvent> for User {
     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = UserBuilder::default();
+        let mut hydrator = User::hydrator();
         for event in events.iter_all() {
             match event {
                 UserEvent::Initialized { id, name } => {
-                    builder = builder.id(*id).name(name.clone());
+                    hydrator.id(*id).name(name.clone());
                 }
                 UserEvent::NameUpdated { name } => {
-                    builder = builder.name(name.clone());
+                    hydrator.name(name.clone());
                 }
             }
         }
-        builder.events(events).build()
+        hydrator.build(events)
     }
 }
 

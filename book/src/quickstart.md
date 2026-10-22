@@ -57,7 +57,7 @@ Here's a complete working example:
 es-entity = "0.9"
 sqlx = "0.8" # Needs to be in scope for entity_id! macro
 serde = { version = "1.0.219", features = ["derive"] } # To serialize the `EntityEvent`
-derive_builder = "0.20.1" # For hydrating and building the entity state (optional)
+bon = "3" # for New* builders (optional)
 ```
 
 ```rust
@@ -66,8 +66,7 @@ derive_builder = "0.20.1" # For hydrating and building the entity state (optiona
 # extern crate serde;
 # extern crate tokio;
 # extern crate anyhow;
-# extern crate derive_builder;
-use derive_builder::Builder;
+# extern crate bon;
 use serde::{Deserialize, Serialize};
 
 use es_entity::*;
@@ -88,10 +87,9 @@ pub enum UserEvent {
     NameUpdated { name: String },
 }
 
-// The `EsEntity` - using derive_builder is optional
-// but useful for hydrating in the `TryFromEvents` trait.
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+// The `EsEntity` - `#[derive(EsEntity)]` generates `UserHydrator`
+// for hydrating in the `TryFromEvents` trait.
+#[derive(EsEntity)]
 pub struct User {
     pub id: UserId,
     pub name: String,
@@ -128,34 +126,28 @@ impl User {
 // This trait is what hydrates entities after loading the events from the database
 impl TryFromEvents<UserEvent> for User {
     fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = UserBuilder::default();
+        let mut hydrator = User::hydrator();
         for event in events.iter_all() {
             match event {
                 UserEvent::Initialized { id, name } => {
-                    builder = builder.id(*id).name(name.clone());
+                    hydrator.id(*id).name(name.clone());
                 }
                 UserEvent::NameUpdated { name } => {
-                    builder = builder.name(name.clone());
+                    hydrator.name(name.clone());
                 }
             }
         }
-        builder.events(events).build()
+        hydrator.build(events)
     }
 }
 
 // The `NewEntity` - this represents the data of an entity in a pre-persisted state.
-// Using derive_builder is not mandatory - any type can be used for the `NewEntity` state.
+// Using bon::Builder is not mandatory - any type can be used for the `NewEntity` state.
 // It has no `id`: by default the repository generates one.
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewUser {
-    #[builder(setter(into))]
+    #[builder(into)]
     pub name: String,
-}
-
-impl NewUser {
-    pub fn builder() -> NewUserBuilder {
-        NewUserBuilder::default()
-    }
 }
 
 // The `NewEntity` type must implement `IntoEvents` to get the initial events that require persisting.
@@ -198,8 +190,7 @@ async fn main() -> anyhow::Result<()> {
 
     let new_user = NewUser::builder()
         .name("Frank")
-        .build()
-        .unwrap();
+        .build();
 
     // The returned type is the hydrated Entity
     let mut user = users.create(new_user).await?;

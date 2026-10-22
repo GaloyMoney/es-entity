@@ -122,9 +122,7 @@ the event's value through:
 # extern crate es_entity;
 # extern crate sqlx;
 # extern crate serde;
-# extern crate derive_builder;
 # use serde::{Deserialize, Serialize};
-# use derive_builder::Builder;
 # use es_entity::*;
 # es_entity::entity_id! { CustomerId }
 # #[derive(EsEvent, Debug, Serialize, Deserialize)]
@@ -135,8 +133,7 @@ the event's value through:
 #     NameUpdated { name: Forgettable<String> },
 #     EmailUpdated { email: String },
 # }
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Customer {
     pub id: CustomerId,
     pub name: Forgettable<String>,
@@ -146,11 +143,11 @@ pub struct Customer {
 
 impl TryFromEvents<CustomerEvent> for Customer {
     fn try_from_events(events: EntityEvents<CustomerEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = CustomerBuilder::default();
+        let mut hydrator = Customer::hydrator();
         for event in events.iter_all() {
             match event {
                 CustomerEvent::Initialized { id, name, email } => {
-                    builder = builder
+                    hydrator
                         .id(*id)
                         // Carry the Forgettable through; it is `Some` while live
                         // and `None` (forgotten) once `forget()` has run.
@@ -158,14 +155,14 @@ impl TryFromEvents<CustomerEvent> for Customer {
                         .email(email.clone());
                 }
                 CustomerEvent::NameUpdated { name } => {
-                    builder = builder.name(name.clone());
+                    hydrator.name(name.clone());
                 }
                 CustomerEvent::EmailUpdated { email } => {
-                    builder = builder.email(email.clone());
+                    hydrator.email(email.clone());
                 }
             }
         }
-        builder.events(events).build()
+        hydrator.build(events)
     }
 }
 # impl IntoEvents<CustomerEvent> for NewCustomer {
