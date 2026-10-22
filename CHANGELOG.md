@@ -1,3 +1,11 @@
+# [cala release v0.20.1](https://github.com/GaloyMoney/cala/releases/tag/0.20.1)
+
+
+
+### Features
+
+- Find_all_for_{col}s — batch lookup keyed by a list_for column (#294)
+
 # [cala release v0.20.0](https://github.com/GaloyMoney/cala/releases/tag/0.20.0)
 
 
