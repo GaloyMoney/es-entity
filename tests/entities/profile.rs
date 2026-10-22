@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
 use es_entity::*;
@@ -29,8 +28,7 @@ pub struct ProfileData {
     pub name: String,
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Profile {
     pub id: ProfileId,
     pub data: ProfileData,
@@ -77,40 +75,35 @@ impl Profile {
 
 impl TryFromEvents<ProfileEvent> for Profile {
     fn try_from_events(events: EntityEvents<ProfileEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = ProfileBuilder::default();
+        let mut h = Profile::hydrator();
         for event in events.iter_all() {
             match event {
                 ProfileEvent::Initialized { id, name, email } => {
-                    builder = builder
-                        .id(*id)
+                    h.id(*id)
                         .data(ProfileData { name: name.clone() })
                         .email(email.clone());
                 }
                 ProfileEvent::NameUpdated { name } => {
-                    builder = builder.data(ProfileData { name: name.clone() });
+                    h.data(ProfileData { name: name.clone() });
                 }
                 ProfileEvent::EmailUpdated { email } => {
-                    builder = builder.email(email.clone());
+                    h.email(email.clone());
                 }
             }
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewProfile {
-    #[builder(setter(into))]
+    #[builder(into)]
     pub name: String,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub email: String,
 }
 
 impl NewProfile {
-    pub fn builder() -> NewProfileBuilder {
-        NewProfileBuilder::default()
-    }
-
     pub fn display_name(&self) -> String {
         format!("Profile: {}", self.name)
     }

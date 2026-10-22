@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
 use es_entity::*;
@@ -19,11 +18,9 @@ pub enum TaskEvent {
     },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Task {
     pub id: TaskId,
-    #[builder(default)]
     pub workspace_id: Option<WorkspaceId>,
     pub status: String,
 
@@ -32,7 +29,7 @@ pub struct Task {
 
 impl TryFromEvents<TaskEvent> for Task {
     fn try_from_events(events: EntityEvents<TaskEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = TaskBuilder::default();
+        let mut h = Task::hydrator();
         for event in events.iter_all() {
             match event {
                 TaskEvent::Initialized {
@@ -40,29 +37,22 @@ impl TryFromEvents<TaskEvent> for Task {
                     workspace_id,
                     status,
                 } => {
-                    builder = builder
-                        .id(*id)
-                        .workspace_id(*workspace_id)
+                    h.id(*id)
+                        .maybe_workspace_id(*workspace_id)
                         .status(status.clone());
                 }
             }
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewTask {
-    #[builder(setter(into, strip_option), default)]
+    #[builder(into)]
     pub workspace_id: Option<WorkspaceId>,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub status: String,
-}
-
-impl NewTask {
-    pub fn builder() -> NewTaskBuilder {
-        NewTaskBuilder::default()
-    }
 }
 
 impl IntoEvents<TaskEvent> for NewTask {

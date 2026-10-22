@@ -25,8 +25,7 @@ async fn create_and_load_with_forgettable_fields() -> anyhow::Result<()> {
     let new_customer = NewCustomer::builder()
         .name("Alice Smith")
         .email("alice@example.com")
-        .build()
-        .unwrap();
+        .build();
 
     let customer = customers.create(new_customer).await?;
     assert_eq!(customer.name, "Alice Smith");
@@ -48,8 +47,7 @@ async fn forget_removes_forgettable_data() -> anyhow::Result<()> {
     let new_customer = NewCustomer::builder()
         .name("Bob Jones")
         .email("bob@example.com")
-        .build()
-        .unwrap();
+        .build();
 
     let mut customer = customers.create(new_customer).await?;
     let id = customer.id;
@@ -84,8 +82,7 @@ async fn forget_preserves_non_forgettable_events() -> anyhow::Result<()> {
     let new_customer = NewCustomer::builder()
         .name("Charlie")
         .email("charlie@example.com")
-        .build()
-        .unwrap();
+        .build();
 
     let mut customer = customers.create(new_customer).await?;
     let id = customer.id;
@@ -113,8 +110,7 @@ async fn staged_erasure_event_is_persisted_by_forget() -> anyhow::Result<()> {
     let new_customer = NewCustomer::builder()
         .name("Marker Test")
         .email("marker@example.com")
-        .build()
-        .unwrap();
+        .build();
 
     let mut customer = customers.create(new_customer).await?;
     let id = customer.id;
@@ -167,8 +163,7 @@ async fn staged_erasure_event_fences_stale_writers() -> anyhow::Result<()> {
     let new_customer = NewCustomer::builder()
         .name("Stale Writer")
         .email("stale@example.com")
-        .build()
-        .unwrap();
+        .build();
     let id = customers.create(new_customer).await?.id;
 
     // Two copies of the same entity: one gets forgotten, one goes stale.
@@ -202,8 +197,7 @@ async fn forget_without_staged_event_leaves_stale_writers_unfenced() -> anyhow::
     let new_customer = NewCustomer::builder()
         .name("Unfenced")
         .email("unfenced@example.com")
-        .build()
-        .unwrap();
+        .build();
     let id = customers.create(new_customer).await?.id;
 
     let mut stale = customers.find_by_id(id).await?;
@@ -237,8 +231,7 @@ async fn forget_persists_staged_events_without_laundering() -> anyhow::Result<()
     let new_customer = NewCustomer::builder()
         .name("Pending Pat")
         .email("pending@example.com")
-        .build()
-        .unwrap();
+        .build();
     let mut customer = customers.create(new_customer).await?;
     let id = customer.id;
 
@@ -281,8 +274,7 @@ async fn events_table_stores_null_for_live_forgettable_fields() -> anyhow::Resul
     let new_customer = NewCustomer::builder()
         .name("Nina Null")
         .email("nina@example.com")
-        .build()
-        .unwrap();
+        .build();
 
     let customer = customers.create(new_customer).await?;
     let id = customer.id;
@@ -328,13 +320,11 @@ async fn create_all_stores_payloads_and_nulls_events() -> anyhow::Result<()> {
         NewCustomer::builder()
             .name("Batch One")
             .email("batch1@example.com")
-            .build()
-            .unwrap(),
+            .build(),
         NewCustomer::builder()
             .name("Batch Two")
             .email("batch2@example.com")
-            .build()
-            .unwrap(),
+            .build(),
     ];
 
     let created = customers.create_all(new_customers).await?;
@@ -378,13 +368,11 @@ async fn find_all_works_with_forgettable() -> anyhow::Result<()> {
     let c1 = NewCustomer::builder()
         .name("Dave")
         .email("dave@example.com")
-        .build()
-        .unwrap();
+        .build();
     let c2 = NewCustomer::builder()
         .name("Eve")
         .email("eve@example.com")
-        .build()
-        .unwrap();
+        .build();
 
     let id1 = customers.create(c1).await?.id;
     let id2 = customers.create(c2).await?.id;

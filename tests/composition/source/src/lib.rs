@@ -1,4 +1,3 @@
-use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
@@ -17,8 +16,7 @@ pub enum LaneItemEvent {
     },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct LaneItem {
     pub id: LaneItemId,
     pub parent_id: LaneParentId,
@@ -28,27 +26,21 @@ pub struct LaneItem {
 
 impl TryFromEvents<LaneItemEvent> for LaneItem {
     fn try_from_events(events: EntityEvents<LaneItemEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = LaneItemBuilder::default();
+        let mut hydrator = LaneItem::hydrator();
         for event in events.iter_all() {
             let LaneItemEvent::Initialized { id, parent_id, sku } = event;
-            builder = builder.id(*id).parent_id(*parent_id).sku(sku.clone());
+            hydrator.id(*id).parent_id(*parent_id).sku(sku.clone());
         }
-        builder.events(events).build()
+        hydrator.build(events)
     }
 }
 
-#[derive(Debug, Clone, Builder)]
+#[derive(Debug, Clone, bon::Builder)]
 pub struct NewLaneItem {
     pub id: LaneItemId,
     pub parent_id: LaneParentId,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub sku: String,
-}
-
-impl NewLaneItem {
-    pub fn builder() -> NewLaneItemBuilder {
-        NewLaneItemBuilder::default()
-    }
 }
 
 impl IntoEvents<LaneItemEvent> for NewLaneItem {
@@ -76,14 +68,12 @@ pub enum LaneParentEvent {
     Initialized { id: LaneParentId },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct LaneParent {
     pub id: LaneParentId,
     events: EntityEvents<LaneParentEvent>,
 
     #[es_entity(nested)]
-    #[builder(default)]
     items: Nested<LaneItem>,
 }
 
@@ -97,24 +87,18 @@ impl TryFromEvents<LaneParentEvent> for LaneParent {
     fn try_from_events(
         events: EntityEvents<LaneParentEvent>,
     ) -> Result<Self, EntityHydrationError> {
-        let mut builder = LaneParentBuilder::default();
+        let mut hydrator = LaneParent::hydrator();
         for event in events.iter_all() {
             let LaneParentEvent::Initialized { id } = event;
-            builder = builder.id(*id);
+            hydrator.id(*id);
         }
-        builder.events(events).build()
+        hydrator.build(events)
     }
 }
 
-#[derive(Debug, Clone, Builder)]
+#[derive(Debug, Clone, bon::Builder)]
 pub struct NewLaneParent {
     pub id: LaneParentId,
-}
-
-impl NewLaneParent {
-    pub fn builder() -> NewLaneParentBuilder {
-        NewLaneParentBuilder::default()
-    }
 }
 
 impl IntoEvents<LaneParentEvent> for NewLaneParent {

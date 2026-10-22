@@ -55,9 +55,8 @@ async fn seed(
         let new = NewTransfer::builder()
             .account_id(AccountId::from(account_id))
             .status("unified_cursor_test")
-            .score(*score)
-            .build()
-            .unwrap();
+            .maybe_score(*score)
+            .build();
         repo.create(new).await?;
     }
     Ok(())

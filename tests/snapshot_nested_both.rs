@@ -77,7 +77,7 @@ async fn nested_both_snapshot_one_statement() -> anyhow::Result<()> {
     let pool = init_pool().await?;
     let repo = BothSites::new(pool);
 
-    let mut site = repo.create(NewSite::builder().build().unwrap()).await?;
+    let mut site = repo.create(NewSite::builder().build()).await?;
     let site_id = site.id;
     site.add_meter(new_meter(site_id, "m"));
     repo.update(&mut site).await?;
@@ -119,7 +119,7 @@ async fn nested_update_refreshes_every_stale_child_not_just_the_mutated_one() ->
     let pool = init_pool().await?;
     let repo = BothSites::new(pool.clone());
 
-    let mut site = repo.create(NewSite::builder().build().unwrap()).await?;
+    let mut site = repo.create(NewSite::builder().build()).await?;
     let site_id = site.id;
 
     for _ in 0..3 {

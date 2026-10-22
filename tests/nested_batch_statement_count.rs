@@ -89,20 +89,17 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for SpanCounts {
 }
 
 async fn create_order_with_items(orders: &Orders, n_items: usize) -> anyhow::Result<OrderId> {
-    let mut order = orders
-        .create(NewOrderBuilder::default().build().unwrap())
-        .await?;
+    let mut order = orders.create(NewOrder::builder().build()).await?;
     let order_id = order.id;
 
     for i in 0..n_items {
         order.add_item(
-            NewOrderItemBuilder::default()
+            NewOrderItem::builder()
                 .order_id(order_id)
                 .product_name(format!("item-{i}"))
                 .quantity(1)
                 .price(9.99)
-                .build()
-                .unwrap(),
+                .build(),
         );
     }
     orders.update(&mut order).await?;
@@ -143,13 +140,12 @@ async fn update_all_batches_nested_children_across_parents() -> anyhow::Result<(
             .update_item_quantity("item-0", 42)
             .expect("item-0 exists");
         order.add_item(
-            NewOrderItemBuilder::default()
+            NewOrderItem::builder()
                 .order_id(order.id)
                 .product_name("new-item")
                 .quantity(1)
                 .price(1.23)
-                .build()
-                .unwrap(),
+                .build(),
         );
     }
 

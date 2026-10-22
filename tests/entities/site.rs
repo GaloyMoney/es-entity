@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use derive_builder::Builder;
 use es_entity::*;
 use serde::{Deserialize, Serialize};
 
@@ -23,26 +22,28 @@ impl TryFromEvents<SiteEvent, SiteSnapshot> for Site {
     fn try_from_events(
         events: EntityEvents<SiteEvent, SiteSnapshot>,
     ) -> Result<Self, EntityHydrationError> {
-        let mut builder = SiteBuilder::default();
+        let mut h = Site::hydrator();
         for r in events.replay() {
             match r {
-                Replay::Snapshot(s) => builder = builder.id(s.id),
-                Replay::Event(SiteEvent::Initialized { id }) => builder = builder.id(*id),
+                Replay::Snapshot(s) => {
+                    h.id(s.id);
+                }
+                Replay::Event(SiteEvent::Initialized { id }) => {
+                    h.id(*id);
+                }
             }
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
 /// Both parent and child snapshot.
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Site {
     pub id: SiteId,
     events: EntityEvents<SiteEvent, SiteSnapshot>,
 
     #[es_entity(nested)]
-    #[builder(default)]
     pub meters: Nested<Meter>,
 }
 
@@ -63,26 +64,28 @@ impl TryFromEvents<SiteEvent, SiteSnapshot> for SiteOverPlainMeters {
     fn try_from_events(
         events: EntityEvents<SiteEvent, SiteSnapshot>,
     ) -> Result<Self, EntityHydrationError> {
-        let mut builder = SiteOverPlainMetersBuilder::default();
+        let mut h = SiteOverPlainMeters::hydrator();
         for r in events.replay() {
             match r {
-                Replay::Snapshot(s) => builder = builder.id(s.id),
-                Replay::Event(SiteEvent::Initialized { id }) => builder = builder.id(*id),
+                Replay::Snapshot(s) => {
+                    h.id(s.id);
+                }
+                Replay::Event(SiteEvent::Initialized { id }) => {
+                    h.id(*id);
+                }
             }
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 #[es_entity(event = "SiteEvent", new = "NewSite")]
 pub struct SiteOverPlainMeters {
     pub id: SiteId,
     events: EntityEvents<SiteEvent, SiteSnapshot>,
 
     #[es_entity(nested)]
-    #[builder(default)]
     pub meters: Nested<PlainMeter>,
 }
 
@@ -101,24 +104,22 @@ impl HeadSnapshot for SiteOverPlainMeters {
 /// Child snapshots, parent does not.
 impl TryFromEvents<SiteEvent> for PlainSiteOverMeters {
     fn try_from_events(events: EntityEvents<SiteEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = PlainSiteOverMetersBuilder::default();
+        let mut h = PlainSiteOverMeters::hydrator();
         for e in events.iter_all() {
             let SiteEvent::Initialized { id } = e;
-            builder = builder.id(*id);
+            h.id(*id);
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 #[es_entity(event = "SiteEvent", new = "NewSite")]
 pub struct PlainSiteOverMeters {
     pub id: SiteId,
     events: EntityEvents<SiteEvent>,
 
     #[es_entity(nested)]
-    #[builder(default)]
     pub meters: Nested<Meter>,
 }
 
@@ -128,14 +129,8 @@ impl PlainSiteOverMeters {
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewSite {}
-
-impl NewSite {
-    pub fn builder() -> NewSiteBuilder {
-        NewSiteBuilder::default()
-    }
-}
 
 impl IntoEvents<SiteEvent> for NewSite {
     type IdSource = FromRepo;
@@ -150,9 +145,5 @@ impl IntoEvents<SiteEvent> for NewSite {
 }
 
 pub fn new_meter(site_id: SiteId, label: &str) -> NewMeter {
-    NewMeter::builder()
-        .site_id(site_id)
-        .label(label)
-        .build()
-        .unwrap()
+    NewMeter::builder().site_id(site_id).label(label).build()
 }

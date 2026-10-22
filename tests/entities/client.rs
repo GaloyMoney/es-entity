@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use derive_builder::Builder;
 use es_entity::*;
 use serde::{Deserialize, Serialize};
 
@@ -27,8 +26,7 @@ pub struct ClientSnapshot {
     pub changes: u32,
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Client {
     pub id: ClientId,
     events: EntityEvents<ClientEvent, ClientSnapshot>,
@@ -95,28 +93,26 @@ impl TryFromEvents<ClientEvent, ClientSnapshot> for Client {
     fn try_from_events(
         events: EntityEvents<ClientEvent, ClientSnapshot>,
     ) -> Result<Self, EntityHydrationError> {
-        let mut builder = ClientBuilder::default();
+        let mut h = Client::hydrator();
         for r in events.replay() {
             match r {
-                Replay::Snapshot(s) => builder = builder.id(s.id),
-                Replay::Event(ClientEvent::Initialized { id, .. }) => builder = builder.id(*id),
+                Replay::Snapshot(s) => {
+                    h.id(s.id);
+                }
+                Replay::Event(ClientEvent::Initialized { id, .. }) => {
+                    h.id(*id);
+                }
                 Replay::Event(_) => {}
             }
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewClient {
-    #[builder(setter(into))]
+    #[builder(into)]
     pub email: String,
-}
-
-impl NewClient {
-    pub fn builder() -> NewClientBuilder {
-        NewClientBuilder::default()
-    }
 }
 
 impl IntoEvents<ClientEvent> for NewClient {

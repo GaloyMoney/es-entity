@@ -39,7 +39,7 @@ async fn update_without_a_constrained_column_or_nesting_returns_repo_fault() -> 
     let repo = ImmutableNameUsers::new(helpers::init_pool().await?);
 
     let mut user = repo
-        .create(NewUser::builder().name("First").build().unwrap())
+        .create(NewUser::builder().name("First").build())
         .await?;
     let _ = user.update_name("Second");
 
@@ -58,7 +58,7 @@ async fn stale_sequence_update_is_transient_optimistic_conflict_through_repo_fau
     let repo = ImmutableNameUsers::new(helpers::init_pool().await?);
 
     let user = repo
-        .create(NewUser::builder().name("Concurrent").build().unwrap())
+        .create(NewUser::builder().name("Concurrent").build())
         .await?;
 
     let mut first = repo.find_by_id(user.id).await?;
@@ -113,8 +113,7 @@ async fn update_persisting_only_a_foreign_key_column_returns_repo_fault() -> any
                 .product_name("Widget")
                 .quantity(1)
                 .price(1.0)
-                .build()
-                .unwrap(),
+                .build(),
         )
         .await?;
     let _ = item.update_quantity(2);

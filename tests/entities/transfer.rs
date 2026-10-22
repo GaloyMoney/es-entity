@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
 use es_entity::*;
@@ -25,15 +24,12 @@ pub enum TransferEvent {
     },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Transfer {
     pub id: TransferId,
     pub account_id: AccountId,
     pub status: String,
-    #[builder(default)]
     pub reference: Option<String>,
-    #[builder(default)]
     pub score: Option<i32>,
 
     events: EntityEvents<TransferEvent>,
@@ -41,7 +37,7 @@ pub struct Transfer {
 
 impl TryFromEvents<TransferEvent> for Transfer {
     fn try_from_events(events: EntityEvents<TransferEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = TransferBuilder::default();
+        let mut h = Transfer::hydrator();
         for event in events.iter_all() {
             match event {
                 TransferEvent::Initialized {
@@ -51,35 +47,27 @@ impl TryFromEvents<TransferEvent> for Transfer {
                     reference,
                     score,
                 } => {
-                    builder = builder
-                        .id(*id)
+                    h.id(*id)
                         .account_id(*account_id)
                         .status(status.clone())
-                        .reference(reference.clone())
-                        .score(*score);
+                        .maybe_reference(reference.clone())
+                        .maybe_score(*score);
                 }
             }
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewTransfer {
-    #[builder(setter(into))]
+    #[builder(into)]
     pub account_id: AccountId,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub status: String,
-    #[builder(setter(into, strip_option), default)]
+    #[builder(into)]
     pub reference: Option<String>,
-    #[builder(default)]
     pub score: Option<i32>,
-}
-
-impl NewTransfer {
-    pub fn builder() -> NewTransferBuilder {
-        NewTransferBuilder::default()
-    }
 }
 
 impl IntoEvents<TransferEvent> for NewTransfer {

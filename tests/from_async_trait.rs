@@ -27,7 +27,7 @@ impl RunJob for TestJob {
         let pool = self.pool.clone();
 
         let orders = Orders::new(pool);
-        let new_order = NewOrderBuilder::default().build().unwrap();
+        let new_order = NewOrder::builder().build();
 
         let order_id = orders.create(new_order).await?.id;
         let mut op = orders.begin_op().await?;

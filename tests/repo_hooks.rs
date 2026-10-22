@@ -139,7 +139,7 @@ async fn post_hydrate_hook_error_propagates_through_create() -> anyhow::Result<(
     let pool = helpers::init_pool().await?;
     let users = UsersWithHydrateHook::new(pool);
 
-    let new_user = NewUser::builder().name("BANNED").build().unwrap();
+    let new_user = NewUser::builder().name("BANNED").build();
 
     let result = users.create(new_user).await;
 
@@ -162,7 +162,7 @@ async fn post_hydrate_hook_allows_valid_entities() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let users = UsersWithHydrateHook::new(pool);
 
-    let new_user = NewUser::builder().name("Alice").build().unwrap();
+    let new_user = NewUser::builder().name("Alice").build();
 
     let user = users.create(new_user).await?;
 
@@ -180,7 +180,7 @@ async fn post_hydrate_hook_error_propagates_through_find_by_id() -> anyhow::Resu
 
     // Create via the hook repo with a valid name
     let users = UsersWithHydrateHook::new(pool.clone());
-    let new_user = NewUser::builder().name("ValidAtFirst").build().unwrap();
+    let new_user = NewUser::builder().name("ValidAtFirst").build();
     let mut user = users.create(new_user).await?;
     let id = user.id;
 
@@ -223,7 +223,7 @@ async fn post_persist_hook_error_propagates_through_create() -> anyhow::Result<(
     let pool = helpers::init_pool().await?;
     let users = UsersWithPersistHook::new(pool);
 
-    let new_user = NewUser::builder().name("BLOCKED").build().unwrap();
+    let new_user = NewUser::builder().name("BLOCKED").build();
 
     let result = users.create(new_user).await;
 
@@ -246,7 +246,7 @@ async fn post_persist_hook_allows_valid_entities() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let users = UsersWithPersistHook::new(pool);
 
-    let new_user = NewUser::builder().name("Bob").build().unwrap();
+    let new_user = NewUser::builder().name("Bob").build();
 
     let user = users.create(new_user).await?;
     assert_eq!(user.name, "Bob");
@@ -259,7 +259,7 @@ async fn post_persist_hook_error_propagates_through_update() -> anyhow::Result<(
     let pool = helpers::init_pool().await?;
     let users = UsersWithPersistHook::new(pool);
 
-    let new_user = NewUser::builder().name("Carol").build().unwrap();
+    let new_user = NewUser::builder().name("Carol").build();
     let mut user = users.create(new_user).await?;
 
     // Rename to blocked value and update

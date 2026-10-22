@@ -45,8 +45,7 @@ async fn seed_contacts(
             .partner_id(partner_id)
             .email(format!("{email}-{}@test.com", ContactId::new()))
             .status(*status)
-            .build()
-            .unwrap();
+            .build();
         ids.push(repo.create(new).await?.id);
     }
     Ok(ids)

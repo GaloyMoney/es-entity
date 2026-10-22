@@ -19,15 +19,13 @@ impl Users {
 
 /// `User` whose id comes from the caller, on the `users` tables.
 mod caller_id {
-    use derive_builder::Builder;
     use es_entity::*;
     use sqlx::PgPool;
 
     use super::entities::user::{UserEvent, UserId};
 
-    #[derive(EsEntity, Builder)]
+    #[derive(EsEntity)]
     #[es_entity(event = "UserEvent")]
-    #[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
     pub struct CallerIdUser {
         pub id: UserId,
         events: EntityEvents<UserEvent>,
@@ -35,13 +33,13 @@ mod caller_id {
 
     impl TryFromEvents<UserEvent> for CallerIdUser {
         fn try_from_events(events: EntityEvents<UserEvent>) -> Result<Self, EntityHydrationError> {
-            let mut builder = CallerIdUserBuilder::default();
+            let mut hydrator = CallerIdUser::hydrator();
             for event in events.iter_all() {
                 if let UserEvent::Initialized { id, .. } = event {
-                    builder = builder.id(*id);
+                    hydrator.id(*id);
                 }
             }
-            builder.events(events).build()
+            hydrator.build(events)
         }
     }
 
@@ -165,18 +163,10 @@ async fn create_duplicate_email_returns_constraint_violation_with_value() -> any
 
     let email = format!("unique_{}@test.com", ProfileId::new());
 
-    let first = NewProfile::builder()
-        .name("First")
-        .email(&email)
-        .build()
-        .unwrap();
+    let first = NewProfile::builder().name("First").email(&email).build();
     profiles.create(first).await?;
 
-    let duplicate = NewProfile::builder()
-        .name("Second")
-        .email(&email)
-        .build()
-        .unwrap();
+    let duplicate = NewProfile::builder().name("Second").email(&email).build();
     let err = match profiles.create(duplicate).await {
         Err(e) => e,
         Ok(_) => panic!("expected constraint violation"),
@@ -326,18 +316,10 @@ async fn update_to_duplicate_email_returns_constraint_violation_with_value() -> 
     let email_a = format!("update_a_{}@test.com", ProfileId::new());
     let email_b = format!("update_b_{}@test.com", ProfileId::new());
 
-    let profile_a = NewProfile::builder()
-        .name("A")
-        .email(&email_a)
-        .build()
-        .unwrap();
+    let profile_a = NewProfile::builder().name("A").email(&email_a).build();
     profiles.create(profile_a).await?;
 
-    let profile_b = NewProfile::builder()
-        .name("B")
-        .email(&email_b)
-        .build()
-        .unwrap();
+    let profile_b = NewProfile::builder().name("B").email(&email_b).build();
     let mut b = profiles.create(profile_b).await?;
 
     // Update B's email to A's email — should trigger constraint violation
@@ -370,8 +352,7 @@ async fn create_fk_violation_is_a_fatal_invariant() -> anyhow::Result<()> {
         .product_name("Orphan")
         .quantity(1)
         .price(1.0)
-        .build()
-        .unwrap();
+        .build();
     let err = match order_items.create(item).await {
         Err(e) => e,
         Ok(_) => panic!("expected foreign key violation"),
@@ -404,8 +385,7 @@ async fn create_all_fk_violation_is_a_fatal_invariant() -> anyhow::Result<()> {
         .product_name("Orphan")
         .quantity(1)
         .price(1.0)
-        .build()
-        .unwrap();
+        .build();
     let err = match order_items.create_all(vec![item]).await {
         Err(e) => e,
         Ok(_) => panic!("expected foreign key violation"),
@@ -421,11 +401,7 @@ async fn create_check_violation_returns_constraint_violation() -> anyhow::Result
     let profiles = Profiles::new(pool);
 
     // Blank email violates the profiles_email_not_blank CHECK constraint.
-    let profile = NewProfile::builder()
-        .name("Blank")
-        .email("")
-        .build()
-        .unwrap();
+    let profile = NewProfile::builder().name("Blank").email("").build();
     let err = match profiles.create(profile).await {
         Err(e) => e,
         Ok(_) => panic!("expected constraint violation"),
@@ -449,11 +425,7 @@ async fn update_check_violation_returns_constraint_violation() -> anyhow::Result
     let profiles = Profiles::new(pool);
 
     let email = format!("check_{}@test.com", ProfileId::new());
-    let profile = NewProfile::builder()
-        .name("Check")
-        .email(&email)
-        .build()
-        .unwrap();
+    let profile = NewProfile::builder().name("Check").email(&email).build();
     let mut profile = profiles.create(profile).await?;
 
     let _ = profile.update_email(String::new());
@@ -543,8 +515,7 @@ async fn unknown_database_constraint_is_fatal_with_original_source() -> anyhow::
         .execute(op.as_executor()).await?;
     let new = NewUser::builder()
         .name("v2-unknown-constraint-trigger")
-        .build()
-        .unwrap();
+        .build();
     let error = users
         .create_in_op(&mut op, new)
         .await
@@ -592,13 +563,7 @@ async fn composite_partial_index_preserves_typed_key_and_batch_uncertainty() -> 
         pool: helpers::init_pool().await?,
     };
     let email = format!("composite-{}", ProfileId::new());
-    let make = |name: &str| {
-        NewProfile::builder()
-            .name(name)
-            .email(&email)
-            .build()
-            .unwrap()
-    };
+    let make = |name: &str| NewProfile::builder().name(name).email(&email).build();
     // Outside the predicate, duplicate key fields are allowed.
     profiles.create(make("inactive")).await?;
     profiles.create(make("inactive")).await?;

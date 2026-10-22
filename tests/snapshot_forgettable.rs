@@ -21,7 +21,7 @@ impl ClientRepo {
 }
 
 fn new_client(email: &str) -> NewClient {
-    NewClient::builder().email(email).build().unwrap()
+    NewClient::builder().email(email).build()
 }
 
 async fn payload_row(pool: &PgPool, id: ClientId) -> anyhow::Result<Option<String>> {

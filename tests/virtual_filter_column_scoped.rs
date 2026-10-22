@@ -46,8 +46,7 @@ async fn create_contact(
                 .partner_id(partner_id)
                 .email(format!("{}@test.com", ContactId::new()))
                 .status(status)
-                .build()
-                .unwrap(),
+                .build(),
         )
         .await?)
 }

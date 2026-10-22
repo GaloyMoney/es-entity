@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
 use es_entity::*;
@@ -25,8 +24,7 @@ pub enum FacilityEvent {
     },
 }
 
-#[derive(EsEntity, Builder)]
-#[builder(pattern = "owned", build_fn(error = "EntityHydrationError"))]
+#[derive(EsEntity)]
 pub struct Facility {
     pub id: FacilityId,
     pub partner_id: PartnerId,
@@ -38,7 +36,7 @@ pub struct Facility {
 
 impl TryFromEvents<FacilityEvent> for Facility {
     fn try_from_events(events: EntityEvents<FacilityEvent>) -> Result<Self, EntityHydrationError> {
-        let mut builder = FacilityBuilder::default();
+        let mut h = Facility::hydrator();
         for event in events.iter_all() {
             match event {
                 FacilityEvent::Initialized {
@@ -47,32 +45,25 @@ impl TryFromEvents<FacilityEvent> for Facility {
                     customer_id,
                     status,
                 } => {
-                    builder = builder
-                        .id(*id)
+                    h.id(*id)
                         .partner_id(*partner_id)
                         .customer_id(*customer_id)
                         .status(status.clone());
                 }
             }
         }
-        builder.events(events).build()
+        h.build(events)
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, bon::Builder)]
 pub struct NewFacility {
-    #[builder(setter(into))]
+    #[builder(into)]
     pub partner_id: PartnerId,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub customer_id: CustomerId,
-    #[builder(setter(into))]
+    #[builder(into)]
     pub status: String,
-}
-
-impl NewFacility {
-    pub fn builder() -> NewFacilityBuilder {
-        NewFacilityBuilder::default()
-    }
 }
 
 impl IntoEvents<FacilityEvent> for NewFacility {

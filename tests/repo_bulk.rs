@@ -45,13 +45,8 @@ async fn update_all_with_custom_accessors() -> anyhow::Result<()> {
         NewProfile::builder()
             .name("Alice")
             .email(&alice_email)
-            .build()
-            .unwrap(),
-        NewProfile::builder()
-            .name("Bob")
-            .email(&bob_email)
-            .build()
-            .unwrap(),
+            .build(),
+        NewProfile::builder().name("Bob").email(&bob_email).build(),
     ];
 
     let mut created = profiles.create_all(new_profiles).await?;

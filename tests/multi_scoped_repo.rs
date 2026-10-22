@@ -77,8 +77,7 @@ async fn seed_facilities(
             .partner_id(partner_id)
             .customer_id(customer_id)
             .status(*status)
-            .build()
-            .unwrap();
+            .build();
         // create is deliberately unscoped: both scope columns are ordinary
         // NewEntity data.
         ids.push(repo.create(new).await?.id);
@@ -365,8 +364,7 @@ async fn scope_variant_override_dispatches_correctly() -> anyhow::Result<()> {
         .partner_id(partner_a)
         .customer_id(customer_x)
         .status("active")
-        .build()
-        .unwrap();
+        .build();
     let id_a = facilities.create(new).await?.id;
 
     // raw id routes through `From<PartnerId> for FacilityScope` into the

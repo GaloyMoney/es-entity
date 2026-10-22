@@ -67,19 +67,16 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for QueryEventCount {
 }
 
 async fn seed_order(orders: &Orders, item_names: &[&str]) -> anyhow::Result<OrderId> {
-    let mut order = orders
-        .create(NewOrderBuilder::default().build().unwrap())
-        .await?;
+    let mut order = orders.create(NewOrder::builder().build()).await?;
     let order_id = order.id;
     for name in item_names {
         order.add_item(
-            NewOrderItemBuilder::default()
+            NewOrderItem::builder()
                 .order_id(order_id)
                 .product_name(*name)
                 .quantity(1)
                 .price(1.0)
-                .build()
-                .unwrap(),
+                .build(),
         );
     }
     orders.update(&mut order).await?;

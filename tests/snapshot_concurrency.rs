@@ -22,7 +22,6 @@ fn new_meter(label: &str) -> NewMeter {
         .site_id(SiteId::new())
         .label(label)
         .build()
-        .unwrap()
 }
 
 /// Concurrency: two independently loaded copies of the same meter,
