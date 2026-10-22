@@ -9,5 +9,5 @@ tracing = "0.1"
 es-entity = { path = "../../.." }
 errlanes = { path = "../../../errlanes", features = ["derive"] }
 serde = { workspace = true }
-derive_builder = { workspace = true }
+bon = { workspace = true }
 sqlx = { workspace = true }
