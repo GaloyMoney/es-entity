@@ -364,4 +364,27 @@ mod tests {
 
         assert_eq!(tokens.to_string(), expected.to_string());
     }
+
+    #[test]
+    fn query_with_key_any_and_directional_order_groups_rows_per_key() {
+        let input: QueryInput = parse_quote!(
+            sql = "SELECT account_holder_id, created_at, id FROM entities WHERE account_holder_id = ANY($1) ORDER BY account_holder_id, created_at DESC, id DESC",
+            args = [account_holder_ids as &[MyCustomEntityId]]
+        );
+
+        let query = EsQuery::from(input);
+        let mut tokens = TokenStream::new();
+        query.to_tokens(&mut tokens);
+        let tokens = tokens.to_string();
+
+        assert!(tokens.contains(
+            "WITH entities AS (SELECT account_holder_id, created_at, id FROM entities WHERE account_holder_id = ANY($1) ORDER BY account_holder_id, created_at DESC, id DESC) SELECT"
+        ));
+        assert!(tokens.contains(
+            "ORDER BY i.account_holder_id, i.created_at desc, i.id desc, i.id, e.sequence"
+        ));
+        assert!(tokens.contains(
+            "order_by_cols : & [\"account_holder_id\" , \"created_at desc\" , \"id desc\"]"
+        ));
+    }
 }

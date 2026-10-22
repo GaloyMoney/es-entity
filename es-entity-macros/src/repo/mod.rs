@@ -7,6 +7,7 @@ mod error_classifier;
 mod error_types;
 mod events_write;
 mod find_all_fn;
+mod find_all_for_fn;
 mod find_by_fn;
 mod forget_fn;
 mod hydrate_nested;
@@ -65,6 +66,7 @@ pub struct EsRepo<'a> {
     begin: Option<begin::Begin<'a>>,
     list_by_fns: Vec<list_by_fn::ListByFn<'a>>,
     list_for_fns: Vec<list_for_fn::ListForFn<'a>>,
+    find_all_for_fns: Vec<find_all_for_fn::FindAllForFn<'a>>,
     hydrate_nested_fns: Vec<syn::Ident>,
     nested: Vec<nested::Nested<'a>>,
     hydrate_nested: Option<hydrate_nested::HydrateNested<'a>>,
@@ -99,6 +101,11 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
                     })
                     .collect::<Vec<_>>()
             })
+            .collect();
+        let find_all_for_fns = opts
+            .columns
+            .all_list_for()
+            .filter_map(|for_col| find_all_for_fn::FindAllForFn::new(for_col, opts))
             .collect();
         let hydrate_nested = opts
             .columns
@@ -155,6 +162,7 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
                 .then(|| begin::Begin::from(opts)),
             list_by_fns,
             list_for_fns,
+            find_all_for_fns,
             hydrate_nested_fns,
             nested,
             hydrate_nested,
@@ -211,6 +219,7 @@ impl ToTokens for EsRepo<'_> {
         let gql_cursors: Vec<TokenStream> = Vec::new();
         let list_by_fns = &self.list_by_fns;
         let list_for_fns = &self.list_for_fns;
+        let find_all_for_fns = &self.find_all_for_fns;
 
         let entity = self.opts.entity();
         let event = self.opts.event();
@@ -293,6 +302,7 @@ impl ToTokens for EsRepo<'_> {
             let find_all_delegates = self.find_all_fn.scoped_delegates();
             let list_by_delegates = self.list_by_fns.iter().map(|f| f.scoped_delegates());
             let list_for_delegates = self.list_for_fns.iter().map(|f| f.scoped_delegates());
+            let find_all_for_delegates = self.find_all_for_fns.iter().map(|f| f.scoped_delegates());
             let list_for_filters_delegates = list_for_filters.scoped_delegates();
 
             let scoped_doc = format!(
@@ -331,6 +341,7 @@ impl ToTokens for EsRepo<'_> {
                         #find_all_delegates
                         #(#list_by_delegates)*
                         #(#list_for_delegates)*
+                        #(#find_all_for_delegates)*
                         #list_for_filters_delegates
                     }
                 },
@@ -440,6 +451,7 @@ impl ToTokens for EsRepo<'_> {
                 #list_for_filters
                 #(#list_by_fns)*
                 #(#list_for_fns)*
+                #(#find_all_for_fns)*
                 #(#nested)*
                 #snapshot_fns_in_impl
             }

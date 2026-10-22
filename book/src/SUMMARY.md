@@ -28,6 +28,7 @@
     - [list_by](./repo-list-by.md)
     - [list_for](./repo-list-for.md)
     - [list_for_filters](./repo-list-for-filters.md)
+    - [Batch lookups](./repo-batch-lookups.md)
     - [delete](./repo-delete.md)
     - [Hooks](./repo-hooks.md)
     - [Error Types](./repo-errors.md)
