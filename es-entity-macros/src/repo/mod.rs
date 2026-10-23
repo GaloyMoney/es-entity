@@ -36,6 +36,7 @@ pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream
     opts.columns.validate_list_for_by_columns()?;
     opts.columns.validate_scope()?;
     opts.columns.validate_virtual()?;
+    opts.columns.validate_find_all_for()?;
     opts.validate_forgettable()?;
     opts.validate_snapshot()?;
     opts.validate_in_op_only()?;

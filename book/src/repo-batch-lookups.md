@@ -25,11 +25,28 @@ fn find_all_for_user_ids_in_op<'a, Out: From<Entity>>(
 
 ## Which columns get one
 
-Every column declared with `list_for` gets a `find_all_for_<column>s` function, except:
+A `list_for` column gets a `find_all_for_<column>s` function only when it opts in with the `find_all_for` flag next to its `by(..)` columns. Without the flag the repo expands exactly as it would without this feature.
+
+```rust,ignore
+user_id(ty = "UserId", list_for(by(created_at), find_all_for))
+user_id(
+    ty = "UserId",
+    list_for(by(created_at), find_all_for),
+    update(persist = false, accessor = "values().user_id")
+)
+```
+
+The flag is an error, naming the column, on:
 
 - `Option<T>` and `nullable` columns, since `= ANY` can never match a `NULL` key
 - `Forgettable<T>` columns
 - `virtual` columns
+- a `list_for` without a `by(..)` column, since the `by(..)` column orders each group
+
+Opting in adds two requirements that `list_for` alone does not have:
+
+- `ty` must implement `Hash + Eq + Clone`, because it keys the returned map.
+- The key must be readable from the entity (see [Key](#semantics)).
 
 The name is the column name pluralised (`account_holder_id` becomes `find_all_for_account_holder_ids`, `currency` becomes `find_all_for_currencies`). A repo with `delete = "soft"` also gets the `_include_deleted` variants, and an `in_op_only` repo only gets the `_in_op` functions.
 
@@ -42,7 +59,7 @@ A column declared with several `by(..)` columns gets one function, ordered by th
 - **Order.** Inside each `Vec` the entities follow the first `by(..)` column in the given `ListDirection`, with `id` as the tiebreak, the same order `list_for_<column>_by_<by>` would return for that single key.
 - **Soft delete.** Deleted entities are hidden, as in `list_for`. The `_include_deleted` variants return them as well.
 - **Empty slice.** An empty key slice returns an empty map.
-- **Key.** The key of each entity is read from the hydrated entity with the column's accessor (`update(accessor = ..)`, or `create(accessor = ..)` for a column with `update(persist = false)`), and the key type must therefore implement `Hash + Eq + Clone`. The slice type must also be usable as a Postgres array bind (`sqlx::postgres::PgHasArrayType`).
+- **Key.** The key of each entity is read from the hydrated entity with the column's `update(accessor = "<expr>")`, the same accessor a `list_by` cursor uses, and it applies even with `update(persist = false)`. Without one, the key is the entity field named after the column. `create(accessor = ..)` is never used, because it reads the `New*` struct, not the entity. The key is cloned, so its type must implement `Hash + Eq + Clone`. The slice type must also be usable as a Postgres array bind (`sqlx::postgres::PgHasArrayType`).
 
 ## Scoped repositories
 
@@ -110,9 +127,9 @@ pub struct UserDocument {
     columns(
         user_id(
             ty = "UserId",
-            list_for(by(created_at)),
+            list_for(by(created_at), find_all_for),
             create(accessor = "owner_id"),
-            update(persist = false)
+            update(persist = false, accessor = "owner_id")
         )
     )
 )]

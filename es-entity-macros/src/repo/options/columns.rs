@@ -193,6 +193,31 @@ impl Columns {
         errors.finish()
     }
 
+    /// Rejects `find_all_for` on a column that cannot back the lookup: an
+    /// optional, `nullable` or forgettable column (`= ANY` never matches a
+    /// `NULL` key), or one with no `by(..)` column to order by. A virtual
+    /// column cannot carry the flag at all: [`Self::validate_virtual`]
+    /// demands the bare `list_for` form for it.
+    pub fn validate_find_all_for(&self) -> darling::Result<()> {
+        let mut errors = darling::Error::accumulator();
+        for col in self.all.iter().filter(|c| c.find_all_for_enabled()) {
+            let name = col.name();
+            let reason = if col.is_nullable_column() {
+                "an optional or nullable column"
+            } else if col.is_forgettable() {
+                "a forgettable column"
+            } else if col.list_for_by_columns().is_empty() {
+                "a column without `list_for(by(..))`"
+            } else {
+                continue;
+            };
+            errors.push(darling::Error::custom(format!(
+                "column '{name}' sets `find_all_for` but is {reason}; `find_all_for` requires a non-optional physical column with `list_for(by(..))`"
+            )));
+        }
+        errors.finish()
+    }
+
     /// Validates every `virtual = "<sql>"` column: `list_for` must be present
     /// as the bare word (`list_for(by(...))` is rejected — a virtual column
     /// never gets a per-column `list_for_{name}_by_{sort}` fn, so there is no
@@ -749,6 +774,7 @@ impl Column {
                 list_for_opts: Some(ListForOpts {
                     by_columns,
                     is_bare: false,
+                    find_all_for: false,
                 }),
                 ..ColumnOpts::new(ty)
             },
@@ -776,6 +802,7 @@ impl Column {
                 list_for_opts: Some(ListForOpts {
                     by_columns: vec![syn::Ident::new("id", proc_macro2::Span::call_site())],
                     is_bare: true,
+                    find_all_for: false,
                 }),
                 virtual_predicate: Some(predicate.to_string()),
                 ..ColumnOpts::new(syn::parse_quote!(bool))
@@ -794,6 +821,7 @@ impl Column {
                 list_for_opts: Some(ListForOpts {
                     by_columns: vec![syn::Ident::new("id", proc_macro2::Span::call_site())],
                     is_bare: true,
+                    find_all_for: false,
                 }),
                 virtual_predicate: Some(predicate.to_string()),
                 ..ColumnOpts::new(ty)
@@ -1016,17 +1044,9 @@ impl Column {
         self.opts.update_accessor(&self.name)
     }
 
-    /// The expression that reads this column's value off a hydrated entity.
-    ///
-    /// A column persisted on update already declares an entity-side accessor
-    /// for it. A column with `update(persist = false)` declares none, so its
-    /// `create(accessor = ..)` stands in.
-    pub fn entity_key_accessor(&self) -> proc_macro2::TokenStream {
-        if self.opts.persist_on_update() {
-            self.opts.update_accessor(&self.name)
-        } else {
-            self.opts.create_accessor(&self.name)
-        }
+    /// Whether `list_for(.., find_all_for)` asked for the batch lookup.
+    pub fn find_all_for_enabled(&self) -> bool {
+        self.opts.find_all_for()
     }
 
     pub fn parent_accessor(&self) -> proc_macro2::TokenStream {
@@ -1297,6 +1317,10 @@ impl ColumnOpts {
         self.virtual_predicate.is_some()
     }
 
+    fn find_all_for(&self) -> bool {
+        self.list_for_opts.as_ref().is_some_and(|o| o.find_all_for)
+    }
+
     fn list_for_by_columns(&self) -> &[syn::Ident] {
         self.list_for_opts
             .as_ref()
@@ -1391,6 +1415,9 @@ struct ListForOpts {
     /// opposed to `list_for(by(...))`. A virtual filter column requires the
     /// bare form — see [`Columns::validate_virtual`].
     is_bare: bool,
+    /// Set by `list_for(.., find_all_for)`: opts the column into the
+    /// `find_all_for_{col}s` batch lookup.
+    find_all_for: bool,
 }
 
 impl FromMeta for ListForOpts {
@@ -1398,6 +1425,7 @@ impl FromMeta for ListForOpts {
         Ok(ListForOpts {
             by_columns: vec![syn::Ident::new("id", proc_macro2::Span::call_site())],
             is_bare: true,
+            find_all_for: false,
         })
     }
 
@@ -1413,6 +1441,7 @@ impl FromMeta for ListForOpts {
 
     fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
         let mut by_columns = Vec::new();
+        let mut find_all_for = false;
         for item in items {
             match item {
                 darling::ast::NestedMeta::Meta(syn::Meta::List(list))
@@ -1422,16 +1451,23 @@ impl FromMeta for ListForOpts {
                         list.parse_args_with(syn::punctuated::Punctuated::parse_terminated)?;
                     by_columns.extend(inner);
                 }
+                darling::ast::NestedMeta::Meta(syn::Meta::Path(path))
+                    if path.is_ident("find_all_for") =>
+                {
+                    find_all_for = true;
+                }
                 _ => {
-                    return Err(
-                        darling::Error::custom("Expected `by(col1, col2, ...)`").with_span(item)
-                    );
+                    return Err(darling::Error::custom(
+                        "Expected `by(col1, col2, ...)` or `find_all_for`",
+                    )
+                    .with_span(item));
                 }
             }
         }
         Ok(ListForOpts {
             by_columns,
             is_bare: false,
+            find_all_for,
         })
     }
 }
