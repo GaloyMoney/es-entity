@@ -149,7 +149,7 @@ impl ToTokens for FindAllForFn<'_> {
         let for_column_name = self.for_column.name();
         let keys_arg = syn::Ident::new(&self.plural_name(), Span::call_site());
         let key_ty = self.for_column.ty();
-        let key_accessor = self.for_column.find_all_for_key_accessor();
+        let key_accessor = self.for_column.accessor();
 
         let cursor = self.cursor();
         let select_columns = cursor.select_columns(Some(for_column_name));
@@ -500,7 +500,7 @@ mod tests {
                         ty = "UserId",
                         list_for(by(created_at), find_all_for),
                         create(accessor = "owner_id"),
-                        update(accessor = "state")
+                        update(persist = false)
                     )
                 )
             )]
@@ -511,19 +511,18 @@ mod tests {
 
         assert!(tokens.contains("let __key = __entity . user_id . clone ()"));
         assert!(!tokens.contains("__entity . owner_id"));
-        assert!(!tokens.contains("__entity . state"));
     }
 
     #[test]
-    fn accessor_expression_is_evaluated_on_the_entity() {
+    fn update_accessor_is_evaluated_on_the_entity() {
         let tokens = tokens(parse_quote! {
             #[es_repo(
                 entity = "Entry",
                 columns(
                     account_id(
                         ty = "AccountId",
-                        list_for(by(created_at), find_all_for(accessor = "values().account_id")),
-                        update(persist = false)
+                        list_for(by(created_at), find_all_for),
+                        update(persist = false, accessor = "values().account_id")
                     )
                 )
             )]

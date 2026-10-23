@@ -29,7 +29,11 @@ A `list_for` column gets a `find_all_for_<column>s` function only when it opts i
 
 ```rust,ignore
 user_id(ty = "UserId", list_for(by(created_at), find_all_for))
-user_id(ty = "UserId", list_for(by(created_at), find_all_for(accessor = "values().user_id")))
+user_id(
+    ty = "UserId",
+    list_for(by(created_at), find_all_for),
+    update(persist = false, accessor = "values().user_id")
+)
 ```
 
 The flag is an error, naming the column, on:
@@ -55,7 +59,7 @@ A column declared with several `by(..)` columns gets one function, ordered by th
 - **Order.** Inside each `Vec` the entities follow the first `by(..)` column in the given `ListDirection`, with `id` as the tiebreak, the same order `list_for_<column>_by_<by>` would return for that single key.
 - **Soft delete.** Deleted entities are hidden, as in `list_for`. The `_include_deleted` variants return them as well.
 - **Empty slice.** An empty key slice returns an empty map.
-- **Key.** The key of each entity is read from the hydrated entity: `find_all_for(accessor = "<expr>")` evaluates `<expr>` on the entity (for example `values().account_id`), and the bare flag reads a field named after the column. The result is cloned, so the key type must implement `Hash + Eq + Clone`. The `create` and `update` accessors are never used, because they describe the `New*` struct and the persisted columns, not the entity. The slice type must also be usable as a Postgres array bind (`sqlx::postgres::PgHasArrayType`).
+- **Key.** The key of each entity is read from the hydrated entity with the column's `update(accessor = "<expr>")`, the same accessor a `list_by` cursor uses, and it applies even with `update(persist = false)`. Without one, the key is the entity field named after the column. `create(accessor = ..)` is never used, because it reads the `New*` struct, not the entity. The key is cloned, so its type must implement `Hash + Eq + Clone`. The slice type must also be usable as a Postgres array bind (`sqlx::postgres::PgHasArrayType`).
 
 ## Scoped repositories
 
@@ -123,9 +127,9 @@ pub struct UserDocument {
     columns(
         user_id(
             ty = "UserId",
-            list_for(by(created_at), find_all_for(accessor = "owner_id")),
+            list_for(by(created_at), find_all_for),
             create(accessor = "owner_id"),
-            update(persist = false)
+            update(persist = false, accessor = "owner_id")
         )
     )
 )]

@@ -774,7 +774,7 @@ impl Column {
                 list_for_opts: Some(ListForOpts {
                     by_columns,
                     is_bare: false,
-                    find_all_for: None,
+                    find_all_for: false,
                 }),
                 ..ColumnOpts::new(ty)
             },
@@ -802,7 +802,7 @@ impl Column {
                 list_for_opts: Some(ListForOpts {
                     by_columns: vec![syn::Ident::new("id", proc_macro2::Span::call_site())],
                     is_bare: true,
-                    find_all_for: None,
+                    find_all_for: false,
                 }),
                 virtual_predicate: Some(predicate.to_string()),
                 ..ColumnOpts::new(syn::parse_quote!(bool))
@@ -821,7 +821,7 @@ impl Column {
                 list_for_opts: Some(ListForOpts {
                     by_columns: vec![syn::Ident::new("id", proc_macro2::Span::call_site())],
                     is_bare: true,
-                    find_all_for: None,
+                    find_all_for: false,
                 }),
                 virtual_predicate: Some(predicate.to_string()),
                 ..ColumnOpts::new(ty)
@@ -1046,24 +1046,7 @@ impl Column {
 
     /// Whether `list_for(.., find_all_for)` asked for the batch lookup.
     pub fn find_all_for_enabled(&self) -> bool {
-        self.opts.find_all_for().is_some()
-    }
-
-    /// The expression, evaluated on `&Entity`, that reads the key of a
-    /// `find_all_for` column: its `find_all_for(accessor = ..)`, else a field
-    /// named after the column.
-    pub fn find_all_for_key_accessor(&self) -> proc_macro2::TokenStream {
-        match self
-            .opts
-            .find_all_for()
-            .and_then(|opts| opts.accessor.as_ref())
-        {
-            Some(accessor) => quote! { #accessor },
-            None => {
-                let name = &self.name;
-                quote! { #name }
-            }
-        }
+        self.opts.find_all_for()
     }
 
     pub fn parent_accessor(&self) -> proc_macro2::TokenStream {
@@ -1334,10 +1317,8 @@ impl ColumnOpts {
         self.virtual_predicate.is_some()
     }
 
-    fn find_all_for(&self) -> Option<&FindAllForOpts> {
-        self.list_for_opts
-            .as_ref()
-            .and_then(|o| o.find_all_for.as_ref())
+    fn find_all_for(&self) -> bool {
+        self.list_for_opts.as_ref().is_some_and(|o| o.find_all_for)
     }
 
     fn list_for_by_columns(&self) -> &[syn::Ident] {
@@ -1434,32 +1415,9 @@ struct ListForOpts {
     /// opposed to `list_for(by(...))`. A virtual filter column requires the
     /// bare form — see [`Columns::validate_virtual`].
     is_bare: bool,
-    /// Set by `list_for(.., find_all_for)` or `find_all_for(accessor = ..)`.
-    find_all_for: Option<FindAllForOpts>,
-}
-
-/// `find_all_for` inside `list_for(..)`: opts the column into the
-/// `find_all_for_{col}s` batch lookup. Bare, the key is read from a field of
-/// the entity named after the column; `accessor` replaces that field with an
-/// expression evaluated on `&Entity`.
-#[derive(Default, PartialEq, Debug)]
-struct FindAllForOpts {
-    accessor: Option<syn::Expr>,
-}
-
-impl FromMeta for FindAllForOpts {
-    fn from_word() -> darling::Result<Self> {
-        Ok(FindAllForOpts::default())
-    }
-
-    fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
-        #[derive(FromMeta)]
-        struct Raw {
-            accessor: Option<syn::Expr>,
-        }
-        let Raw { accessor } = Raw::from_list(items)?;
-        Ok(FindAllForOpts { accessor })
-    }
+    /// Set by `list_for(.., find_all_for)`: opts the column into the
+    /// `find_all_for_{col}s` batch lookup.
+    find_all_for: bool,
 }
 
 impl FromMeta for ListForOpts {
@@ -1467,7 +1425,7 @@ impl FromMeta for ListForOpts {
         Ok(ListForOpts {
             by_columns: vec![syn::Ident::new("id", proc_macro2::Span::call_site())],
             is_bare: true,
-            find_all_for: None,
+            find_all_for: false,
         })
     }
 
@@ -1483,7 +1441,7 @@ impl FromMeta for ListForOpts {
 
     fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
         let mut by_columns = Vec::new();
-        let mut find_all_for = None;
+        let mut find_all_for = false;
         for item in items {
             match item {
                 darling::ast::NestedMeta::Meta(syn::Meta::List(list))
@@ -1493,8 +1451,10 @@ impl FromMeta for ListForOpts {
                         list.parse_args_with(syn::punctuated::Punctuated::parse_terminated)?;
                     by_columns.extend(inner);
                 }
-                darling::ast::NestedMeta::Meta(meta) if meta.path().is_ident("find_all_for") => {
-                    find_all_for = Some(FindAllForOpts::from_meta(meta)?);
+                darling::ast::NestedMeta::Meta(syn::Meta::Path(path))
+                    if path.is_ident("find_all_for") =>
+                {
+                    find_all_for = true;
                 }
                 _ => {
                     return Err(darling::Error::custom(

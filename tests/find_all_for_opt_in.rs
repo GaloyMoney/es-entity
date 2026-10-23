@@ -163,8 +163,8 @@ pub mod batch {
         columns(
             account_id(
                 ty = "OptInAccountId",
-                list_for(by(created_at), find_all_for(accessor = "values().account_id")),
-                update(persist = false)
+                list_for(by(created_at), find_all_for),
+                update(persist = false, accessor = "values().account_id")
             ),
             visibility(
                 ty = "Visibility",
@@ -180,7 +180,7 @@ pub mod batch {
 }
 
 #[tokio::test]
-async fn flag_with_accessor_reads_the_key_from_the_values_struct() -> anyhow::Result<()> {
+async fn flag_with_update_accessor_reads_the_key_from_the_values_struct() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let repo = batch::BatchEntries { pool };
     let (a, b, c) = (
