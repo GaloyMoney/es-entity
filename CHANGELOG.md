@@ -1,3 +1,15 @@
+# [cala release v0.20.2](https://github.com/GaloyMoney/cala/releases/tag/0.20.2)
+
+
+
+### Bug Fixes
+
+- Make find_all_for opt-in and read its key from the entity (#295)
+
+### Miscellaneous Tasks
+
+- Bump the all-dependencies group across 1 directory with 8 updates (#293)
+
 # [cala release v0.20.1](https://github.com/GaloyMoney/cala/releases/tag/0.20.1)
 
 
