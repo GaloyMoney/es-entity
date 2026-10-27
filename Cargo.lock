@@ -744,7 +744,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "errlanes"
-version = "0.20.3-dev"
+version = "0.20.2"
 dependencies = [
  "composition-consumer",
  "downstream",
@@ -765,7 +765,7 @@ dependencies = [
 
 [[package]]
 name = "errlanes-derive"
-version = "0.20.3-dev"
+version = "0.20.2"
 dependencies = [
  "convert_case",
  "darling 0.24.1",
@@ -791,7 +791,7 @@ dependencies = [
 
 [[package]]
 name = "es-entity"
-version = "0.20.3-dev"
+version = "0.20.2"
 dependencies = [
  "anyhow",
  "async-graphql",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "es-entity-macros"
-version = "0.20.3-dev"
+version = "0.20.2"
 dependencies = [
  "convert_case",
  "darling 0.24.1",
