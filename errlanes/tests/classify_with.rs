@@ -16,7 +16,7 @@ fn fail_fatal<E: Error + Send + Sync + 'static>(e: E) -> Fail<Infallible, Tf> {
 }
 
 fn classify_upstream(u: Upstream) -> Fail<Infallible, Tf> {
-    if u.errors.iter().any(|e| e == "EGeneral:No data") {
+    if u.errors.iter().any(|e| e == "no_data") {
         Fail::Transient(errlanes::Transient::from_error(
             errlanes::TransientKind::UpstreamUnavailable,
             u,
@@ -28,31 +28,28 @@ fn classify_upstream(u: Upstream) -> Fail<Infallible, Tf> {
 
 #[derive(Debug, errlanes::Classify)]
 #[classify(with = classify_upstream, lanes(Transient, Fatal))]
-#[error("Kraken rejected request: {errors:?}")]
+#[error("upstream rejected request: {errors:?}")]
 struct Upstream {
     errors: Vec<String>,
 }
 
 #[test]
-fn kraken_shape_interpolates_named_field_and_classifies_whole_struct() {
+fn named_field_message_interpolates_and_classifier_gets_whole_struct() {
     let u = Upstream {
-        errors: vec!["EGeneral:No data".to_string()],
+        errors: vec!["no_data".to_string()],
     };
-    assert_eq!(
-        u.to_string(),
-        "Kraken rejected request: [\"EGeneral:No data\"]"
-    );
+    assert_eq!(u.to_string(), "upstream rejected request: [\"no_data\"]");
     let fail: Fail<Infallible, Tf> = errlanes::Classify::classify(u);
     let fault: Fault<Tf> = fail.into_fault();
     assert!(fault.is_transient());
     assert!(
         fault
             .message()
-            .contains("Kraken rejected request: [\"EGeneral:No data\"]")
+            .contains("upstream rejected request: [\"no_data\"]")
     );
 
     let fatal = Upstream {
-        errors: vec!["EOrder:Insufficient funds".to_string()],
+        errors: vec!["bad_request".to_string()],
     };
     let fault: Fault<Tf> = errlanes::Classify::classify(fatal).into_fault();
     assert!(fault.is_fatal());
