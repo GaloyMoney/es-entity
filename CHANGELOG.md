@@ -1,3 +1,11 @@
+# [cala release v0.20.3](https://github.com/GaloyMoney/cala/releases/tag/0.20.3)
+
+
+
+### Bug Fixes
+
+- With = .. structs bind fields and emit source() (#298)
+
 # [cala release v0.20.2](https://github.com/GaloyMoney/cala/releases/tag/0.20.2)
 
 
