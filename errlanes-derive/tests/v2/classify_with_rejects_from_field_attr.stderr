@@ -1,0 +1,5 @@
+error: `#[from]` is not supported here; use `from` inside `#[classify(..)]` / `#[rejection(..)]` instead, or `error = manual` to let thiserror own this type
+ --> tests/v2/classify_with_rejects_from_field_attr.rs:7:16
+  |
+7 | struct Wrapped(#[from] std::io::Error);
+  |                ^

@@ -330,14 +330,67 @@ pub(crate) fn from_impl(
     })
 }
 
+type DisplayParts = (TokenStream, Vec<TokenStream>);
+
+fn struct_display(
+    ident: &Ident,
+    generics: &syn::Generics,
+    attrs: &[syn::Attribute],
+    fields: &Fields,
+    from_payload: Option<&Payload>,
+) -> syn::Result<DisplayParts> {
+    std_error::reject_from_field_attr(fields)?;
+    let source = match from_payload {
+        Some(p) => Some({
+            let name = std_error::field_binding(fields, p.index);
+            quote! { #name }
+        }),
+        None => std_error::marked_source(fields, ident)?,
+    };
+    let pat = std_error::bind_pattern(quote! { Self }, fields);
+    let error = std_error::take_error_lit(attrs)?;
+    std_error::emit(
+        ident,
+        generics,
+        DisplayDefault::Name,
+        &[Unit {
+            pat,
+            fields,
+            error,
+            name: ident.clone(),
+            source,
+        }],
+    )
+}
+
+fn unit_display(
+    ident: &Ident,
+    generics: &syn::Generics,
+    attrs: &[syn::Attribute],
+) -> syn::Result<DisplayParts> {
+    let fields = Fields::Unit;
+    let error = std_error::take_error_lit(attrs)?;
+    std_error::emit(
+        ident,
+        generics,
+        DisplayDefault::Name,
+        &[Unit {
+            pat: quote! { _ },
+            fields: &fields,
+            error,
+            name: ident.clone(),
+            source: None,
+        }],
+    )
+}
+
 fn with_impl(
     ident: &Ident,
     generics: &syn::Generics,
     with: &Path,
     lanes: &[Ident],
-    error_manual: bool,
-    attrs: &[syn::Attribute],
     field_types: &[syn::Type],
+    display: impl FnOnce() -> syn::Result<DisplayParts>,
 ) -> syn::Result<TokenStream> {
     if lanes.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -345,7 +398,9 @@ fn with_impl(
             "`with = ..` requires `lanes(..)` naming at least one lane",
         ));
     }
-    let classify_extra = std_error::classify_bounds(generics, field_types);
+    let (display_tokens, display_extra) = display()?;
+    let mut classify_extra = std_error::classify_bounds(generics, field_types);
+    classify_extra.extend(display_extra);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let where_tokens = std_error::merge_where(where_clause, &classify_extra);
     let mut out = quote! {
@@ -358,26 +413,7 @@ fn with_impl(
             }
         }
     };
-    if !error_manual {
-        let fields = Fields::Unit;
-        let error = std_error::take_error_lit(attrs)?;
-        // `fields` is always `Fields::Unit` here, so `emit`'s `extra`
-        // bounds are always empty — a type-level `#[error(..)]` literal
-        // with no fields to bind can never reference a generic parameter.
-        let (display_tokens, _extra) = std_error::emit(
-            ident,
-            generics,
-            DisplayDefault::Name,
-            &[Unit {
-                pat: quote! { _ },
-                fields: &fields,
-                error,
-                name: ident.clone(),
-                source: None,
-            }],
-        )?;
-        out.extend(display_tokens);
-    }
+    out.extend(display_tokens);
     Ok(out)
 }
 
@@ -400,36 +436,31 @@ fn derive_laned_struct(ast: &syn::DeriveInput, data: &syn::DataStruct) -> syn::R
             &ast.generics,
             with,
             &meta.lanes,
-            meta.error_manual,
-            &ast.attrs,
             &std_error::field_types(&data.fields),
+            || {
+                if meta.error_manual {
+                    return Ok(DisplayParts::default());
+                }
+                struct_display(
+                    ident,
+                    &ast.generics,
+                    &ast.attrs,
+                    &data.fields,
+                    from_payload.as_ref(),
+                )
+            },
         )?);
         return Ok(out);
     }
 
     let mut display_extra: Vec<TokenStream> = Vec::new();
     if !meta.error_manual {
-        std_error::reject_from_field_attr(&data.fields)?;
-        let source = match &from_payload {
-            Some(p) => Some({
-                let name = std_error::field_binding(&data.fields, p.index);
-                quote! { #name }
-            }),
-            None => std_error::marked_source(&data.fields, ident)?,
-        };
-        let pat = std_error::bind_pattern(quote! { Self }, &data.fields);
-        let error = std_error::take_error_lit(&ast.attrs)?;
-        let (display_tokens, extra) = std_error::emit(
+        let (display_tokens, extra) = struct_display(
             ident,
             &ast.generics,
-            DisplayDefault::Name,
-            &[Unit {
-                pat,
-                fields: &data.fields,
-                error,
-                name: ident.clone(),
-                source,
-            }],
+            &ast.attrs,
+            &data.fields,
+            from_payload.as_ref(),
         )?;
         out.extend(display_tokens);
         display_extra = extra;
@@ -482,9 +513,13 @@ fn derive_laned_enum(ast: &syn::DeriveInput, data: &syn::DataEnum) -> syn::Resul
             &ast.generics,
             with,
             &type_meta.lanes,
-            type_meta.error_manual,
-            &ast.attrs,
             &field_types,
+            || {
+                if type_meta.error_manual {
+                    return Ok(DisplayParts::default());
+                }
+                unit_display(ident, &ast.generics, &ast.attrs)
+            },
         );
     }
 
