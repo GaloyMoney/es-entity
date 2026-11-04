@@ -635,7 +635,14 @@ macro_rules! __entity_id_graphql_impls {
             }
         }
 
-        $crate::graphql::async_graphql::scalar!($name);
+        $crate::graphql::async_graphql::scalar_internal!(
+            $name,
+            ::std::stringify!($name),
+            ::std::option::Option::None,
+            ::std::option::Option::Some(::std::string::String::from(
+                "https://www.rfc-editor.org/rfc/rfc9562"
+            ))
+        );
     };
 }
 
