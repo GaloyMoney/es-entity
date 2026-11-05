@@ -113,7 +113,12 @@ pub mod graphql {
     #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, Copy)]
     #[serde(transparent)]
     pub struct UUID(crate::prelude::uuid::Uuid);
-    async_graphql::scalar!(UUID);
+    async_graphql::scalar!(
+        UUID,
+        "UUID",
+        "A universally unique identifier.",
+        "https://www.rfc-editor.org/rfc/rfc9562"
+    );
     impl<T: Into<crate::prelude::uuid::Uuid>> From<T> for UUID {
         fn from(id: T) -> Self {
             let uuid = id.into();
