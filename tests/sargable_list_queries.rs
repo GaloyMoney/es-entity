@@ -158,8 +158,8 @@ async fn list_for_filters_matches_reference_for_all_combos() -> anyhow::Result<(
                             if !ret.has_next_page() {
                                 break;
                             }
-                            after = ret.into_end_cursor();
-                            assert!(after.is_some(), "has_next_page without end_cursor");
+                            after = ret.into_next_cursor();
+                            assert!(after.is_some(), "has_next_page without next_cursor");
                         }
                         actual.retain(|id| truth_ids.contains(id));
 
@@ -271,8 +271,8 @@ async fn list_by_score_paginates_through_nulls() -> anyhow::Result<()> {
             if !ret.has_next_page() {
                 break;
             }
-            after = ret.into_end_cursor();
-            assert!(after.is_some(), "has_next_page without end_cursor");
+            after = ret.into_next_cursor();
+            assert!(after.is_some(), "has_next_page without next_cursor");
         }
         actual.retain(|id| truth_ids.contains(id));
 
@@ -320,7 +320,7 @@ async fn list_for_account_id_by_created_at_paginates() -> anyhow::Result<()> {
         if !ret.has_next_page() {
             break;
         }
-        after = ret.into_end_cursor();
+        after = ret.into_next_cursor();
     }
 
     assert_eq!(actual, expected);
