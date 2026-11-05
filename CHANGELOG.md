@@ -1,3 +1,11 @@
+# [cala release v0.20.4](https://github.com/GaloyMoney/cala/releases/tag/0.20.4)
+
+
+
+### Features
+
+- Publish UUID scalar specification metadata (#299)
+
 # [cala release v0.20.3](https://github.com/GaloyMoney/cala/releases/tag/0.20.3)
 
 
