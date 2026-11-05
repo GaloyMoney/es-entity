@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!: ContactId\" FROM ((SELECT id FROM contacts WHERE partner_id = $1 AND COALESCE(status = $2, $2 IS NULL) AND (id > $5) AND ($5 IS NOT NULL) AND ((SELECT COUNT(*) FROM contact_flags f WHERE f.contact_id = contacts.id) >= $3) ORDER BY id ASC LIMIT $4) UNION ALL (SELECT id FROM contacts WHERE partner_id = $1 AND COALESCE(status = $2, $2 IS NULL) AND ($5 IS NULL) AND ((SELECT COUNT(*) FROM contact_flags f WHERE f.contact_id = contacts.id) >= $3) ORDER BY id ASC LIMIT $4) ORDER BY id ASC LIMIT $4) __ids ORDER BY id ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!: ContactId",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8",
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4809d2d9dba142c1db83f92d506252ced54cb1491170f03b6969da72b62d6977"
+}

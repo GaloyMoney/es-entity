@@ -15,6 +15,7 @@ use sqlx::PgPool;
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "Contact",
+    list_ids_for_filters,
     columns(
         partner_id(ty = "PartnerId", scope),
         email(ty = "String"),
@@ -106,7 +107,7 @@ async fn scoped_value_virtual_stays_within_scope() -> anyhow::Result<()> {
         .list_for_filters(
             ContactScope::All,
             ContactFilters {
-                status: Some(unique_status),
+                status: Some(unique_status.clone()),
                 min_flags: Some(1),
             },
             Sort {
@@ -121,6 +122,41 @@ async fn scoped_value_virtual_stays_within_scope() -> anyhow::Result<()> {
         .await?;
     let all_ids: HashSet<_> = all_result.entities().iter().map(|e| e.id).collect();
     assert_eq!(all_ids, HashSet::from([a_flagged.id, b_flagged.id]));
+
+    let scoped_ids = contacts
+        .scoped(partner_a)
+        .list_ids_for_filters_by_id(
+            ContactFilters {
+                status: Some(unique_status.clone()),
+                min_flags: Some(1),
+            },
+            PaginatedQueryArgs {
+                first: 10,
+                after: None,
+            },
+            ListDirection::Ascending,
+        )
+        .await?;
+    assert_eq!(scoped_ids.entities(), &[a_flagged.id]);
+
+    let all_ids = contacts
+        .list_ids_for_filters_by_id(
+            ContactScope::All,
+            ContactFilters {
+                status: Some(unique_status),
+                min_flags: Some(1),
+            },
+            PaginatedQueryArgs {
+                first: 10,
+                after: None,
+            },
+            ListDirection::Ascending,
+        )
+        .await?;
+    assert_eq!(
+        all_ids.entities().iter().copied().collect::<HashSet<_>>(),
+        HashSet::from([a_flagged.id, b_flagged.id])
+    );
 
     Ok(())
 }

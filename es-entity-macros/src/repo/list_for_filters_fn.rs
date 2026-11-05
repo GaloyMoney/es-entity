@@ -183,6 +183,7 @@ fn virtual_trailing(columns: &[&Column], combo: &[VirtualState]) -> Vec<String> 
 }
 
 pub struct FiltersStruct<'a> {
+    list_ids_for_filters: bool,
     columns: Vec<&'a Column>,
     virtual_columns: Vec<&'a Column>,
     entity: &'a syn::Ident,
@@ -195,6 +196,7 @@ impl<'a> FiltersStruct<'a> {
         virtual_columns: Vec<&'a Column>,
     ) -> Self {
         Self {
+            list_ids_for_filters: opts.list_ids_for_filters(),
             entity: opts.entity(),
             columns,
             virtual_columns,
@@ -204,6 +206,7 @@ impl<'a> FiltersStruct<'a> {
     #[cfg(test)]
     fn new_test(entity: &'a syn::Ident, columns: Vec<&'a Column>) -> Self {
         Self {
+            list_ids_for_filters: false,
             entity,
             columns,
             virtual_columns: Vec::new(),
@@ -217,6 +220,7 @@ impl<'a> FiltersStruct<'a> {
         virtual_columns: Vec<&'a Column>,
     ) -> Self {
         Self {
+            list_ids_for_filters: false,
             entity,
             columns,
             virtual_columns,
@@ -452,6 +456,54 @@ impl<'a> ListForFiltersFn<'a> {
                         self.repo.#fn_in_op(op, self.scope, filters, cursor, direction).await
                     }
                 });
+
+                if self.filters_struct.list_ids_for_filters && by_column.is_id() {
+                    let id = self.id;
+                    let fn_name = syn::Ident::new(
+                        &format!(
+                            "list_ids_for_filters_by_{}{}",
+                            by_column.name(),
+                            delete_postfix
+                        ),
+                        Span::call_site(),
+                    );
+                    let fn_in_op = syn::Ident::new(
+                        &format!(
+                            "list_ids_for_filters_by_{}{}_in_op",
+                            by_column.name(),
+                            delete_postfix
+                        ),
+                        Span::call_site(),
+                    );
+                    let standalone = (!self.in_op_only).then(|| {
+                        quote! {
+                            pub async fn #fn_name(
+                                &self,
+                                filters: #filters_ident,
+                                cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
+                                direction: es_entity::ListDirection,
+                            ) -> Result<es_entity::PaginatedQueryRet<#id, #cursor_mod::#cursor_ident>, es_entity::RepoFault> {
+                                self.repo.#fn_name(self.scope, filters, cursor, direction).await
+                            }
+                        }
+                    });
+                    tokens.append_all(quote! {
+                        #standalone
+
+                        pub async fn #fn_in_op #query_fn_generics(
+                            &self,
+                            #query_fn_op_arg,
+                            filters: #filters_ident,
+                            cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
+                            direction: es_entity::ListDirection,
+                        ) -> Result<es_entity::PaginatedQueryRet<#id, #cursor_mod::#cursor_ident>, es_entity::RepoFault>
+                            where
+                                OP: #query_fn_op_traits
+                        {
+                            self.repo.#fn_in_op(op, self.scope, filters, cursor, direction).await
+                        }
+                    });
+                }
             }
 
             let dispatch_fn = syn::Ident::new(
@@ -723,6 +775,19 @@ impl<'a> ListForFiltersFn<'a> {
     }
 
     fn generate_by_fn(&self, by_column: &'a Column, delete: DeleteOption) -> TokenStream {
+        self.generate_by_fn_projection(by_column, delete, false)
+    }
+
+    fn generate_ids_by_fn(&self, by_column: &'a Column, delete: DeleteOption) -> TokenStream {
+        self.generate_by_fn_projection(by_column, delete, true)
+    }
+
+    fn generate_by_fn_projection(
+        &self,
+        by_column: &'a Column,
+        delete: DeleteOption,
+        ids_only: bool,
+    ) -> TokenStream {
         let entity = self.entity;
         let cursor_mod = &self.cursor_mod;
         let query_fn_generics = RepositoryOptions::query_fn_generics();
@@ -743,9 +808,14 @@ impl<'a> ListForFiltersFn<'a> {
         let select_columns = cursor_struct.select_columns(None);
         let cursor_arg_tokens = cursor_struct.query_arg_tokens();
 
+        let fn_prefix = if ids_only {
+            "list_ids_for_filters_by"
+        } else {
+            "list_for_filters_by"
+        };
         let fn_name = syn::Ident::new(
             &format!(
-                "list_for_filters_by_{}{}",
+                "{fn_prefix}_{}{}",
                 by_column_name,
                 delete.include_deletion_fn_postfix()
             ),
@@ -753,12 +823,18 @@ impl<'a> ListForFiltersFn<'a> {
         );
         let fn_in_op = syn::Ident::new(
             &format!(
-                "list_for_filters_by_{}{}_in_op",
+                "{fn_prefix}_{}{}_in_op",
                 by_column_name,
                 delete.include_deletion_fn_postfix()
             ),
             Span::call_site(),
         );
+        let item_type = if ids_only {
+            let id = self.id;
+            quote! { #id }
+        } else {
+            quote! { #entity }
+        };
 
         let filters_ident = self.filters_struct.ident();
 
@@ -917,6 +993,27 @@ impl<'a> ListForFiltersFn<'a> {
                 }
             }
         };
+        let make_fetch = |query: &str, args: &TokenStream, ascending: bool| -> TokenStream {
+            if ids_only {
+                let id = self.id;
+                let direction = if ascending { "ASC" } else { "DESC" };
+                let query = format!(
+                    "SELECT id AS \"id!: {id}\" FROM ({query}) __ids ORDER BY id {direction}"
+                );
+                quote! {{
+                    use es_entity::IntoOneTimeExecutor as _;
+                    let mut ids = sqlx::query_scalar!(#query, #args)
+                        .fetch_all(op.into_executor())
+                        .await?;
+                    let has_next_page = ids.len() > first;
+                    ids.truncate(first);
+                    (ids, has_next_page)
+                }}
+            } else {
+                let es_query_call = make_es_query(query, args);
+                quote! { #es_query_call.fetch_n(op, first).await? }
+            }
+        };
 
         // Specialized variant matrix: one static query per (filter
         // combination x cursor state x direction). Every present filter
@@ -1051,17 +1148,17 @@ impl<'a> ListForFiltersFn<'a> {
                                     &cursor_struct.order_by(ascending),
                                     param_idx,
                                 );
-                                let es_query_call = make_es_query(&query, &args);
+                                let fetch = make_fetch(&query, &args, ascending);
                                 if ascending {
                                     asc_arms.append_all(quote! {
                                         #pattern => {
-                                            #es_query_call.fetch_n(op, first).await?
+                                            #fetch
                                         },
                                     });
                                 } else {
                                     desc_arms.append_all(quote! {
                                         #pattern => {
-                                            #es_query_call.fetch_n(op, first).await?
+                                            #fetch
                                         },
                                     });
                                 }
@@ -1084,42 +1181,36 @@ impl<'a> ListForFiltersFn<'a> {
         // optional columns use — it becomes one static fallback query per
         // virtual state combo, wildcarding the (already COALESCE-based)
         // physical dimension via a `..` rest pattern.
-        let build_fallback_arms = |scope: Option<&ScopeCol>,
-                                   all_specialized: bool|
-         -> (TokenStream, TokenStream) {
-            if all_specialized {
-                return (quote! {}, quote! {});
-            }
-            if bool_virtuals.is_empty() && value_virtuals.is_empty() {
-                let (asc_query, desc_query, args) = build_fallback(scope, &[], &[]);
-                let asc_call = make_es_query(&asc_query, &args);
-                let desc_call = make_es_query(&desc_query, &args);
-                return (
-                    quote! { _ => #asc_call.fetch_n(op, first).await?, },
-                    quote! { _ => #desc_call.fetch_n(op, first).await?, },
-                );
-            }
-            let mut asc_arms = TokenStream::new();
-            let mut desc_arms = TokenStream::new();
-            for virtual_combo in virtual_state_combos(&bool_virtuals) {
-                for value_combo in value_virtual_state_combos(&value_virtuals) {
-                    let (asc_query, desc_query, args) =
-                        build_fallback(scope, &virtual_combo, &value_combo);
-                    let asc_call = make_es_query(&asc_query, &args);
-                    let desc_call = make_es_query(&desc_query, &args);
-                    let virtual_patterns: Vec<TokenStream> =
-                        virtual_combo.iter().map(|s| s.pattern_elem()).collect();
-                    let value_patterns: Vec<TokenStream> =
-                        value_combo.iter().map(|s| s.pattern_elem()).collect();
-                    let pattern = quote! { (.., #(#virtual_patterns,)* #(#value_patterns,)*) };
-                    asc_arms
-                        .append_all(quote! { #pattern => #asc_call.fetch_n(op, first).await?, });
-                    desc_arms
-                        .append_all(quote! { #pattern => #desc_call.fetch_n(op, first).await?, });
+        let build_fallback_arms =
+            |scope: Option<&ScopeCol>, all_specialized: bool| -> (TokenStream, TokenStream) {
+                if all_specialized {
+                    return (quote! {}, quote! {});
                 }
-            }
-            (asc_arms, desc_arms)
-        };
+                if bool_virtuals.is_empty() && value_virtuals.is_empty() {
+                    let (asc_query, desc_query, args) = build_fallback(scope, &[], &[]);
+                    let asc_fetch = make_fetch(&asc_query, &args, true);
+                    let desc_fetch = make_fetch(&desc_query, &args, false);
+                    return (quote! { _ => #asc_fetch, }, quote! { _ => #desc_fetch, });
+                }
+                let mut asc_arms = TokenStream::new();
+                let mut desc_arms = TokenStream::new();
+                for virtual_combo in virtual_state_combos(&bool_virtuals) {
+                    for value_combo in value_virtual_state_combos(&value_virtuals) {
+                        let (asc_query, desc_query, args) =
+                            build_fallback(scope, &virtual_combo, &value_combo);
+                        let asc_fetch = make_fetch(&asc_query, &args, true);
+                        let desc_fetch = make_fetch(&desc_query, &args, false);
+                        let virtual_patterns: Vec<TokenStream> =
+                            virtual_combo.iter().map(|s| s.pattern_elem()).collect();
+                        let value_patterns: Vec<TokenStream> =
+                            value_combo.iter().map(|s| s.pattern_elem()).collect();
+                        let pattern = quote! { (.., #(#virtual_patterns,)* #(#value_patterns,)*) };
+                        asc_arms.append_all(quote! { #pattern => #asc_fetch, });
+                        desc_arms.append_all(quote! { #pattern => #desc_fetch, });
+                    }
+                }
+                (asc_arms, desc_arms)
+            };
         let (asc_fallback_arm, desc_fallback_arm) =
             build_fallback_arms(None, all_combos_specialized);
 
@@ -1169,7 +1260,7 @@ impl<'a> ListForFiltersFn<'a> {
         let (instrument_attr, extract_has_cursor, record_fields, record_results, error_recording) = {
             let entity_name = entity.to_string();
             let repo_name = &self.repo_name_snake;
-            let span_name = format!("{}.list_for_filters_by_{}", repo_name, by_column_name);
+            let span_name = format!("{}.{}_{}", repo_name, fn_prefix, by_column_name);
             (
                 quote! {
                     #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, filters = tracing::field::debug(&filters), first, has_cursor, direction = tracing::field::debug(&direction), count = tracing::field::Empty, has_next_page = tracing::field::Empty, ids = tracing::field::Empty, error = tracing::field::Empty, exception.message = tracing::field::Empty, exception.type = tracing::field::Empty))]
@@ -1181,11 +1272,20 @@ impl<'a> ListForFiltersFn<'a> {
                     tracing::Span::current().record("first", first);
                     tracing::Span::current().record("has_cursor", has_cursor);
                 },
-                quote! {
-                    let result_ids: Vec<_> = entities.iter().map(|e| &e.id).collect();
-                    tracing::Span::current().record("count", result_ids.len());
-                    tracing::Span::current().record("has_next_page", has_next_page);
-                    tracing::Span::current().record("ids", tracing::field::debug(&result_ids));
+                if ids_only {
+                    quote! {
+                        let result_ids: Vec<_> = entities.iter().collect();
+                        tracing::Span::current().record("count", result_ids.len());
+                        tracing::Span::current().record("has_next_page", has_next_page);
+                        tracing::Span::current().record("ids", tracing::field::debug(&result_ids));
+                    }
+                } else {
+                    quote! {
+                        let result_ids: Vec<_> = entities.iter().map(|e| &e.id).collect();
+                        tracing::Span::current().record("count", result_ids.len());
+                        tracing::Span::current().record("has_next_page", has_next_page);
+                        tracing::Span::current().record("ids", tracing::field::debug(&result_ids));
+                    }
                 },
                 quote! {
                     if let Err(ref e) = __result {
@@ -1200,7 +1300,7 @@ impl<'a> ListForFiltersFn<'a> {
         let (instrument_attr, extract_has_cursor, record_fields, record_results, error_recording) =
             (quote! {}, quote! {}, quote! {}, quote! {}, quote! {});
 
-        let post_hydrate_check = if self.post_hydrate_hook {
+        let post_hydrate_check = if self.post_hydrate_hook && !ids_only {
             quote! {
                 for __entity in &entities {
                     self.execute_post_hydrate_hook(__entity)?;
@@ -1218,11 +1318,22 @@ impl<'a> ListForFiltersFn<'a> {
                     filters: #filters_ident,
                     cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                     direction: es_entity::ListDirection,
-                ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, es_entity::RepoFault> {
+                ) -> Result<es_entity::PaginatedQueryRet<#item_type, #cursor_mod::#cursor_ident>, es_entity::RepoFault> {
                     self.#fn_in_op(#query_fn_get_op, #scope_fn_pass filters, cursor, direction).await
                 }
             }
         });
+        let end_cursor = if ids_only {
+            quote! {
+                let end_cursor = entities.last().map(|id| #cursor_mod::#cursor_ident {
+                    id: id.clone(),
+                });
+            }
+        } else {
+            quote! {
+                let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
+            }
+        };
 
         quote! {
             #standalone
@@ -1235,11 +1346,11 @@ impl<'a> ListForFiltersFn<'a> {
                 filters: #filters_ident,
                 cursor: es_entity::PaginatedQueryArgs<#cursor_mod::#cursor_ident>,
                 direction: es_entity::ListDirection,
-            ) -> Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, es_entity::RepoFault>
+            ) -> Result<es_entity::PaginatedQueryRet<#item_type, #cursor_mod::#cursor_ident>, es_entity::RepoFault>
                 where
                     OP: #query_fn_op_traits
             {
-                let __result: Result<es_entity::PaginatedQueryRet<#entity, #cursor_mod::#cursor_ident>, es_entity::RepoFault> = async {
+                let __result: Result<es_entity::PaginatedQueryRet<#item_type, #cursor_mod::#cursor_ident>, es_entity::RepoFault> = async {
                     #scope_convert
                     #extract_has_cursor
                     #destructure_filters
@@ -1251,7 +1362,7 @@ impl<'a> ListForFiltersFn<'a> {
                     #post_hydrate_check
                     #record_results
 
-                    let end_cursor = entities.last().map(#cursor_mod::#cursor_ident::from);
+                    #end_cursor
 
                     Ok(es_entity::PaginatedQueryRet::new(entities, has_next_page, end_cursor, first))
                 }.await;
@@ -1286,6 +1397,11 @@ impl ToTokens for ListForFiltersFn<'_> {
                 .collect();
 
             tokens.append_all(by_fns);
+            if self.filters_struct.list_ids_for_filters {
+                for by_column in self.by_columns.iter().filter(|column| column.is_id()) {
+                    tokens.append_all(self.generate_ids_by_fn(by_column, delete));
+                }
+            }
 
             // Generate dispatch function
             let dispatch_arms = |in_op: bool| -> TokenStream {
