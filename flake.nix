@@ -305,6 +305,8 @@
           pkgs.sqlx-cli
           pkgs.cargo-nextest
           pkgs.coreutils
+          pkgs.findutils
+          pkgs.gnused
           pkgs.gnumake
           rustToolchain
           pkgs.mdbook
