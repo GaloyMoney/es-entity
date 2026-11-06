@@ -90,11 +90,11 @@ pub use with_event_context::*;
 /// async boundaries via the [`WithEventContext`] trait.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ContextData(im::HashMap<Cow<'static, str>, serde_json::Value>);
+pub struct ContextData(imbl::HashMap<Cow<'static, str>, serde_json::Value>);
 
 impl ContextData {
     fn new() -> Self {
-        Self(im::HashMap::new())
+        Self(imbl::HashMap::new())
     }
 
     fn insert(&mut self, key: &'static str, value: serde_json::Value) {
