@@ -2,9 +2,9 @@ error[E0308]: mismatched types
   --> tests/v2/lift_struct_partial_without_fatal.rs:12:5
    |
 11 | fn boundary(result: Result<(), Source>) -> Result<(), Fail<Destination, lanes!()>> {
-   |                                            --------------------------------------- expected `Result<(), errlanes::Fail<Destination, Profile<false, false, false>>>` because of return type
+   |                                            --------------------------------------- expected `Result<(), Fail<Destination, Profile<false, false, false>>>` because of return type
 12 |     result.lift()
    |     ^^^^^^^^^^^^^ expected `false`, found `true`
    |
-   = note: expected enum `Result<(), errlanes::Fail<Destination, Profile<false, false, false>>>`
-              found enum `Result<(), errlanes::Fail<_, Profile<false, false, true>>>`
+   = note: expected enum `Result<(), Fail<Destination, Profile<false, false, false>>>`
+              found enum `Result<(), Fail<_, Profile<false, false, true>>>`

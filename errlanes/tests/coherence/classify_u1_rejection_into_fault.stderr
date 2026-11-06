@@ -4,4 +4,4 @@ error[E0271]: type mismatch resolving `<Validation as IntoLanes>::Rejected == In
 9 |     r?;
   |      ^ expected `Infallible`, found `Validation`
   |
-  = note: required for `errlanes::Fault<Profile<false, true, true>>` to implement `From<Validation>`
+  = note: required for `Fault<Profile<false, true, true>>` to implement `From<Validation>`

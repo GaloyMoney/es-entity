@@ -4,4 +4,4 @@ error[E0271]: type mismatch resolving `<DbWrite as IntoLanes>::Rejected == Infal
 19 |     r?;
    |      ^ expected `Infallible`, found `Constraint`
    |
-   = note: required for `errlanes::Fault<Profile<false, true, true>>` to implement `From<DbWrite>`
+   = note: required for `Fault<Profile<false, true, true>>` to implement `From<DbWrite>`

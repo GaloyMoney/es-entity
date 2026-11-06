@@ -9,7 +9,16 @@ help: the trait `Laned` is not implemented for `NotLaned`
    |
  5 | struct NotLaned;
    | ^^^^^^^^^^^^^^^
-   = help: the following other types implement trait `Laned`:
-             errlanes::Fail<D, L>
-             errlanes::Fault<L>
+help: the following other types implement trait `Laned`
+  --> $WORKSPACE/errlanes/src/fail.rs
+   |
+   | / impl<D: Rejection, L: LaneProfile> Laned for Fail<D, L>
+   | | where
+   | |     L::Transient: NarrowTransient<L::Fatal>,
+   | |____________________________________________^ `Fail<D, L>`
+...
+   | / impl<L: LaneProfile> Laned for Fault<L>
+   | | where
+   | |     L::Transient: NarrowTransient<L::Fatal>,
+   | |____________________________________________^ `Fault<L>`
    = note: this error originates in the attribute macro `errlanes::instrument` (in Nightly builds, run with -Z macro-backtrace for more info)

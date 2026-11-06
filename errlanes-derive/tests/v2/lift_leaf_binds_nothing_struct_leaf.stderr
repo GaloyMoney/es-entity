@@ -1,4 +1,4 @@
-error[E0423]: expected value, found struct `Leaf`
+error[E0423]: cannot find value `Leaf` in this scope
   --> tests/v2/lift_leaf_binds_nothing_struct_leaf.rs:13:10
    |
  5 | / struct Leaf {
@@ -8,3 +8,5 @@ error[E0423]: expected value, found struct `Leaf`
 ...
 13 |       Gone(Leaf),
    |            ^^^^ help: use struct literal syntax instead: `Leaf { code: val }`
+   |
+   = note: a struct named `Leaf` exists in another namespace

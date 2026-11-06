@@ -9,9 +9,14 @@ help: the trait `id_source::sealed::Sealed` is not implemented for `Mine`
   |
 3 | pub struct Mine;
   | ^^^^^^^^^^^^^^^
-  = help: the following other types implement trait `id_source::sealed::Sealed`:
-            FromCaller
-            FromRepo
+help: the following other types implement trait `id_source::sealed::Sealed`
+ --> src/id_source.rs
+  |
+  | impl sealed::Sealed for FromRepo {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `FromRepo`
+...
+  | impl sealed::Sealed for FromCaller {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `FromCaller`
 note: required by a bound in `es_entity::IdSource`
  --> src/id_source.rs
   |

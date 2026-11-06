@@ -1,12 +1,18 @@
-error[E0277]: `?` couldn't convert the error: `errlanes::kind::Fail: IntoFail` is not satisfied
+error[E0277]: `?` couldn't convert the error: `errlanes::kind::Fail: errlanes::kind::IntoFail` is not satisfied
   --> tests/coherence/negative/fail_rejection_change_question_mark.rs:14:10
    |
 13 | fn outer(inner: Result<(), Fail<Child, lanes!(Fatal)>>) -> Result<(), Fail<Parent, lanes!(Fatal)>> {
-   |                                                            --------------------------------------- required `errlanes::kind::Fail: IntoFail` because of this
+   |                                                            --------------------------------------- required `errlanes::kind::Fail: errlanes::kind::IntoFail` because of this
 14 |     inner?;
-   |     -----^ the trait `IntoFail` is not implemented for `errlanes::kind::Fail`
+   |     -----^ the trait `errlanes::kind::IntoFail` is not implemented for `errlanes::kind::Fail`
    |     |
-   |     this can't be annotated with `?` because it has type `Result<_, errlanes::Fail<Child, Profile<false, false, true>>>`
+   |     this can't be annotated with `?` because it has type `Result<_, Fail<Child, Profile<false, false, true>>>`
    |
    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
-   = note: required for `errlanes::Fail<Parent, Profile<false, false, true>>` to implement `From<errlanes::Fail<Child, Profile<false, false, true>>>`
+help: item with same name found
+  --> src/fail.rs
+   |
+   | pub enum Fail<D, L: LaneProfile = AllLanes> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: there are multiple different versions of crate `errlanes` in the dependency graph
+   = note: required for `Fail<Parent, Profile<false, false, true>>` to implement `From<Fail<Child, Profile<false, false, true>>>`

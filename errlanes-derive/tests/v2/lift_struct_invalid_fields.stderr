@@ -26,12 +26,12 @@ error[E0277]: the trait bound `String: From<u32>` is not satisfied
 15 | #[derive(errlanes::Lift)]
    |          ^^^^^^^^^^^^^^ the trait `From<u32>` is not implemented for `String`
    |
-   = help: the following other types implement trait `From<T>`:
-             `String` implements `From<&String>`
-             `String` implements `From<&mut str>`
-             `String` implements `From<&str>`
-             `String` implements `From<Box<str>>`
-             `String` implements `From<Cow<'_, str>>`
-             `String` implements `From<char>`
+   = help: `String` implements trait `From<T>`:
+             From<&String>
+             From<&mut str>
+             From<&str>
+             From<Box<str>>
+             From<Cow<'_, str>>
+             From<char>
    = note: required for `u32` to implement `Into<String>`
    = note: this error originates in the derive macro `errlanes::Lift` (in Nightly builds, run with -Z macro-backtrace for more info)

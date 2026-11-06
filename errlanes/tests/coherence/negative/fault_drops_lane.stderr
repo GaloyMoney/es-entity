@@ -1,15 +1,21 @@
-error[E0277]: `?` couldn't convert the error: `errlanes::kind::Fault: IntoFault` is not satisfied
+error[E0277]: `?` couldn't convert the error: `errlanes::kind::Fault: errlanes::kind::IntoFault` is not satisfied
  --> tests/coherence/negative/fault_drops_lane.rs:5:10
   |
 4 | fn outer(inner: Result<(), Fault<lanes!(Denied, Fatal)>>) -> Result<(), Fault<lanes!(Fatal)>> {
-  |                                                              -------------------------------- required `errlanes::kind::Fault: IntoFault` because of this
+  |                                                              -------------------------------- required `errlanes::kind::Fault: errlanes::kind::IntoFault` because of this
 5 |     inner?;
-  |     -----^ the trait `IntoFault` is not implemented for `errlanes::kind::Fault`
+  |     -----^ the trait `errlanes::kind::IntoFault` is not implemented for `errlanes::kind::Fault`
   |     |
-  |     this can't be annotated with `?` because it has type `Result<_, errlanes::Fault<Profile<true, false, true>>>`
+  |     this can't be annotated with `?` because it has type `Result<_, Fault<Profile<true, false, true>>>`
   |
   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
-  = note: required for `errlanes::Fault<Profile<false, false, true>>` to implement `From<errlanes::Fault<Profile<true, false, true>>>`
+help: item with same name found
+ --> src/fail.rs
+  |
+  | pub enum Fault<L: LaneProfile = AllLanes> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: there are multiple different versions of crate `errlanes` in the dependency graph
+  = note: required for `Fault<Profile<false, false, true>>` to implement `From<Fault<Profile<true, false, true>>>`
 
 error[E0277]: `?` couldn't convert the error to `Infallible`
  --> tests/coherence/negative/fault_drops_lane.rs:5:10
@@ -19,11 +25,18 @@ error[E0277]: `?` couldn't convert the error to `Infallible`
 5 |     inner?;
   |     -----^ the trait `From<errlanes::Denied>` is not implemented for `Infallible`
   |     |
-  |     this can't be annotated with `?` because it has type `Result<_, errlanes::Fault<Profile<true, false, true>>>`
+  |     this can't be annotated with `?` because it has type `Result<_, Fault<Profile<true, false, true>>>`
   |
   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
-  = help: the following other types implement trait `From<T>`:
-            `Infallible` implements `From<!>`
-            `Infallible` implements `From<AlignmentError<Src, Dst>>`
+help: `Infallible` implements trait `From<T>`
+ --> $RUST/core/src/convert/mod.rs
+  |
+  | const impl From<!> for Infallible {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<!>`
+  |
+ ::: $CARGO/zerocopy-$VERSION/src/error.rs
+  |
+  | impl<Src, Dst: ?Sized + Unaligned> From<AlignmentError<Src, Dst>> for Infallible {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<AlignmentError<Src, Dst>>`
   = note: required for `errlanes::Denied` to implement `Into<Infallible>`
-  = note: required for `errlanes::Fault<Profile<false, false, true>>` to implement `From<errlanes::Fault<Profile<true, false, true>>>`
+  = note: required for `Fault<Profile<false, false, true>>` to implement `From<Fault<Profile<true, false, true>>>`

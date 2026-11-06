@@ -4,10 +4,14 @@ error[E0277]: the trait bound `Infallible: From<errlanes::Denied>` is not satisf
 8 | fn main() { let _: Fail<Child, lanes!(Fatal)> = Denied::default().into(); }
   |                                                                   ^^^^ the trait `From<errlanes::Denied>` is not implemented for `Infallible`
   |
-  = help: the trait `From<errlanes::Denied>` is not implemented for `Infallible`
-          but trait `From<!>` is implemented for it
+help: the trait `From<errlanes::Denied>` is not implemented for `Infallible`
+      but trait `From<!>` is implemented for it
+ --> $RUST/core/src/convert/mod.rs
+  |
+  | const impl From<!> for Infallible {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   = help: for that trait implementation, expected `!`, found `errlanes::Denied`
   = note: required for `errlanes::Denied` to implement `Into<Infallible>`
-  = note: required for `errlanes::Fail<Child, Profile<false, false, true>>` to implement `From<errlanes::Denied>`
+  = note: required for `Fail<Child, Profile<false, false, true>>` to implement `From<errlanes::Denied>`
   = note: 1 redundant requirement hidden
-  = note: required for `errlanes::Denied` to implement `Into<errlanes::Fail<Child, Profile<false, false, true>>>`
+  = note: required for `errlanes::Denied` to implement `Into<Fail<Child, Profile<false, false, true>>>`
