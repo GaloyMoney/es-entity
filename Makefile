@@ -32,15 +32,13 @@ setup-db:
 reset-deps: clean-deps start-deps
 
 test-book:
-	cargo build --profile mdbook-test --features mdbook-test --lib
-	CARGO_MANIFEST_DIR=$(shell pwd) mdbook test book -L $${CARGO_TARGET_DIR:-./target}/mdbook-test,$${CARGO_TARGET_DIR:-./target}/mdbook-test/deps
+	./ci/test-book.sh
 
 serve-book:
 	mdbook serve book --open
 
 test-chapter:
-	cargo build --profile mdbook-test --features mdbook-test --lib
-	CARGO_MANIFEST_DIR=$(shell pwd) mdbook test book -L ./target/mdbook-test,./target/mdbook-test/deps --chapter "$(CHAPTER)"
+	./ci/test-book.sh --chapter "$(CHAPTER)"
 
 check-code:
 	nix flake check

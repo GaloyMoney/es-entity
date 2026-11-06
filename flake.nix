@@ -359,9 +359,7 @@
         ${setupDbDev}/bin/setup-db-dev
 
         echo "Running mdbook tests..."
-        rm -rf ''${CARGO_TARGET_DIR:-./target}/mdbook-test
-        cargo build --profile mdbook-test --features mdbook-test --lib
-        CARGO_MANIFEST_DIR=$(pwd) mdbook test book -L ''${CARGO_TARGET_DIR:-./target}/mdbook-test,''${CARGO_TARGET_DIR:-./target}/mdbook-test/deps
+        ./ci/test-book.sh
 
         echo "Running nextest..."
         cargo nextest run --workspace --features errlanes/classify-reqwest --verbose
