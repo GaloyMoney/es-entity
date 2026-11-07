@@ -9,8 +9,15 @@ error[E0277]: `?` couldn't convert the error to `Infallible`
   |     this can't be annotated with `?` because it has type `Result<_, errlanes::Denied>`
   |
   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
-  = help: the following other types implement trait `From<T>`:
-            `Infallible` implements `From<!>`
-            `Infallible` implements `From<AlignmentError<Src, Dst>>`
+help: `Infallible` implements trait `From<T>`
+ --> $RUST/core/src/convert/mod.rs
+  |
+  | const impl From<!> for Infallible {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<!>`
+  |
+ ::: $CARGO/zerocopy-$VERSION/src/error.rs
+  |
+  | impl<Src, Dst: ?Sized + Unaligned> From<AlignmentError<Src, Dst>> for Infallible {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<AlignmentError<Src, Dst>>`
   = note: required for `errlanes::Denied` to implement `Into<Infallible>`
-  = note: required for `errlanes::Fault<Profile<false, true, true>>` to implement `From<errlanes::Denied>`
+  = note: required for `Fault<Profile<false, true, true>>` to implement `From<errlanes::Denied>`

@@ -4,8 +4,8 @@ error[E0271]: type mismatch resolving `<Profile<false, true, true> as LaneProfil
 5 |     let _ = r.narrow_denied();
   |               ^^^^^^^^^^^^^ expected `Denied`, found `Infallible`
   |
-  = note: required for `errlanes::Fault<Profile<false, true, true>>` to implement `NarrowDeniedLane`
-note: required by a bound in `errlanes::ResultExt::narrow_denied`
+  = note: required for `Fault<Profile<false, true, true>>` to implement `errlanes::NarrowDeniedLane`
+note: required by a bound in `narrow_denied`
  --> src/result_ext.rs
   |
   |     fn narrow_denied(self) -> Result<T, E::Narrowed>

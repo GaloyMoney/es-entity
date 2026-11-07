@@ -96,7 +96,7 @@ where
             return Ok(None);
         }
 
-        EntityEvents::load_first(rows.into_iter()).map_err(Into::into)
+        EntityEvents::load_first(rows).map_err(Into::into)
     }
 
     async fn fetch_n_inner(
@@ -106,7 +106,7 @@ where
     ) -> Result<(Vec<<Repo as EsRepo>::Entity>, bool), crate::RepoFault> {
         let executor = op.into_executor();
         let rows = executor.fetch_all(self.inner).await?;
-        EntityEvents::load_n(rows.into_iter(), first).map_err(Into::into)
+        EntityEvents::load_n(rows, first).map_err(Into::into)
     }
 
     async fn fetch_tree_rows(
