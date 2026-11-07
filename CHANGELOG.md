@@ -1,3 +1,12 @@
+# [cala release v0.20.5](https://github.com/GaloyMoney/cala/releases/tag/0.20.5)
+
+
+
+### Miscellaneous Tasks
+
+- Update flake inputs (#302)
+- Replace im with imbl (#301)
+
 # [cala release v0.20.4](https://github.com/GaloyMoney/cala/releases/tag/0.20.4)
 
 
