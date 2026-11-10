@@ -15,6 +15,9 @@ use super::options::*;
 pub struct CreateAllFn<'a> {
     in_op_only: bool,
     entity: &'a syn::Ident,
+    /// `RepositoryOptions::create_can_reject`: the error is
+    /// `RepoWriteError<{Entity}ConstraintViolation>`.
+    can_reject: bool,
     /// The generated signatures' error type, see
     /// `RepositoryOptions::create_error_ty`.
     write_error_ty: TokenStream,
@@ -26,6 +29,7 @@ impl<'a> From<&'a RepositoryOptions> for CreateAllFn<'a> {
     fn from(opts: &'a RepositoryOptions) -> Self {
         Self {
             write_error_ty: opts.create_error_ty(),
+            can_reject: opts.create_can_reject(),
             in_op_only: opts.in_op_only(),
             entity: opts.entity(),
             #[cfg(feature = "instrument")]
@@ -38,6 +42,16 @@ impl ToTokens for CreateAllFn<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let entity = self.entity;
         let write_error_ty = &self.write_error_ty;
+        // Rejections carry no attempted values, as from the Postgres batch
+        // statement (see `__without_attempted`).
+        let clear_attempted = self.can_reject.then(|| {
+            quote! {
+                .map_rejected(|r| r.__without_attempted())
+            }
+        });
+        let rejection_import = self
+            .can_reject
+            .then(|| quote! { use es_entity::errlanes::ResultExt as _; });
 
         #[cfg(feature = "instrument")]
         let (instrument_attr, error_recording) = {
@@ -87,6 +101,7 @@ impl ToTokens for CreateAllFn<'_> {
                 OP: es_entity::AtomicOperation + ?Sized
             {
                 let __result: Result<Vec<#entity>, #write_error_ty> = async {
+                    #rejection_import
                     let mut entities = Vec::with_capacity(new_entities.len());
                     if new_entities.is_empty() {
                         return Ok(entities);
@@ -99,7 +114,7 @@ impl ToTokens for CreateAllFn<'_> {
                             Ok(entity) => entities.push(entity),
                             Err(e) => {
                                 __savepoint.rollback().await?;
-                                return Err(e);
+                                return Err(e) #clear_attempted;
                             }
                         }
                     }

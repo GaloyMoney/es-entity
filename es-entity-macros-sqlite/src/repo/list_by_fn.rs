@@ -51,8 +51,10 @@ pub fn assemble_union_select(
             }
             conditions.push(format!("({gate})"));
             conditions.extend(trailing.iter().cloned());
+            // SQLite: a compound member may not be parenthesised nor carry
+            // its own ORDER BY / LIMIT, so each branch is a derived table.
             format!(
-                "(SELECT {select_columns} FROM {table_name} WHERE {} ORDER BY {order_by} LIMIT ${limit_param_idx})",
+                "SELECT * FROM (SELECT {select_columns} FROM {table_name} WHERE {} ORDER BY {order_by} LIMIT ${limit_param_idx})",
                 conditions.join(" AND "),
             )
         })
@@ -854,7 +856,7 @@ mod tests {
                         es_entity::ListDirection::Ascending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "(SELECT id FROM entities WHERE (id > $2) AND ($2 IS NOT NULL) AND deleted = FALSE ORDER BY id ASC LIMIT $1) UNION ALL (SELECT id FROM entities WHERE ($2 IS NULL) AND deleted = FALSE ORDER BY id ASC LIMIT $1) ORDER BY id ASC LIMIT $1",
+                                "SELECT * FROM (SELECT id FROM entities WHERE (id > $2) AND ($2 IS NOT NULL) AND deleted = FALSE ORDER BY id ASC LIMIT $1) UNION ALL SELECT * FROM (SELECT id FROM entities WHERE ($2 IS NULL) AND deleted = FALSE ORDER BY id ASC LIMIT $1) ORDER BY id ASC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                             )
@@ -864,7 +866,7 @@ mod tests {
                         es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "(SELECT id FROM entities WHERE (id < $2) AND ($2 IS NOT NULL) AND deleted = FALSE ORDER BY id DESC LIMIT $1) UNION ALL (SELECT id FROM entities WHERE ($2 IS NULL) AND deleted = FALSE ORDER BY id DESC LIMIT $1) ORDER BY id DESC LIMIT $1",
+                                "SELECT * FROM (SELECT id FROM entities WHERE (id < $2) AND ($2 IS NOT NULL) AND deleted = FALSE ORDER BY id DESC LIMIT $1) UNION ALL SELECT * FROM (SELECT id FROM entities WHERE ($2 IS NULL) AND deleted = FALSE ORDER BY id DESC LIMIT $1) ORDER BY id DESC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                             )
@@ -975,7 +977,7 @@ mod tests {
                         es_entity::ListDirection::Ascending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "(SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) AND ($2 IS NOT NULL) ORDER BY name ASC, id ASC LIMIT $1) UNION ALL (SELECT name, id FROM entities WHERE ($2 IS NULL) ORDER BY name ASC, id ASC LIMIT $1) ORDER BY name ASC, id ASC LIMIT $1",
+                                "SELECT * FROM (SELECT name, id FROM entities WHERE ((name, id) > ($3, $2)) AND ($2 IS NOT NULL) ORDER BY name ASC, id ASC LIMIT $1) UNION ALL SELECT * FROM (SELECT name, id FROM entities WHERE ($2 IS NULL) ORDER BY name ASC, id ASC LIMIT $1) ORDER BY name ASC, id ASC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                                 name as Option<String>,
@@ -986,7 +988,7 @@ mod tests {
                         es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "(SELECT name, id FROM entities WHERE ((name, id) < ($3, $2)) AND ($2 IS NOT NULL) ORDER BY name DESC, id DESC LIMIT $1) UNION ALL (SELECT name, id FROM entities WHERE ($2 IS NULL) ORDER BY name DESC, id DESC LIMIT $1) ORDER BY name DESC, id DESC LIMIT $1",
+                                "SELECT * FROM (SELECT name, id FROM entities WHERE ((name, id) < ($3, $2)) AND ($2 IS NOT NULL) ORDER BY name DESC, id DESC LIMIT $1) UNION ALL SELECT * FROM (SELECT name, id FROM entities WHERE ($2 IS NULL) ORDER BY name DESC, id DESC LIMIT $1) ORDER BY name DESC, id DESC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                                 name as Option<String>,
@@ -1067,7 +1069,7 @@ mod tests {
                         es_entity::ListDirection::Ascending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "(SELECT value, id FROM entities WHERE ((value, id) > ($3, $2)) AND ($2 IS NOT NULL AND $3 IS NOT NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ((value IS NOT NULL OR id > $2)) AND ($2 IS NOT NULL AND $3 IS NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ($2 IS NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
+                                "SELECT * FROM (SELECT value, id FROM entities WHERE ((value, id) > ($3, $2)) AND ($2 IS NOT NULL AND $3 IS NOT NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) UNION ALL SELECT * FROM (SELECT value, id FROM entities WHERE ((value IS NOT NULL OR id > $2)) AND ($2 IS NOT NULL AND $3 IS NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) UNION ALL SELECT * FROM (SELECT value, id FROM entities WHERE ($2 IS NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                                 value as Option<rust_decimal::Decimal>,
@@ -1078,7 +1080,7 @@ mod tests {
                         es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "(SELECT value, id FROM entities WHERE ((value IS NULL OR (value, id) < ($3, $2))) AND ($2 IS NOT NULL AND $3 IS NOT NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ((value IS NULL AND id < $2)) AND ($2 IS NOT NULL AND $3 IS NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ($2 IS NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
+                                "SELECT * FROM (SELECT value, id FROM entities WHERE ((value IS NULL OR (value, id) < ($3, $2))) AND ($2 IS NOT NULL AND $3 IS NOT NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) UNION ALL SELECT * FROM (SELECT value, id FROM entities WHERE ((value IS NULL AND id < $2)) AND ($2 IS NOT NULL AND $3 IS NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) UNION ALL SELECT * FROM (SELECT value, id FROM entities WHERE ($2 IS NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                                 value as Option<rust_decimal::Decimal>,
@@ -1178,7 +1180,7 @@ mod tests {
                         es_entity::ListDirection::Ascending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "(SELECT value, id FROM entities WHERE ((value, id) > ($3, $2)) AND ($2 IS NOT NULL AND $3 IS NOT NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ((value IS NOT NULL OR id > $2)) AND ($2 IS NOT NULL AND $3 IS NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ($2 IS NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
+                                "SELECT * FROM (SELECT value, id FROM entities WHERE ((value, id) > ($3, $2)) AND ($2 IS NOT NULL AND $3 IS NOT NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) UNION ALL SELECT * FROM (SELECT value, id FROM entities WHERE ((value IS NOT NULL OR id > $2)) AND ($2 IS NOT NULL AND $3 IS NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) UNION ALL SELECT * FROM (SELECT value, id FROM entities WHERE ($2 IS NULL) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1) ORDER BY value ASC NULLS FIRST, id ASC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                                 value as Option<DomainEnum>,
@@ -1189,7 +1191,7 @@ mod tests {
                         es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "(SELECT value, id FROM entities WHERE ((value IS NULL OR (value, id) < ($3, $2))) AND ($2 IS NOT NULL AND $3 IS NOT NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ((value IS NULL AND id < $2)) AND ($2 IS NOT NULL AND $3 IS NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) UNION ALL (SELECT value, id FROM entities WHERE ($2 IS NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
+                                "SELECT * FROM (SELECT value, id FROM entities WHERE ((value IS NULL OR (value, id) < ($3, $2))) AND ($2 IS NOT NULL AND $3 IS NOT NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) UNION ALL SELECT * FROM (SELECT value, id FROM entities WHERE ((value IS NULL AND id < $2)) AND ($2 IS NOT NULL AND $3 IS NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) UNION ALL SELECT * FROM (SELECT value, id FROM entities WHERE ($2 IS NULL) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1) ORDER BY value DESC NULLS LAST, id DESC LIMIT $1",
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
                                 value as Option<DomainEnum>,

@@ -489,7 +489,7 @@ mod tests {
                         es_entity::ListDirection::Ascending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "(SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND (id > $3) AND ($3 IS NOT NULL) ORDER BY id ASC LIMIT $2) UNION ALL (SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND ($3 IS NULL) ORDER BY id ASC LIMIT $2) ORDER BY id ASC LIMIT $2",
+                                "SELECT * FROM (SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND (id > $3) AND ($3 IS NOT NULL) ORDER BY id ASC LIMIT $2) UNION ALL SELECT * FROM (SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND ($3 IS NULL) ORDER BY id ASC LIMIT $2) ORDER BY id ASC LIMIT $2",
                                 filter_customer_id as &Uuid,
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
@@ -500,7 +500,7 @@ mod tests {
                         es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "(SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND (id < $3) AND ($3 IS NOT NULL) ORDER BY id DESC LIMIT $2) UNION ALL (SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND ($3 IS NULL) ORDER BY id DESC LIMIT $2) ORDER BY id DESC LIMIT $2",
+                                "SELECT * FROM (SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND (id < $3) AND ($3 IS NOT NULL) ORDER BY id DESC LIMIT $2) UNION ALL SELECT * FROM (SELECT customer_id, id FROM entities WHERE (customer_id = $1) AND ($3 IS NULL) ORDER BY id DESC LIMIT $2) ORDER BY id DESC LIMIT $2",
                                 filter_customer_id as &Uuid,
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
@@ -584,7 +584,7 @@ mod tests {
                         es_entity::ListDirection::Ascending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "(SELECT email, id FROM entities WHERE (email = $1) AND ((email, id) > ($4, $3)) AND ($3 IS NOT NULL) ORDER BY email ASC, id ASC LIMIT $2) UNION ALL (SELECT email, id FROM entities WHERE (email = $1) AND ($3 IS NULL) ORDER BY email ASC, id ASC LIMIT $2) ORDER BY email ASC, id ASC LIMIT $2",
+                                "SELECT * FROM (SELECT email, id FROM entities WHERE (email = $1) AND ((email, id) > ($4, $3)) AND ($3 IS NOT NULL) ORDER BY email ASC, id ASC LIMIT $2) UNION ALL SELECT * FROM (SELECT email, id FROM entities WHERE (email = $1) AND ($3 IS NULL) ORDER BY email ASC, id ASC LIMIT $2) ORDER BY email ASC, id ASC LIMIT $2",
                                 filter_email as &str,
                                 (first + 1) as i64,
                                 id as Option<EntityId>,
@@ -596,7 +596,7 @@ mod tests {
                         es_entity::ListDirection::Descending => {
                             es_entity::es_query!(
                                 entity = Entity,
-                                "(SELECT email, id FROM entities WHERE (email = $1) AND ((email, id) < ($4, $3)) AND ($3 IS NOT NULL) ORDER BY email DESC, id DESC LIMIT $2) UNION ALL (SELECT email, id FROM entities WHERE (email = $1) AND ($3 IS NULL) ORDER BY email DESC, id DESC LIMIT $2) ORDER BY email DESC, id DESC LIMIT $2",
+                                "SELECT * FROM (SELECT email, id FROM entities WHERE (email = $1) AND ((email, id) < ($4, $3)) AND ($3 IS NOT NULL) ORDER BY email DESC, id DESC LIMIT $2) UNION ALL SELECT * FROM (SELECT email, id FROM entities WHERE (email = $1) AND ($3 IS NULL) ORDER BY email DESC, id DESC LIMIT $2) ORDER BY email DESC, id DESC LIMIT $2",
                                 filter_email as &str,
                                 (first + 1) as i64,
                                 id as Option<EntityId>,

@@ -16,7 +16,6 @@ mod list_for_filters_fn;
 mod list_for_fn;
 mod nested;
 mod options;
-mod persist_events_batch_fn;
 mod persist_events_fn;
 mod post_hydrate_hook;
 mod post_persist_hook;
@@ -53,7 +52,6 @@ pub struct EsRepo<'a> {
     error_classifier: error_classifier::ErrorClassifier<'a>,
     classify_conflict_fn: Option<TokenStream>,
     persist_events_fn: Option<persist_events_fn::PersistEventsFn<'a>>,
-    persist_events_batch_fn: Option<persist_events_batch_fn::PersistEventsBatchFn<'a>>,
     update_fn: update_fn::UpdateFn<'a>,
     update_all_fn: update_all_fn::UpdateAllFn<'a>,
     create_fn: create_fn::CreateFn<'a>,
@@ -132,11 +130,14 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
         // with no forgettable index columns; `persist_events_batch` for
         // column-less bulk updates. `extract_concurrent_modification` outlives
         // both — the follow-up forgettable payload inserts still use it.
-        let needs_persist_events = !opts.columns.updates_needed()
-            || (opts.forgettable_enabled() && opts.columns.forgettable_column_names().is_empty());
-        let needs_persist_events_batch = !opts.columns.updates_needed();
-        let classify_conflict_fn = (!opts.columns.updates_needed() || opts.forgettable_enabled())
-            .then(error_classifier::classify_conflict_fn);
+        //
+        // SQLite: every write path persists its events through
+        // `persist_events` (and `update` classifies through
+        // `classify_conflict`), so both are always emitted; batches go
+        // through the single-entity paths, so `persist_events_batch` has no
+        // caller and is not generated.
+        let needs_persist_events = true;
+        let classify_conflict_fn = Some(error_classifier::classify_conflict_fn());
 
         Self {
             repo: &opts.ident,
@@ -145,8 +146,6 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             classify_conflict_fn,
             persist_events_fn: needs_persist_events
                 .then(|| persist_events_fn::PersistEventsFn::from(opts)),
-            persist_events_batch_fn: needs_persist_events_batch
-                .then(|| persist_events_batch_fn::PersistEventsBatchFn::from(opts)),
             update_fn: update_fn::UpdateFn::from(opts),
             update_all_fn: update_all_fn::UpdateAllFn::from(opts),
             create_fn: create_fn::CreateFn::from(opts),
@@ -180,7 +179,6 @@ impl ToTokens for EsRepo<'_> {
         let error_classifier = &self.error_classifier;
         let classify_conflict_fn = &self.classify_conflict_fn;
         let persist_events_fn = &self.persist_events_fn;
-        let persist_events_batch_fn = &self.persist_events_batch_fn;
         let update_fn = &self.update_fn;
         let update_all_fn = &self.update_all_fn;
         let create_fn = &self.create_fn;
@@ -440,7 +438,6 @@ impl ToTokens for EsRepo<'_> {
                 #post_persist_hook
                 #classify_conflict_fn
                 #persist_events_fn
-                #persist_events_batch_fn
                 #create_fn
                 #create_all_fn
                 #update_fn

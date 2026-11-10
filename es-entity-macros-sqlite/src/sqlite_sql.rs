@@ -108,8 +108,7 @@ fn starts_word(chars: &[char], i: usize) -> bool {
 /// the number of input chars consumed.
 fn keyword_at(chars: &[char], i: usize, kw: &str) -> Option<usize> {
     let mut j = i;
-    let mut kw_chars = kw.chars().peekable();
-    while let Some(k) = kw_chars.next() {
+    for k in kw.chars() {
         if k == ' ' {
             if !chars.get(j).is_some_and(|c| c.is_whitespace()) {
                 return None;

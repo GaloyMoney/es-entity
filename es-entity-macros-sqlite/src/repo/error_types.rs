@@ -213,6 +213,7 @@ impl<'a> ErrorTypes<'a> {
         let mut check_variants: Vec<(syn::Ident, TokenStream)> = Vec::new();
         let mut classifiers = Vec::new();
         let mut set_values = Vec::new();
+        let mut clear_values = Vec::new();
         let mut payloads = Vec::new();
         let mut foreign_keys = Vec::new();
         // A nested repository imports its whole constraint family under a
@@ -327,6 +328,7 @@ impl<'a> ErrorTypes<'a> {
                 #name => Ok(Self::#variant(es_entity::ConstraintConflict::new(None, #table, #name, es_entity::ConstraintKind::#kind, source)))
             });
             set_values.push(quote! { Self::#variant(mut conflict) => { conflict.attempted = #attempted; Self::#variant(conflict) } });
+            clear_values.push(quote! { Self::#variant(mut conflict) => { conflict.attempted = None; Self::#variant(conflict) } });
         }
         for nested in opts.all_nested() {
             let path = match nested_constraint_violation_path(nested) {
@@ -442,6 +444,14 @@ impl<'a> ErrorTypes<'a> {
                 #[doc(hidden)]
                 pub fn with_attempted(self, values: #values) -> Self {
                     match self { #(#set_values,)* #[allow(unreachable_patterns)] other => other }
+                }
+                /// SQLite `create_all` creates entity by entity, so it knows
+                /// which input conflicted; dropping the attempted values keeps
+                /// its rejections identical to the Postgres batch statement's,
+                /// which cannot attribute a conflict to one input.
+                #[doc(hidden)]
+                pub fn __without_attempted(self) -> Self {
+                    match self { #(#clear_values,)* #[allow(unreachable_patterns)] other => other }
                 }
                 #pkey_from_database
             }

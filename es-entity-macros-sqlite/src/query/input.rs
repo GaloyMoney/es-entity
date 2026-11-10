@@ -22,13 +22,23 @@ impl QueryInput {
     pub(super) fn table_name(&self) -> darling::Result<String> {
         let query = self.sql.to_lowercase();
         let words: Vec<&str> = query.split_whitespace().collect();
-        let from_pos = words.iter().position(|&word| word == "from").ok_or(
-            darling::Error::custom("Could not identify table name - no 'FROM' clause")
-                .with_span(&self.sql_span),
-        )?;
-        let table_name = words.get(from_pos + 1).ok_or(
-            darling::Error::custom("No word after 'FROM' clause").with_span(&self.sql_span),
-        )?;
+        if !words.contains(&"from") {
+            return Err(
+                darling::Error::custom("Could not identify table name - no 'FROM' clause")
+                    .with_span(&self.sql_span),
+            );
+        }
+        // Skip derived tables (`FROM (SELECT ...)`, which the SQLite unified
+        // cursor queries wrap each branch in): the table is the first
+        // `FROM` target that is a plain name.
+        let table_name = words
+            .windows(2)
+            .find(|w| w[0] == "from" && !w[1].starts_with('('))
+            .map(|w| w[1])
+            .ok_or(
+                darling::Error::custom("No table name after 'FROM' clause")
+                    .with_span(&self.sql_span),
+            )?;
         let table_name = table_name.trim_end_matches(|c: char| !c.is_alphanumeric());
         Ok(table_name.to_string())
     }

@@ -70,7 +70,7 @@ impl ToTokens for PersistEventsFn<'_> {
                 quote! {
                     if let Some(__json) = &__snapshot_json {
                         es_entity::sqlite_write::upsert_snapshot(
-                            op.as_executor(),
+                            op.connection(),
                             #snap_tbl,
                             __now,
                             id,
@@ -132,7 +132,7 @@ impl ToTokens for PersistEventsFn<'_> {
                 if !payload_sequences.is_empty() {
                     let payload_ids = vec![id; payload_sequences.len()];
                     es_entity::sqlite_write::insert_payloads(
-                        op.as_executor(),
+                        op.connection(),
                         #forgettable_tbl,
                         &payload_ids,
                         &payload_sequences,
@@ -147,12 +147,32 @@ impl ToTokens for PersistEventsFn<'_> {
             quote! {}
         };
 
+        let snapshot_arg = self.snapshot_table_name.map(|_| quote! { , snapshot });
+
         tokens.append_all(quote! {
             async fn persist_events<OP>(
                 &self,
                 op: &mut OP,
                 events: &mut #events_ty
                 #snapshot_param
+            ) -> Result<usize, sqlx::Error>
+            where
+                OP: es_entity::AtomicOperation + ?Sized,
+            {
+                let __now = es_entity::sqlite_write::resolve_now(op.maybe_now());
+                self.persist_events_at(op, events #snapshot_arg, __now).await
+            }
+
+            /// `persist_events` stamped with `__now`. SQLite has no
+            /// transaction-stable `NOW()`, so `create` resolves the time once
+            /// and uses it for both the index row's `created_at` and the
+            /// events' `recorded_at`, as Postgres' `NOW()` would.
+            async fn persist_events_at<OP>(
+                &self,
+                op: &mut OP,
+                events: &mut #events_ty
+                #snapshot_param,
+                __now: es_entity::prelude::chrono::DateTime<es_entity::prelude::chrono::Utc>,
             ) -> Result<usize, sqlx::Error>
             where
                 OP: es_entity::AtomicOperation + ?Sized,
@@ -166,10 +186,9 @@ impl ToTokens for PersistEventsFn<'_> {
                 let serialized_events = events.serialize_new_events();
                 #ctx_var
                 #snap_gather
-                let __now = es_entity::sqlite_write::resolve_now(op.maybe_now());
 
                 es_entity::sqlite_write::insert_entity_events(
-                    op.as_executor(),
+                    op.connection(),
                     #events_table,
                     #event_ctx,
                     __now,

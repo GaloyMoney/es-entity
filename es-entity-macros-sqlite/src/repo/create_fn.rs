@@ -172,7 +172,7 @@ impl ToTokens for CreateFn<'_> {
         // on: its errors propagate as faults.
         let no_snapshot = self.snapshot.then(|| quote! { , None });
         let persist_events = quote! {
-            let n_events = self.persist_events(op, &mut events #no_snapshot).await?;
+            let n_events = self.persist_events_at(op, &mut events #no_snapshot, __now).await?;
         };
 
         #[cfg(feature = "instrument")]
@@ -506,7 +506,8 @@ impl ToTokens for CreateFn<'_> {
 
                     let mut __query_args = es_entity::db::Arguments::default();
                     #(#arg_adds)*
-                    __query_args.add(op.maybe_now()).map_err(sqlx::Error::Encode)?;
+                    let __now = es_entity::sqlite_write::resolve_now(op.maybe_now());
+                    __query_args.add(__now).map_err(sqlx::Error::Encode)?;
 
                     let mut __key_args = es_entity::db::Arguments::default();
                     #(__key_args.add(#key_columns as &#key_types).map_err(sqlx::Error::Encode)?;)*
@@ -627,7 +628,8 @@ impl ToTokens for CreateFn<'_> {
 
                     let mut __query_args = es_entity::db::Arguments::default();
                     #(#arg_adds)*
-                    __query_args.add(op.maybe_now()).map_err(sqlx::Error::Encode)?;
+                    let __now = es_entity::sqlite_write::resolve_now(op.maybe_now());
+                    __query_args.add(__now).map_err(sqlx::Error::Encode)?;
 
                     let mut events = Self::convert_new(new_entity, #builder);
                     #caller_id_check
@@ -709,7 +711,7 @@ mod tests {
             "{out}"
         );
         assert!(
-            out.contains("self . persist_events (op , & mut events) . await ?"),
+            out.contains("self . persist_events_at (op , & mut events , __now) . await ?"),
             "{out}"
         );
         assert!(
