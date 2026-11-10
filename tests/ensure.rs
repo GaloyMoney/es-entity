@@ -1031,9 +1031,11 @@ async fn repeatable_read_after_concurrent_commit(
     let code = unique("isolation");
 
     let mut tx = pool.begin().await?;
-    sqlx::query(&format!("SET TRANSACTION ISOLATION LEVEL {level}"))
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SET TRANSACTION ISOLATION LEVEL {level}"
+    )))
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("SELECT 1").execute(&mut *tx).await?;
     sqlx::query("SELECT COUNT(*) FROM ensure_templates")
         .execute(&mut *tx)

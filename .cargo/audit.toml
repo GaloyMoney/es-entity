@@ -1,2 +1,9 @@
 [advisories]
-ignore = ["RUSTSEC-2023-0071"]
+ignore = [
+  "RUSTSEC-2023-0071",
+  # libsqlite3-sys < 0.39: only reachable via sqlx's optional `sqlite` feature,
+  # which es-entity never enables (absent from `cargo tree`). sqlx 0.9.0 caps
+  # libsqlite3-sys below 0.38, so the patched version can't resolve yet.
+  # Drop once sqlx allows libsqlite3-sys >= 0.39.
+  "RUSTSEC-2026-0459",
+]
