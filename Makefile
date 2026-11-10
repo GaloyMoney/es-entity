@@ -50,4 +50,4 @@ fuzz:
 	FUZZ_SECONDS=$(FUZZ_TIME) bash ci/vendor/tasks/fuzz.sh
 
 sqlx-prepare:
-	cargo sqlx prepare --workspace
+	cargo sqlx prepare --workspace -- --all-targets
