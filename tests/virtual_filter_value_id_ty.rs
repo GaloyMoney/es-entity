@@ -4,8 +4,7 @@ mod helpers;
 use std::collections::HashSet;
 
 use entities::vf_account::*;
-use es_entity::*;
-use sqlx::PgPool;
+use es_entity::{db::Pool, *};
 
 /// A value virtual whose `ty` is a strongly-typed `entity_id!` (not a bare
 /// scalar like `i64`/`String`) compiles and binds — proving the value
@@ -24,11 +23,11 @@ use sqlx::PgPool;
     ),)
 )]
 pub struct VfAccountsFlaggedBy {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl VfAccountsFlaggedBy {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -39,7 +38,7 @@ async fn create_account(repo: &VfAccountsFlaggedBy, status: &str) -> anyhow::Res
         .await?)
 }
 
-async fn flag(pool: &PgPool, account_id: VfAccountId) -> anyhow::Result<()> {
+async fn flag(pool: &Pool, account_id: VfAccountId) -> anyhow::Result<()> {
     sqlx::query("INSERT INTO vf_account_flags (account_id, flag) VALUES ($1, 'due')")
         .bind(account_id)
         .execute(pool)

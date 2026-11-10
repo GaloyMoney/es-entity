@@ -2,17 +2,16 @@ mod entities;
 mod helpers;
 
 use entities::customer::*;
-use es_entity::*;
-use sqlx::PgPool;
+use es_entity::{db::Pool, *};
 
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Customer", forgettable, columns(email(ty = "String")))]
 pub struct Customers {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Customers {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -102,6 +101,8 @@ async fn forget_preserves_non_forgettable_events() -> anyhow::Result<()> {
     Ok(())
 }
 
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn staged_erasure_event_is_persisted_by_forget() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -223,6 +224,8 @@ async fn forget_without_staged_event_leaves_stale_writers_unfenced() -> anyhow::
     Ok(())
 }
 
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn forget_persists_staged_events_without_laundering() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -266,6 +269,8 @@ async fn forget_persists_staged_events_without_laundering() -> anyhow::Result<()
     Ok(())
 }
 
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn events_table_stores_null_for_live_forgettable_fields() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -311,6 +316,8 @@ async fn events_table_stores_null_for_live_forgettable_fields() -> anyhow::Resul
     Ok(())
 }
 
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn create_all_stores_payloads_and_nulls_events() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;

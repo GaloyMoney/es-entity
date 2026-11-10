@@ -2,25 +2,23 @@ mod entities;
 mod helpers;
 
 use entities::{order::*, profile::*, user::*};
-use es_entity::*;
-use sqlx::PgPool;
+use es_entity::{db::Pool, *};
 
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
 pub struct Users {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Users {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
 
 /// `User` whose id comes from the caller, on the `users` tables.
 mod caller_id {
-    use es_entity::*;
-    use sqlx::PgPool;
+    use es_entity::{db::Pool, *};
 
     use super::entities::user::{UserEvent, UserId};
 
@@ -84,7 +82,7 @@ mod caller_id {
         columns(name(ty = "String", update(persist = false)))
     )]
     pub struct Users {
-        pub pool: PgPool,
+        pub pool: Pool,
     }
 }
 
@@ -106,11 +104,11 @@ mod caller_id {
     )
 )]
 pub struct Profiles {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Profiles {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -125,11 +123,11 @@ impl Profiles {
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
 pub struct OrderItems {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl OrderItems {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -506,6 +504,9 @@ async fn find_by_name_not_found_is_fatal_invariant() -> anyhow::Result<()> {
     Ok(())
 }
 
+// Postgres-only: adds a constraint at runtime with
+// `ALTER TABLE ... ADD CONSTRAINT ... NOT VALID`, which SQLite lacks.
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn unknown_database_constraint_is_fatal_with_original_source() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -540,8 +541,7 @@ async fn unknown_database_constraint_is_fatal_with_original_source() -> anyhow::
 
 mod composite {
     use super::entities::profile::*;
-    use es_entity::*;
-    use sqlx::PgPool;
+    use es_entity::{db::Pool, *};
     #[derive(EsRepo)]
     #[es_repo(
         entity = "Profile",
@@ -553,7 +553,7 @@ mod composite {
         )
     )]
     pub struct Profiles {
-        pub pool: PgPool,
+        pub pool: Pool,
     }
 }
 
@@ -599,8 +599,7 @@ async fn composite_partial_index_preserves_typed_key_and_batch_uncertainty() -> 
 
 mod custom_pkey {
     use super::{caller_id::CallerIdUser, entities::user::*};
-    use es_entity::*;
-    use sqlx::PgPool;
+    use es_entity::{db::Pool, *};
     #[derive(EsRepo, Debug)]
     #[es_repo(
         entity = "CallerIdUser",
@@ -611,7 +610,7 @@ mod custom_pkey {
         columns(name(ty = "String", update(persist = false)))
     )]
     pub struct Widgets {
-        pub pool: PgPool,
+        pub pool: Pool,
     }
 }
 

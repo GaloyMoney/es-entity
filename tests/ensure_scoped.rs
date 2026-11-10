@@ -1,9 +1,8 @@
 mod helpers;
 
 use es_entity::errlanes::Fail;
-use es_entity::*;
+use es_entity::{db::Pool, *};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 es_entity::entity_id! {
     EnsureMemberId,
@@ -84,7 +83,7 @@ impl IntoEvents<EnsureMemberEvent> for NewEnsureMember {
     columns(tenant_id(ty = "TenantId", scope), email(ty = "String"))
 )]
 pub struct EnsureMembers {
-    pool: PgPool,
+    pool: Pool,
 }
 
 fn member(id: EnsureMemberId, tenant_id: TenantId, email: &str) -> NewEnsureMember {

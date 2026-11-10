@@ -1,8 +1,7 @@
 mod helpers;
 
-use es_entity::*;
+use es_entity::{db::Pool, *};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 es_entity::entity_id! { DoohickeyId }
 
@@ -50,7 +49,7 @@ impl IntoEvents<DoohickeyEvent> for NewDoohickey {
     migrations_dir = "no_such_migrations_dir"
 )]
 pub struct Doohickeys {
-    pool: PgPool,
+    pool: Pool,
 }
 
 #[tokio::test]

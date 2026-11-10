@@ -1,10 +1,8 @@
 mod entities;
 mod helpers;
 
-use sqlx::PgPool;
-
 use entities::contact::*;
-use es_entity::*;
+use es_entity::{db::Pool, *};
 
 /// The scoped `Contacts` repo whose migrations declare a
 /// `(partner_id, created_at, id)` index, so the scoped `PartnerId`-arm
@@ -25,11 +23,11 @@ use es_entity::*;
     )
 )]
 pub struct Contacts {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Contacts {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }

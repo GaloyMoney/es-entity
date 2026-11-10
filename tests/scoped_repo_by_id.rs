@@ -1,10 +1,8 @@
 mod entities;
 mod helpers;
 
-use sqlx::PgPool;
-
 use entities::partner::*;
-use es_entity::*;
+use es_entity::{db::Pool, *};
 
 /// Id-scoped repo — the tenancy-root variant of a scoped repository. The
 /// entity has no separate tenant column: its rows' scope value is its own
@@ -20,11 +18,11 @@ use es_entity::*;
     columns(name(ty = "String", list_by))
 )]
 pub struct Partners {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Partners {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -247,10 +245,8 @@ async fn id_scoped_view_delegates() -> anyhow::Result<()> {
 /// derive-generated companion types (`PartnerScope`,
 /// `PartnerConstraintViolation`, ...) would otherwise collide.
 pub mod overridden_id_scope {
-    use sqlx::PgPool;
-
     use super::entities::partner::*;
-    use es_entity::*;
+    use es_entity::{db::Pool, *};
 
     #[derive(EsRepo, Debug)]
     #[es_repo(
@@ -259,11 +255,11 @@ pub mod overridden_id_scope {
         columns(name(ty = "String"))
     )]
     pub struct PartnersByOverriddenScope {
-        pool: PgPool,
+        pool: Pool,
     }
 
     impl PartnersByOverriddenScope {
-        pub fn new(pool: PgPool) -> Self {
+        pub fn new(pool: Pool) -> Self {
             Self { pool }
         }
     }

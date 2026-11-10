@@ -1,4 +1,6 @@
-#![cfg(feature = "instrument")]
+// Postgres-only: counts `sqlx::query` events on a thread-local subscriber;
+// sqlx-sqlite runs statements on its worker thread, so none are observed.
+#![cfg(all(feature = "instrument", feature = "postgres"))]
 
 mod entities;
 mod helpers;
@@ -6,22 +8,21 @@ mod helpers;
 use std::sync::{Arc, Mutex};
 
 use entities::order::*;
-use es_entity::*;
+use es_entity::{db::Pool, *};
 use helpers::init_pool;
-use sqlx::PgPool;
 use tracing_subscriber::layer::SubscriberExt;
 
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Order", delete = "soft")]
 pub struct Orders {
-    pool: PgPool,
+    pool: Pool,
 
     #[es_repo(nested)]
     items: OrderItems,
 }
 
 impl Orders {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self {
             pool: pool.clone(),
             items: OrderItems::new(pool),
@@ -36,11 +37,11 @@ impl Orders {
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
 pub struct OrderItems {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl OrderItems {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }

@@ -1,10 +1,8 @@
 mod entities;
 mod helpers;
 
-use sqlx::PgPool;
-
 use entities::facility::*;
-use es_entity::*;
+use es_entity::{db::Pool, *};
 
 /// Two-dimension scoped repo mirroring lana's admin/partner/customer split:
 /// `partner_id` and `customer_id` are both `scope` columns. Reads are scoped
@@ -20,11 +18,11 @@ use es_entity::*;
     )
 )]
 pub struct Facilities {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Facilities {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -40,10 +38,8 @@ impl Facilities {
 /// the repo struct name, so a second `entity = "Facility"` repo in the same
 /// scope as [`Facilities`] would collide.
 pub mod overridden_scope {
-    use sqlx::PgPool;
-
     use super::entities::facility::*;
-    use es_entity::*;
+    use es_entity::{db::Pool, *};
 
     #[derive(EsRepo, Debug)]
     #[es_repo(
@@ -55,11 +51,11 @@ pub mod overridden_scope {
         )
     )]
     pub struct FacilitiesByOverriddenScope {
-        pool: PgPool,
+        pool: Pool,
     }
 
     impl FacilitiesByOverriddenScope {
-        pub fn new(pool: PgPool) -> Self {
+        pub fn new(pool: Pool) -> Self {
             Self { pool }
         }
     }

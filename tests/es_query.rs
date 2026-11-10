@@ -2,9 +2,8 @@ mod entities;
 mod helpers;
 
 use entities::user::*;
-use es_entity::*;
+use es_entity::{db::Pool, *};
 use helpers::init_pool;
-use sqlx::PgPool;
 
 mod tbl_prefix_param {
     use super::*;
@@ -16,11 +15,11 @@ mod tbl_prefix_param {
         columns(name(ty = "String"))
     )]
     struct UsersTblPrefix {
-        pool: PgPool,
+        pool: Pool,
     }
 
     impl UsersTblPrefix {
-        fn new(pool: PgPool) -> Self {
+        fn new(pool: Pool) -> Self {
             Self { pool }
         }
 
@@ -87,11 +86,11 @@ mod entity_param {
         columns(name(ty = "String"))
     )]
     struct UsersEntity {
-        pool: PgPool,
+        pool: Pool,
     }
 
     impl UsersEntity {
-        fn new(pool: PgPool) -> Self {
+        fn new(pool: Pool) -> Self {
             Self { pool }
         }
 
@@ -152,11 +151,11 @@ mod no_params {
     #[derive(EsRepo, Debug)]
     #[es_repo(entity = "User", columns(name(ty = "String")))]
     struct UsersNoParams {
-        pool: PgPool,
+        pool: Pool,
     }
 
     impl UsersNoParams {
-        fn new(pool: PgPool) -> Self {
+        fn new(pool: Pool) -> Self {
             Self { pool }
         }
 

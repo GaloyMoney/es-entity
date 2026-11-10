@@ -1,3 +1,6 @@
+// Postgres-only: its shared helper runs a compile-time `sqlx::query!`.
+#![cfg(feature = "postgres")]
+
 mod helpers;
 
 use es_entity::{

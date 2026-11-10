@@ -1,3 +1,7 @@
+// Postgres-only: its hooks write rows with compile-time `sqlx::query!`
+// (Postgres schema) and it serializes on `pg_advisory_xact_lock`.
+#![cfg(feature = "postgres")]
+
 mod helpers;
 
 use es_entity::operation::{

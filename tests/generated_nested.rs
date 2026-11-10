@@ -1,9 +1,8 @@
 mod helpers;
 
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
-use es_entity::*;
+use es_entity::{db::Pool, *};
 
 es_entity::entity_id! { PalletId, PalletItemId, RackId, RackItemId }
 
@@ -125,19 +124,19 @@ impl IntoEvents<PalletEvent> for NewPallet {
     columns(pallet_id(ty = "PalletId", update(persist = false), parent))
 )]
 struct PalletItems {
-    pool: PgPool,
+    pool: Pool,
 }
 
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Pallet")]
 pub struct Pallets {
-    pool: PgPool,
+    pool: Pool,
     #[es_repo(nested)]
     items: PalletItems,
 }
 
 impl Pallets {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self {
             pool: pool.clone(),
             items: PalletItems { pool },
@@ -268,19 +267,19 @@ impl IntoEvents<RackEvent> for NewRack {
     )
 )]
 pub struct RackItems {
-    pool: PgPool,
+    pool: Pool,
 }
 
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Rack")]
 pub struct Racks {
-    pool: PgPool,
+    pool: Pool,
     #[es_repo(nested)]
     items: RackItems,
 }
 
 impl Racks {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self {
             pool: pool.clone(),
             items: RackItems { pool },

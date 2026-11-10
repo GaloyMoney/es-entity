@@ -1,18 +1,20 @@
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#![cfg(feature = "postgres")]
+
 mod entities;
 mod helpers;
 
 use entities::meter::*;
-use es_entity::*;
-use sqlx::PgPool;
+use es_entity::{db::Pool, *};
 
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Meter", snapshot, columns(label(ty = "String")))]
 pub struct MeterRepo {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl MeterRepo {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }

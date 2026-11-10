@@ -1,9 +1,11 @@
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#![cfg(feature = "postgres")]
+
 mod entities;
 mod helpers;
 
 use entities::client::*;
-use es_entity::*;
-use sqlx::PgPool;
+use es_entity::{db::Pool, *};
 
 /// Snapshot + forgettable together: the snapshot's own `Forgettable` fields
 /// live in the same `<tbl>_forgettable_payloads` table, at the reserved
@@ -11,11 +13,11 @@ use sqlx::PgPool;
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Client", snapshot, forgettable)]
 pub struct ClientRepo {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl ClientRepo {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -24,7 +26,7 @@ fn new_client(email: &str) -> NewClient {
     NewClient::builder().email(email).build()
 }
 
-async fn payload_row(pool: &PgPool, id: ClientId) -> anyhow::Result<Option<String>> {
+async fn payload_row(pool: &Pool, id: ClientId) -> anyhow::Result<Option<String>> {
     let row = sqlx::query!(
         r#"SELECT payload->>'email' AS email FROM clients_forgettable_payloads
            WHERE entity_id = $1 AND sequence = 0"#,
@@ -35,7 +37,7 @@ async fn payload_row(pool: &PgPool, id: ClientId) -> anyhow::Result<Option<Strin
     Ok(row.and_then(|r| r.email))
 }
 
-async fn payload_row_count(pool: &PgPool, id: ClientId) -> anyhow::Result<i64> {
+async fn payload_row_count(pool: &Pool, id: ClientId) -> anyhow::Result<i64> {
     Ok(sqlx::query!(
         r#"SELECT COUNT(*) AS "count!" FROM clients_forgettable_payloads WHERE entity_id = $1"#,
         id as ClientId
@@ -45,7 +47,7 @@ async fn payload_row_count(pool: &PgPool, id: ClientId) -> anyhow::Result<i64> {
     .count)
 }
 
-async fn snapshot_email(pool: &PgPool, id: ClientId) -> anyhow::Result<Option<Option<String>>> {
+async fn snapshot_email(pool: &Pool, id: ClientId) -> anyhow::Result<Option<Option<String>>> {
     let row = sqlx::query!(
         r#"SELECT snapshot->>'email' AS email FROM client_snapshots WHERE id = $1"#,
         id as ClientId

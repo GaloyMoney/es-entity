@@ -1,5 +1,4 @@
-use es_entity::context::EventContext;
-use es_entity_macros::es_event_context;
+use es_entity::{context::EventContext, es_event_context};
 use serde_json::json;
 
 struct TestStruct;

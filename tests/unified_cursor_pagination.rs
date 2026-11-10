@@ -20,10 +20,10 @@
 mod entities;
 mod helpers;
 
-use sqlx::{PgPool, Row};
+use sqlx::Row;
 
 use entities::transfer::*;
-use es_entity::*;
+use es_entity::{db::Pool, *};
 
 /// Minimal repo over the shared `transfers` table with a nullable `score`
 /// sort column driving `list_by`.
@@ -37,11 +37,11 @@ use es_entity::*;
     )
 )]
 pub struct Transfers {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Transfers {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -183,6 +183,8 @@ async fn unified_list_by_nullable_matches_reference_at_every_cursor() -> anyhow:
 /// the sargable composite-index qual. Verified on a single connection with a
 /// generic plan (the pooled prepared-statement condition) so the assertion
 /// reflects production planning, not a one-off custom plan.
+// Postgres-only: asserts on the Postgres planner via `EXPLAIN ANALYZE`.
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn unified_cursor_query_prunes_dead_branches() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;

@@ -1,3 +1,6 @@
+// Postgres-only: its hooks write rows with compile-time `sqlx::query!`
+// (Postgres schema).
+#![cfg(feature = "postgres")]
 //! Post-persist hook execution on the generated `forget` / `forget_in_op`
 //! path.
 //!
@@ -10,15 +13,13 @@
 mod entities;
 mod helpers;
 
-use sqlx::PgPool;
-
 use std::sync::{
     Mutex,
     atomic::{AtomicBool, Ordering},
 };
 
 use entities::customer::*;
-use es_entity::*;
+use es_entity::{db::Pool, *};
 
 #[derive(Debug)]
 pub struct CustomerPublishError(String);
@@ -54,13 +55,13 @@ pub struct HookCall {
     post_persist_hook = "publish"
 )]
 pub struct CustomersWithHook {
-    pool: PgPool,
+    pool: Pool,
     calls: Mutex<Vec<HookCall>>,
     fail_on_forgot: AtomicBool,
 }
 
 impl CustomersWithHook {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self {
             pool,
             calls: Mutex::new(Vec::new()),

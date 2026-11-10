@@ -2,25 +2,23 @@ mod entities;
 mod helpers;
 
 use entities::user::*;
-use es_entity::{clock::*, *};
-use sqlx::PgPool;
+use es_entity::{clock::*, db::Pool, *};
 
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
 pub struct Users {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Users {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
 
 /// A separate module for the clock field repo to avoid type conflicts
 mod users_with_clock {
-    use es_entity::{EsEntity, EsEvent, EsRepo, clock::ClockHandle};
-    use sqlx::PgPool;
+    use es_entity::{EsEntity, EsEvent, EsRepo, clock::ClockHandle, db::Pool};
 
     use crate::entities::user::*;
 
@@ -28,16 +26,16 @@ mod users_with_clock {
     #[derive(EsRepo, Debug)]
     #[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
     pub struct UsersWithClock {
-        pool: PgPool,
+        pool: Pool,
         clock: Option<ClockHandle>,
     }
 
     impl UsersWithClock {
-        pub fn new(pool: PgPool) -> Self {
+        pub fn new(pool: Pool) -> Self {
             Self { pool, clock: None }
         }
 
-        pub fn with_clock(pool: PgPool, clock: ClockHandle) -> Self {
+        pub fn with_clock(pool: Pool, clock: ClockHandle) -> Self {
             Self {
                 pool,
                 clock: Some(clock),
@@ -50,8 +48,7 @@ use users_with_clock::UsersWithClock;
 
 /// A separate module for the required clock field repo
 mod users_with_required_clock {
-    use es_entity::{EsEntity, EsEvent, EsRepo, clock::ClockHandle};
-    use sqlx::PgPool;
+    use es_entity::{EsEntity, EsEvent, EsRepo, clock::ClockHandle, db::Pool};
 
     use crate::entities::user::*;
 
@@ -59,12 +56,12 @@ mod users_with_required_clock {
     #[derive(EsRepo, Debug)]
     #[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
     pub struct UsersWithRequiredClock {
-        pool: PgPool,
+        pool: Pool,
         clock: ClockHandle,
     }
 
     impl UsersWithRequiredClock {
-        pub fn new(pool: PgPool, clock: ClockHandle) -> Self {
+        pub fn new(pool: Pool, clock: ClockHandle) -> Self {
             Self { pool, clock }
         }
     }

@@ -2,20 +2,19 @@ mod entities;
 mod helpers;
 
 use entities::order::*;
-use es_entity::*;
-use sqlx::PgPool;
+use es_entity::{db::Pool, *};
 
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Order", delete = "soft")]
 pub struct Orders {
-    pool: PgPool,
+    pool: Pool,
 
     #[es_repo(nested)]
     items: OrderItems,
 }
 
 impl Orders {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self {
             pool: pool.clone(),
             items: OrderItems::new(pool),
@@ -30,11 +29,11 @@ impl Orders {
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
 pub struct OrderItems {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl OrderItems {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -216,6 +215,8 @@ async fn find_all_with_nested_entities() -> anyhow::Result<()> {
     Ok(())
 }
 
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn delete_parent_cascades_to_children() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;

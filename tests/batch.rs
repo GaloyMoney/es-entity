@@ -34,7 +34,7 @@ async fn insert(op: &mut impl AtomicOperation, v: i32) -> Result<(), sqlx::Error
 
 /// Clears this test's slice of the table so a re-run starts from the same
 /// state as a first run.
-async fn reset(pool: &sqlx::PgPool, base: i32) -> anyhow::Result<()> {
+async fn reset(pool: &es_entity::db::Pool, base: i32) -> anyhow::Result<()> {
     sqlx::query("DELETE FROM batch_items WHERE v >= $1 AND v < $2")
         .bind(base)
         .bind(base + 100)
@@ -45,7 +45,7 @@ async fn reset(pool: &sqlx::PgPool, base: i32) -> anyhow::Result<()> {
 
 /// Pre-inserts `v`, so that a later insert of the same value raises a real
 /// primary-key violation.
-async fn seed(pool: &sqlx::PgPool, v: i32) -> anyhow::Result<()> {
+async fn seed(pool: &es_entity::db::Pool, v: i32) -> anyhow::Result<()> {
     sqlx::query("INSERT INTO batch_items (v) VALUES ($1)")
         .bind(v)
         .execute(pool)
@@ -53,7 +53,10 @@ async fn seed(pool: &sqlx::PgPool, v: i32) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn present(pool: &sqlx::PgPool, range: std::ops::Range<i32>) -> anyhow::Result<Vec<i32>> {
+async fn present(
+    pool: &es_entity::db::Pool,
+    range: std::ops::Range<i32>,
+) -> anyhow::Result<Vec<i32>> {
     let rows: Vec<(i32,)> =
         sqlx::query_as("SELECT v FROM batch_items WHERE v >= $1 AND v < $2 ORDER BY v")
             .bind(range.start)

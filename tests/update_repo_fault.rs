@@ -2,8 +2,7 @@ mod entities;
 mod helpers;
 
 use entities::{order::*, user::*};
-use es_entity::*;
-use sqlx::PgPool;
+use es_entity::{db::Pool, *};
 
 /// A repo whose only non-id column never persists on update, and which has
 /// no nested children: `update_can_reject()` is false for it, so
@@ -18,11 +17,11 @@ use sqlx::PgPool;
     columns(name(ty = "String", update(persist = false)))
 )]
 pub struct ImmutableNameUsers {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl ImmutableNameUsers {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -85,15 +84,17 @@ async fn stale_sequence_update_is_transient_optimistic_conflict_through_repo_fau
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "OrderItem", columns(order_id(ty = "OrderId")))]
 pub struct ForeignKeyOnlyOrderItems {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl ForeignKeyOnlyOrderItems {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
 
+// Postgres-only: seeds rows via compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn update_persisting_only_a_foreign_key_column_returns_repo_fault() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;

@@ -1,3 +1,5 @@
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#![cfg(feature = "postgres")]
 //! Cascade-delete PII scrub for forgettable **nested children**.
 //!
 //! Soft-deleting a parent cascades to its direct nested children. When a child
@@ -9,9 +11,8 @@
 mod helpers;
 
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
-use es_entity::*;
+use es_entity::{db::Pool, *};
 
 es_entity::entity_id! { AccountId, AccountHolderId }
 
@@ -149,14 +150,14 @@ impl IntoEvents<AccountEvent> for NewAccount {
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Account", delete = "soft")]
 pub struct Accounts {
-    pool: PgPool,
+    pool: Pool,
 
     #[es_repo(nested)]
     holders: AccountHolders,
 }
 
 impl Accounts {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self {
             pool: pool.clone(),
             holders: AccountHolders::new(pool),
@@ -175,11 +176,11 @@ impl Accounts {
     )
 )]
 pub struct AccountHolders {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl AccountHolders {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }

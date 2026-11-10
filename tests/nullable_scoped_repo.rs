@@ -1,10 +1,8 @@
 mod entities;
 mod helpers;
 
-use sqlx::PgPool;
-
 use entities::party::*;
-use es_entity::*;
+use es_entity::{db::Pool, *};
 
 /// Mirrors lana's `core/party` shape: `customer_id` is a **nullable** scope
 /// column (`Option<CustomerId>`). The generated `PartyScope::Customer`
@@ -25,11 +23,11 @@ use es_entity::*;
     )
 )]
 pub struct Parties {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Parties {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }

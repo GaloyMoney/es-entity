@@ -2,8 +2,7 @@ mod entities;
 mod helpers;
 
 use entities::task::*;
-use es_entity::*;
-use sqlx::PgPool;
+use es_entity::{db::Pool, *};
 
 /// Repo with two list_for columns:
 /// - workspace_id: Option<WorkspaceId>, list_for by(id) — paired with id sort
@@ -26,11 +25,11 @@ use sqlx::PgPool;
     )
 )]
 pub struct Tasks {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Tasks {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }

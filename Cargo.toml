@@ -70,7 +70,9 @@ bon = { workspace = true, optional = true }
 
 [dev-dependencies]
 bon = { workspace = true }
-es-entity = { path = ".", features = ["testing"] }
+# No default features: the backend comes from the build itself (default
+# `postgres`, or `--no-default-features --features sqlite`).
+es-entity = { path = ".", default-features = false, features = ["testing"] }
 repo-composition-source = { path = "tests/composition/source" }
 repo-composition-middle = { path = "tests/composition/middle" }
 tokio = { workspace = true }
@@ -83,6 +85,8 @@ criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 proptest = "1"
 errlanes = { workspace = true, features = ["classify-serde-json", "classify-sqlx", "derive"] }
 thiserror = { workspace = true }
+# `migrate`: the SQLite test helper applies `migrations-sqlite/`.
+sqlx = { workspace = true, features = ["migrate"] }
 
 [[bench]]
 name = "context"
