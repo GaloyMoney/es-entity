@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!: ContactId\" FROM ((SELECT id FROM contacts WHERE partner_id = $1 AND COALESCE(status = $2, $2 IS NULL) AND (id < $4) AND ($4 IS NOT NULL) ORDER BY id DESC LIMIT $3) UNION ALL (SELECT id FROM contacts WHERE partner_id = $1 AND COALESCE(status = $2, $2 IS NULL) AND ($4 IS NULL) ORDER BY id DESC LIMIT $3) ORDER BY id DESC LIMIT $3) __ids ORDER BY id DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!: ContactId",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "44c154d3ac3f9b68edb5c5db8be9f035d755400b2629018c5b0ca988c9eb9d8c"
+}

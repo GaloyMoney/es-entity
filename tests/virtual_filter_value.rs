@@ -16,6 +16,7 @@ use sqlx::PgPool;
 #[derive(EsRepo, Debug)]
 #[es_repo(
     entity = "VfAccount",
+    list_ids_for_filters,
     columns(
         status(ty = "String", list_for(by(created_at))),
         flagged(
@@ -284,6 +285,58 @@ async fn value_virtual_paginates_correctly() -> anyhow::Result<()> {
         qualifying_ids.len(),
         "no id repeated across pages"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn id_only_listing_preserves_filters_order_and_cursor_pagination() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let accounts = VfAccountsWithValue::new(pool.clone());
+    let unique_status = format!("vfv_ids_{}", VfAccountId::new());
+
+    let mut expected = Vec::new();
+    for _ in 0..3 {
+        let account = create_account(&accounts, &unique_status).await?;
+        flag(&pool, account.id).await?;
+        expected.push(account.id);
+    }
+    create_account(&accounts, &unique_status).await?;
+    expected.sort();
+
+    for direction in [ListDirection::Ascending, ListDirection::Descending] {
+        let mut expected = expected.clone();
+        if matches!(direction, ListDirection::Descending) {
+            expected.reverse();
+        }
+        let filters = || VfAccountFilters {
+            status: Some(unique_status.clone()),
+            flagged: Some(true),
+            min_flags: Some(1),
+        };
+        let first = accounts
+            .list_ids_for_filters_by_id(
+                filters(),
+                PaginatedQueryArgs {
+                    first: 2,
+                    after: None,
+                },
+                direction,
+            )
+            .await?;
+        assert_eq!(first.entities(), &expected[..2]);
+        assert!(first.has_next_page());
+
+        let second = accounts
+            .list_ids_for_filters_by_id(
+                filters(),
+                first.into_next_query().expect("one ID remains"),
+                direction,
+            )
+            .await?;
+        assert_eq!(second.entities(), &expected[2..]);
+        assert!(!second.has_next_page());
+    }
 
     Ok(())
 }
