@@ -1,0 +1,5 @@
+CREATE TABLE widgets (
+    id UUID PRIMARY KEY,
+    code VARCHAR NOT NULL UNIQUE,
+    handle VARCHAR NOT NULL
+);

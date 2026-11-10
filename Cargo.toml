@@ -16,14 +16,14 @@ inherits = "dev"
 
 # Exactly one database backend must be enabled (see `src/db.rs`).
 default = ["postgres"]
-postgres = ["sqlx/postgres"]
-sqlite = ["sqlx/sqlite"]
+postgres = ["sqlx/postgres", "dep:es-entity-macros"]
+sqlite = ["sqlx/sqlite", "dep:es-entity-macros-sqlite"]
 
-fail-on-warnings = ["es-entity-macros/fail-on-warnings"]
+fail-on-warnings = ["es-entity-macros?/fail-on-warnings", "es-entity-macros-sqlite?/fail-on-warnings"]
 tracing-context = ["dep:tracing", "dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk"]
-graphql = ["es-entity-macros/graphql", "dep:async-graphql", "dep:base64"]
-event-context = ["es-entity-macros/event-context", "event-context-enabled"]
-event-context-enabled = ["es-entity-macros/event-context-enabled"]
+graphql = ["es-entity-macros?/graphql", "es-entity-macros-sqlite?/graphql", "dep:async-graphql", "dep:base64"]
+event-context = ["es-entity-macros?/event-context", "es-entity-macros-sqlite?/event-context", "event-context-enabled"]
+event-context-enabled = ["es-entity-macros?/event-context-enabled", "es-entity-macros-sqlite?/event-context-enabled"]
 json-schema = ["dep:schemars"]
 mdbook-test = ["dep:anyhow", "dep:bon", "testing"]
 # `es_entity::testing`: build entities from events or `New*` values without a
@@ -32,14 +32,15 @@ testing = []
 # Split out so a consumer (job) can pull in the errlanes recorder without
 # turning on repo-span instrumentation.
 errlanes-tracing = ["errlanes/tracing"]
-instrument = ["es-entity-macros/instrument", "dep:tracing", "errlanes-tracing"]
+instrument = ["es-entity-macros?/instrument", "es-entity-macros-sqlite?/instrument", "dep:tracing", "errlanes-tracing"]
 # Re-export of errlanes' blessed `Classify` impl for reqwest, so a consumer
 # (job, lana) enables it through es-entity rather than taking a direct
 # errlanes dependency. serde_json's is always on: hydration delegates to it.
 errlanes-classify-reqwest = ["errlanes/classify-reqwest"]
 
 [dependencies]
-es-entity-macros = { workspace = true }
+es-entity-macros = { workspace = true, optional = true }
+es-entity-macros-sqlite = { workspace = true, optional = true }
 errlanes = { workspace = true, features = ["classify-serde-json", "classify-sqlx", "derive"] }
 
 async-stream = { workspace = true }
@@ -93,6 +94,7 @@ members = [
   "errlanes",
   "errlanes-derive",
   "es-entity-macros",
+  "es-entity-macros-sqlite",
 ]
 
 [workspace.dependencies]
@@ -100,6 +102,7 @@ members = [
 errlanes = { path = "errlanes", version = "0.21.1-dev", default-features = false }
 errlanes-derive = { path = "errlanes-derive", version = "0.21.1-dev" }
 es-entity-macros = { path = "es-entity-macros", version = "0.21.1-dev" }
+es-entity-macros-sqlite = { path = "es-entity-macros-sqlite", version = "0.21.1-dev" }
 
 anyhow = "1.0"
 async-stream = "0.3"

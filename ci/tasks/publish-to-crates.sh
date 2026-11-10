@@ -13,4 +13,5 @@ EOF
 cargo publish -p errlanes-derive --all-features --no-verify
 cargo publish -p errlanes --all-features --no-verify
 cargo publish -p es-entity-macros --all-features --no-verify
+cargo publish -p es-entity-macros-sqlite --all-features --no-verify
 cargo publish -p es-entity --all-features --no-verify

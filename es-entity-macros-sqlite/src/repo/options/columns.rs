@@ -1,0 +1,2171 @@
+use darling::FromMeta;
+use quote::quote;
+
+#[derive(Default)]
+pub struct Columns {
+    all: Vec<Column>,
+    /// Columns declared with `virtual = "<sql predicate>"`: a SQL predicate
+    /// spliced verbatim into `list_for_filters*` as a conjunct, rather than a
+    /// physical column. Kept out of `all` so every existing iterator over it
+    /// (create/update persistence, scope, find_by/list_by, the Column enum,
+    /// …) never sees one — see [`Self::validate_virtual`].
+    virtual_columns: Vec<Column>,
+}
+
+/// Splits parsed columns into physical (`all`) and `virtual = "..."`
+/// (`virtual_columns`) buckets, in declaration order within each bucket.
+fn partition_virtual(columns: Vec<Column>) -> (Vec<Column>, Vec<Column>) {
+    columns.into_iter().partition(|c| !c.opts.is_virtual())
+}
+
+impl Columns {
+    #[cfg(test)]
+    pub fn new(id: &syn::Ident, columns: impl IntoIterator<Item = Column>) -> Self {
+        let (all, virtual_columns) = partition_virtual(columns.into_iter().collect());
+        let mut res = Columns {
+            all,
+            virtual_columns,
+        };
+        res.set_id_column(id);
+        res
+    }
+
+    pub fn set_id_column(&mut self, ty: &syn::Ident) {
+        let id_column = Column::for_id(syn::parse_str(&ty.to_string()).unwrap());
+        let mut all = vec![Column::for_created_at(), id_column];
+        all.append(&mut self.all);
+        self.all = all;
+    }
+
+    /// Marks the id column as a scope column, from the repo-level
+    /// `id(scope)` / `id(scope(variant = "..."))`. Used by tenancy-root repos
+    /// whose rows' scope value is their own id. Call after
+    /// [`Self::set_id_column`].
+    pub fn scope_id_column(&mut self, scope: ScopeOpts) {
+        if let Some(id) = self.all.iter_mut().find(|c| c.opts.is_id) {
+            id.opts.scope_opts = Some(scope);
+        }
+    }
+
+    pub fn all_find_by(&self) -> impl Iterator<Item = &Column> {
+        self.all.iter().filter(|c| c.opts.find_by())
+    }
+
+    pub fn all_list_by(&self) -> impl Iterator<Item = &Column> {
+        self.all.iter().filter(|c| c.opts.list_by())
+    }
+
+    pub fn all_list_for(&self) -> impl Iterator<Item = &Column> {
+        self.all.iter().filter(|c| c.opts.list_for())
+    }
+
+    /// Virtual filter columns (`virtual = "<sql>"`), in declaration order.
+    /// These participate only in `list_for_filters*` — never `list_by`,
+    /// `find_by`, or a per-column `list_for_{name}_by_{sort}` fn.
+    pub fn all_virtual_filters(&self) -> impl Iterator<Item = &Column> {
+        self.virtual_columns.iter()
+    }
+
+    /// The columns marked `scope`, in declaration order (declaration order
+    /// becomes enum-variant order and dispatch-arm order). Validated by
+    /// [`Self::validate_scope`].
+    pub fn scope_columns(&self) -> Vec<&Column> {
+        self.all
+            .iter()
+            .filter(|c| c.opts.scope_opts.is_some())
+            .collect()
+    }
+
+    /// Validates the `scope` column markers:
+    ///
+    /// - scope columns must have pairwise-distinct Rust types, compared on
+    ///   the type that lands in the generated enum ([`Column::ty_for_scope`]
+    ///   — the inner type for an `Option<T>` column) since the generated
+    ///   `From<T>` conversions dispatch on that type: two scope columns that
+    ///   resolve to the same type would produce conflicting impls. Variant
+    ///   names (UpperCamel of the column name, or `scope(variant = "...")`)
+    ///   must also be pairwise-distinct and not collide with the reserved
+    ///   `All` variant
+    /// - a `nullable`-annotated scope column whose Rust type is not
+    ///   syntactically `Option<T>` is rejected: there is no inner type to
+    ///   unwrap, and scoping by the NULL-encoding value would silently match
+    ///   no rows. Syntactic `Option<T>` scope columns are allowed — the
+    ///   generated variant carries the inner `T`, and NULL rows are simply
+    ///   invisible to every scoped variant (`All` still sees them)
+    /// - every scope column must not be `Forgettable<T>`
+    /// - no scope column may be the `parent` column (nested repos cannot be
+    ///   scoped — children are custody-guarded via their parent)
+    pub fn validate_scope(&self) -> darling::Result<()> {
+        let scope_columns: Vec<_> = self
+            .all
+            .iter()
+            .filter(|c| c.opts.scope_opts.is_some())
+            .collect();
+        if scope_columns.is_empty() {
+            return Ok(());
+        }
+        if self.parent().is_some() {
+            return Err(darling::Error::custom(
+                "scope is not supported on nested repos — children are custody-guarded via their (scoped) parent",
+            ));
+        }
+        for col in &scope_columns {
+            if col.opts.nullable() && !col.is_optional() {
+                return Err(darling::Error::custom(format!(
+                    "scope column '{}' is `nullable`-annotated — only syntactic Option<T> scope columns are supported (the NULL-encoding value would silently match no rows)",
+                    col.name(),
+                )));
+            }
+            if col.opts.forgettable {
+                return Err(darling::Error::custom(format!(
+                    "scope column '{}' cannot be Forgettable",
+                    col.name(),
+                )));
+            }
+            if col.opts.parent_opts.is_some() {
+                return Err(darling::Error::custom(format!(
+                    "scope column '{}' cannot be the parent column — nested repos cannot be scoped",
+                    col.name(),
+                )));
+            }
+        }
+        // The generated From<T> conversions dispatch on the type that lands
+        // in the enum (the inner type for an Option<T> scope column) — every
+        // scope column must resolve to a distinct type or the impls conflict.
+        for (i, a) in scope_columns.iter().enumerate() {
+            for b in &scope_columns[i + 1..] {
+                let ty_a = quote::ToTokens::to_token_stream(&a.ty_for_scope()).to_string();
+                let ty_b = quote::ToTokens::to_token_stream(&b.ty_for_scope()).to_string();
+                if ty_a == ty_b {
+                    return Err(darling::Error::custom(format!(
+                        "scope columns '{}' and '{}' have the same Rust type '{}' — the generated From<T> conversions would conflict; use distinct newtype ids",
+                        a.name(),
+                        b.name(),
+                        ty_a,
+                    )));
+                }
+            }
+        }
+        // Variant idents default to UpperCamel(column name) but may be
+        // overridden via `scope(variant = "...")`; either way they must not
+        // collide with each other or with the built-in `All` variant.
+        let mut variant_names: Vec<String> = Vec::new();
+        for col in &scope_columns {
+            let variant = col.scope_variant().to_string();
+            if variant == "All" {
+                return Err(darling::Error::custom(format!(
+                    "scope column '{}' maps to the reserved variant name 'All'",
+                    col.name(),
+                )));
+            }
+            if variant_names.contains(&variant) {
+                return Err(darling::Error::custom(format!(
+                    "scope columns map to the same variant name '{variant}'",
+                )));
+            }
+            variant_names.push(variant);
+        }
+        Ok(())
+    }
+
+    pub fn find_list_by(&self, name: &syn::Ident) -> Option<&Column> {
+        self.all
+            .iter()
+            .find(|c| c.name() == name && c.opts.list_by())
+    }
+
+    pub fn validate_list_for_by_columns(&self) -> darling::Result<()> {
+        let mut errors = darling::Error::accumulator();
+        for col in self.all.iter().filter(|c| c.opts.list_for()) {
+            for by_name in col.list_for_by_columns() {
+                if self.find_list_by(by_name).is_none() {
+                    let available: Vec<_> =
+                        self.all_list_by().map(|c| c.name().to_string()).collect();
+                    errors.push(darling::Error::custom(format!(
+                        "column '{}' in list_for(by(...)) on '{}' is not a list_by column. Available list_by columns: {}",
+                        by_name,
+                        col.name(),
+                        available.join(", "),
+                    )));
+                }
+            }
+        }
+        errors.finish()
+    }
+
+    /// Rejects `find_all_for` on a column that cannot back the lookup: an
+    /// optional, `nullable` or forgettable column (`= ANY` never matches a
+    /// `NULL` key), or one with no `by(..)` column to order by. A virtual
+    /// column cannot carry the flag at all: [`Self::validate_virtual`]
+    /// demands the bare `list_for` form for it.
+    pub fn validate_find_all_for(&self) -> darling::Result<()> {
+        let mut errors = darling::Error::accumulator();
+        for col in self.all.iter().filter(|c| c.find_all_for_enabled()) {
+            let name = col.name();
+            let reason = if col.is_nullable_column() {
+                "an optional or nullable column"
+            } else if col.is_forgettable() {
+                "a forgettable column"
+            } else if col.list_for_by_columns().is_empty() {
+                "a column without `list_for(by(..))`"
+            } else {
+                continue;
+            };
+            errors.push(darling::Error::custom(format!(
+                "column '{name}' sets `find_all_for` but is {reason}; `find_all_for` requires a non-optional physical column with `list_for(by(..))`"
+            )));
+        }
+        errors.finish()
+    }
+
+    /// Validates every `virtual = "<sql>"` column: `list_for` must be present
+    /// as the bare word (`list_for(by(...))` is rejected — a virtual column
+    /// never gets a per-column `list_for_{name}_by_{sort}` fn, so there is no
+    /// `by` to declare), no other column option may be set, and the
+    /// predicate must be non-empty after trimming.
+    ///
+    /// `ty` discriminates two kinds (see [`is_bare_bool`],
+    /// [`Column::is_value_virtual`]):
+    /// - `ty = "bool"` is the "polarity" form: its predicate must **not**
+    ///   reference the `{value}` placeholder (there is no value to bind).
+    /// - any other `ty` is a "value" virtual: its predicate **must**
+    ///   reference `{value}` (checked via [`substitute_value_placeholder`]),
+    ///   and `ty` must not itself be syntactically `Option<..>` — value
+    ///   virtuals have no NULL-filtering state, only `Absent`/`Present`.
+    pub fn validate_virtual(&self) -> darling::Result<()> {
+        let mut errors = darling::Error::accumulator();
+        for col in &self.virtual_columns {
+            let name = col.name();
+            let predicate = col.opts.virtual_predicate.as_deref().unwrap_or("");
+            let has_value_placeholder = substitute_value_placeholder(predicate, 0).is_some();
+            if is_bare_bool(&col.opts.ty) {
+                if has_value_placeholder {
+                    errors.push(darling::Error::custom(format!(
+                        "virtual column '{name}' with ty = \"bool\" must not use {{value}} — declare a non-bool ty to bind a value"
+                    )));
+                }
+            } else {
+                if !has_value_placeholder {
+                    errors.push(darling::Error::custom(format!(
+                        "virtual column '{name}' must reference {{value}} in its predicate"
+                    )));
+                }
+                if col.is_optional() {
+                    errors.push(darling::Error::custom(format!(
+                        "virtual column '{name}' cannot declare an Option<..> ty — value virtuals have no NULL-filtering state"
+                    )));
+                }
+            }
+            match &col.opts.list_for_opts {
+                None => {
+                    errors.push(darling::Error::custom(format!(
+                        "virtual column '{name}' must be marked `list_for`"
+                    )));
+                }
+                Some(opts) if !opts.is_bare => {
+                    errors.push(darling::Error::custom(format!(
+                        "virtual column '{name}' must use bare `list_for` — `list_for(by(...))` is not supported on virtual columns (no per-column list_for fn is generated for them)"
+                    )));
+                }
+                _ => {}
+            }
+            if col.opts.find_by.is_some() {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' cannot set `find_by`"
+                )));
+            }
+            if col.opts.list_by.is_some() {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' cannot set `list_by`"
+                )));
+            }
+            if col.opts.scope_opts.is_some() {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' cannot be `scope`"
+                )));
+            }
+            if col.opts.parent_opts.is_some() {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' cannot be `parent`"
+                )));
+            }
+            if col.opts.nullable.is_some() {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' cannot set `nullable`"
+                )));
+            }
+            if col.opts.create_opts.is_some() {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' cannot set `create`"
+                )));
+            }
+            if col.opts.update_opts.is_some() {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' cannot set `update`"
+                )));
+            }
+            if col
+                .opts
+                .virtual_predicate
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .is_empty()
+            {
+                errors.push(darling::Error::custom(format!(
+                    "virtual column '{name}' has an empty predicate"
+                )));
+            }
+        }
+        errors.finish()
+    }
+
+    /// Returns columns for the Column enum (id + user columns, not created_at)
+    pub fn column_enum_columns(&self) -> impl Iterator<Item = &Column> {
+        self.all.iter().filter(|c| *c.name() != "created_at")
+    }
+
+    pub fn constraint_values(&self, entity: &syn::Ident, create: bool) -> proc_macro2::TokenStream {
+        let values = quote::format_ident!("{}ConstraintValues", entity);
+        let fields: Vec<_> = self
+            .column_enum_columns()
+            .filter(|c| {
+                if create {
+                    c.opts.persist_on_create()
+                } else {
+                    c.opts.persist_on_update() || c.opts.is_id
+                }
+            })
+            .map(|c| {
+                let name = c.name();
+                quote!(#name: Some((*#name).clone()))
+            })
+            .collect();
+        let remaining = (fields.len() != self.column_enum_columns().count())
+            .then(|| quote!(..Default::default()));
+        quote!(let __constraint_values = #values { #(#fields,)* #remaining };)
+    }
+
+    pub fn delete_constraint_values(&self, entity: &syn::Ident) -> proc_macro2::TokenStream {
+        let values = quote::format_ident!("{}ConstraintValues", entity);
+        let fields: Vec<_> = self
+            .column_enum_columns()
+            .filter(|c| (c.opts.persist_on_update() && !c.opts.forgettable) || c.opts.is_id)
+            .map(|c| {
+                let name = c.name();
+                quote!(#name: Some((*#name).clone()))
+            })
+            .collect();
+        let remaining = (fields.len() != self.column_enum_columns().count())
+            .then(|| quote!(..Default::default()));
+        quote!(let __constraint_values = #values { #(#fields,)* #remaining };)
+    }
+
+    pub fn parent(&self) -> Option<&Column> {
+        self.all.iter().find(|c| c.opts.parent_opts.is_some())
+    }
+
+    pub fn updates_needed(&self) -> bool {
+        self.all.iter().any(|c| c.opts.persist_on_update())
+    }
+
+    pub fn variable_assignments_for_update(&self, ident: syn::Ident) -> proc_macro2::TokenStream {
+        let assignments = self.all.iter().filter_map(|c| {
+            if c.opts.persist_on_update() || c.opts.is_id {
+                Some(c.variable_assignment_for_update(&ident))
+            } else {
+                None
+            }
+        });
+        quote! {
+            #(#assignments)*
+        }
+    }
+
+    /// `generated_id`: the id column reads the id the repo resolved
+    /// (`__id`) instead of a field of the `New*` type, which has none.
+    pub fn variable_assignments_for_create(
+        &self,
+        ident: syn::Ident,
+        generated_id: bool,
+    ) -> proc_macro2::TokenStream {
+        let assignments = self.all.iter().filter_map(|c| {
+            if !c.opts.persist_on_create() {
+                None
+            } else if generated_id && c.opts.is_id {
+                let name = &c.name;
+                Some(quote! { let #name = &__id; })
+            } else {
+                Some(c.variable_assignment_for_create(&ident))
+            }
+        });
+        quote! {
+            #(#assignments)*
+        }
+    }
+
+    #[allow(dead_code)] // Postgres batch-statement builder; SQLite batches per entity.
+    pub fn variable_assignments_for_create_all(
+        &self,
+        ident: syn::Ident,
+        generated_id: bool,
+    ) -> proc_macro2::TokenStream {
+        let assignments = self.all.iter().filter_map(|c| {
+            if !c.opts.persist_on_create() {
+                None
+            } else if generated_id && c.opts.is_id {
+                let name = &c.name;
+                let ty = &c.opts.ty;
+                Some(quote! { let #name: &#ty = __id; })
+            } else {
+                Some(c.variable_assignment_for_create_all(&ident))
+            }
+        });
+        quote! {
+            #(#assignments)*
+        }
+    }
+
+    /// Eager-encoding `add` statements for the create columns, targeting a
+    /// `__query_args: PgArguments`. Used by the combined index+events insert,
+    /// where the event arrays require consuming the new entity before query
+    /// construction — the index args are encoded first, ending their borrows.
+    pub fn create_query_arg_adds(&self) -> Vec<proc_macro2::TokenStream> {
+        self.all
+            .iter()
+            .filter(|c| c.opts.persist_on_create())
+            .map(|column| {
+                let ident = &column.name;
+                let ty = &column.opts.ty;
+                quote! {
+                    __query_args.add(#ident as &#ty).map_err(sqlx::Error::Encode)?;
+                }
+            })
+            .collect()
+    }
+
+    /// Per-column collection vectors for the bulk create, plus the eager
+    /// `add` statements that encode them into a `__query_args: PgArguments`.
+    /// Encoding eagerly (rather than binding lazily) ends the collections'
+    /// borrows of the new entities, so the caller can consume them into the
+    /// event stream for the same statement.
+    #[allow(dead_code)] // Postgres batch-statement builder; SQLite batches per entity.
+    pub fn create_all_arg_collection(
+        &self,
+        ident: syn::Ident,
+        generated_id: bool,
+    ) -> (proc_macro2::TokenStream, Vec<proc_macro2::TokenStream>) {
+        let assignments = self.variable_assignments_for_create_all(ident.clone(), generated_id);
+        let (vecs, pushes, bindings) = self
+            .all
+            .iter()
+            .filter(|c| c.opts.persist_on_create())
+            .map(|column| {
+                let vec_ident = syn::Ident::new(
+                    &format!("{}_collection", column.name),
+                    proc_macro2::Span::call_site(),
+                );
+                let ident = &column.name;
+                (
+                    quote! {
+                        let mut #vec_ident = Vec::new();
+                    },
+                    quote! {
+                        #vec_ident.push(#ident);
+                    },
+                    quote! {
+                        __query_args.add(#vec_ident).map_err(sqlx::Error::Encode)?;
+                    },
+                )
+            })
+            .fold(
+                (Vec::new(), Vec::new(), Vec::new()),
+                |(mut v1, mut v2, mut v3): (Vec<_>, Vec<_>, Vec<_>), (a, b, c)| {
+                    v1.push(a);
+                    v2.push(b);
+                    v3.push(c);
+                    (v1, v2, v3)
+                },
+            );
+        let loop_head = if generated_id {
+            quote! { for (#ident, __id) in new_entities.iter().zip(__ids.iter()) }
+        } else {
+            quote! { for #ident in new_entities.iter() }
+        };
+        (
+            quote! {
+                #(#vecs)*
+                #loop_head {
+                    #assignments
+
+                    #(#pushes)*
+                }
+            },
+            bindings,
+        )
+    }
+
+    pub fn insert_column_names(&self) -> Vec<String> {
+        self.all
+            .iter()
+            .filter_map(|c| {
+                if c.opts.persist_on_create() {
+                    Some(c.name.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn insert_placeholders(&self, offset: usize) -> String {
+        let count = self
+            .all
+            .iter()
+            .filter(|c| c.opts.persist_on_create())
+            .count();
+        ((1 + offset)..=(count + offset))
+            .map(|i| format!("${i}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    pub fn sql_updates(&self) -> String {
+        self.all
+            .iter()
+            .skip(1)
+            .filter(|c| c.opts.persist_on_update())
+            .enumerate()
+            .map(|(idx, column)| format!("{} = ${}", column.name, idx + 2))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    pub fn update_query_args(&self) -> Vec<proc_macro2::TokenStream> {
+        self.all
+            .iter()
+            .filter(|c| c.opts.persist_on_update() || c.opts.is_id)
+            .map(|column| {
+                let ident = &column.name;
+                let ty = &column.opts.ty;
+                quote! {
+                    #ident as &#ty
+                }
+            })
+            .collect()
+    }
+
+    /// Names of the forgettable index columns (excludes the id column).
+    pub fn forgettable_column_names(&self) -> Vec<&syn::Ident> {
+        self.all
+            .iter()
+            .filter(|c| c.opts.forgettable && !c.opts.is_id)
+            .map(|c| &c.name)
+            .collect()
+    }
+
+    /// `SET` clause for the soft-delete `UPDATE`, but with forgettable columns
+    /// forced to `NULL` (delete auto-forgets) instead of re-persisting the live
+    /// value. Placeholder numbering only advances for the non-forgettable,
+    /// bound columns; it must stay in step with [`Self::update_query_args_for_delete`].
+    pub fn sql_updates_for_delete(&self) -> String {
+        let mut placeholder = 2;
+        let mut parts = Vec::new();
+        for column in self
+            .all
+            .iter()
+            .skip(1)
+            .filter(|c| c.opts.persist_on_update())
+        {
+            if column.opts.forgettable {
+                parts.push(format!("{} = NULL", column.name));
+            } else {
+                parts.push(format!("{} = ${}", column.name, placeholder));
+                placeholder += 1;
+            }
+        }
+        parts.join(", ")
+    }
+
+    /// Bind args for the soft-delete `UPDATE`, excluding forgettable columns
+    /// (which are literal `NULL` in [`Self::sql_updates_for_delete`]).
+    pub fn update_query_args_for_delete(&self) -> Vec<proc_macro2::TokenStream> {
+        self.all
+            .iter()
+            .filter(|c| (c.opts.persist_on_update() && !c.opts.forgettable) || c.opts.is_id)
+            .map(|column| {
+                let ident = &column.name;
+                let ty = &column.opts.ty;
+                quote! {
+                    #ident as &#ty
+                }
+            })
+            .collect()
+    }
+
+    /// Per-column `let` bindings for the soft-delete `UPDATE`, excluding
+    /// forgettable columns (they are never materialised, only NULLed).
+    pub fn variable_assignments_for_delete(&self, ident: syn::Ident) -> proc_macro2::TokenStream {
+        let assignments = self.all.iter().filter_map(|c| {
+            if (c.opts.persist_on_update() && !c.opts.forgettable) || c.opts.is_id {
+                Some(c.variable_assignment_for_update(&ident))
+            } else {
+                None
+            }
+        });
+        quote! {
+            #(#assignments)*
+        }
+    }
+
+    #[allow(dead_code)] // Postgres batch-statement builder; SQLite batches per entity.
+    pub fn update_all_arg_parts(
+        &self,
+        ident: syn::Ident,
+    ) -> (
+        proc_macro2::TokenStream,
+        proc_macro2::TokenStream,
+        Vec<proc_macro2::TokenStream>,
+    ) {
+        let assignments = {
+            let assignments = self.all.iter().filter_map(|c| {
+                if c.opts.persist_on_update() || c.opts.is_id {
+                    Some(c.variable_assignment_for_update_all(&ident))
+                } else {
+                    None
+                }
+            });
+            quote! {
+                #(#assignments)*
+            }
+        };
+        let (vecs, pushes, bindings) = self
+            .all
+            .iter()
+            .filter(|c| c.opts.persist_on_update() || c.opts.is_id)
+            .map(|column| {
+                let vec_ident = syn::Ident::new(
+                    &format!("{}_collection", column.name),
+                    proc_macro2::Span::call_site(),
+                );
+                let ident = &column.name;
+                (
+                    quote! {
+                        let mut #vec_ident = Vec::new();
+                    },
+                    quote! {
+                        #vec_ident.push(#ident);
+                    },
+                    quote! {
+                        .bind(#vec_ident)
+                    },
+                )
+            })
+            .fold(
+                (Vec::new(), Vec::new(), Vec::new()),
+                |(mut v1, mut v2, mut v3): (Vec<_>, Vec<_>, Vec<_>), (a, b, c)| {
+                    v1.push(a);
+                    v2.push(b);
+                    v3.push(c);
+                    (v1, v2, v3)
+                },
+            );
+        (
+            quote! { #(#vecs)* },
+            quote! {
+                #assignments
+                #(#pushes)*
+            },
+            bindings,
+        )
+    }
+
+    #[allow(dead_code)] // Postgres batch-statement builder; SQLite batches per entity.
+    pub fn sql_bulk_update_set(&self) -> String {
+        self.all
+            .iter()
+            .filter(|c| c.opts.persist_on_update() && !c.opts.is_id)
+            .map(|column| format!("{name} = unnested.{name}", name = column.name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    #[allow(dead_code)] // Postgres batch-statement builder; SQLite batches per entity.
+    pub fn update_all_column_names(&self) -> Vec<String> {
+        self.all
+            .iter()
+            .filter(|c| c.opts.persist_on_update() || c.opts.is_id)
+            .map(|c| c.name.to_string())
+            .collect()
+    }
+}
+
+impl FromMeta for Columns {
+    fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
+        let mut all = Vec::new();
+        for item in items {
+            if let darling::ast::NestedMeta::Meta(meta) = item
+                && meta.path().is_ident("id")
+            {
+                return Err(darling::Error::custom(
+                    "the id column is configured by the repo-level `id` attribute, e.g. `#[es_repo(id(scope), columns(...))]`",
+                )
+                .with_span(meta));
+            }
+            all.push(Column::from_nested_meta(item)?);
+        }
+        let (all, virtual_columns) = partition_virtual(all);
+        Ok(Columns {
+            all,
+            virtual_columns,
+        })
+    }
+}
+
+#[derive(PartialEq)]
+pub struct Column {
+    name: syn::Ident,
+    opts: ColumnOpts,
+}
+
+impl FromMeta for Column {
+    fn from_nested_meta(item: &darling::ast::NestedMeta) -> darling::Result<Self> {
+        match item {
+            darling::ast::NestedMeta::Meta(
+                meta @ syn::Meta::NameValue(syn::MetaNameValue {
+                    value:
+                        syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(lit_str),
+                            ..
+                        }),
+                    ..
+                }),
+            ) => {
+                let name = meta.path().get_ident().cloned().ok_or_else(|| {
+                    darling::Error::custom("Expected identifier").with_span(meta.path())
+                })?;
+                Ok(Column::new(name, syn::parse_str(&lit_str.value())?))
+            }
+            darling::ast::NestedMeta::Meta(meta @ syn::Meta::List(_)) => {
+                let name = meta.path().get_ident().cloned().ok_or_else(|| {
+                    darling::Error::custom("Expected identifier").with_span(meta.path())
+                })?;
+                let mut opts = ColumnOpts::from_meta(meta)?;
+                opts.normalize_forgettable();
+                let column = Column { name, opts };
+                Ok(column)
+            }
+            _ => Err(
+                darling::Error::custom("Expected name-value pair or attribute list")
+                    .with_span(item),
+            ),
+        }
+    }
+}
+
+impl Column {
+    pub fn new(name: syn::Ident, ty: syn::Type) -> Self {
+        Column {
+            name,
+            opts: ColumnOpts::new(ty),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_list_for(name: syn::Ident, ty: syn::Type, by_columns: Vec<syn::Ident>) -> Self {
+        Column {
+            name,
+            opts: ColumnOpts {
+                list_for_opts: Some(ListForOpts {
+                    by_columns,
+                    is_bare: false,
+                    find_all_for: false,
+                }),
+                ..ColumnOpts::new(ty)
+            },
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_nullable(name: syn::Ident, ty: syn::Type) -> Self {
+        Column {
+            name,
+            opts: ColumnOpts {
+                nullable: Some(true),
+                ..ColumnOpts::new(ty)
+            },
+        }
+    }
+
+    /// Test-only constructor for a valid `virtual = "<sql>"` filter column:
+    /// `ty = bool`, bare `list_for`, predicate as given.
+    #[cfg(test)]
+    pub fn new_virtual(name: syn::Ident, predicate: &str) -> Self {
+        Column {
+            name,
+            opts: ColumnOpts {
+                list_for_opts: Some(ListForOpts {
+                    by_columns: vec![syn::Ident::new("id", proc_macro2::Span::call_site())],
+                    is_bare: true,
+                    find_all_for: false,
+                }),
+                virtual_predicate: Some(predicate.to_string()),
+                ..ColumnOpts::new(syn::parse_quote!(bool))
+            },
+        }
+    }
+
+    /// Test-only constructor for a valid *value* virtual filter column:
+    /// non-`bool` `ty`, bare `list_for`, predicate as given (expected to
+    /// reference `{value}`).
+    #[cfg(test)]
+    pub fn new_virtual_value(name: syn::Ident, ty: syn::Type, predicate: &str) -> Self {
+        Column {
+            name,
+            opts: ColumnOpts {
+                list_for_opts: Some(ListForOpts {
+                    by_columns: vec![syn::Ident::new("id", proc_macro2::Span::call_site())],
+                    is_bare: true,
+                    find_all_for: false,
+                }),
+                virtual_predicate: Some(predicate.to_string()),
+                ..ColumnOpts::new(ty)
+            },
+        }
+    }
+
+    pub fn for_id(ty: syn::Type) -> Self {
+        Column {
+            name: syn::Ident::new("id", proc_macro2::Span::call_site()),
+            opts: ColumnOpts {
+                ty,
+                is_id: true,
+                forgettable: false,
+                scope_opts: None,
+                list_by: Some(true),
+                find_by: Some(true),
+                nullable: None,
+                list_for_opts: None,
+                parent_opts: None,
+                create_opts: Some(CreateOpts {
+                    persist: Some(true),
+                    accessor: None,
+                }),
+                update_opts: Some(UpdateOpts {
+                    persist: Some(false),
+                    accessor: None,
+                }),
+                virtual_predicate: None,
+            },
+        }
+    }
+
+    pub fn for_created_at() -> Self {
+        Column {
+            name: syn::Ident::new("created_at", proc_macro2::Span::call_site()),
+            opts: ColumnOpts {
+                ty: syn::parse_quote!(
+                    es_entity::prelude::chrono::DateTime<es_entity::prelude::chrono::Utc>
+                ),
+                is_id: false,
+                forgettable: false,
+                scope_opts: None,
+                list_by: Some(true),
+                find_by: Some(false),
+                nullable: None,
+                list_for_opts: None,
+                parent_opts: None,
+                create_opts: Some(CreateOpts {
+                    persist: Some(false),
+                    accessor: None,
+                }),
+                update_opts: Some(UpdateOpts {
+                    persist: Some(false),
+                    accessor: Some(syn::parse_quote!(
+                        events()
+                            .entity_first_persisted_at()
+                            .expect("entity not persisted")
+                    )),
+                }),
+                virtual_predicate: None,
+            },
+        }
+    }
+
+    pub fn list_for_by_columns(&self) -> &[syn::Ident] {
+        self.opts.list_for_by_columns()
+    }
+
+    pub fn is_id(&self) -> bool {
+        self.opts.is_id
+    }
+
+    pub fn is_forgettable(&self) -> bool {
+        self.opts.forgettable
+    }
+
+    /// Whether the column's value is known to the create statement and
+    /// stored as-is, so a conflict on it can be targeted and looked up.
+    pub fn is_ensurable(&self) -> bool {
+        self.opts.persist_on_create() && !self.opts.forgettable
+    }
+
+    /// Whether this column's own update statement can ever hit a constraint
+    /// — `false` for an `update(persist = false)` column, since an update
+    /// that never writes a column can never violate a constraint on it.
+    /// Used by `RepositoryOptions::update_can_reject` to decide, per
+    /// constraint, whether any of its columns are actually reachable from
+    /// `update`/`update_all`.
+    pub fn persist_on_update(&self) -> bool {
+        self.opts.persist_on_update()
+    }
+
+    /// The verbatim SQL predicate of a `virtual = "<sql>"` column. Panics on
+    /// a non-virtual column — callers only ever hold virtual columns via
+    /// [`Columns::all_virtual_filters`].
+    pub fn virtual_predicate(&self) -> &str {
+        self.opts
+            .virtual_predicate
+            .as_deref()
+            .expect("virtual_predicate called on a non-virtual column")
+    }
+
+    /// True iff this is a *value* virtual column: `virtual = "<sql>"` with a
+    /// non-`bool` `ty`. Its predicate carries a `{value}` placeholder the
+    /// macro rewrites to a bound `$k` parameter at codegen time, and its
+    /// filters-struct field is a genuine `Option<T>` — `None` omits the
+    /// conjunct, `Some(v)` applies it with `v` bound through the same path a
+    /// physical `list_for` column uses.
+    ///
+    /// Contrast the `ty = "bool"` "polarity" virtual (`!is_value_virtual()`):
+    /// its `Option<bool>` field selects one of three pre-expanded static SQL
+    /// arms (`Absent`/`True`/`False`) and binds no parameter.
+    pub fn is_value_virtual(&self) -> bool {
+        self.opts.is_virtual() && !is_bare_bool(&self.opts.ty)
+    }
+
+    /// The scope enum variant ident for this column: the explicit
+    /// `scope(variant = "...")` override if given, else UpperCamel of the
+    /// column name. Only meaningful for columns marked `scope`.
+    pub fn scope_variant(&self) -> syn::Ident {
+        self.opts
+            .scope_opts
+            .as_ref()
+            .and_then(|o| o.variant.clone())
+            .unwrap_or_else(|| {
+                use convert_case::{Case, Casing};
+                syn::Ident::new(
+                    &self.name.to_string().to_case(Case::UpperCamel),
+                    proc_macro2::Span::call_site(),
+                )
+            })
+    }
+
+    /// True iff the Rust type is syntactically `Option<T>`.
+    ///
+    /// Drives how the macro casts query parameters and destructures the
+    /// cursor — both of which depend on the Rust type's shape (Option vs.
+    /// bare). For the SQL question "is this column nullable?" use
+    /// [`Self::is_nullable_column`] instead.
+    pub fn is_optional(&self) -> bool {
+        if let syn::Type::Path(type_path) = self.ty()
+            && type_path.path.segments.len() == 1
+        {
+            let segment = &type_path.path.segments[0];
+            if segment.ident == "Option" {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// True iff the underlying SQL column can hold NULL.
+    ///
+    /// Returns true when the Rust type is `Option<T>` *or* the column was
+    /// explicitly annotated `nullable` in the repo declaration. The latter
+    /// covers types like a domain enum whose custom `sqlx::Encode`
+    /// implementation maps one variant to SQL NULL — the macro otherwise
+    /// can't see that nullability via syntactic inspection.
+    ///
+    /// Drives `ORDER BY ... NULLS FIRST/LAST` emission and the nullable-aware
+    /// cursor `WHERE` clause in [`Self::condition`].
+    pub fn is_nullable_column(&self) -> bool {
+        self.is_optional() || self.opts.nullable()
+    }
+
+    pub fn name(&self) -> &syn::Ident {
+        &self.name
+    }
+
+    /// The Rust type used in the generated `{Entity}Scope` enum variant, its
+    /// `From` impl, and the query bind. For a scope column whose declared
+    /// type is syntactically `Option<Inner>`, this is `Inner` — the
+    /// generated variant is `{Variant}(Inner)`, never `{Variant}(Option
+    /// <Inner>)`, since a scope value is always concrete: NULL rows match no
+    /// scoped variant (only `All` sees them). Non-`Option` scope columns are
+    /// unaffected. Only meaningful for columns marked `scope`; mirrors the
+    /// `Forgettable<Inner>` unwrapping in [`Self::ty_for_find_by`].
+    pub fn ty_for_scope(&self) -> syn::Type {
+        option_inner(self.ty()).unwrap_or_else(|| self.ty().clone())
+    }
+
+    pub fn ty(&self) -> &syn::Type {
+        &self.opts.ty
+    }
+
+    pub fn ty_for_find_by(
+        &self,
+    ) -> (
+        syn::Type,
+        proc_macro2::TokenStream,
+        proc_macro2::TokenStream,
+    ) {
+        // A `Forgettable<Inner>` column stores `Option<Inner>` but is queried by
+        // `Inner` (identical ergonomics to a naked `Inner` column). Unwrap the
+        // synthesised `Option<..>` back to the inner type for the lookup param.
+        let query_ty = if self.opts.forgettable {
+            option_inner(self.ty()).unwrap_or_else(|| self.ty().clone())
+        } else {
+            self.ty().clone()
+        };
+        if let syn::Type::Path(type_path) = &query_ty
+            && type_path.path.is_ident("String")
+        {
+            (
+                syn::parse_quote! { str },
+                quote! { impl std::convert::AsRef<str> },
+                quote! { as_ref() },
+            )
+        } else {
+            (
+                query_ty.clone(),
+                quote! { impl std::borrow::Borrow<#query_ty> },
+                quote! { borrow() },
+            )
+        }
+    }
+
+    pub fn accessor(&self) -> proc_macro2::TokenStream {
+        self.opts.update_accessor(&self.name)
+    }
+
+    /// Whether `list_for(.., find_all_for)` asked for the batch lookup.
+    pub fn find_all_for_enabled(&self) -> bool {
+        self.opts.find_all_for()
+    }
+
+    pub fn parent_accessor(&self) -> proc_macro2::TokenStream {
+        self.opts.parent_accessor(&self.name)
+    }
+
+    fn variable_assignment_for_create(&self, ident: &syn::Ident) -> proc_macro2::TokenStream {
+        let name = &self.name;
+        if self.opts.forgettable {
+            // The `New` entity holds the plain inner value; a freshly-created
+            // entity always has the value set, so wrap it in `Some` for the
+            // nullable index column. (`update`/`list_by` read the `Forgettable`
+            // field of the hydrated entity via the accessor instead.)
+            return quote! {
+                let #name = &Some(#ident.#name.clone());
+            };
+        }
+        let accessor = self.opts.create_accessor(name);
+        quote! {
+            let #name = &#ident.#accessor;
+        }
+    }
+
+    #[allow(dead_code)] // Postgres batch-statement builder; SQLite batches per entity.
+    fn variable_assignment_for_create_all(&self, ident: &syn::Ident) -> proc_macro2::TokenStream {
+        let name = &self.name;
+        let ty = &self.opts.ty;
+        if self.opts.forgettable {
+            return quote! {
+                let #name: #ty = Some(#ident.#name.clone());
+            };
+        }
+        let accessor = self.opts.create_accessor(name);
+        if self.opts.create_accessor_returns_owned() {
+            quote! {
+                let #name: #ty = #ident.#accessor;
+            }
+        } else {
+            quote! {
+                let #name: &#ty = &#ident.#accessor;
+            }
+        }
+    }
+
+    fn variable_assignment_for_update(&self, ident: &syn::Ident) -> proc_macro2::TokenStream {
+        let name = &self.name;
+        let accessor = self.opts.update_accessor(name);
+        quote! {
+            let #name = &#ident.#accessor;
+        }
+    }
+
+    #[allow(dead_code)] // Postgres batch-statement builder; SQLite batches per entity.
+    fn variable_assignment_for_update_all(&self, ident: &syn::Ident) -> proc_macro2::TokenStream {
+        let name = &self.name;
+        let accessor = self.opts.update_accessor(name);
+        if self.opts.update_accessor_returns_owned() {
+            quote! {
+                let #name = #ident.#accessor;
+            }
+        } else {
+            quote! {
+                let #name = &#ident.#accessor;
+            }
+        }
+    }
+}
+
+/// If `ty` is `Forgettable<Inner>`, returns `Inner`; otherwise `None`.
+///
+/// Used to recognise `columns(name = "Forgettable<String>")`: such a column is
+/// materialised into a nullable index column (`Option<Inner>`) that is queried
+/// by `Inner` and set to `NULL` by `forget()`/`delete()`.
+fn forgettable_inner(ty: &syn::Type) -> Option<syn::Type> {
+    if let syn::Type::Path(type_path) = ty
+        && type_path.path.segments.len() == 1
+    {
+        let segment = &type_path.path.segments[0];
+        if segment.ident == "Forgettable"
+            && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+            && args.args.len() == 1
+            && let syn::GenericArgument::Type(inner) = &args.args[0]
+        {
+            return Some(inner.clone());
+        }
+    }
+    None
+}
+
+/// True iff `ty` is syntactically the bare `bool` path, with no
+/// qualification. Discriminates the two virtual-column kinds a `virtual =
+/// "<sql>"` column may declare: `ty = "bool"` is the "polarity" form
+/// (`Absent`/`True`/`False`, no bound value); any other `ty` is a "value"
+/// virtual, whose predicate must reference `{value}` — see
+/// [`Columns::validate_virtual`] and [`Column::is_value_virtual`].
+fn is_bare_bool(ty: &syn::Type) -> bool {
+    matches!(ty, syn::Type::Path(type_path) if type_path.path.is_ident("bool"))
+}
+
+/// Rewrites every occurrence of the literal placeholder `{value}` in `pred`
+/// to the bind parameter `$k`, honouring `{{`/`}}` as escapes for a literal
+/// `{`/`}` and leaving content inside single-quoted SQL string literals
+/// (`''` the escaped quote) untouched. Returns `None` when `pred` contains
+/// no unescaped `{value}` — callers use that both to validate a virtual
+/// column's predicate against its declared kind
+/// ([`Columns::validate_virtual`]) and to substitute the bind parameter at
+/// codegen time (`list_for_filters_fn`). The predicate otherwise stays
+/// opaque, verbatim SQL text — this is a light single-quote-aware scan, not
+/// a SQL parser.
+pub fn substitute_value_placeholder(pred: &str, k: u32) -> Option<String> {
+    let mut out = String::with_capacity(pred.len());
+    let mut in_string = false;
+    let mut found = false;
+    let mut chars = pred.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if in_string {
+            out.push(c);
+            if c == '\'' {
+                if matches!(chars.peek(), Some((_, '\''))) {
+                    out.push('\'');
+                    chars.next();
+                } else {
+                    in_string = false;
+                }
+            }
+            continue;
+        }
+        match c {
+            '\'' => {
+                in_string = true;
+                out.push(c);
+            }
+            '{' if matches!(chars.peek(), Some((_, '{'))) => {
+                out.push('{');
+                chars.next();
+            }
+            '}' if matches!(chars.peek(), Some((_, '}'))) => {
+                out.push('}');
+                chars.next();
+            }
+            '{' if pred[i..].starts_with("{value}") => {
+                out.push_str(&format!("${k}"));
+                found = true;
+                for _ in 0.."value}".len() {
+                    chars.next();
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    found.then_some(out)
+}
+
+/// If `ty` is `Option<Inner>`, returns `Inner`; otherwise `None`.
+fn option_inner(ty: &syn::Type) -> Option<syn::Type> {
+    if let syn::Type::Path(type_path) = ty
+        && type_path.path.segments.len() == 1
+    {
+        let segment = &type_path.path.segments[0];
+        if segment.ident == "Option"
+            && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+            && args.args.len() == 1
+            && let syn::GenericArgument::Type(inner) = &args.args[0]
+        {
+            return Some(inner.clone());
+        }
+    }
+    None
+}
+
+#[derive(PartialEq, FromMeta)]
+struct ColumnOpts {
+    ty: syn::Type,
+    #[darling(default, skip)]
+    is_id: bool,
+    /// Set when the declared column type was `Forgettable<Inner>`. Such columns
+    /// store the value in a nullable index column while live and are set to
+    /// `NULL` by `forget()`/`delete()`. `ty` is rewritten to `Option<Inner>`.
+    #[darling(default, skip)]
+    forgettable: bool,
+    /// Marks a repo scope column: every generated read fn gains a leading
+    /// `scope: impl Into<{Entity}Scope>` argument and filters by this column
+    /// under its dedicated enum variant. Multiple columns may be marked
+    /// `scope` (one variant each, plus `All`). Bare `scope` names the
+    /// variant UpperCamel(column name); `scope(variant = "...")` overrides
+    /// it. Validated by [`Columns::validate_scope`].
+    #[darling(default, rename = "scope")]
+    scope_opts: Option<ScopeOpts>,
+    #[darling(default)]
+    find_by: Option<bool>,
+    #[darling(default)]
+    list_by: Option<bool>,
+    /// Opt-in flag for columns whose Rust type is not syntactically `Option<T>`
+    /// but whose underlying SQL column is nullable. When set, the macro emits
+    /// the same nullable-aware cursor SQL (`IS NOT DISTINCT FROM`, `NULLS
+    /// FIRST/LAST` ordering, direction-aware NULL fallback) as it would for an
+    /// `Option<T>` column. The Rust type itself must implement `sqlx::Encode`
+    /// in a way that maps to a nullable database column — typically by
+    /// encoding one variant as `IsNull::Yes` or by exposing a `Type::type_info`
+    /// matching `Option<Inner>`.
+    #[darling(default)]
+    nullable: Option<bool>,
+    #[darling(default, rename = "list_for")]
+    list_for_opts: Option<ListForOpts>,
+    #[darling(default, rename = "parent")]
+    parent_opts: Option<ParentOpts>,
+    #[darling(default, rename = "create")]
+    create_opts: Option<CreateOpts>,
+    #[darling(default, rename = "update")]
+    update_opts: Option<UpdateOpts>,
+    /// `virtual = "<sql predicate>"`: marks this a virtual filter column — a
+    /// SQL predicate spliced into `list_for_filters*` as a conjunct, rather
+    /// than a physical index column. `ty = "bool"` splices the predicate
+    /// verbatim (`(pred)` / `NOT (pred)`, no bound parameter); any other
+    /// `ty` requires a `{value}` placeholder, rewritten to a bound `$k` (see
+    /// [`substitute_value_placeholder`]). Validated by
+    /// [`Columns::validate_virtual`].
+    #[darling(default, rename = "virtual")]
+    virtual_predicate: Option<String>,
+}
+
+impl ColumnOpts {
+    fn new(ty: syn::Type) -> Self {
+        let mut opts = ColumnOpts {
+            ty,
+            is_id: false,
+            forgettable: false,
+            scope_opts: None,
+            find_by: None,
+            list_by: None,
+            nullable: None,
+            list_for_opts: None,
+            parent_opts: None,
+            create_opts: None,
+            update_opts: None,
+            virtual_predicate: None,
+        };
+        opts.normalize_forgettable();
+        opts
+    }
+
+    /// Rewrite a `Forgettable<Inner>` column type into a nullable `Option<Inner>`
+    /// index column and flag it as forgettable. Idempotent.
+    fn normalize_forgettable(&mut self) {
+        if let Some(inner) = forgettable_inner(&self.ty) {
+            self.forgettable = true;
+            self.ty = syn::parse_quote! { Option<#inner> };
+        }
+    }
+
+    fn find_by(&self) -> bool {
+        // `scope` flips the default to false — every read is already
+        // filtered by the scope column; explicit `find_by = true` opts in.
+        self.find_by.unwrap_or(self.scope_opts.is_none())
+    }
+
+    fn list_by(&self) -> bool {
+        self.list_by.unwrap_or(false)
+    }
+
+    fn nullable(&self) -> bool {
+        self.nullable.unwrap_or(false)
+    }
+
+    fn list_for(&self) -> bool {
+        self.list_for_opts.is_some()
+    }
+
+    fn is_virtual(&self) -> bool {
+        self.virtual_predicate.is_some()
+    }
+
+    fn find_all_for(&self) -> bool {
+        self.list_for_opts.as_ref().is_some_and(|o| o.find_all_for)
+    }
+
+    fn list_for_by_columns(&self) -> &[syn::Ident] {
+        self.list_for_opts
+            .as_ref()
+            .map(|o| o.by_columns.as_slice())
+            .unwrap_or(&[])
+    }
+
+    fn persist_on_create(&self) -> bool {
+        self.create_opts
+            .as_ref()
+            .is_none_or(|o| o.persist.unwrap_or(true))
+    }
+
+    fn create_accessor(&self, name: &syn::Ident) -> proc_macro2::TokenStream {
+        if let Some(accessor) = &self.create_opts.as_ref().and_then(|o| o.accessor.as_ref()) {
+            quote! {
+                #accessor
+            }
+        } else {
+            quote! {
+                #name
+            }
+        }
+    }
+
+    fn persist_on_update(&self) -> bool {
+        self.update_opts
+            .as_ref()
+            .is_none_or(|o| o.persist.unwrap_or(true))
+    }
+
+    fn update_accessor(&self, name: &syn::Ident) -> proc_macro2::TokenStream {
+        if self.forgettable {
+            quote! {
+                #name.value().map(|v| v.clone())
+            }
+        } else if let Some(accessor) = &self.update_opts.as_ref().and_then(|o| o.accessor.as_ref())
+        {
+            quote! {
+                #accessor
+            }
+        } else {
+            quote! {
+                #name
+            }
+        }
+    }
+
+    #[allow(dead_code)] // Postgres batch-statement builder; SQLite batches per entity.
+    fn create_accessor_returns_owned(&self) -> bool {
+        self.create_opts
+            .as_ref()
+            .and_then(|o| o.accessor.as_ref())
+            .is_some_and(|expr| matches!(expr, syn::Expr::Call(_) | syn::Expr::MethodCall(_)))
+    }
+
+    #[allow(dead_code)] // Postgres batch-statement builder; SQLite batches per entity.
+    fn update_accessor_returns_owned(&self) -> bool {
+        self.forgettable
+            || self
+                .update_opts
+                .as_ref()
+                .and_then(|o| o.accessor.as_ref())
+                .is_some_and(|expr| matches!(expr, syn::Expr::Call(_) | syn::Expr::MethodCall(_)))
+    }
+
+    fn parent_accessor(&self, name: &syn::Ident) -> proc_macro2::TokenStream {
+        if let Some(accessor) = &self.parent_opts.as_ref().and_then(|o| o.accessor.as_ref()) {
+            quote! {
+                #accessor
+            }
+        } else {
+            self.update_accessor(name)
+        }
+    }
+}
+
+#[derive(Default, PartialEq, FromMeta)]
+struct CreateOpts {
+    persist: Option<bool>,
+    accessor: Option<syn::Expr>,
+}
+
+#[derive(Default, PartialEq, FromMeta)]
+struct UpdateOpts {
+    persist: Option<bool>,
+    accessor: Option<syn::Expr>,
+}
+
+#[derive(PartialEq, Debug, Default)]
+struct ListForOpts {
+    by_columns: Vec<syn::Ident>,
+    /// True iff this was the bare `list_for` word (or `list_for = true`), as
+    /// opposed to `list_for(by(...))`. A virtual filter column requires the
+    /// bare form — see [`Columns::validate_virtual`].
+    is_bare: bool,
+    /// Set by `list_for(.., find_all_for)`: opts the column into the
+    /// `find_all_for_{col}s` batch lookup.
+    find_all_for: bool,
+}
+
+impl FromMeta for ListForOpts {
+    fn from_word() -> darling::Result<Self> {
+        Ok(ListForOpts {
+            by_columns: vec![syn::Ident::new("id", proc_macro2::Span::call_site())],
+            is_bare: true,
+            find_all_for: false,
+        })
+    }
+
+    fn from_bool(value: bool) -> darling::Result<Self> {
+        if value {
+            Self::from_word()
+        } else {
+            Err(darling::Error::custom(
+                "list_for = false is not supported; remove list_for entirely to disable",
+            ))
+        }
+    }
+
+    fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
+        let mut by_columns = Vec::new();
+        let mut find_all_for = false;
+        for item in items {
+            match item {
+                darling::ast::NestedMeta::Meta(syn::Meta::List(list))
+                    if list.path.is_ident("by") =>
+                {
+                    let inner: syn::punctuated::Punctuated<syn::Ident, syn::Token![,]> =
+                        list.parse_args_with(syn::punctuated::Punctuated::parse_terminated)?;
+                    by_columns.extend(inner);
+                }
+                darling::ast::NestedMeta::Meta(syn::Meta::Path(path))
+                    if path.is_ident("find_all_for") =>
+                {
+                    find_all_for = true;
+                }
+                _ => {
+                    return Err(darling::Error::custom(
+                        "Expected `by(col1, col2, ...)` or `find_all_for`",
+                    )
+                    .with_span(item));
+                }
+            }
+        }
+        Ok(ListForOpts {
+            by_columns,
+            is_bare: false,
+            find_all_for,
+        })
+    }
+}
+
+/// Options for a `scope` column marker. Bare `scope` leaves `variant: None`
+/// (the enum variant defaults to UpperCamel of the column name, computed in
+/// [`Column::scope_variant`]); `scope(variant = "...")` overrides it.
+#[derive(PartialEq, Debug, Default)]
+pub struct ScopeOpts {
+    variant: Option<syn::Ident>,
+}
+
+impl FromMeta for ScopeOpts {
+    fn from_word() -> darling::Result<Self> {
+        Ok(ScopeOpts::default())
+    }
+
+    fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
+        #[derive(FromMeta)]
+        struct Inner {
+            #[darling(default)]
+            variant: Option<String>,
+        }
+
+        let inner = Inner::from_list(items)?;
+        let variant = inner
+            .variant
+            .map(|v| {
+                syn::parse_str::<syn::Ident>(&v).map_err(|_| {
+                    darling::Error::custom(format!(
+                        "scope variant '{v}' is not a valid Rust identifier"
+                    ))
+                })
+            })
+            .transpose()?;
+        Ok(ScopeOpts { variant })
+    }
+}
+
+#[derive(PartialEq, Debug, Default)]
+struct ParentOpts {
+    accessor: Option<syn::Expr>,
+}
+
+impl FromMeta for ParentOpts {
+    fn from_word() -> darling::Result<Self> {
+        Ok(ParentOpts::default())
+    }
+
+    fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
+        #[derive(FromMeta)]
+        struct Inner {
+            #[darling(default)]
+            accessor: Option<syn::Expr>,
+        }
+
+        let inner = Inner::from_list(items)?;
+        Ok(ParentOpts {
+            accessor: inner.accessor,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use darling::FromMeta;
+    use syn::parse_quote;
+
+    use super::*;
+
+    #[test]
+    fn column_opts_from_list() {
+        let input: syn::Meta = parse_quote!(thing(
+            ty = "crate::module::Thing",
+            list_by = false,
+            create(persist = true, accessor = accessor_fn()),
+        ));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert_eq!(values.ty, parse_quote!(crate::module::Thing));
+        assert!(!values.list_by());
+        assert!(values.find_by());
+        // assert!(values.update());
+        assert_eq!(
+            values.create_opts.unwrap().accessor.unwrap(),
+            parse_quote!(accessor_fn())
+        );
+    }
+
+    #[test]
+    fn columns_from_list() {
+        let input: syn::Meta = parse_quote!(columns(
+            name = "String",
+            email(
+                ty = "String",
+                list_by = false,
+                create(accessor = "email()"),
+                update(persist = false)
+            )
+        ));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        assert_eq!(columns.all.len(), 2);
+
+        assert_eq!(columns.all[0].name.to_string(), "name");
+
+        assert_eq!(columns.all[1].name.to_string(), "email");
+        assert!(!columns.all[1].opts.list_by());
+        assert_eq!(
+            columns.all[1]
+                .opts
+                .create_accessor(&parse_quote!(email))
+                .to_string(),
+            quote!(email()).to_string()
+        );
+        assert!(!columns.all[1].opts.persist_on_update());
+    }
+
+    #[test]
+    fn parent_opts_from_list() {
+        let input: syn::Meta = parse_quote!(thing(ty = "String", parent));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert_eq!(values.ty, parse_quote!(String));
+        assert!(values.parent_opts.is_some());
+
+        let input: syn::Meta = parse_quote!(thing(ty = "String", parent(accessor = "parent_id()")));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert_eq!(values.ty, parse_quote!(String));
+        assert!(values.parent_opts.is_some());
+        assert_eq!(
+            values.parent_accessor(&parse_quote!(thing)).to_string(),
+            quote!(parent_id()).to_string()
+        );
+    }
+
+    #[test]
+    fn list_for_bare_word() {
+        let input: syn::Meta = parse_quote!(thing(ty = "String", list_for));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert!(values.list_for());
+        assert_eq!(values.list_for_by_columns().len(), 1);
+        assert_eq!(values.list_for_by_columns()[0].to_string(), "id");
+    }
+
+    #[test]
+    fn list_for_with_by_columns() {
+        let input: syn::Meta = parse_quote!(thing(ty = "String", list_for(by(created_at))));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert!(values.list_for());
+        assert_eq!(values.list_for_by_columns().len(), 1);
+        assert_eq!(values.list_for_by_columns()[0].to_string(), "created_at");
+    }
+
+    #[test]
+    fn list_for_by_column_must_be_list_by() {
+        let id_ident: syn::Ident = parse_quote!(TestId);
+        let col = Column::new_list_for(
+            parse_quote!(status),
+            syn::parse_str("String").unwrap(),
+            vec![parse_quote!(nonexistent)],
+        );
+        let columns = Columns::new(&id_ident, vec![col]);
+        let result = columns.validate_list_for_by_columns();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("nonexistent"),
+            "error should mention the invalid column name: {err}"
+        );
+        assert!(
+            err.contains("list_by"),
+            "error should mention list_by: {err}"
+        );
+    }
+
+    #[test]
+    fn list_for_by_valid_column_passes_validation() {
+        let id_ident: syn::Ident = parse_quote!(TestId);
+        let col = Column::new_list_for(
+            parse_quote!(status),
+            syn::parse_str("String").unwrap(),
+            vec![parse_quote!(id)],
+        );
+        let columns = Columns::new(&id_ident, vec![col]);
+        let result = columns.validate_list_for_by_columns();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn list_for_with_multiple_by_columns() {
+        let input: syn::Meta = parse_quote!(thing(ty = "String", list_for(by(created_at, id))));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert!(values.list_for());
+        assert_eq!(values.list_for_by_columns().len(), 2);
+        assert_eq!(values.list_for_by_columns()[0].to_string(), "created_at");
+        assert_eq!(values.list_for_by_columns()[1].to_string(), "id");
+    }
+
+    fn scope_opts(meta: syn::Meta) -> ScopeOpts {
+        ScopeOpts::from_meta(&meta).expect("Failed to parse scope")
+    }
+
+    #[test]
+    fn id_scope_from_list() {
+        let input: syn::Meta = parse_quote!(columns(name = "String"));
+        let mut columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        assert_eq!(columns.all.len(), 1);
+        columns.set_id_column(&parse_quote!(TestId));
+        columns.scope_id_column(scope_opts(parse_quote!(scope)));
+
+        let scope_cols = columns.scope_columns();
+        let scope = scope_cols.first().expect("id should be scope column");
+        assert_eq!(scope.name().to_string(), "id");
+        // The id column keeps its point-read and cursor fns despite being
+        // the scope column (`for_id` opts in explicitly).
+        assert!(scope.opts.find_by());
+        assert!(scope.opts.list_by());
+        assert!(columns.validate_scope().is_ok());
+        // bare `id(scope)` defaults the variant to `Id`.
+        assert_eq!(scope.scope_variant().to_string(), "Id");
+    }
+
+    #[test]
+    fn id_scope_variant_override_is_parsed_and_used() {
+        let input: syn::Meta = parse_quote!(columns(name = "String"));
+        let mut columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        columns.set_id_column(&parse_quote!(TestId));
+        columns.scope_id_column(scope_opts(parse_quote!(scope(variant = "Tenant"))));
+
+        let scope_cols = columns.scope_columns();
+        let scope = scope_cols.first().expect("id should be scope column");
+        assert_eq!(scope.scope_variant().to_string(), "Tenant");
+        assert!(columns.validate_scope().is_ok());
+    }
+
+    #[test]
+    fn id_without_scope_stays_unscoped() {
+        let input: syn::Meta = parse_quote!(columns(name = "String"));
+        let mut columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        columns.set_id_column(&parse_quote!(TestId));
+        assert!(columns.scope_columns().is_empty());
+    }
+
+    fn parse_columns_err(input: syn::Meta) -> String {
+        match Columns::from_meta(&input) {
+            Err(err) => err.to_string(),
+            Ok(_) => panic!("expected error"),
+        }
+    }
+
+    #[test]
+    fn id_column_is_not_configured_in_columns() {
+        for input in [
+            parse_quote!(columns(id(scope), name = "String")),
+            parse_quote!(columns(id(ty = "TestId"), name = "String")),
+            parse_quote!(columns(id = "TestId")),
+            parse_quote!(columns(id(scope, find_by = false))),
+            parse_quote!(columns(id(scope = true), name = "String")),
+        ] {
+            let err = parse_columns_err(input);
+            assert!(
+                err.contains("repo-level `id` attribute"),
+                "error should point at the repo-level id attribute: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn id_scope_composes_with_distinct_column_scope() {
+        // Multiple scope columns are allowed as long as their Rust types are
+        // pairwise distinct — `id(scope)` (TestId) plus a `partner_id(scope)`
+        // (PartnerId) is a valid two-dimension scope.
+        let input: syn::Meta = parse_quote!(columns(partner_id(ty = "PartnerId", scope)));
+        let mut columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        columns.set_id_column(&parse_quote!(TestId));
+        columns.scope_id_column(scope_opts(parse_quote!(scope)));
+        assert!(columns.validate_scope().is_ok());
+        assert_eq!(columns.scope_columns().len(), 2);
+    }
+
+    #[test]
+    fn same_type_scope_columns_rejected() {
+        let input: syn::Meta = parse_quote!(columns(
+            partner_id(ty = "PartnerId", scope),
+            other_partner_id(ty = "PartnerId", scope)
+        ));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_scope().unwrap_err().to_string();
+        assert!(err.contains("same Rust type"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn colliding_variant_names_rejected() {
+        // `all` as a column name collides with the reserved `All` variant.
+        let input: syn::Meta = parse_quote!(columns(all(ty = "PartnerId", scope)));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_scope().unwrap_err().to_string();
+        assert!(
+            err.contains("reserved variant name"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn scope_bare_word_defaults_variant_to_upper_camel_column_name() {
+        let input: syn::Meta = parse_quote!(thing(ty = "PartnerId", scope));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert!(values.scope_opts.is_some());
+        assert!(values.scope_opts.as_ref().unwrap().variant.is_none());
+
+        let column = Column {
+            name: parse_quote!(partner_id),
+            opts: values,
+        };
+        assert_eq!(column.scope_variant().to_string(), "PartnerId");
+    }
+
+    #[test]
+    fn scope_variant_override_is_parsed_and_used() {
+        let input: syn::Meta = parse_quote!(thing(ty = "PartnerId", scope(variant = "Partner")));
+        let values = ColumnOpts::from_meta(&input).expect("Failed to parse Field");
+        assert_eq!(
+            values
+                .scope_opts
+                .as_ref()
+                .and_then(|o| o.variant.as_ref())
+                .expect("variant override")
+                .to_string(),
+            "Partner"
+        );
+
+        let column = Column {
+            name: parse_quote!(partner_id),
+            opts: values,
+        };
+        assert_eq!(column.scope_variant().to_string(), "Partner");
+    }
+
+    #[test]
+    fn scope_variant_override_must_be_valid_identifier() {
+        let input: syn::Meta =
+            parse_quote!(thing(ty = "PartnerId", scope(variant = "not an ident")));
+        let err = match ColumnOpts::from_meta(&input) {
+            Err(err) => err.to_string(),
+            Ok(_) => panic!("expected error"),
+        };
+        assert!(
+            err.contains("not a valid Rust identifier"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn overridden_variant_names_still_checked_for_collisions() {
+        // Two scope columns whose override collapses to the same variant
+        // name must be rejected, same as the unoverridden case.
+        let input: syn::Meta = parse_quote!(columns(
+            partner_id(ty = "PartnerId", scope(variant = "Tenant")),
+            customer_id(ty = "CustomerId", scope(variant = "Tenant"))
+        ));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_scope().unwrap_err().to_string();
+        assert!(
+            err.contains("same variant name 'Tenant'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn overridden_variant_colliding_with_all_is_rejected() {
+        let input: syn::Meta = parse_quote!(columns(partner_id(
+            ty = "PartnerId",
+            scope(variant = "All")
+        )));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_scope().unwrap_err().to_string();
+        assert!(
+            err.contains("reserved variant name"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn nullable_option_scope_column_is_accepted() {
+        // A syntactic Option<T> scope column is the new feature: previously
+        // rejected outright, now validates fine — the enum variant carries
+        // the inner type (checked in scope.rs's token tests).
+        let input: syn::Meta = parse_quote!(columns(customer_id(
+            ty = "Option<CustomerId>",
+            scope(variant = "Customer")
+        )));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        assert!(columns.validate_scope().is_ok());
+        let scope_cols = columns.scope_columns();
+        let col = scope_cols
+            .first()
+            .expect("customer_id should be scope column");
+        assert!(col.is_optional());
+        assert_eq!(col.scope_variant().to_string(), "Customer");
+    }
+
+    #[test]
+    fn ty_for_scope_unwraps_option_to_inner_type() {
+        let input: syn::Meta = parse_quote!(columns(customer_id(ty = "Option<CustomerId>", scope)));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let scope_cols = columns.scope_columns();
+        let col = scope_cols
+            .first()
+            .expect("customer_id should be scope column");
+        assert_eq!(
+            quote::ToTokens::to_token_stream(&col.ty_for_scope()).to_string(),
+            quote!(CustomerId).to_string(),
+        );
+    }
+
+    #[test]
+    fn ty_for_scope_is_identity_for_non_option_column() {
+        let input: syn::Meta = parse_quote!(columns(partner_id(ty = "PartnerId", scope)));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let scope_cols = columns.scope_columns();
+        let col = scope_cols
+            .first()
+            .expect("partner_id should be scope column");
+        assert_eq!(
+            quote::ToTokens::to_token_stream(&col.ty_for_scope()).to_string(),
+            quote!(PartnerId).to_string(),
+        );
+    }
+
+    #[test]
+    fn nullable_annotated_non_option_scope_column_still_rejected() {
+        // `nullable` (the opt-in flag for a non-Option Rust type whose custom
+        // Encode maps a value to SQL NULL) has no inner type to unwrap into a
+        // variant payload — still rejected, with a narrowed message.
+        let input: syn::Meta = parse_quote!(columns(status(ty = "StatusEnum", nullable, scope)));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_scope().unwrap_err().to_string();
+        assert!(err.contains("nullable"), "unexpected error: {err}");
+        assert!(
+            err.contains("only syntactic Option<T>"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn option_and_bare_same_inner_type_scope_columns_rejected() {
+        // customer_id: Option<CustomerId> and other_customer_id: CustomerId
+        // both resolve to the same From<CustomerId> impl target — must be
+        // caught even though their declared Rust types differ syntactically.
+        let input: syn::Meta = parse_quote!(columns(
+            customer_id(ty = "Option<CustomerId>", scope),
+            other_customer_id(ty = "CustomerId", scope)
+        ));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_scope().unwrap_err().to_string();
+        assert!(err.contains("same Rust type"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn virtual_column_is_partitioned_out_of_all() {
+        let input: syn::Meta = parse_quote!(columns(
+            status(ty = "String", list_for),
+            flagged(
+                ty = "bool",
+                virtual = "EXISTS (SELECT 1 FROM flags f WHERE f.id = t.id)",
+                list_for
+            )
+        ));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        assert_eq!(columns.all.len(), 1);
+        assert_eq!(columns.all[0].name().to_string(), "status");
+        assert_eq!(columns.virtual_columns.len(), 1);
+        let flagged = &columns.virtual_columns[0];
+        assert_eq!(flagged.name().to_string(), "flagged");
+        assert_eq!(
+            flagged.virtual_predicate(),
+            "EXISTS (SELECT 1 FROM flags f WHERE f.id = t.id)"
+        );
+        // `all_list_for` (drives the per-column `list_for_{name}_by_{sort}`
+        // fns) must not see the virtual column.
+        assert_eq!(columns.all_list_for().count(), 1);
+        assert_eq!(columns.all_virtual_filters().count(), 1);
+        assert!(columns.validate_virtual().is_ok());
+    }
+
+    #[test]
+    fn value_virtual_with_placeholder_passes_validation() {
+        let input: syn::Meta = parse_quote!(columns(min_flags(
+            ty = "i64",
+            virtual = "(SELECT COUNT(*) FROM flags f WHERE f.id = t.id) >= {value}",
+            list_for
+        )));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        assert!(columns.validate_virtual().is_ok());
+        let col = &columns.virtual_columns[0];
+        assert!(col.is_value_virtual());
+    }
+
+    #[test]
+    fn value_virtual_without_placeholder_rejected() {
+        let input: syn::Meta = parse_quote!(columns(min_flags(
+            ty = "i64",
+            virtual = "TRUE",
+            list_for
+        )));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_virtual().unwrap_err().to_string();
+        assert!(
+            err.contains("must reference {value}"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bool_virtual_with_placeholder_rejected() {
+        let input: syn::Meta = parse_quote!(columns(flagged(
+            ty = "bool",
+            virtual = "count(*) >= {value}",
+            list_for
+        )));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_virtual().unwrap_err().to_string();
+        assert!(
+            err.contains("must not use {value}"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn value_virtual_rejects_option_ty() {
+        let input: syn::Meta = parse_quote!(columns(min_flags(
+            ty = "Option<i64>",
+            virtual = "count(*) >= {value}",
+            list_for
+        )));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_virtual().unwrap_err().to_string();
+        assert!(err.contains("NULL-filtering"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn value_virtual_rejects_other_options() {
+        for extra in [
+            "find_by = true",
+            "list_by = true",
+            "scope",
+            "nullable = true",
+            "create(persist = false)",
+            "update(persist = false)",
+        ] {
+            let src = format!(
+                r#"columns(min_flags(ty = "i64", virtual = "count(*) >= {{value}}", list_for, {extra}))"#
+            );
+            let input: syn::Meta = syn::parse_str(&src).unwrap();
+            let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+            let err = columns.validate_virtual();
+            assert!(
+                err.is_err(),
+                "expected `{extra}` to be rejected on a value virtual column"
+            );
+        }
+    }
+
+    #[test]
+    fn value_virtual_does_not_persist_on_create_or_update() {
+        let input: syn::Meta = parse_quote!(columns(min_flags(
+            ty = "i64",
+            virtual = "count(*) >= {value}",
+            list_for
+        )));
+        let mut columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        columns.set_id_column(&parse_quote!(TestId));
+        assert!(
+            !columns
+                .insert_column_names()
+                .contains(&"min_flags".to_string())
+        );
+        assert!(!columns.sql_updates().contains("min_flags"));
+    }
+
+    #[test]
+    fn substitute_value_placeholder_rewrites_single_occurrence() {
+        let out = substitute_value_placeholder("col >= {value}", 3).unwrap();
+        assert_eq!(out, "col >= $3");
+    }
+
+    #[test]
+    fn substitute_value_placeholder_rewrites_repeated_occurrence_to_same_param() {
+        let out = substitute_value_placeholder("{value} = {value}", 5).unwrap();
+        assert_eq!(out, "$5 = $5");
+    }
+
+    #[test]
+    fn substitute_value_placeholder_honours_double_brace_escape() {
+        // `{{value}}` is an escaped literal, not a placeholder — it must not
+        // count toward `found` on its own (a predicate with only escaped
+        // braces and no real `{value}` correctly reports "no placeholder",
+        // same as one with none at all).
+        assert_eq!(
+            substitute_value_placeholder("literal {{value}} here", 1),
+            None
+        );
+
+        // Paired with a real occurrence, the escape still resolves to a
+        // literal `{value}` while the real placeholder is rewritten.
+        let out = substitute_value_placeholder("literal {{value}} and {value} here", 1).unwrap();
+        assert_eq!(out, "literal {value} and $1 here");
+    }
+
+    #[test]
+    fn substitute_value_placeholder_skips_single_quoted_string() {
+        let out = substitute_value_placeholder("col = '{value}' OR x >= {value}", 2).unwrap();
+        assert_eq!(out, "col = '{value}' OR x >= $2");
+    }
+
+    #[test]
+    fn substitute_value_placeholder_returns_none_without_placeholder() {
+        assert_eq!(substitute_value_placeholder("TRUE", 1), None);
+    }
+
+    #[test]
+    fn virtual_column_requires_list_for() {
+        let input: syn::Meta = parse_quote!(columns(flagged(ty = "bool", virtual = "TRUE")));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_virtual().unwrap_err().to_string();
+        assert!(
+            err.contains("must be marked `list_for`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn virtual_column_rejects_list_for_by() {
+        let input: syn::Meta = parse_quote!(columns(flagged(
+            ty = "bool",
+            virtual = "TRUE",
+            list_for(by(created_at))
+        )));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_virtual().unwrap_err().to_string();
+        assert!(err.contains("bare `list_for`"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn virtual_column_rejects_other_options() {
+        for extra in [
+            "find_by = true",
+            "list_by = true",
+            "scope",
+            "nullable = true",
+            "create(persist = false)",
+            "update(persist = false)",
+        ] {
+            let src =
+                format!(r#"columns(flagged(ty = "bool", virtual = "TRUE", list_for, {extra}))"#);
+            let input: syn::Meta = syn::parse_str(&src).unwrap();
+            let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+            let err = columns.validate_virtual();
+            assert!(
+                err.is_err(),
+                "expected `{extra}` to be rejected on a virtual column"
+            );
+        }
+    }
+
+    #[test]
+    fn virtual_column_rejects_empty_predicate() {
+        let input: syn::Meta =
+            parse_quote!(columns(flagged(ty = "bool", virtual = "   ", list_for)));
+        let columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        let err = columns.validate_virtual().unwrap_err().to_string();
+        assert!(err.contains("empty predicate"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn virtual_column_does_not_persist_on_create_or_update() {
+        // Regression guard for the partitioning itself: were a virtual
+        // column left in `all`, its default persist-on-create/update would
+        // silently add it to the INSERT/UPDATE column lists.
+        let input: syn::Meta = parse_quote!(columns(flagged(
+            ty = "bool",
+            virtual = "TRUE",
+            list_for
+        )));
+        let mut columns = Columns::from_meta(&input).expect("Failed to parse Fields");
+        columns.set_id_column(&parse_quote!(TestId));
+        assert!(
+            !columns
+                .insert_column_names()
+                .contains(&"flagged".to_string())
+        );
+        assert!(!columns.sql_updates().contains("flagged"));
+    }
+}

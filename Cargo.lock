@@ -826,6 +826,7 @@ dependencies = [
  "errlanes",
  "es-entity",
  "es-entity-macros",
+ "es-entity-macros-sqlite",
  "futures",
  "futures-core",
  "futures-util",
@@ -852,6 +853,20 @@ dependencies = [
 
 [[package]]
 name = "es-entity-macros"
+version = "0.21.1-dev"
+dependencies = [
+ "convert_case",
+ "darling 0.24.1",
+ "pluralizer",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "sqlparser",
+ "syn 3.0.9",
+]
+
+[[package]]
+name = "es-entity-macros-sqlite"
 version = "0.21.1-dev"
 dependencies = [
  "convert_case",

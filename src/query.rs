@@ -50,6 +50,10 @@ pub struct EsQuery<
 {
     inner: sqlx::query::Map<'q, db::Db, F, A>,
     source: TreeQuerySource<<<<Repo as EsRepo>::Entity as EsEntity>::Event as EsEvent>::EntityId>,
+    /// SQLite: the user SQL with its slice parameter expanded at runtime
+    /// (see `sqlite_write::expand_list_param`), replacing `source.user_sql`.
+    #[cfg(feature = "sqlite")]
+    user_sql_override: Option<String>,
     _repo: std::marker::PhantomData<Repo>,
     _flavor: std::marker::PhantomData<Flavor>,
     _row: std::marker::PhantomData<fn() -> R>,
@@ -80,10 +84,19 @@ where
         Self {
             inner: query,
             source,
+            #[cfg(feature = "sqlite")]
+            user_sql_override: None,
             _repo: std::marker::PhantomData,
             _flavor: std::marker::PhantomData,
             _row: std::marker::PhantomData,
         }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[doc(hidden)]
+    pub fn with_user_sql(mut self, user_sql: String) -> Self {
+        self.user_sql_override = Some(user_sql);
+        self
     }
 
     async fn fetch_optional_inner(
@@ -122,13 +135,22 @@ where
     > {
         let executor = op.into_executor();
         let spec = <Repo as EsRepo>::nested_tree_spec();
+        #[cfg(feature = "sqlite")]
+        let user_sql = self
+            .user_sql_override
+            .as_deref()
+            .unwrap_or(self.source.user_sql);
+        #[cfg(not(feature = "sqlite"))]
+        let user_sql = self.source.user_sql;
         let sql = build_tree_query(
-            self.source.user_sql,
+            user_sql,
             self.source.order_by_cols,
             &spec,
             include_deleted,
             self.source.n_user_args + 1,
         );
+        #[cfg(feature = "sqlite")]
+        let sql = crate::sqlite_sql::translate(&sql);
 
         let mut inner = self.inner;
         let mut args = sqlx::Execute::take_arguments(&mut inner)

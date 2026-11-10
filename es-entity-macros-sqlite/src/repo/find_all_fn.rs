@@ -1,0 +1,250 @@
+use darling::ToTokens;
+use proc_macro2::TokenStream;
+use quote::{TokenStreamExt, quote};
+
+use super::{options::*, scope::ScopeInfo};
+
+pub struct FindAllFn<'a> {
+    in_op_only: bool,
+    prefix: Option<&'a syn::LitStr>,
+    id: &'a syn::Ident,
+    entity: &'a syn::Ident,
+    table_name: &'a str,
+    post_hydrate_hook: bool,
+    forgettable_table_name: Option<&'a str>,
+    snapshot_table_name: Option<&'a str>,
+    scope: Option<ScopeInfo<'a>>,
+    #[cfg(feature = "instrument")]
+    repo_name_snake: String,
+}
+
+impl<'a> From<&'a RepositoryOptions> for FindAllFn<'a> {
+    fn from(opts: &'a RepositoryOptions) -> Self {
+        Self {
+            in_op_only: opts.in_op_only(),
+            prefix: opts.table_prefix(),
+            id: opts.id(),
+            entity: opts.entity(),
+            table_name: opts.table_name(),
+            post_hydrate_hook: opts.post_hydrate_hook.is_some(),
+            forgettable_table_name: opts.forgettable_table_name(),
+            snapshot_table_name: opts.snapshot_table_name(),
+            scope: ScopeInfo::from_opts(opts),
+            #[cfg(feature = "instrument")]
+            repo_name_snake: opts.repo_name_snake_case(),
+        }
+    }
+}
+
+impl FindAllFn<'_> {
+    /// Delegating methods for the generated `Scoped{Repo}` bound view.
+    /// Empty for unscoped repos.
+    pub fn scoped_delegates(&self) -> TokenStream {
+        if self.scope.is_none() {
+            return TokenStream::new();
+        }
+        let id = self.id;
+        let entity = self.entity;
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
+
+        let generics = quote! { <'a, Out: From<#entity>> };
+        let op_param = quote! { op: impl #query_fn_op_traits };
+
+        let standalone = (!self.in_op_only).then(|| {
+            quote! {
+                pub async fn find_all<Out: From<#entity>>(
+                    &self,
+                    ids: &[#id]
+                ) -> Result<std::collections::HashMap<#id, Out>, es_entity::RepoFault> {
+                    self.repo.find_all(self.scope, ids).await
+                }
+            }
+        });
+
+        quote! {
+            #standalone
+
+            pub async fn find_all_in_op #generics(
+                &self,
+                #op_param,
+                ids: &[#id]
+            ) -> Result<std::collections::HashMap<#id, Out>, es_entity::RepoFault> {
+                self.repo.find_all_in_op(op, self.scope, ids).await
+            }
+        }
+    }
+}
+
+impl ToTokens for FindAllFn<'_> {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let id = self.id;
+        let entity = self.entity;
+        let query_fn_op_traits = RepositoryOptions::query_fn_op_traits();
+        let query_fn_get_op = RepositoryOptions::query_fn_get_op();
+
+        let generics = quote! { <'a, Out: From<#entity>> };
+
+        let query = format!("SELECT id FROM {} WHERE id = ANY($1)", self.table_name);
+
+        let forgettable_tbl_arg = if let Some(tbl) = self.forgettable_table_name {
+            quote! { forgettable_tbl = #tbl, }
+        } else {
+            quote! {}
+        };
+        let snapshot_tbl_arg = if let Some(tbl) = self.snapshot_table_name {
+            quote! { snapshot_tbl = #tbl, }
+        } else {
+            quote! {}
+        };
+
+        // SQLite: `ANY($1)` is expanded at runtime (`expand_first_arg`).
+        let make_es_query = |query: &str, extra_args: &TokenStream| -> TokenStream {
+            let target = match self.prefix {
+                Some(prefix) => quote! { tbl_prefix = #prefix, },
+                None => quote! { entity = #entity, },
+            };
+            quote! {
+                es_entity::expand_es_query!(
+                    #target
+                    #forgettable_tbl_arg
+                    #snapshot_tbl_arg
+                    expand_first_arg = true,
+                    sql = #query,
+                    args = [ids as &[#id], #extra_args]
+                )
+            }
+        };
+        let es_query_call = make_es_query(&query, &quote! {});
+
+        let (scope_fn_arg, scope_fn_pass, scope_convert) = match &self.scope {
+            Some(scope) => (scope.fn_arg(), scope.fn_pass(), scope.convert()),
+            None => (quote! {}, quote! {}, quote! {}),
+        };
+        let fetch_call = if let Some(scope) = &self.scope {
+            scope.dispatch(
+                quote! { #es_query_call.fetch_n(op, ids.len()).await? },
+                |col| {
+                    let scoped_query = format!(
+                        "SELECT id FROM {} WHERE id = ANY($1) AND {}",
+                        self.table_name,
+                        col.predicate(2),
+                    );
+                    let scoped_es_query_call = make_es_query(&scoped_query, &col.arg_tokens());
+                    quote! { #scoped_es_query_call.fetch_n(op, ids.len()).await? }
+                },
+            )
+        } else {
+            quote! { #es_query_call.fetch_n(op, ids.len()).await? }
+        };
+
+        let op_param = quote! { op: impl #query_fn_op_traits };
+
+        #[cfg(feature = "instrument")]
+        let instrument_attr = {
+            let entity_name = entity.to_string();
+            let repo_name = &self.repo_name_snake;
+            let span_name = format!("{}.find_all", repo_name);
+            quote! {
+                #[tracing::instrument(name = #span_name, skip_all, fields(entity = #entity_name, count = ids.len(), ids = tracing::field::debug(ids)), err)]
+            }
+        };
+        #[cfg(not(feature = "instrument"))]
+        let instrument_attr = quote! {};
+
+        let post_hydrate_check = if self.post_hydrate_hook {
+            quote! {
+                for __entity in &entities {
+                    self.execute_post_hydrate_hook(__entity)?;
+                }
+            }
+        } else {
+            quote! {}
+        };
+
+        let standalone = (!self.in_op_only).then(|| {
+            quote! {
+                pub async fn find_all<Out: From<#entity>>(
+                    &self,
+                    #scope_fn_arg
+                    ids: &[#id]
+                ) -> Result<std::collections::HashMap<#id, Out>, es_entity::RepoFault> {
+                    self.find_all_in_op(#query_fn_get_op, #scope_fn_pass ids).await
+                }
+            }
+        });
+
+        tokens.append_all(quote! {
+            #standalone
+
+            #instrument_attr
+            pub async fn find_all_in_op #generics(
+                &self,
+                #op_param,
+                #scope_fn_arg
+                ids: &[#id]
+            ) -> Result<std::collections::HashMap<#id, Out>, es_entity::RepoFault> {
+                 #scope_convert
+                 let (entities, _) = #fetch_call;
+                 #post_hydrate_check
+                 Ok(entities.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proc_macro2::Span;
+    use syn::Ident;
+
+    #[test]
+    fn find_all_fn() {
+        let id_type = Ident::new("EntityId", Span::call_site());
+        let entity = Ident::new("Entity", Span::call_site());
+
+        let persist_fn = FindAllFn {
+            in_op_only: false,
+            prefix: None,
+            id: &id_type,
+            entity: &entity,
+            table_name: "entities",
+            post_hydrate_hook: false,
+            forgettable_table_name: None,
+            snapshot_table_name: None,
+            scope: None,
+            #[cfg(feature = "instrument")]
+            repo_name_snake: "test_repo".to_string(),
+        };
+
+        let mut tokens = TokenStream::new();
+        persist_fn.to_tokens(&mut tokens);
+
+        let expected = quote! {
+            pub async fn find_all<Out: From<Entity>>(
+                &self,
+                ids: &[EntityId]
+            ) -> Result<std::collections::HashMap<EntityId, Out>, es_entity::RepoFault> {
+                self.find_all_in_op(self.pool(), ids).await
+            }
+
+            pub async fn find_all_in_op<'a, Out: From<Entity>>(
+                &self,
+                op: impl es_entity::IntoOneTimeExecutor<'a>,
+                ids: &[EntityId]
+            ) -> Result<std::collections::HashMap<EntityId, Out>, es_entity::RepoFault> {
+                let (entities, _) = es_entity::expand_es_query!(
+                    entity = Entity,
+                    expand_first_arg = true,
+                    sql = "SELECT id FROM entities WHERE id = ANY($1)",
+                    args = [ids as &[EntityId],]
+                )
+                    .fetch_n(op, ids.len())
+                    .await?;
+                Ok(entities.into_iter().map(|u| (u.id.clone(), Out::from(u))).collect())
+            }
+        };
+
+        assert_eq!(tokens.to_string(), expected.to_string());
+    }
+}
