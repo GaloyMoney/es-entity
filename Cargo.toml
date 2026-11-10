@@ -14,6 +14,11 @@ inherits = "dev"
 
 [features]
 
+# Exactly one database backend must be enabled (see `src/db.rs`).
+default = ["postgres"]
+postgres = ["sqlx/postgres"]
+sqlite = ["sqlx/sqlite"]
+
 fail-on-warnings = ["es-entity-macros/fail-on-warnings"]
 tracing-context = ["dep:tracing", "dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk"]
 graphql = ["es-entity-macros/graphql", "dep:async-graphql", "dep:base64"]
@@ -107,7 +112,7 @@ schemars = { version = "1.0", features = ["uuid1"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_with = "3.15"
-sqlx = { version = "0.9", default-features = false, features = ["macros", "runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json" ] }
+sqlx = { version = "0.9", default-features = false, features = ["macros", "runtime-tokio", "tls-rustls", "uuid", "chrono", "json" ] }
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "time"] }
 thiserror = "2.0"
 uuid = { version = "1.23", features = ["serde", "v7"] }

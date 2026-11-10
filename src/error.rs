@@ -111,9 +111,18 @@ pub fn parse_constraint_detail_value(detail: Option<&str>) -> Option<String> {
 ///
 /// **Security note:** see [`parse_constraint_detail_value`] — the returned
 /// value may be PII and must not be exposed to untrusted clients.
+#[cfg(feature = "postgres")]
 pub fn extract_constraint_value(db_err: &dyn sqlx::error::DatabaseError) -> Option<String> {
     let pg_err = db_err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()?;
     parse_constraint_detail_value(pg_err.detail())
+}
+
+/// SQLite reports no `detail` for a constraint violation (only
+/// `UNIQUE constraint failed: table.col`, with no value), so there is nothing
+/// to extract. A caller treats `None` as "could not attribute the conflict".
+#[cfg(feature = "sqlite")]
+pub fn extract_constraint_value(_db_err: &dyn sqlx::error::DatabaseError) -> Option<String> {
+    None
 }
 
 /// Extracts the conflicting id from an events-table primary-key violation.
