@@ -1,3 +1,11 @@
+# [cala release v0.21.0](https://github.com/GaloyMoney/cala/releases/tag/0.21.0)
+
+
+
+### Miscellaneous Tasks
+
+- [**breaking**] Upgrade sqlx to 0.9 (#303)
+
 # [cala release v0.20.5](https://github.com/GaloyMoney/cala/releases/tag/0.20.5)
 
 
