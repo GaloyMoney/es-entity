@@ -4,8 +4,7 @@ mod helpers;
 use std::collections::HashSet;
 
 use entities::vf_account::*;
-use es_entity::*;
-use sqlx::PgPool;
+use es_entity::{db::Pool, *};
 
 /// Repo with one physical `list_for` column (`status`), one bool-polarity
 /// virtual (`flagged`, unchanged from `tests/virtual_filter_column.rs`), and
@@ -31,11 +30,11 @@ use sqlx::PgPool;
     )
 )]
 pub struct VfAccountsWithValue {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl VfAccountsWithValue {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -46,7 +45,7 @@ async fn create_account(repo: &VfAccountsWithValue, status: &str) -> anyhow::Res
         .await?)
 }
 
-async fn flag(pool: &PgPool, account_id: VfAccountId) -> anyhow::Result<()> {
+async fn flag(pool: &Pool, account_id: VfAccountId) -> anyhow::Result<()> {
     sqlx::query("INSERT INTO vf_account_flags (account_id, flag) VALUES ($1, 'due')")
         .bind(account_id)
         .execute(pool)

@@ -7,10 +7,8 @@ use entities::facility::*;
 use es_entity::*;
 
 pub mod unscoped {
-    use sqlx::PgPool;
-
     use super::entities::facility::*;
-    use es_entity::*;
+    use es_entity::{db::Pool, *};
 
     #[derive(EsRepo, Debug)]
     #[es_repo(
@@ -22,21 +20,19 @@ pub mod unscoped {
         )
     )]
     pub struct UnscopedFacilities {
-        pool: PgPool,
+        pool: Pool,
     }
 
     impl UnscopedFacilities {
-        pub fn new(pool: PgPool) -> Self {
+        pub fn new(pool: Pool) -> Self {
             Self { pool }
         }
     }
 }
 
 pub mod scoped {
-    use sqlx::PgPool;
-
     use super::entities::facility::*;
-    use es_entity::*;
+    use es_entity::{db::Pool, *};
 
     #[derive(EsRepo, Debug)]
     #[es_repo(
@@ -48,11 +44,11 @@ pub mod scoped {
         )
     )]
     pub struct ScopedFacilities {
-        pool: PgPool,
+        pool: Pool,
     }
 
     impl ScopedFacilities {
-        pub fn new(pool: PgPool) -> Self {
+        pub fn new(pool: Pool) -> Self {
             Self { pool }
         }
     }

@@ -94,12 +94,12 @@ where
     /// Proxy call to `query.fetch_all` but guarantees the inner executor will only be used once.
     pub async fn fetch_all<'q, F, O, A>(
         self,
-        query: sqlx::query::Map<'q, sqlx::Postgres, F, A>,
+        query: sqlx::query::Map<'q, db::Db, F, A>,
     ) -> Result<Vec<O>, sqlx::Error>
     where
-        F: FnMut(sqlx::postgres::PgRow) -> Result<O, sqlx::Error> + Send,
+        F: FnMut(db::Row) -> Result<O, sqlx::Error> + Send,
         O: Send + Unpin,
-        A: 'q + Send + sqlx::IntoArguments<sqlx::Postgres>,
+        A: 'q + Send + sqlx::IntoArguments<db::Db>,
     {
         query.fetch_all(self).await
     }
@@ -107,12 +107,12 @@ where
     /// Proxy call to `query.fetch_optional` but guarantees the inner executor will only be used once.
     pub async fn fetch_optional<'q, F, O, A>(
         self,
-        query: sqlx::query::Map<'q, sqlx::Postgres, F, A>,
+        query: sqlx::query::Map<'q, db::Db, F, A>,
     ) -> Result<Option<O>, sqlx::Error>
     where
-        F: FnMut(sqlx::postgres::PgRow) -> Result<O, sqlx::Error> + Send,
+        F: FnMut(db::Row) -> Result<O, sqlx::Error> + Send,
         O: Send + Unpin,
-        A: 'q + Send + sqlx::IntoArguments<sqlx::Postgres>,
+        A: 'q + Send + sqlx::IntoArguments<db::Db>,
     {
         query.fetch_optional(self).await
     }
@@ -135,7 +135,7 @@ fn annotation_active() -> bool {
 /// is a server-side parse + plan per annotated execution.
 fn rebuild_annotated<'q>(
     mut query: impl Execute<'q, db::Db>,
-) -> Result<sqlx::query::Query<'static, db::Db, sqlx::postgres::PgArguments>, Error> {
+) -> Result<sqlx::query::Query<'static, db::Db, db::Arguments>, Error> {
     let args = query
         .take_arguments()
         .map_err(Error::Encode)?

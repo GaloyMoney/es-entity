@@ -1,4 +1,5 @@
-#![cfg(feature = "tracing-context")]
+// Postgres-only: observes the annotation server-side via `pg_stat_activity`.
+#![cfg(all(feature = "tracing-context", feature = "postgres"))]
 //! End-to-end proof that statements executed through
 //! [`AtomicOperation::as_executor`] carry the active span's `traceparent`
 //! comment all the way to Postgres.

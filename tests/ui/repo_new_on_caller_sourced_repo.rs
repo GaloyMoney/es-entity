@@ -1,6 +1,6 @@
 use es_entity::*;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use es_entity::db::Pool as PgPool;
 
 es_entity::entity_id! { GadgetId }
 

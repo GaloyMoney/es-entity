@@ -1,4 +1,6 @@
-#![cfg(feature = "instrument")]
+// Postgres-only: counts statements and inspects rows with compile-time
+// `sqlx::query!` (Postgres schema).
+#![cfg(all(feature = "instrument", feature = "postgres"))]
 //! Proves nested batching composes to arbitrary depth: a three-level
 //! parent -> child -> grandchild hierarchy, where the grandchild phase
 //! (gathered *across every child of every parent* in one
@@ -20,10 +22,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use es_entity::*;
+use es_entity::{db::Pool, *};
 use helpers::init_pool;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 use tracing_subscriber::layer::SubscriberExt;
 
 es_entity::entity_id! { GcParentId, GcChildId, GcGrandchildId }
@@ -242,11 +243,11 @@ impl IntoEvents<GcParentEvent> for NewGcParent {
     columns(child_id(ty = "GcChildId", update(persist = false), parent))
 )]
 pub struct GcGrandchildren {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl GcGrandchildren {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -260,14 +261,14 @@ impl GcGrandchildren {
     columns(parent_id(ty = "GcParentId", update(persist = false), parent))
 )]
 pub struct GcChildren {
-    pool: PgPool,
+    pool: Pool,
 
     #[es_repo(nested)]
     grandchildren: GcGrandchildren,
 }
 
 impl GcChildren {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self {
             pool: pool.clone(),
             grandchildren: GcGrandchildren::new(pool),
@@ -283,14 +284,14 @@ impl GcChildren {
     delete = "soft"
 )]
 pub struct GcParents {
-    pool: PgPool,
+    pool: Pool,
 
     #[es_repo(nested)]
     children: GcChildren,
 }
 
 impl GcParents {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self {
             pool: pool.clone(),
             children: GcChildren::new(pool),

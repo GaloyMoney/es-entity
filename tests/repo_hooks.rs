@@ -34,8 +34,7 @@ impl std::error::Error for UserPersistAuditError {}
 // ---------------------------------------------------------------------------
 
 mod users_with_hydrate_hook {
-    use es_entity::*;
-    use sqlx::PgPool;
+    use es_entity::{db::Pool, *};
 
     use crate::UserHydrateValidationError;
     use crate::entities::user::*;
@@ -47,11 +46,11 @@ mod users_with_hydrate_hook {
         post_hydrate_hook = "validate_hydrated"
     )]
     pub struct UsersWithHydrateHook {
-        pool: PgPool,
+        pool: Pool,
     }
 
     impl UsersWithHydrateHook {
-        pub fn new(pool: PgPool) -> Self {
+        pub fn new(pool: Pool) -> Self {
             Self { pool }
         }
 
@@ -73,8 +72,7 @@ mod users_with_hydrate_hook {
 // ---------------------------------------------------------------------------
 
 mod users_with_persist_hook {
-    use es_entity::*;
-    use sqlx::PgPool;
+    use es_entity::{db::Pool, *};
 
     use crate::UserPersistAuditError;
     use crate::entities::user::*;
@@ -86,11 +84,11 @@ mod users_with_persist_hook {
         post_persist_hook = "audit_persist"
     )]
     pub struct UsersWithPersistHook {
-        pool: PgPool,
+        pool: Pool,
     }
 
     impl UsersWithPersistHook {
-        pub fn new(pool: PgPool) -> Self {
+        pub fn new(pool: Pool) -> Self {
             Self { pool }
         }
 

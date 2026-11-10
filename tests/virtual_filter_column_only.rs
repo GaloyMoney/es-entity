@@ -4,8 +4,7 @@ mod helpers;
 use std::collections::HashSet;
 
 use entities::vf_account::*;
-use es_entity::*;
-use sqlx::PgPool;
+use es_entity::{db::Pool, *};
 
 /// Repo with *only* a virtual filter column — no physical `list_for` column
 /// at all. Exercises the emission-gating change: `list_for_filters*` must
@@ -23,11 +22,11 @@ use sqlx::PgPool;
     ),)
 )]
 pub struct VfAccountsFlagOnly {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl VfAccountsFlagOnly {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -38,7 +37,7 @@ async fn create_account(repo: &VfAccountsFlagOnly, status: &str) -> anyhow::Resu
         .await?)
 }
 
-async fn flag(pool: &PgPool, account_id: VfAccountId) -> anyhow::Result<()> {
+async fn flag(pool: &Pool, account_id: VfAccountId) -> anyhow::Result<()> {
     sqlx::query("INSERT INTO vf_account_flags (account_id, flag) VALUES ($1, 'due')")
         .bind(account_id)
         .execute(pool)

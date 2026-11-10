@@ -4,8 +4,7 @@ mod helpers;
 use std::collections::HashSet;
 
 use entities::contact::*;
-use es_entity::*;
-use sqlx::PgPool;
+use es_entity::{db::Pool, *};
 
 /// Same virtual filter column as `tests/virtual_filter_column.rs`, this time
 /// on a partner-scoped repo — a virtual filter conjunct must survive the
@@ -26,11 +25,11 @@ use sqlx::PgPool;
     )
 )]
 pub struct ScopedVfContacts {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl ScopedVfContacts {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -51,7 +50,7 @@ async fn create_contact(
         .await?)
 }
 
-async fn flag(pool: &PgPool, contact_id: ContactId) -> anyhow::Result<()> {
+async fn flag(pool: &Pool, contact_id: ContactId) -> anyhow::Result<()> {
     sqlx::query("INSERT INTO contact_flags (contact_id, flag) VALUES ($1, 'due')")
         .bind(contact_id)
         .execute(pool)

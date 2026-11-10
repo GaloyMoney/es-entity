@@ -1,0 +1,1349 @@
+mod begin;
+mod combo_cursor;
+mod create_all_fn;
+mod create_fn;
+mod delete_fn;
+mod error_classifier;
+mod error_types;
+mod events_write;
+mod find_all_fn;
+mod find_all_for_fn;
+mod find_by_fn;
+mod forget_fn;
+mod hydrate_nested;
+mod list_by_fn;
+mod list_for_filters_fn;
+mod list_for_fn;
+mod nested;
+mod options;
+mod persist_events_fn;
+mod post_hydrate_hook;
+mod post_persist_hook;
+mod scope;
+mod snapshot_fns;
+mod update_all_fn;
+mod update_fn;
+
+use darling::{FromDeriveInput, ToTokens};
+use proc_macro2::TokenStream;
+use quote::{TokenStreamExt, quote};
+
+use options::RepositoryOptions;
+
+pub fn derive(ast: syn::DeriveInput) -> darling::Result<proc_macro2::TokenStream> {
+    let opts = RepositoryOptions::from_derive_input(&ast)?;
+    opts.columns.validate_list_for_by_columns()?;
+    opts.columns.validate_scope()?;
+    opts.columns.validate_virtual()?;
+    opts.columns.validate_find_all_for()?;
+    opts.validate_forgettable()?;
+    opts.validate_snapshot()?;
+    opts.validate_in_op_only()?;
+    // `include_bytes!` the resolved migrations so Cargo re-runs this derive when
+    // they change (keeps the migration-derived index catalog and error mapping
+    // in sync even for an auto-discovered ancestor `migrations/`).
+    let migrations_rerun = opts.migrations_rerun_tokens();
+    let repo = EsRepo::from(&opts);
+    Ok(quote!(#migrations_rerun #repo))
+}
+pub struct EsRepo<'a> {
+    repo: &'a syn::Ident,
+    generics: &'a syn::Generics,
+    error_classifier: error_classifier::ErrorClassifier<'a>,
+    classify_conflict_fn: Option<TokenStream>,
+    persist_events_fn: Option<persist_events_fn::PersistEventsFn<'a>>,
+    update_fn: update_fn::UpdateFn<'a>,
+    update_all_fn: update_all_fn::UpdateAllFn<'a>,
+    create_fn: create_fn::CreateFn<'a>,
+    create_all_fn: create_all_fn::CreateAllFn<'a>,
+    delete_fn: delete_fn::DeleteFn<'a>,
+    forget_fn: Option<forget_fn::ForgetFn<'a>>,
+    find_by_fns: Vec<find_by_fn::FindByFn<'a>>,
+    find_all_fn: find_all_fn::FindAllFn<'a>,
+    post_hydrate_hook: post_hydrate_hook::PostHydrateHook<'a>,
+    post_persist_hook: post_persist_hook::PostPersistHook<'a>,
+    begin: Option<begin::Begin<'a>>,
+    list_by_fns: Vec<list_by_fn::ListByFn<'a>>,
+    list_for_fns: Vec<list_for_fn::ListForFn<'a>>,
+    find_all_for_fns: Vec<find_all_for_fn::FindAllForFn<'a>>,
+    hydrate_nested_fns: Vec<syn::Ident>,
+    nested: Vec<nested::Nested<'a>>,
+    hydrate_nested: Option<hydrate_nested::HydrateNested<'a>>,
+    error_types: error_types::ErrorTypes<'a>,
+    snapshot_fns: Option<snapshot_fns::SnapshotFns<'a>>,
+    opts: &'a RepositoryOptions,
+}
+
+impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
+    fn from(opts: &'a RepositoryOptions) -> Self {
+        let find_by_fns = opts
+            .columns
+            .all_find_by()
+            .map(|c| find_by_fn::FindByFn::new(c, opts))
+            .collect();
+        let list_by_fns = opts
+            .columns
+            .all_list_by()
+            .map(|c| list_by_fn::ListByFn::new(c, opts))
+            .collect();
+        let list_for_fns = opts
+            .columns
+            .all_list_for()
+            .flat_map(|for_col| {
+                for_col
+                    .list_for_by_columns()
+                    .iter()
+                    .filter_map(|by_name| {
+                        opts.columns
+                            .find_list_by(by_name)
+                            .map(|by_col| list_for_fn::ListForFn::new(for_col, by_col, opts))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let find_all_for_fns = opts
+            .columns
+            .all_list_for()
+            .filter_map(|for_col| find_all_for_fn::FindAllForFn::new(for_col, opts))
+            .collect();
+        let hydrate_nested = opts
+            .columns
+            .parent()
+            .map(|c| hydrate_nested::HydrateNested::new(c, opts));
+        let (hydrate_nested_fns, nested): (Vec<_>, Vec<_>) = opts
+            .all_nested()
+            .map(|n| (n.hydrate_nested_fn_name(), nested::Nested::new(n, opts)))
+            .unzip();
+
+        let forget_fn = if opts.forgettable_enabled() {
+            Some(forget_fn::ForgetFn::from(opts))
+        } else {
+            None
+        };
+
+        // Every write path now folds its index write and its event insert into
+        // one statement, so the shared persist helpers are only reachable
+        // where there is no index write to fold into. Emitting a helper
+        // nothing calls would be dead code in consumers that build with
+        // `-D warnings`, so each is gated to its remaining callers:
+        // `persist_events` for column-less updates and for `forget` on repos
+        // with no forgettable index columns; `persist_events_batch` for
+        // column-less bulk updates. `extract_concurrent_modification` outlives
+        // both — the follow-up forgettable payload inserts still use it.
+        //
+        // SQLite: every write path persists its events through
+        // `persist_events` (and `update` classifies through
+        // `classify_conflict`), so both are always emitted; batches go
+        // through the single-entity paths, so `persist_events_batch` has no
+        // caller and is not generated.
+        let needs_persist_events = true;
+        let classify_conflict_fn = Some(error_classifier::classify_conflict_fn());
+
+        Self {
+            repo: &opts.ident,
+            generics: &opts.generics,
+            error_classifier: error_classifier::ErrorClassifier::from(opts),
+            classify_conflict_fn,
+            persist_events_fn: needs_persist_events
+                .then(|| persist_events_fn::PersistEventsFn::from(opts)),
+            update_fn: update_fn::UpdateFn::from(opts),
+            update_all_fn: update_all_fn::UpdateAllFn::from(opts),
+            create_fn: create_fn::CreateFn::from(opts),
+            create_all_fn: create_all_fn::CreateAllFn::from(opts),
+            delete_fn: delete_fn::DeleteFn::from(opts),
+            forget_fn,
+            find_by_fns,
+            find_all_fn: find_all_fn::FindAllFn::from(opts),
+            post_hydrate_hook: post_hydrate_hook::PostHydrateHook::from(opts),
+            post_persist_hook: post_persist_hook::PostPersistHook::from(opts),
+            begin: opts
+                .pool_field()
+                .is_some()
+                .then(|| begin::Begin::from(opts)),
+            list_by_fns,
+            list_for_fns,
+            find_all_for_fns,
+            hydrate_nested_fns,
+            nested,
+            hydrate_nested,
+            error_types: error_types::ErrorTypes::new(opts),
+            snapshot_fns: snapshot_fns::SnapshotFns::from(opts),
+            opts,
+        }
+    }
+}
+
+impl ToTokens for EsRepo<'_> {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let repo = &self.repo;
+        let error_classifier = &self.error_classifier;
+        let classify_conflict_fn = &self.classify_conflict_fn;
+        let persist_events_fn = &self.persist_events_fn;
+        let update_fn = &self.update_fn;
+        let update_all_fn = &self.update_all_fn;
+        let create_fn = &self.create_fn;
+        let create_all_fn = &self.create_all_fn;
+        let delete_fn = &self.delete_fn;
+        let forget_fn = &self.forget_fn;
+        let find_by_fns = &self.find_by_fns;
+        let find_all_fn = &self.find_all_fn;
+        let post_hydrate_hook = &self.post_hydrate_hook;
+        let post_persist_hook = &self.post_persist_hook;
+        let begin = &self.begin;
+        let cursors = self.list_by_fns.iter().map(|l| l.cursor());
+        let combo_cursor = combo_cursor::ComboCursor::new(
+            self.opts,
+            self.list_by_fns.iter().map(|l| l.cursor()).collect(),
+        );
+        let sort_by = combo_cursor.sort_by();
+        let list_for_filters = list_for_filters_fn::ListForFiltersFn::new(
+            self.opts,
+            self.opts.columns.all_list_for().collect(),
+            self.opts.columns.all_virtual_filters().collect(),
+            self.opts.columns.all_list_by().collect(),
+            &combo_cursor,
+        );
+        let list_for_filters_struct = &list_for_filters.filters_struct;
+        #[cfg(feature = "graphql")]
+        let gql_combo_cursor = combo_cursor.gql_cursor();
+        #[cfg(not(feature = "graphql"))]
+        let gql_combo_cursor = TokenStream::new();
+        #[cfg(feature = "graphql")]
+        let gql_cursors: Vec<_> = self
+            .list_by_fns
+            .iter()
+            .map(|l| l.cursor().gql_cursor())
+            .collect();
+        #[cfg(not(feature = "graphql"))]
+        let gql_cursors: Vec<TokenStream> = Vec::new();
+        let list_by_fns = &self.list_by_fns;
+        let list_for_fns = &self.list_for_fns;
+        let find_all_for_fns = &self.find_all_for_fns;
+
+        let entity = self.opts.entity();
+        let event = self.opts.event();
+        let id = self.opts.id();
+
+        let cursor_mod = self.opts.cursor_mod();
+        let types_mod = self.opts.repo_types_mod();
+
+        let hydrate_nested_fns = &self.hydrate_nested_fns;
+        let nested = &self.nested;
+        let hydrate_nested = &self.hydrate_nested;
+        let snapshot_fns_in_impl = self.snapshot_fns.as_ref().map(|s| s.in_impl_tokens());
+
+        let pool_fn = self.opts.pool_field().map(|pool_field| {
+            quote! {
+                #[inline(always)]
+                pub fn pool(&self) -> &es_entity::db::Pool {
+                    &self.#pool_field
+                }
+            }
+        });
+        let has_tbl_prefix = self.opts.table_prefix().is_some();
+        let es_query_flavor = if hydrate_nested_fns.is_empty() {
+            quote! {
+                es_entity::EsQueryFlavorFlat
+            }
+        } else {
+            quote! { es_entity::EsQueryFlavorNested }
+        };
+
+        let tree_table_name = self.opts.table_name();
+        let tree_events_table_name = self.opts.events_table_name();
+        let tree_parent_column = match self.opts.columns.parent() {
+            Some(col) => {
+                let name = col.name().to_string();
+                quote! { Some(#name) }
+            }
+            None => quote! { None },
+        };
+        let tree_soft_delete = self.opts.delete.is_soft();
+        let tree_forgettable_table_name = match self.opts.forgettable_table_name() {
+            Some(tbl) => quote! { Some(#tbl) },
+            None => quote! { None },
+        };
+        let tree_snapshot_table_name = match self.opts.snapshot_table_name() {
+            Some(tbl) => quote! { Some(#tbl) },
+            None => quote! { None },
+        };
+        let tree_child_tys: Vec<_> = self.opts.all_nested().map(|f| &f.ty).collect();
+
+        let constraint_violation = self.opts.constraint_violation();
+        let write_error = self.opts.write_error();
+        let create_shape = self.opts.create_shape();
+        let update_shape = self.opts.update_shape();
+        let error_types = self.error_types.generate();
+
+        let scope_type = scope::ScopeType::new(self.opts);
+        let scope_type = quote! { #scope_type };
+
+        let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
+
+        // The `repo.scoped(scope)` bound view: a borrowed view of the repo
+        // with the scope captured once, exposing every read fn without the
+        // per-call scope argument (each method delegates to the scope-arg
+        // fn). Only generated for scoped repos.
+        let (scoped_fn, scoped_view) = if let Some(info) = scope::ScopeInfo::from_opts(self.opts) {
+            let scoped_ident = self.opts.scoped_view_ident();
+            let scope_ty = &info.scope_ty;
+            let repo_ident = self.repo;
+
+            let mut scoped_generics = self.generics.clone();
+            scoped_generics
+                .params
+                .insert(0, syn::parse_quote!('scoped_repo));
+            let scoped_struct_where = scoped_generics.where_clause.clone();
+            let (scoped_impl_generics, scoped_ty_generics, scoped_where) =
+                scoped_generics.split_for_impl();
+
+            let find_by_delegates = self.find_by_fns.iter().map(|f| f.scoped_delegates());
+            let find_all_delegates = self.find_all_fn.scoped_delegates();
+            let list_by_delegates = self.list_by_fns.iter().map(|f| f.scoped_delegates());
+            let list_for_delegates = self.list_for_fns.iter().map(|f| f.scoped_delegates());
+            let find_all_for_delegates = self.find_all_for_fns.iter().map(|f| f.scoped_delegates());
+            let list_for_filters_delegates = list_for_filters.scoped_delegates();
+
+            let scoped_doc = format!(
+                "Bound view of [`{repo_ident}`] with a [`{scope_ty}`] captured once: every \
+                 read method delegates to the corresponding scope-argument fn with the bound \
+                 scope. Obtained via [`{repo_ident}::scoped`]. Borrows the repo, so it is \
+                 naturally request-scoped."
+            );
+
+            (
+                quote! {
+                    pub fn scoped<'scoped_repo>(
+                        &'scoped_repo self,
+                        scope: impl Into<#scope_ty>,
+                    ) -> #scoped_ident #scoped_ty_generics {
+                        #scoped_ident {
+                            repo: self,
+                            scope: scope.into(),
+                        }
+                    }
+                },
+                quote! {
+                    #[doc = #scoped_doc]
+                    pub struct #scoped_ident #scoped_generics #scoped_struct_where {
+                        repo: &'scoped_repo #repo_ident #ty_generics,
+                        scope: #scope_ty,
+                    }
+
+                    impl #scoped_impl_generics #scoped_ident #scoped_ty_generics #scoped_where {
+                        #[inline(always)]
+                        pub fn scope(&self) -> #scope_ty {
+                            self.scope
+                        }
+
+                        #(#find_by_delegates)*
+                        #find_all_delegates
+                        #(#list_by_delegates)*
+                        #(#list_for_delegates)*
+                        #(#find_all_for_delegates)*
+                        #list_for_filters_delegates
+                    }
+                },
+            )
+        } else {
+            (quote! {}, quote! {})
+        };
+
+        // If the event type has Forgettable fields, the repo must enable
+        // `forgettable` — otherwise the payload machinery is never generated
+        // and forgettable values would be lost. The repo cannot see the
+        // event's forgettable-ness at macro time, so this rides the event's
+        // inherent `HAS_FORGETTABLE_FIELDS` const as a const assert (mirroring
+        // the `es_query!` guard). Forgettable *index columns* are checked
+        // eagerly in `validate_forgettable`.
+        let forgettable_event_guard = if self.opts.forgettable_enabled() {
+            quote! {}
+        } else {
+            quote! {
+                const _: () = assert!(
+                    !Repo__Event::HAS_FORGETTABLE_FIELDS,
+                    "event type has Forgettable fields but this repo does not enable `forgettable`; add `forgettable` to #[es_repo(...)]"
+                );
+            }
+        };
+
+        let repo_has_snapshot = self.opts.snapshot_enabled();
+        let has_forgettable_flag = self.opts.forgettable_enabled();
+        let repo_db_event = if repo_has_snapshot {
+            quote! { es_entity::SnapshotGenericEvent<#id> }
+        } else {
+            quote! { es_entity::GenericEvent<#id> }
+        };
+        let snapshot_guards = quote! {
+            const _: () = assert!(
+                <<#entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::IS_SNAPSHOT == #repo_has_snapshot,
+                "entity snapshot type and `#[es_repo(snapshot)]` disagree: a snapshotted entity needs `snapshot` on its repo and vice versa"
+            );
+            const _: () = assert!(
+                !<<#entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::HAS_FORGETTABLE_FIELDS
+                    || #has_forgettable_flag,
+                "snapshot type has Forgettable fields but this repo does not enable `forgettable`"
+            );
+        };
+
+        tokens.append_all(quote! {
+            pub mod #cursor_mod {
+                use super::*;
+
+                #(#cursors)*
+                #(#gql_cursors)*
+
+                #combo_cursor
+                #gql_combo_cursor
+            }
+
+            mod #types_mod {
+
+                use super::*;
+
+                #[allow(non_camel_case_types)]
+                pub(super) type Repo__Id = #id;
+                #[allow(non_camel_case_types)]
+                pub(super) type Repo__Event = #event;
+                #[allow(non_camel_case_types)]
+                pub(super) type Repo__Entity = #entity;
+                #[allow(non_camel_case_types)]
+                pub(super) type Repo__DbEvent = #repo_db_event;
+                #[allow(dead_code)]
+                pub(super) const REPO__HAS_TBL_PREFIX: bool = #has_tbl_prefix;
+                #[allow(dead_code)]
+                pub(super) const REPO__HAS_SNAPSHOT: bool = #repo_has_snapshot;
+
+                #forgettable_event_guard
+                #snapshot_guards
+            }
+
+            #error_types
+
+            #scope_type
+
+            #scoped_view
+
+            #list_for_filters_struct
+            #sort_by
+
+             impl #impl_generics #repo #ty_generics #where_clause {
+                #pool_fn
+
+                #scoped_fn
+
+                #error_classifier
+                #begin
+                #post_hydrate_hook
+                #post_persist_hook
+                #classify_conflict_fn
+                #persist_events_fn
+                #create_fn
+                #create_all_fn
+                #update_fn
+                #update_all_fn
+                #delete_fn
+                #forget_fn
+                #(#find_by_fns)*
+                #find_all_fn
+                #list_for_filters
+                #(#list_by_fns)*
+                #(#list_for_fns)*
+                #(#find_all_for_fns)*
+                #(#nested)*
+                #snapshot_fns_in_impl
+            }
+
+            #hydrate_nested
+
+            impl es_entity::WriteShapes for #constraint_violation {
+                type Create = #create_shape;
+                type Update = #update_shape;
+            }
+
+            impl #impl_generics es_entity::EsRepo for #repo #ty_generics #where_clause {
+                type Entity = #entity;
+                type ConstraintViolation = #constraint_violation;
+                type WriteError = #write_error;
+                type EsQueryFlavor = #es_query_flavor;
+
+               #[inline(always)]
+               fn nested_tree_spec() -> es_entity::TreeSpec {
+                   es_entity::TreeSpec {
+                       table_name: #tree_table_name,
+                       events_table_name: #tree_events_table_name,
+                       parent_column: #tree_parent_column,
+                       soft_delete: #tree_soft_delete,
+                       forgettable_table_name: #tree_forgettable_table_name,
+                       event_context: <#types_mod::Repo__Event as EsEvent>::event_context(),
+                       snapshot_table_name: #tree_snapshot_table_name,
+                       snapshot_fingerprint: <<#entity as es_entity::EsEntity>::Snapshot as es_entity::EsSnapshot>::FINGERPRINT,
+                       children: vec![ #( <#tree_child_tys as es_entity::EsRepo>::nested_tree_spec(), )* ],
+                   }
+               }
+
+               #[inline(always)]
+               fn hydrate_nested_from_rows(
+                   rows_by_tag: &mut std::collections::HashMap<i32, Vec<es_entity::db::Row>>,
+                   tag_cursor: &mut i32,
+                   entities: &mut [#entity],
+               ) -> Result<(), es_entity::RepoFault>
+               {
+                   #(Self::#hydrate_nested_fns(rows_by_tag, tag_cursor, entities)?;)*
+                   Ok(())
+               }
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::parse_quote;
+
+    use super::*;
+
+    // Guard 2 (known at macro time): Forgettable<T> index columns require the
+    // repo to enable `forgettable`.
+    #[test]
+    fn forgettable_index_column_without_flag_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Subscriber", columns(email(ty = "Forgettable<String>")))]
+            struct Subscribers {
+                pool: sqlx::PgPool,
+            }
+        };
+        let err = derive(input).unwrap_err();
+        assert!(
+            err.to_string().contains("does not enable `forgettable`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn forgettable_index_column_with_flag_is_ok() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Subscriber",
+                forgettable,
+                columns(email(ty = "Forgettable<String>"))
+            )]
+            struct Subscribers {
+                pool: sqlx::PgPool,
+            }
+        };
+        assert!(derive(input).is_ok());
+    }
+
+    #[test]
+    fn create_or_find_in_op_is_generated_once_with_its_rustdoc_contract() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Widget",
+                migrations_dir = "tests/fixtures/ensure_keys",
+                columns(
+                    code(ty = "String"),
+                    account(ty = "String"),
+                    currency(ty = "String"),
+                    reference(ty = "String"),
+                    lowered(ty = "String")
+                )
+            )]
+            struct Widgets {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = derive(input).unwrap().to_string();
+        assert_eq!(out.matches("fn create_or_find_in_op").count(), 1, "{out}");
+        assert!(out.contains("pub enum WidgetEnsureRejection"), "{out}");
+        assert!(
+            out.contains("FROM widgets WHERE code = ?1 OR (account = ?2 AND currency = ?3)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("The stored entity's id may differ from `new`'s id"),
+            "{out}"
+        );
+    }
+
+    fn soft_widgets(delete: &str, nested: bool) -> String {
+        let delete: proc_macro2::TokenStream = format!("delete = \"{delete}\"").parse().unwrap();
+        let nested = nested.then(|| {
+            quote! {
+                #[es_repo(nested)]
+                items: WidgetItems,
+            }
+        });
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Widget",
+                #delete,
+                migrations_dir = "tests/fixtures/ensure_keys_soft",
+                columns(code(ty = "String"), handle(ty = "String"))
+            )]
+            struct Widgets {
+                pool: sqlx::PgPool,
+                #nested
+            }
+        };
+        derive(input).unwrap().to_string()
+    }
+
+    #[test]
+    fn a_soft_delete_repo_gets_create_or_find_in_op_returning_ensured() {
+        let out = soft_widgets("soft", false);
+        assert_eq!(out.matches("fn create_or_find_in_op").count(), 1, "{out}");
+        assert!(out.contains("es_entity :: Ensured < Widget >"), "{out}");
+        assert!(!out.contains("EnsuredOrDeleted"), "{out}");
+        assert!(out.contains("KeysHeldByDeleted"), "{out}");
+        assert!(!out.contains("__find_by_id_any_in_op"), "{out}");
+        assert!(
+            out.contains("code = ?1 OR (handle = ?2 AND deleted = FALSE)"),
+            "{out}"
+        );
+        // `IS DISTINCT FROM` is translated to SQLite's `IS NOT`.
+        assert!(out.contains("deleted IS NOT FALSE"), "{out}");
+        assert!(!out.contains("fetch_optional_include_deleted"), "{out}");
+    }
+
+    #[test]
+    fn a_soft_without_queries_repo_gets_the_method_and_no_include_deleted_finder() {
+        let out = soft_widgets("soft_without_queries", false);
+        assert_eq!(out.matches("fn create_or_find_in_op").count(), 1, "{out}");
+        assert!(out.contains("es_entity :: Ensured < Widget >"), "{out}");
+        assert!(out.contains("KeysHeldByDeleted"), "{out}");
+        assert!(!out.contains("fn find_by_id_include_deleted"), "{out}");
+        assert!(!out.contains("_include_deleted_in_op"), "{out}");
+    }
+
+    #[test]
+    fn a_nested_soft_delete_repo_does_not_load_deleted_entities_in_ensure() {
+        let out = soft_widgets("soft", true);
+        assert!(out.contains("KeysHeldByDeleted"), "{out}");
+        assert!(!out.contains("__find_by_id_any_in_op"), "{out}");
+    }
+
+    #[test]
+    fn a_non_soft_repo_keeps_ensured() {
+        let out = derive(parse_quote! {
+            #[es_repo(
+                entity = "Widget",
+                migrations_dir = "tests/fixtures/ensure_keys_soft",
+                columns(code(ty = "String"), handle(ty = "String"))
+            )]
+            struct Widgets {
+                pool: sqlx::PgPool,
+            }
+        })
+        .unwrap()
+        .to_string();
+        assert!(!out.contains("EnsuredOrDeleted"), "{out}");
+        assert!(!out.contains("KeysHeldByDeleted"), "{out}");
+        assert!(out.contains("es_entity :: Ensured < Widget >"), "{out}");
+    }
+
+    #[test]
+    fn a_caller_id_only_repo_gets_create_or_find_in_op_returning_repo_fault() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Widget", id(source = caller), migrations_dir = "tests/fixtures/no_such_dir")]
+            struct Widgets {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = derive(input).unwrap().to_string();
+        assert!(!out.contains("EnsureRejection"), "{out}");
+        assert!(
+            out.contains("Result < es_entity :: Ensured < Widget > , es_entity :: RepoFault >"),
+            "{out}"
+        );
+    }
+
+    /// The combined-write classifiers are emitted once per repo, not rendered
+    /// into every write path. `classify_update_write` is gated to repos that
+    /// actually have a caller — an uncalled private helper is dead code, and
+    /// consumers build with `-D warnings`.
+    #[test]
+    fn error_classifiers_are_emitted_once_and_gated() {
+        let with_columns: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", columns(name(ty = "String")))]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = derive(with_columns).unwrap().to_string();
+        assert_eq!(
+            out.matches("fn classify_create_write").count(),
+            1,
+            "create classifier should be defined exactly once"
+        );
+        assert_eq!(
+            out.matches("fn classify_update_write").count(),
+            1,
+            "write classifier should be defined exactly once"
+        );
+        // The create path calls the shared fn rather than inlining a match
+        // (SQLite's create_all delegates to create_in_op).
+        assert_eq!(
+            out.matches("Self :: classify_create_write").count(),
+            1,
+            "create should call the shared classifier"
+        );
+
+        // No index columns to persist and no soft delete → nothing calls the
+        // write classifier, so it must not be emitted.
+        let no_columns: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User")]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = derive(no_columns).unwrap().to_string();
+        assert!(
+            !out.contains("fn classify_update_write"),
+            "write classifier must not be emitted without a caller"
+        );
+        assert!(
+            out.contains("fn classify_create_write"),
+            "create classifier always has callers"
+        );
+    }
+
+    /// Every repository exposes an enum; nested families use composition.
+    #[test]
+    fn constraint_violation_is_enum_with_nested_composition() {
+        let flat: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", columns(name(ty = "String")))]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = derive(flat).unwrap().to_string();
+        assert!(out.contains("pub enum UserConstraintViolation"));
+
+        let nested: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Order", columns(name(ty = "String")))]
+            struct Orders {
+                pool: sqlx::PgPool,
+                #[es_repo(nested)]
+                items: OrderItems,
+            }
+        };
+        let out = derive(nested).unwrap().to_string();
+        assert!(out.contains("pub enum OrderConstraintViolation"));
+        assert!(out.contains("compose (OrderItemConstraintViolation as Items)"));
+    }
+
+    /// The id-only primary key gets the non-optional `Pkey(IdConflict<IdTy>)`
+    /// variant, a `pkey_from_database` constructor to attribute it from a
+    /// create path, and no `from_database` match arm of its own — a pkey
+    /// violation reported outside a create (no attributable id) falls
+    /// through to the catch-all `Err(source)`, which the surrounding
+    /// classifier turns into `Fatal(Invariant)`.
+    #[test]
+    fn pkey_constraint_gets_id_conflict_variant_and_no_from_database_arm() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", id(source = caller), columns(name(ty = "String")))]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = derive(input).unwrap().to_string();
+        assert!(
+            out.contains("Pkey (# [source] es_entity :: IdConflict < UserId >)"),
+            "expected a Pkey(IdConflict<UserId>) variant, got: {out}"
+        );
+        assert!(
+            out.contains("pub fn pkey_from_database"),
+            "expected a pkey_from_database constructor, got: {out}"
+        );
+        assert!(
+            !out.contains("\"users_pkey\" => Ok"),
+            "the pkey name must have no from_database match arm of its own \
+             -- it falls through to the catch-all Err(source), got: {out}"
+        );
+    }
+
+    /// A repo that generates its own ids can never reject on the primary
+    /// key: a collision of a fresh id is a fault, so the family has no
+    /// `Pkey` variant and no `pkey_from_database` constructor.
+    #[test]
+    fn generated_id_repo_has_no_pkey_variant() {
+        for attr in [
+            quote! { #[es_repo(entity = "User", columns(name(ty = "String")))] },
+            quote! { #[es_repo(entity = "User", id = "UserId", columns(name(ty = "String")))] },
+            quote! { #[es_repo(entity = "User", id(source = repo), columns(name(ty = "String")))] },
+            quote! { #[es_repo(entity = "User", id(ty = "UserId", generator = "Self::next_id"), columns(name(ty = "String")))] },
+        ] {
+            let input: syn::DeriveInput = parse_quote! {
+                #attr
+                struct Users {
+                    pool: sqlx::PgPool,
+                }
+            };
+            let out = derive(input).unwrap().to_string();
+            assert!(!out.contains("Pkey"), "no Pkey variant expected: {out}");
+            assert!(!out.contains("pkey_from_database"), "{out}");
+        }
+    }
+
+    // Guard 1 (event has Forgettable fields but the repo omits `forgettable`)
+    // fires only once the event type resolves, so it is a const assert on the
+    // event's inherent `HAS_FORGETTABLE_FIELDS`; its end-to-end behavior is
+    // covered by a compile_fail doctest on `Forgettable` rather than a brittle
+    // token-string assertion here.
+
+    #[test]
+    fn plain_repo_is_ok() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", columns(name(ty = "String")))]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        assert!(derive(input).is_ok());
+    }
+
+    #[test]
+    fn scoped_repo_is_ok() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                columns(partner_id(ty = "PartnerId", scope), name(ty = "String"))
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("scoped repo should derive")
+            .to_string();
+        assert!(tokens.contains("pub enum UserScope"));
+        assert!(tokens.contains("PartnerId (PartnerId)"));
+        assert!(!tokens.contains("Only"));
+        // every read fn takes the scope argument
+        assert!(tokens.contains("fn find_by_id (& self , scope : impl Into < UserScope >"));
+        assert!(tokens.contains("(& self , scope : impl Into < UserScope > , ids"));
+        assert!(tokens.contains("fn list_by_created_at (& self , scope : impl Into < UserScope >"));
+        // the PartnerId arm filters by the scope column, the All arm does not
+        assert!(tokens.contains("WHERE id = $1 AND partner_id = $2"));
+        assert!(tokens.contains("WHERE id = $1\""));
+        // no find_by fns are generated for the scope column itself
+        assert!(!tokens.contains("find_by_partner_id"));
+        // writes stay unscoped (custody principle)
+        assert!(tokens.contains("fn create_in_op < OP > (& self , op : & mut OP , new_entity"));
+        assert!(tokens.contains("fn update_in_op < OP > (& self , op : & mut OP , entity"));
+    }
+
+    #[test]
+    fn scoped_repo_generates_bound_view() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                columns(partner_id(ty = "PartnerId", scope), name(ty = "String"))
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("scoped repo should derive")
+            .to_string();
+        // the bound view type + constructor
+        assert!(tokens.contains("pub struct ScopedUsers"));
+        assert!(tokens.contains("pub fn scoped <"));
+        // view methods take no scope argument and forward the bound scope
+        assert!(tokens.contains("self . repo . find_by_id (self . scope"));
+        assert!(tokens.contains("self . repo . maybe_find_by_id_in_op (op , self . scope"));
+        assert!(tokens.contains("self . repo . find_all (self . scope"));
+        assert!(tokens.contains("self . repo . list_by_created_at (self . scope"));
+        assert!(tokens.contains("self . repo . list_for_filters (self . scope"));
+    }
+
+    #[test]
+    fn unscoped_repo_has_no_bound_view() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", columns(name(ty = "String")))]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input).unwrap().to_string();
+        assert!(!tokens.contains("ScopedUsers"));
+        assert!(!tokens.contains("pub fn scoped <"));
+    }
+
+    #[test]
+    fn scoped_repo_with_generics_generates_bound_view() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                columns(partner_id(ty = "PartnerId", scope))
+            )]
+            struct Users<E> {
+                pool: sqlx::PgPool,
+                _phantom: std::marker::PhantomData<E>,
+            }
+        };
+        let tokens = derive(input)
+            .expect("generic scoped repo should derive")
+            .to_string();
+        assert!(tokens.contains("pub struct ScopedUsers < 'scoped_repo , E >"));
+    }
+
+    #[test]
+    fn multi_scoped_repo_is_ok() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Facility",
+                columns(
+                    partner_id(ty = "PartnerId", scope),
+                    customer_id(ty = "CustomerId", scope),
+                    name(ty = "String")
+                )
+            )]
+            struct Facilities {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("multi-scoped repo should derive")
+            .to_string();
+        assert!(tokens.contains("pub enum FacilityScope"));
+        assert!(tokens.contains("PartnerId (PartnerId)"));
+        assert!(tokens.contains("CustomerId (CustomerId)"));
+        // one dispatch arm per dimension, each with only its own conjunct
+        assert!(tokens.contains("WHERE id = $1 AND partner_id = $2"));
+        assert!(tokens.contains("WHERE id = $1 AND customer_id = $2"));
+        assert!(!tokens.contains("partner_id = $2 AND customer_id"));
+        // From impls for both id types
+        assert!(tokens.contains("impl From < PartnerId > for FacilityScope"));
+        assert!(tokens.contains("impl From < CustomerId > for FacilityScope"));
+    }
+
+    #[test]
+    fn scope_variant_override_is_ok() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Facility",
+                columns(
+                    partner_id(ty = "PartnerId", scope(variant = "Partner")),
+                    customer_id(ty = "CustomerId", scope),
+                    name(ty = "String")
+                )
+            )]
+            struct Facilities {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("overridden-variant scoped repo should derive")
+            .to_string();
+        assert!(tokens.contains("pub enum FacilityScope"));
+        // overridden column uses the custom variant name...
+        assert!(tokens.contains("Partner (PartnerId)"));
+        assert!(!tokens.contains("PartnerId (PartnerId)"));
+        // ...while the un-overridden column keeps the default
+        assert!(tokens.contains("CustomerId (CustomerId)"));
+        assert!(tokens.contains("impl From < PartnerId > for FacilityScope"));
+        assert!(tokens.contains("FacilityScope :: Partner (__scope_val)"));
+    }
+
+    #[test]
+    fn id_scope_variant_override_is_ok() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Partner",
+                id(scope(variant = "Tenant")),
+                columns(name(ty = "String", list_by))
+            )]
+            struct Partners {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("id(scope(variant = ...)) repo should derive")
+            .to_string();
+        assert!(tokens.contains("pub enum PartnerScope"));
+        // the id column's overridden variant name replaces the default `Id`...
+        assert!(tokens.contains("Tenant (PartnerId)"));
+        assert!(!tokens.contains("Id (PartnerId)"));
+        assert!(tokens.contains("impl From < PartnerId > for PartnerScope"));
+        assert!(tokens.contains("PartnerScope :: Tenant (__scope_val)"));
+        // every query carries the id conjunct under the overridden variant
+        assert!(tokens.contains("WHERE id = $1 AND id = $2"));
+    }
+
+    #[test]
+    fn id_long_form_combines_type_source_and_scope() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "Partner",
+                id(ty = "TenantId", source = caller, scope),
+                columns(name(ty = "String"))
+            )]
+            struct Partners {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("id(ty, source = caller, scope) repo should derive")
+            .to_string();
+        assert!(tokens.contains("Id (TenantId)"));
+        assert!(tokens.contains("es_entity :: FromCaller"));
+        assert!(!tokens.contains("PartnerId"));
+    }
+
+    #[test]
+    fn duplicate_id_attribute_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "Partner", id = "PartnerId", id(source = caller))]
+            struct Partners {
+                pool: sqlx::PgPool,
+            }
+        };
+        assert!(derive(input).is_err());
+    }
+
+    #[test]
+    fn same_type_scope_columns_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                columns(
+                    partner_id(ty = "PartnerId", scope),
+                    other_partner_id(ty = "PartnerId", scope)
+                )
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let err = derive(input).unwrap_err();
+        assert!(
+            err.to_string().contains("same Rust type"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn optional_scope_column_is_ok() {
+        // A syntactic Option<T> scope column is accepted: the generated
+        // variant and its `From` impl carry the bare inner type, never
+        // `Option<T>` — a scope value is always concrete, and NULL rows are
+        // simply invisible to this variant (only `All` sees them).
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                columns(partner_id(ty = "Option<PartnerId>", scope))
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("Option<T> scope column should derive")
+            .to_string();
+        assert!(tokens.contains("pub enum UserScope"));
+        // the variant carries the bare inner type, not Option<PartnerId>.
+        // The full derive output legitimately still contains "Option <
+        // PartnerId >" elsewhere (the column itself stays declared
+        // `Option<PartnerId>` for create/persist — only the scope enum and
+        // its `From` impls unwrap it), so assert on the specific
+        // scope-related spots rather than the whole token stream.
+        assert!(tokens.contains("PartnerId (PartnerId)"));
+        assert!(!tokens.contains("PartnerId (Option < PartnerId >)"));
+        assert!(tokens.contains("impl From < PartnerId > for UserScope"));
+        assert!(tokens.contains("impl From < & PartnerId > for UserScope"));
+        assert!(!tokens.contains("impl From < Option < PartnerId > > for UserScope"));
+        // the SQL conjunct is the ordinary equality — NULL rows fall out of
+        // `=` semantics with zero special-casing.
+        assert!(tokens.contains("WHERE id = $1 AND partner_id = $2"));
+    }
+
+    #[test]
+    fn nullable_annotated_scope_column_is_error() {
+        // Unlike Option<T>, a `nullable`-annotated non-Option scope column
+        // has no inner type to unwrap — still rejected.
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                columns(partner_id(ty = "PartnerId", scope, nullable = true))
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let err = derive(input).unwrap_err();
+        assert!(
+            err.to_string().contains("only syntactic Option<T>"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn scope_column_composes_with_query_flags() {
+        // `scope` may coexist with `find_by = true`, `list_by` and `list_for`
+        // on the same column — the generated fns compose with the scope.
+        for extra in ["find_by = true", "list_by = true", "list_for"] {
+            let src = format!(
+                r#"
+                #[es_repo(
+                    entity = "User",
+                    columns(partner_id(ty = "PartnerId", scope, {extra}))
+                )]
+                struct Users {{
+                    pool: sqlx::PgPool,
+                }}
+                "#
+            );
+            let input: syn::DeriveInput = syn::parse_str(&src).unwrap();
+            derive(input)
+                .unwrap_or_else(|err| panic!("scope column with `{extra}` should derive: {err}"));
+        }
+    }
+
+    #[test]
+    fn scope_column_find_by_composes_via_conjunct() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                columns(partner_id(ty = "PartnerId", scope, find_by = true))
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("scoped repo should derive")
+            .to_string();
+        // explicit opt-in generates the find fns, scope argument included
+        assert!(tokens.contains("fn find_by_partner_id (& self , scope : impl Into < UserScope >"));
+        assert!(
+            tokens
+                .contains("fn maybe_find_by_partner_id (& self , scope : impl Into < UserScope >")
+        );
+        assert!(tokens.contains("WHERE partner_id = $1 AND partner_id = $2"));
+    }
+
+    #[test]
+    fn scope_column_list_for_composes_via_conjunct() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                columns(
+                    partner_id(ty = "PartnerId", scope, list_for(by(created_at))),
+                    status(ty = "String", list_for(by(created_at)))
+                )
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let tokens = derive(input)
+            .expect("scoped repo should derive")
+            .to_string();
+        // the Filters struct carries the scope column like any other
+        // list_for column
+        assert!(tokens.contains("pub struct UserFilters"));
+        assert!(tokens.contains("pub partner_id : Option < PartnerId >"));
+        assert!(tokens.contains("pub status : Option < String >"));
+        assert!(tokens.contains(
+            "fn list_for_partner_id_by_created_at (& self , scope : impl Into < UserScope >"
+        ));
+        assert!(tokens.contains("(partner_id = $1) AND partner_id = $2"));
+    }
+
+    #[test]
+    fn scope_on_nested_child_repo_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "LineItem",
+                columns(
+                    order_id(ty = "OrderId", parent),
+                    partner_id(ty = "PartnerId", scope)
+                )
+            )]
+            struct LineItems {
+                pool: sqlx::PgPool,
+            }
+        };
+        let err = derive(input).unwrap_err();
+        assert!(
+            err.to_string().contains("not supported on nested repos"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn forgettable_scope_column_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                forgettable,
+                columns(partner_id(ty = "Forgettable<PartnerId>", scope))
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        };
+        let err = derive(input).unwrap_err();
+        // Forgettable columns are rewritten to Option<T>, so either the
+        // forgettable or the nullable check may fire first — both reject.
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Forgettable") || msg.contains("non-nullable"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    const STANDALONE_FN_SIGNATURES: &[&str] = &[
+        "pub async fn create (& self ,",
+        "pub async fn create_all (& self ,",
+        "pub async fn update (& self ,",
+        "pub async fn update_all (& self ,",
+        "pub async fn delete (& self ,",
+        "pub async fn find_by_id (& self ,",
+        "pub async fn maybe_find_by_id (& self ,",
+        "pub async fn find_by_name (& self ,",
+        "pub async fn find_all < Out : From < User",
+        "pub async fn list_by_id (& self ,",
+        "pub async fn list_for_name_by_id (& self ,",
+        "pub async fn list_for_filters (& self ,",
+    ];
+
+    fn every_fn_family_repo(extra_opts: proc_macro2::TokenStream) -> syn::DeriveInput {
+        parse_quote! {
+            #[es_repo(
+                entity = "User",
+                delete = "soft",
+                #extra_opts
+                columns(name(ty = "String", list_by, list_for))
+            )]
+            struct Users {
+                pool: sqlx::PgPool,
+            }
+        }
+    }
+
+    #[test]
+    fn in_op_only_suppresses_every_standalone_fn() {
+        let tokens = derive(every_fn_family_repo(quote! { in_op_only, }))
+            .expect("in_op_only repo should derive")
+            .to_string();
+
+        for sig in STANDALONE_FN_SIGNATURES {
+            assert!(
+                !tokens.contains(sig),
+                "`in_op_only` must not generate the standalone fn `{sig}`"
+            );
+        }
+        assert!(!tokens.contains("pub async fn find_by_id_include_deleted (& self ,"));
+        assert!(!tokens.contains("pub async fn list_by_id_include_deleted (& self ,"));
+        assert!(!tokens.contains("pub async fn list_for_filters_include_deleted (& self ,"));
+
+        assert!(tokens.contains("pub async fn create_in_op"));
+        assert!(tokens.contains("pub async fn update_in_op"));
+        assert!(tokens.contains("pub async fn delete_in_op"));
+        assert!(tokens.contains("pub async fn find_by_id_in_op"));
+        assert!(tokens.contains("pub async fn find_all_in_op"));
+        assert!(tokens.contains("pub async fn list_by_id_in_op"));
+        assert!(tokens.contains("pub async fn list_for_filters_in_op"));
+    }
+
+    #[test]
+    fn repo_without_in_op_only_keeps_every_standalone_fn() {
+        let tokens = derive(every_fn_family_repo(quote! {}))
+            .expect("default repo should derive")
+            .to_string();
+
+        for sig in STANDALONE_FN_SIGNATURES {
+            assert!(
+                tokens.contains(sig),
+                "a repo without `in_op_only` must still generate `{sig}`"
+            );
+        }
+        assert!(tokens.contains("pub fn pool (& self)"));
+        assert!(tokens.contains("pub async fn begin_op (& self)"));
+        assert!(tokens.contains("pub async fn begin_op_with_clock"));
+    }
+
+    #[test]
+    fn in_op_only_without_pool_field_drops_pool_accessor_and_begin_op() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", in_op_only, columns(name(ty = "String")))]
+            struct Users {}
+        };
+        let tokens = derive(input)
+            .expect("pool-less in_op_only repo should derive")
+            .to_string();
+
+        assert!(!tokens.contains("pub fn pool (& self)"));
+        assert!(!tokens.contains("begin_op"));
+        assert!(!tokens.contains("self . pool ()"));
+        assert!(tokens.contains("pub async fn create_in_op"));
+        assert!(tokens.contains("pub async fn find_by_id_in_op"));
+    }
+
+    #[test]
+    fn in_op_only_with_pool_field_keeps_begin_op() {
+        let tokens = derive(every_fn_family_repo(quote! { in_op_only, }))
+            .expect("in_op_only repo with a pool should derive")
+            .to_string();
+
+        assert!(tokens.contains("pub fn pool (& self)"));
+        assert!(tokens.contains("pub async fn begin_op (& self)"));
+        assert!(!tokens.contains("pub async fn create (& self ,"));
+    }
+
+    #[test]
+    fn in_op_only_suppresses_scoped_view_standalone_delegates() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "User",
+                in_op_only,
+                columns(partner_id(ty = "PartnerId", scope), name(ty = "String"))
+            )]
+            struct Users {}
+        };
+        let tokens = derive(input)
+            .expect("scoped in_op_only repo should derive")
+            .to_string();
+
+        assert!(tokens.contains("pub struct ScopedUsers"));
+        assert!(!tokens.contains("self . repo . find_by_id (self . scope"));
+        assert!(!tokens.contains("self . repo . find_all (self . scope"));
+        assert!(!tokens.contains("self . repo . list_for_filters (self . scope"));
+        assert!(tokens.contains("self . repo . find_by_id_in_op (op , self . scope"));
+        assert!(tokens.contains("self . repo . list_for_filters_in_op (op , self . scope"));
+    }
+
+    #[test]
+    fn missing_pool_without_in_op_only_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", columns(name(ty = "String")))]
+            struct Users {}
+        };
+        let err = derive(input).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no pool field") && msg.contains("in_op_only"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn clock_field_without_pool_is_error() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(entity = "User", in_op_only, columns(name(ty = "String")))]
+            struct Users {
+                clock: es_entity::clock::ClockHandle,
+            }
+        };
+        let err = derive(input).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("clock field") && msg.contains("begin_op"),
+            "unexpected error: {msg}"
+        );
+    }
+}

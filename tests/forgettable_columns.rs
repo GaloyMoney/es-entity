@@ -8,9 +8,8 @@
 mod helpers;
 
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
-use es_entity::*;
+use es_entity::{db::Pool, *};
 
 es_entity::entity_id! { SubscriberId }
 
@@ -123,11 +122,11 @@ impl IntoEvents<SubscriberEvent> for NewSubscriber {
     columns(email(ty = "Forgettable<String>", list_by), plan(ty = "String"))
 )]
 pub struct Subscribers {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Subscribers {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -160,6 +159,8 @@ async fn forgettable_column_is_queryable_while_live() -> anyhow::Result<()> {
     Ok(())
 }
 
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn forget_nulls_the_index_column() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -199,6 +200,8 @@ async fn forget_nulls_the_index_column() -> anyhow::Result<()> {
     Ok(())
 }
 
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn delete_with_pending_forgettable_events_leaves_the_pending_payload() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -242,6 +245,8 @@ async fn delete_with_pending_forgettable_events_leaves_the_pending_payload() -> 
     Ok(())
 }
 
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn staged_erasure_event_fences_stale_writers_on_delete() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -283,6 +288,8 @@ async fn staged_erasure_event_fences_stale_writers_on_delete() -> anyhow::Result
     Ok(())
 }
 
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn soft_delete_auto_forgets_the_index_column() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -311,8 +318,7 @@ async fn soft_delete_auto_forgets_the_index_column() -> anyhow::Result<()> {
 /// No column persists on update, so `update_can_reject()` is false:
 /// `forget` and soft `delete` narrow to `RepoFault` like `update` does.
 mod frozen {
-    use es_entity::*;
-    use sqlx::PgPool;
+    use es_entity::{db::Pool, *};
 
     use super::{Subscriber, SubscriberEvent, SubscriberId};
 
@@ -327,11 +333,11 @@ mod frozen {
         )
     )]
     pub struct FrozenSubscribers {
-        pool: PgPool,
+        pool: Pool,
     }
 
     impl FrozenSubscribers {
-        pub fn new(pool: PgPool) -> Self {
+        pub fn new(pool: Pool) -> Self {
             Self { pool }
         }
     }
@@ -342,6 +348,8 @@ fn takes_fault<T>(res: Result<T, es_entity::RepoFault>) -> Result<T, es_entity::
     res
 }
 
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn forget_and_delete_return_repo_fault_when_the_repo_cannot_reject() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;

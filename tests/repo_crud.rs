@@ -2,8 +2,7 @@ mod entities;
 mod helpers;
 
 use entities::user::*;
-use es_entity::*;
-use sqlx::PgPool;
+use es_entity::{db::Pool, *};
 
 /// Regression test: repo structs with a generic parameter named 'E' must compile
 /// without conflicting with the macro's internal error generic.
@@ -11,8 +10,7 @@ use sqlx::PgPool;
 mod generic_e_repo {
     #![allow(dead_code)]
 
-    use es_entity::*;
-    use sqlx::PgPool;
+    use es_entity::{db::Pool, *};
 
     use crate::entities::user::*;
 
@@ -21,7 +19,7 @@ mod generic_e_repo {
     #[derive(EsRepo, Debug)]
     #[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
     pub struct UsersWithGenericE<E: EventMarker> {
-        pool: PgPool,
+        pool: Pool,
         _marker: std::marker::PhantomData<E>,
     }
 }
@@ -29,11 +27,11 @@ mod generic_e_repo {
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
 pub struct Users {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Users {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -87,6 +85,9 @@ async fn list_by() -> anyhow::Result<()> {
     Ok(())
 }
 
+// Postgres-only: its first assertion relies on rows other tests left in the
+// shared Postgres database; each SQLite test starts from an empty one.
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn list_for_filters() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -419,7 +420,7 @@ async fn update_all_concurrent_modification() -> anyhow::Result<()> {
 }
 
 /// Hard-deletes an entity's index and event rows out from under a loaded copy.
-async fn vanish(pool: &PgPool, id: UserId) -> anyhow::Result<()> {
+async fn vanish(pool: &Pool, id: UserId) -> anyhow::Result<()> {
     sqlx::query("DELETE FROM user_events WHERE id = $1")
         .bind(id)
         .execute(pool)

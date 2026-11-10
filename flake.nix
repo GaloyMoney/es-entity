@@ -52,12 +52,27 @@
           || (builtins.match ".*deny\.toml$" path != null)
           || (builtins.match ".*/README\.md$" path != null)
           || (builtins.match ".*/migrations/.*\.sql$" path != null)
+          || (builtins.match ".*/migrations-sqlite/.*\.sql$" path != null)
           || (craneLib.filterCargoSources path type);
       };
       commonArgs = {
         src = rustSource;
         SQLX_OFFLINE = "true";
       };
+      # Every es-entity feature except the backend selection.
+      allFeaturesExceptBackend = pkgs.lib.concatStringsSep "," [
+        "fail-on-warnings"
+        "tracing-context"
+        "graphql"
+        "event-context"
+        "json-schema"
+        "mdbook-test"
+        "testing"
+        "errlanes-tracing"
+        "instrument"
+        "errlanes-classify-reqwest"
+      ];
+      sqliteTestFeatures = "sqlite,graphql,event-context,instrument,json-schema,tracing-context";
       cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
       # `fly` — the Concourse CLI, used by `ci/repipe` to set the pipeline.
@@ -375,6 +390,29 @@
         echo "Tests completed successfully!"
       '';
 
+      # ── SQLite test runner ─────────────────────────────────────────────
+      # No server: each test opens its own SQLite file in the temp dir and
+      # applies `migrations-sqlite/`. Generated SQLite queries are runtime
+      # queries, so no DATABASE_URL / offline cache is needed to build.
+      nextest-sqlite-runner = pkgs.writeShellScriptBin "nextest-sqlite-runner" ''
+        set -e
+
+        export PATH="${pkgs.lib.makeBinPath [
+          pkgs.cargo-nextest
+          pkgs.coreutils
+          rustToolchain
+          pkgs.stdenv.cc
+        ]}:$PATH"
+
+        echo "Running SQLite macro tests..."
+        cargo nextest run -p es-entity-macros-sqlite --verbose
+
+        echo "Running SQLite integration tests..."
+        cargo nextest run -p es-entity --no-default-features --features ${sqliteTestFeatures} --verbose
+
+        echo "SQLite tests completed successfully!"
+      '';
+
       # ── Fuzz runner (cargo-fuzz / libFuzzer) ───────────────────────────
       # Wraps the shared ci/vendor/tasks/fuzz.sh (from galoy-concourse-shared)
       # with the Rust toolchain + cargo-fuzz on PATH so the same script runs
@@ -396,6 +434,7 @@
       with pkgs; {
         packages = {
           nextest = nextest-runner;
+          nextest-sqlite = nextest-sqlite-runner;
           fuzz = fuzz-runner;
           setup-db-dev = setupDbDev;
           dev-env = devEnv;
@@ -414,10 +453,17 @@
 
         checks = {
           workspace-fmt = craneLib.cargoFmt commonArgs;
+          # `postgres` and `sqlite` are mutually exclusive, so `--all-features`
+          # is not an option: every other feature is listed per backend.
           workspace-clippy = craneLib.cargoClippy (commonArgs
             // {
               inherit cargoArtifacts;
-              cargoClippyExtraArgs = "--all-features -- --deny warnings";
+              cargoClippyExtraArgs = "--features ${allFeaturesExceptBackend} -- --deny warnings";
+            });
+          workspace-clippy-sqlite = craneLib.cargoClippy (commonArgs
+            // {
+              inherit cargoArtifacts;
+              cargoClippyExtraArgs = "-p es-entity --no-default-features --features sqlite,${allFeaturesExceptBackend} -- --deny warnings";
             });
           workspace-audit = craneLib.cargoAudit {
             inherit advisory-db;

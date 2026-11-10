@@ -1,9 +1,8 @@
 mod helpers;
 
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
-use es_entity::*;
+use es_entity::{db::Pool, *};
 
 es_entity::entity_id! { GadgetId, KnobId, SprocketId, DoohickeyId }
 
@@ -52,11 +51,11 @@ impl IntoEvents<GadgetEvent> for NewGadget {
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Gadget")]
 pub struct Gadgets {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Gadgets {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -112,11 +111,11 @@ impl IntoEvents<KnobEvent> for NewKnob {
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Knob", columns(serial(ty = "String")))]
 pub struct Knobs {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Knobs {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -166,12 +165,12 @@ impl IntoEvents<SprocketEvent> for NewSprocket {
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Sprocket", id(generator = "Self::next_id"))]
 pub struct Sprockets {
-    pool: PgPool,
+    pool: Pool,
     minted: std::sync::Arc<std::sync::Mutex<Vec<SprocketId>>>,
 }
 
 impl Sprockets {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self {
             pool,
             minted: Default::default(),
@@ -238,11 +237,11 @@ impl IntoEvents<DoohickeyEvent> for NewDoohickey {
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Doohickey", id(source = caller))]
 pub struct Doohickeys {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Doohickeys {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -383,6 +382,8 @@ async fn create_all_with_a_caller_id_that_differs_from_the_container_id_writes_n
     Ok(())
 }
 
+// Postgres-only: plants rows with Postgres SQL (`NOW()`).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn hydrating_an_entity_whose_payload_id_differs_from_the_container_is_corrupt_state()
 -> anyhow::Result<()> {

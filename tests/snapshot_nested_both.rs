@@ -6,23 +6,22 @@ mod helpers;
 use std::sync::{Arc, Mutex};
 
 use entities::{meter::*, site::*};
-use es_entity::*;
+use es_entity::{db::Pool, *};
 use helpers::init_pool;
-use sqlx::PgPool;
 use tracing_subscriber::layer::SubscriberExt;
 
 /// Both parent (`Site`) and child (`Meter`) snapshot.
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Site", snapshot)]
 pub struct BothSites {
-    pool: PgPool,
+    pool: Pool,
 
     #[es_repo(nested, entity = "Meter")]
     meters: BothMeters,
 }
 
 impl BothSites {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self {
             pool: pool.clone(),
             meters: BothMeters::new(pool),
@@ -40,11 +39,11 @@ impl BothSites {
     )
 )]
 pub struct BothMeters {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl BothMeters {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -72,6 +71,9 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for QueryEventCount {
 
 /// Nested "just works" when both parent and child snapshot: a nested
 /// `find_by_id` still issues exactly one SQL statement for the whole tree.
+// Postgres-only: counts `sqlx::query` events on a thread-local subscriber;
+// sqlx-sqlite runs statements on its worker thread, so none are observed.
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn nested_both_snapshot_one_statement() -> anyhow::Result<()> {
     let pool = init_pool().await?;
@@ -113,6 +115,8 @@ async fn nested_both_snapshot_one_statement() -> anyhow::Result<()> {
 /// still refreshes every stale child in the same call, not just the mutated
 /// one, because `update_all` (which the nested phase routes through) checks
 /// every child it is handed, not only the dirty ones.
+// Postgres-only: tampers with rows via compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn nested_update_refreshes_every_stale_child_not_just_the_mutated_one() -> anyhow::Result<()>
 {

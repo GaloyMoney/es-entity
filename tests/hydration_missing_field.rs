@@ -1,8 +1,11 @@
+// Postgres-only: its shared `plant` helper writes rows with Postgres SQL
+// (`NOW()`).
+#![cfg(feature = "postgres")]
+
 mod helpers;
 
-use es_entity::*;
+use es_entity::{db::Pool, *};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 es_entity::entity_id! { ProbeId }
 
@@ -72,10 +75,10 @@ impl IntoEvents<ProbeEvent> for NewProbe {
     events_tbl = "hydration_probe_events"
 )]
 pub struct Probes {
-    pool: PgPool,
+    pool: Pool,
 }
 
-async fn plant(pool: &PgPool, events: Vec<serde_json::Value>) -> anyhow::Result<ProbeId> {
+async fn plant(pool: &Pool, events: Vec<serde_json::Value>) -> anyhow::Result<ProbeId> {
     let id = ProbeId::new();
     sqlx::query("INSERT INTO hydration_probes (id, created_at) VALUES ($1, NOW())")
         .bind(id)

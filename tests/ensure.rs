@@ -7,9 +7,8 @@ use std::{
 };
 
 use es_entity::errlanes::{Fail, RejectionCode};
-use es_entity::*;
+use es_entity::{db::Pool, *};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 es_entity::entity_id! {
     EnsureTemplateId,
@@ -138,7 +137,7 @@ static HOOK_RUNS: AtomicUsize = AtomicUsize::new(0);
     post_persist_hook = "count_persist"
 )]
 pub struct EnsureTemplates {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl EnsureTemplates {
@@ -159,7 +158,7 @@ impl EnsureTemplates {
     columns(account(ty = "String"), currency(ty = "String"), label(ty = "String"))
 )]
 pub struct EnsureSlots {
-    pool: PgPool,
+    pool: Pool,
 }
 
 #[derive(EsEvent, Debug, Serialize, Deserialize)]
@@ -242,7 +241,7 @@ impl IntoEvents<EnsureAccountEvent> for NewEnsureAccount {
     columns(code(ty = "String"), external_id(ty = "Option<String>"))
 )]
 pub struct EnsureAccounts {
-    pool: PgPool,
+    pool: Pool,
 }
 
 #[derive(EsEvent, Debug, Serialize, Deserialize)]
@@ -301,7 +300,7 @@ impl IntoEvents<EnsurePartialEvent> for NewEnsurePartial {
     columns(tag(ty = "String"))
 )]
 pub struct EnsurePartials {
-    pool: PgPool,
+    pool: Pool,
 }
 
 #[derive(EsEvent, Debug, Serialize, Deserialize)]
@@ -344,7 +343,7 @@ impl IntoEvents<DoohickeyEvent> for NewDoohickey {
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Doohickey", id(source = caller))]
 pub struct Doohickeys {
-    pool: PgPool,
+    pool: Pool,
 }
 
 #[derive(EsEvent, Debug, Serialize, Deserialize)]
@@ -397,7 +396,7 @@ impl IntoEvents<KnobEvent> for NewKnob {
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Knob", id(source = caller), columns(serial(ty = "String")))]
 pub struct Knobs {
-    pool: PgPool,
+    pool: Pool,
 }
 
 fn template(code: &str, note: &str) -> NewEnsureTemplate {
@@ -442,7 +441,7 @@ fn takes_fault<T>(res: Result<T, RepoFault>) -> Result<T, RepoFault> {
     res
 }
 
-async fn event_count(pool: &PgPool, code: &str) -> anyhow::Result<i64> {
+async fn event_count(pool: &Pool, code: &str) -> anyhow::Result<i64> {
     Ok(sqlx::query_scalar(
         "SELECT COUNT(*) FROM ensure_template_events e \
          JOIN ensure_templates t ON t.id = e.id WHERE t.code = $1",
@@ -956,6 +955,8 @@ async fn keys_span_entities_carries_ids_and_names_not_values() -> anyhow::Result
     Ok(())
 }
 
+// Postgres-only: seeds a row with Postgres SQL (`NOW()`).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn partial_unique_index_conflict_is_rejected() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -1051,6 +1052,9 @@ async fn repeatable_read_after_concurrent_commit(
         .await)
 }
 
+// Postgres-only: exercises Postgres isolation levels (`SET TRANSACTION
+// ISOLATION LEVEL`); SQLite transactions are always serializable.
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn under_snapshot_isolation_is_transient_never_corrupt() -> anyhow::Result<()> {
     for level in ["REPEATABLE READ", "SERIALIZABLE"] {
@@ -1067,6 +1071,9 @@ async fn under_snapshot_isolation_is_transient_never_corrupt() -> anyhow::Result
     Ok(())
 }
 
+// Postgres-only: exercises Postgres isolation levels (`SET TRANSACTION
+// ISOLATION LEVEL`); SQLite transactions are always serializable.
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn under_read_committed_finds_a_concurrent_commit() -> anyhow::Result<()> {
     let outcome = repeatable_read_after_concurrent_commit("READ COMMITTED").await?;

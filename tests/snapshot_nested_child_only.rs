@@ -6,9 +6,8 @@ mod helpers;
 use std::sync::{Arc, Mutex};
 
 use entities::{meter::*, site::*};
-use es_entity::*;
+use es_entity::{db::Pool, *};
 use helpers::init_pool;
-use sqlx::PgPool;
 use tracing_subscriber::layer::SubscriberExt;
 
 /// Child (`Meter`) snapshots, parent (`PlainSiteOverMeters`) does not.
@@ -21,14 +20,14 @@ use tracing_subscriber::layer::SubscriberExt;
     events_tbl = "site_events"
 )]
 pub struct ChildOnlySites {
-    pool: PgPool,
+    pool: Pool,
 
     #[es_repo(nested, entity = "Meter")]
     meters: ChildOnlyMeters,
 }
 
 impl ChildOnlySites {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self {
             pool: pool.clone(),
             meters: ChildOnlyMeters::new(pool),
@@ -46,11 +45,11 @@ impl ChildOnlySites {
     )
 )]
 pub struct ChildOnlyMeters {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl ChildOnlyMeters {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -78,6 +77,9 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for QueryEventCount {
 
 /// Nested "just works" when only the child snapshots: a nested `find_by_id`
 /// still issues exactly one SQL statement for the whole tree.
+// Postgres-only: counts `sqlx::query` events on a thread-local subscriber;
+// sqlx-sqlite runs statements on its worker thread, so none are observed.
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn nested_child_only_snapshot_one_statement() -> anyhow::Result<()> {
     let pool = init_pool().await?;

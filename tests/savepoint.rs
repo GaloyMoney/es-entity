@@ -1,3 +1,7 @@
+// Postgres-only: its shared helpers write and read rows with compile-time
+// `sqlx::query!` (Postgres schema).
+#![cfg(feature = "postgres")]
+
 mod helpers;
 
 use es_entity::operation::{
@@ -29,7 +33,7 @@ async fn insert_item_in_op(
     Ok(())
 }
 
-async fn labels(pool: &sqlx::PgPool, prefix: &str) -> anyhow::Result<Vec<String>> {
+async fn labels(pool: &es_entity::db::Pool, prefix: &str) -> anyhow::Result<Vec<String>> {
     let labels = sqlx::query!(
         "SELECT label FROM savepoint_items WHERE label LIKE $1 ORDER BY label",
         format!("{prefix}%")

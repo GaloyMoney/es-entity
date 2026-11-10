@@ -1,3 +1,6 @@
+// Postgres-only: verifies the catalog against Postgres' own `pg_indexes`
+// over a `PgConnection`.
+#![cfg(feature = "postgres")]
 //! Verification lint for the index catalog: the physical composite indexes the
 //! `list_for_filters` specialization relies on must actually exist in the
 //! migrated database.

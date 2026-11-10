@@ -1,9 +1,8 @@
 mod helpers;
 
 use es_entity::errlanes::Fail;
-use es_entity::*;
+use es_entity::{db::Pool, *};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 es_entity::entity_id! { EnsureSoftBoxId, EnsureSoftNoteId }
 
@@ -134,7 +133,7 @@ impl IntoEvents<EnsureSoftBoxEvent> for NewEnsureSoftBox {
     columns(label(ty = "String"))
 )]
 pub struct EnsureSoftBoxes {
-    pool: PgPool,
+    pool: Pool,
 
     #[es_repo(nested)]
     notes: EnsureSoftNotes,
@@ -147,7 +146,7 @@ pub struct EnsureSoftBoxes {
     columns(box_id(ty = "EnsureSoftBoxId", update(persist = false), parent))
 )]
 pub struct EnsureSoftNotes {
-    pool: PgPool,
+    pool: Pool,
 }
 
 #[tokio::test]

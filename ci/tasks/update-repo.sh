@@ -25,7 +25,7 @@ done
 
 # Only the version string is rewritten so the rest of each entry (e.g.
 # `default-features = false` on errlanes) survives.
-sed -i'' -E "s/^((errlanes|errlanes-derive|es-entity-macros) = \{ path = \"[^\"]+\", version = )\"[^\"]*\"/\1\"${VERSION}\"/" ./Cargo.toml
+sed -i'' -E "s/^((errlanes|errlanes-derive|es-entity-macros|es-entity-macros-sqlite) =\{ path = \"[^\"]+\", version = )\"[^\"]*\"/\1\"${VERSION}\"/" ./Cargo.toml
 cargo update --workspace
 
 git status

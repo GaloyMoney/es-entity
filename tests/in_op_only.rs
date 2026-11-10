@@ -155,13 +155,12 @@ async fn pool_less_repo_serves_every_read_family_in_op() -> anyhow::Result<()> {
 /// discipline, because the op still has to be passed in explicitly.
 mod with_pool {
     use super::{entities::user::*, helpers, new_user};
-    use es_entity::*;
-    use sqlx::PgPool;
+    use es_entity::{db::Pool, *};
 
     #[derive(EsRepo, Debug)]
     #[es_repo(entity = "User", in_op_only, columns(name(ty = "String")))]
     pub struct Users {
-        pool: PgPool,
+        pool: Pool,
     }
 
     #[tokio::test]

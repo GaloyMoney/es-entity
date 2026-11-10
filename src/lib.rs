@@ -41,6 +41,11 @@ pub mod pagination;
 pub mod query;
 pub mod snapshot;
 pub mod sql_commenter;
+#[cfg(feature = "sqlite")]
+mod sqlite_sql;
+#[cfg(feature = "sqlite")]
+#[doc(hidden)]
+pub mod sqlite_write;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod traits;
@@ -70,14 +75,20 @@ pub use errlanes::{
 };
 #[doc(inline)]
 pub use error::*;
+#[cfg(feature = "postgres")]
 #[doc(hidden)]
 pub use es_entity_macros::ConstraintRejection;
-pub use es_entity_macros::EsEntity;
-pub use es_entity_macros::EsEvent;
-pub use es_entity_macros::EsRepo;
-pub use es_entity_macros::EsSnapshot;
-pub use es_entity_macros::es_event_context;
-pub use es_entity_macros::expand_es_query;
+#[cfg(feature = "postgres")]
+pub use es_entity_macros::{
+    EsEntity, EsEvent, EsRepo, EsSnapshot, es_event_context, expand_es_query,
+};
+#[cfg(feature = "sqlite")]
+#[doc(hidden)]
+pub use es_entity_macros_sqlite::ConstraintRejection;
+#[cfg(feature = "sqlite")]
+pub use es_entity_macros_sqlite::{
+    EsEntity, EsEvent, EsRepo, EsSnapshot, es_event_context, expand_es_query,
+};
 #[doc(inline)]
 pub use events::*;
 #[doc(inline)]

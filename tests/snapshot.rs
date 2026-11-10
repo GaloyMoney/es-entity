@@ -2,17 +2,16 @@ mod entities;
 mod helpers;
 
 use entities::meter::*;
-use es_entity::*;
-use sqlx::PgPool;
+use es_entity::{db::Pool, *};
 
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Meter", snapshot, columns(label(ty = "String")))]
 pub struct MeterRepo {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl MeterRepo {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -27,11 +26,11 @@ impl MeterRepo {
     columns(label(ty = "String"))
 )]
 pub struct PlainMeterRepo {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl PlainMeterRepo {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -47,6 +46,8 @@ fn new_meter(label: &str) -> NewMeter {
 /// a short tail, and folds to the same state as a full replay of the same
 /// rows via the non-snapshot twin; `len_persisted()` equals the events row
 /// count.
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn round_trip() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -148,6 +149,8 @@ async fn forward_guard_reads_snapshot_first() -> anyhow::Result<()> {
 /// stored fingerprint, a reload ignores the snapshot (falls back to a full
 /// replay with correct state); the next update rewrites the row with the
 /// right fingerprint.
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn fingerprint_mismatch_self_heals() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -197,6 +200,8 @@ async fn fingerprint_mismatch_self_heals() -> anyhow::Result<()> {
 }
 
 /// Corrupt blob with matching fingerprint ⇒ `SnapshotDecode`.
+// Postgres-only: tampers with rows via compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn corrupt_snapshot_blob_is_a_hard_error() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -256,6 +261,8 @@ async fn corrupt_snapshot_blob_is_a_hard_error() -> anyhow::Result<()> {
 /// Compaction: after an update that snapshotted, the tail is empty and
 /// `len_persisted()` unchanged; a further update on the same in-memory
 /// entity persists with correct sequences (no `UNIQUE` violation).
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn compaction_after_snapshot_write() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -292,6 +299,8 @@ async fn compaction_after_snapshot_write() -> anyhow::Result<()> {
 
 /// `capture()` returning `None` keeps the old row and grows the tail (row
 /// `sequence` unchanged).
+// Postgres-only: inspects rows with compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn snapshot_returning_none_keeps_old_row() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -333,6 +342,8 @@ async fn snapshot_returning_none_keeps_old_row() -> anyhow::Result<()> {
 
 /// Batch: `find_all` and `list_by_id` over a page mixing snapshotted,
 /// never-snapshotted, and stale-fingerprint meters — every entity correct.
+// Postgres-only: tampers with rows via compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn batch_load_mixes_snapshot_states() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
@@ -412,6 +423,8 @@ async fn batch_load_mixes_snapshot_states() -> anyhow::Result<()> {
 /// A clean entity whose loaded state has no matching snapshot — because a
 /// fingerprint change made a fresh row stop matching — gets refreshed on
 /// its next `update`, even though that call stages no new events.
+// Postgres-only: tampers with rows via compile-time `sqlx::query!` (Postgres schema).
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn stale_clean_entity_refreshes_on_next_update() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;

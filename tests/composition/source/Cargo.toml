@@ -6,7 +6,9 @@ license = "Apache-2.0"
 publish = false
 [dependencies]
 tracing = "0.1"
-es-entity = { path = "../../.." }
+# The backend (`postgres` / `sqlite`) comes from the es-entity build that
+# pulls this crate in as a dev-dependency.
+es-entity = { path = "../../..", default-features = false }
 errlanes = { path = "../../../errlanes", features = ["derive"] }
 serde = { workspace = true }
 bon = { workspace = true }

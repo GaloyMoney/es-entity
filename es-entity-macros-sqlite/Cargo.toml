@@ -1,0 +1,33 @@
+[package]
+name = "es-entity-macros-sqlite"
+description = "Proc macros for es-entity (SQLite backend)"
+repository = "https://github.com/GaloyMoney/cala"
+version = "0.21.1-dev"
+edition = "2024"
+license = "Apache-2.0"
+categories = ["data-structures", "database"]
+
+[features]
+
+fail-on-warnings = []
+graphql = []
+event-context = ["event-context-enabled"]
+event-context-enabled = []
+instrument = []
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+syn = "3.0"
+quote = "1.0"
+darling = "0.24"
+pluralizer = "0.5"
+convert_case = "0.12"
+regex = "1.12"
+# Minimal features: `recursive-protection` (default) would pull in
+# recursive -> stacker -> psm (C + build.rs) + libc and the
+# `Apache-2.0 WITH LLVM-exception` license. Migrations are shallow DDL, so the
+# stack-overflow guard is unnecessary; this leaves `log` as the only new dep.
+sqlparser = { version = "0.63", default-features = false, features = ["std"] }

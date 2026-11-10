@@ -17,17 +17,16 @@ mod entities;
 mod helpers;
 
 use entities::user::*;
-use es_entity::{AtomicOperation, DbOp, *};
-use sqlx::PgPool;
+use es_entity::{AtomicOperation, DbOp, db::Pool, *};
 
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "User", columns(name(ty = "String", list_for)))]
 pub struct Users {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Users {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -97,12 +96,12 @@ use entities::task::*;
     post_persist_hook = "on_persist"
 )]
 pub struct TasksWithHook {
-    pool: PgPool,
+    pool: Pool,
     hook_calls: std::sync::atomic::AtomicUsize,
 }
 
 impl TasksWithHook {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self {
             pool,
             hook_calls: std::sync::atomic::AtomicUsize::new(0),

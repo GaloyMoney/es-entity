@@ -1,4 +1,7 @@
-#![cfg(feature = "instrument")]
+// Postgres-only: asserts the single batched statement of the Postgres
+// `update_all` (SQLite updates entity by entity) and counts `sqlx::query`
+// events, which sqlx-sqlite emits on its worker thread.
+#![cfg(all(feature = "instrument", feature = "postgres"))]
 //! Proves that `update_all_in_op`'s nested-children phase vectorizes across
 //! the *whole* parent batch instead of degrading to one child-repo call per
 //! parent.
@@ -24,22 +27,21 @@ use std::{
 };
 
 use entities::order::*;
-use es_entity::*;
+use es_entity::{db::Pool, *};
 use helpers::init_pool;
-use sqlx::PgPool;
 use tracing_subscriber::layer::SubscriberExt;
 
 #[derive(EsRepo, Debug)]
 #[es_repo(entity = "Order", delete = "soft")]
 pub struct Orders {
-    pool: PgPool,
+    pool: Pool,
 
     #[es_repo(nested)]
     items: OrderItems,
 }
 
 impl Orders {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self {
             pool: pool.clone(),
             items: OrderItems::new(pool),
@@ -54,11 +56,11 @@ impl Orders {
     columns(order_id(ty = "OrderId", update(persist = false), parent))
 )]
 pub struct OrderItems {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl OrderItems {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }

@@ -1,11 +1,14 @@
+// Postgres-only: its ground-truth query binds an array to `= ANY($1)`,
+// which SQLite cannot bind.
+#![cfg(feature = "postgres")]
+
 mod entities;
 mod helpers;
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
 
 use entities::transfer::*;
-use es_entity::*;
+use es_entity::{db::Pool, *};
 
 /// Repo shape mirroring lana's `Disbursals`: two non-optional filter columns
 /// plus one optional filter column, sorted `by(created_at)`, plus a nullable
@@ -21,11 +24,11 @@ use es_entity::*;
     )
 )]
 pub struct Transfers {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Transfers {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -56,7 +59,7 @@ async fn seed_transfers(
     Ok(())
 }
 
-async fn ground_truth(pool: &PgPool, account_ids: &[uuid::Uuid]) -> anyhow::Result<Vec<Row>> {
+async fn ground_truth(pool: &Pool, account_ids: &[uuid::Uuid]) -> anyhow::Result<Vec<Row>> {
     let rows = sqlx::query_as::<
         _,
         (

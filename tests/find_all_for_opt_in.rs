@@ -1,8 +1,7 @@
 mod helpers;
 
-use es_entity::*;
+use es_entity::{db::Pool, *};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 es_entity::entity_id! { OptInEntryId }
 es_entity::entity_id! { OptInAccountId }
@@ -111,7 +110,7 @@ pub mod plain {
         )
     )]
     pub struct PlainEntries {
-        pub pool: PgPool,
+        pub pool: Pool,
     }
 }
 
@@ -175,7 +174,7 @@ pub mod batch {
         )
     )]
     pub struct BatchEntries {
-        pub pool: PgPool,
+        pub pool: Pool,
     }
 }
 

@@ -1,10 +1,8 @@
 mod entities;
 mod helpers;
 
-use sqlx::PgPool;
-
 use entities::contact::*;
-use es_entity::*;
+use es_entity::{db::Pool, *};
 
 /// Partner-scoped repo: every generated read fn requires a leading
 /// `scope: impl Into<ContactScope>` argument. `PartnerId(partner_id)` filters
@@ -28,11 +26,11 @@ use es_entity::*;
     )
 )]
 pub struct Contacts {
-    pool: PgPool,
+    pool: Pool,
 }
 
 impl Contacts {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -336,6 +334,8 @@ async fn foreign_cursor_cannot_leak_rows() -> anyhow::Result<()> {
 /// The `PartnerId` arm's page-1 list SQL must be sargable against a
 /// `(partner_id, created_at, id)` composite index — the scope conjunct is a
 /// plain equality, not a COALESCE catch-all.
+// Postgres-only: asserts on the Postgres planner via `EXPLAIN`.
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn scoped_list_query_plan_uses_composite_index() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;

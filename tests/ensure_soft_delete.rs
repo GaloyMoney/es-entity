@@ -3,9 +3,8 @@ mod helpers;
 use std::collections::BTreeSet;
 
 use es_entity::errlanes::Fail;
-use es_entity::*;
+use es_entity::{db::Pool, *};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 es_entity::entity_id! { EnsureSoftMemberId }
 
@@ -80,12 +79,11 @@ impl IntoEvents<EnsureSoftMemberEvent> for NewEnsureSoftMember {
     columns(email(ty = "String"), handle(ty = "String"))
 )]
 pub struct EnsureSoftMembers {
-    pool: PgPool,
+    pool: Pool,
 }
 
 mod without_queries {
-    use es_entity::*;
-    use sqlx::PgPool;
+    use es_entity::{db::Pool, *};
 
     use super::{EnsureSoftMember, EnsureSoftMemberEvent, EnsureSoftMemberId};
 
@@ -97,7 +95,7 @@ mod without_queries {
         columns(email(ty = "String"), handle(ty = "String"))
     )]
     pub struct EnsureBareSoftMembers {
-        pub pool: PgPool,
+        pub pool: Pool,
     }
 }
 
@@ -113,7 +111,7 @@ fn member(id: EnsureSoftMemberId, email: &str, handle: &str) -> NewEnsureSoftMem
     }
 }
 
-async fn event_count(pool: &PgPool, id: EnsureSoftMemberId) -> anyhow::Result<i64> {
+async fn event_count(pool: &Pool, id: EnsureSoftMemberId) -> anyhow::Result<i64> {
     Ok(
         sqlx::query_scalar("SELECT COUNT(*) FROM ensure_soft_member_events WHERE id = $1")
             .bind(uuid::Uuid::from(id))
@@ -122,7 +120,7 @@ async fn event_count(pool: &PgPool, id: EnsureSoftMemberId) -> anyhow::Result<i6
     )
 }
 
-async fn row_count(pool: &PgPool, email: &str) -> anyhow::Result<i64> {
+async fn row_count(pool: &Pool, email: &str) -> anyhow::Result<i64> {
     Ok(
         sqlx::query_scalar("SELECT COUNT(*) FROM ensure_soft_members WHERE email = $1")
             .bind(email)
