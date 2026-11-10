@@ -6,12 +6,24 @@
       {
         "ordinal": 0,
         "name": "deleted",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "account_holders",
+            "name": "deleted"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "email",
-        "type_info": "Varchar"
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "account_holders",
+            "name": "email"
+          }
+        }
       }
     ],
     "parameters": {
