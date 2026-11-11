@@ -364,7 +364,7 @@
         ./ci/test-book.sh
 
         echo "Running nextest..."
-        cargo nextest run --workspace --features errlanes/classify-reqwest --verbose
+        cargo nextest run --workspace --features errlanes/classify-reqwest,es-entity/tracing-context --verbose
 
         echo "Running doc tests..."
         cargo test --doc --workspace
