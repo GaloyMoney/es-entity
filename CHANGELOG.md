@@ -1,3 +1,15 @@
+# [cala release v0.22.0](https://github.com/GaloyMoney/cala/releases/tag/0.22.0)
+
+
+
+### Bug Fixes
+
+- [**breaking**] Restore SQLx 0.8.6 compatibility (#307)
+
+### Miscellaneous Tasks
+
+- Align toolchain with lana-bank at 1.100.0 (#306)
+
 # [cala release v0.21.0](https://github.com/GaloyMoney/cala/releases/tag/0.21.0)
 
 
