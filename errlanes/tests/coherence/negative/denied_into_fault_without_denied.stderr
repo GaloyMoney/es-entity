@@ -1,23 +1,20 @@
-error[E0277]: `?` couldn't convert the error to `Infallible`
+error[E0277]: `?` couldn't convert the error to `!`
  --> tests/coherence/negative/denied_into_fault_without_denied.rs:6:33
   |
 5 | fn f() -> Result<(), Fault<lanes!(Transient, Fatal)>> {
-  |           ------------------------------------------- expected `Infallible` because of this
+  |           ------------------------------------------- expected `!` because of this
 6 |     Err(errlanes::Denied::new())?;
-  |     ----------------------------^ the trait `From<errlanes::Denied>` is not implemented for `Infallible`
+  |     ----------------------------^ the trait `From<errlanes::Denied>` is not implemented for `!`
   |     |
   |     this can't be annotated with `?` because it has type `Result<_, errlanes::Denied>`
   |
   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
-help: `Infallible` implements trait `From<T>`
- --> $RUST/core/src/convert/mod.rs
-  |
-  | const impl From<!> for Infallible {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<!>`
-  |
- ::: $CARGO/zerocopy-$VERSION/src/error.rs
+help: the trait `From<errlanes::Denied>` is not implemented for `!`
+      but trait `From<AlignmentError<_, _>>` is implemented for it
+ --> $CARGO/zerocopy-$VERSION/src/error.rs
   |
   | impl<Src, Dst: ?Sized + Unaligned> From<AlignmentError<Src, Dst>> for Infallible {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<AlignmentError<Src, Dst>>`
-  = note: required for `errlanes::Denied` to implement `Into<Infallible>`
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: for that trait implementation, expected `AlignmentError<_, _>`, found `errlanes::Denied`
+  = note: required for `errlanes::Denied` to implement `Into<!>`
   = note: required for `Fault<Profile<false, true, true>>` to implement `From<errlanes::Denied>`

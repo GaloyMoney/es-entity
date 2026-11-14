@@ -18,27 +18,24 @@ help: item with same name found
    = note: there are multiple different versions of crate `errlanes` in the dependency graph
    = note: required for `Fail<Parent, Profile<false, false, false>>` to implement `From<Fail<_, Profile<false, false, true>>>`
 
-error[E0277]: `?` couldn't convert the error to `Infallible`
+error[E0277]: `?` couldn't convert the error to `!`
   --> tests/coherence/negative/lift_without_fatal.rs:11:17
    |
 10 | fn outer(inner: Result<(), Child>) -> Result<(), Fail<Parent, lanes!()>> {
-   |                                       ---------------------------------- expected `Infallible` because of this
+   |                                       ---------------------------------- expected `!` because of this
 11 |     inner.lift()?;
-   |     ----- ------^ the trait `From<errlanes::Fatal>` is not implemented for `Infallible`
+   |     ----- ------^ the trait `From<errlanes::Fatal>` is not implemented for `!`
    |     |     |
    |     |     this can't be annotated with `?` because it has type `Result<_, Fail<_, Profile<false, false, true>>>`
    |     this has type `Result<_, Child>`
    |
    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
-help: `Infallible` implements trait `From<T>`
-  --> $RUST/core/src/convert/mod.rs
-   |
-   | const impl From<!> for Infallible {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<!>`
-   |
-  ::: $CARGO/zerocopy-$VERSION/src/error.rs
+help: the trait `From<errlanes::Fatal>` is not implemented for `!`
+      but trait `From<AlignmentError<_, _>>` is implemented for it
+  --> $CARGO/zerocopy-$VERSION/src/error.rs
    |
    | impl<Src, Dst: ?Sized + Unaligned> From<AlignmentError<Src, Dst>> for Infallible {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<AlignmentError<Src, Dst>>`
-   = note: required for `errlanes::Fatal` to implement `Into<Infallible>`
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for that trait implementation, expected `AlignmentError<_, _>`, found `errlanes::Fatal`
+   = note: required for `errlanes::Fatal` to implement `Into<!>`
    = note: required for `Fail<Parent, Profile<false, false, false>>` to implement `From<Fail<_, Profile<false, false, true>>>`
