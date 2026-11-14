@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH updated AS (UPDATE ensure_slots SET account = $2, currency = $3, label = $4 WHERE id = $1 RETURNING id) INSERT INTO ensure_slot_events (id, recorded_at, sequence, event_type, event) SELECT updated.id, COALESCE($5, NOW()), ROW_NUMBER() OVER () + $6, unnested.event_type, unnested.event FROM updated CROSS JOIN UNNEST($7::TEXT[], $8::JSONB[]) AS unnested(event_type, event) RETURNING recorded_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "recorded_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Timestamptz",
+        "Int8",
+        "TextArray",
+        "JsonbArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f0907298751bb5ea99361868f9a78abdcf1a6172135982dc7ccf3ccfd1ff7a2d"
+}

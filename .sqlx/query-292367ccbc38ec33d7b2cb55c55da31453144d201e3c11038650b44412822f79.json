@@ -6,24 +6,12 @@
       {
         "ordinal": 0,
         "name": "email",
-        "type_info": "Varchar",
-        "origin": {
-          "Table": {
-            "table": "subscribers",
-            "name": "email"
-          }
-        }
+        "type_info": "Varchar"
       },
       {
         "ordinal": 1,
         "name": "plan",
-        "type_info": "Varchar",
-        "origin": {
-          "Table": {
-            "table": "subscribers",
-            "name": "plan"
-          }
-        }
+        "type_info": "Varchar"
       }
     ],
     "parameters": {
