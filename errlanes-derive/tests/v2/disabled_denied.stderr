@@ -1,17 +1,10 @@
-error[E0277]: the trait bound `Infallible: From<errlanes::Denied>` is not satisfied
+error[E0277]: the trait bound `!: From<errlanes::Denied>` is not satisfied
  --> tests/v2/disabled_denied.rs:8:67
   |
 8 | fn main() { let _: Fail<Child, lanes!(Fatal)> = Denied::default().into(); }
-  |                                                                   ^^^^ the trait `From<errlanes::Denied>` is not implemented for `Infallible`
+  |                                                                   ^^^^ the trait `From<errlanes::Denied>` is not implemented for `!`
   |
-help: the trait `From<errlanes::Denied>` is not implemented for `Infallible`
-      but trait `From<!>` is implemented for it
- --> $RUST/core/src/convert/mod.rs
-  |
-  | const impl From<!> for Infallible {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = help: for that trait implementation, expected `!`, found `errlanes::Denied`
-  = note: required for `errlanes::Denied` to implement `Into<Infallible>`
+  = note: required for `errlanes::Denied` to implement `Into<!>`
   = note: required for `Fail<Child, Profile<false, false, true>>` to implement `From<errlanes::Denied>`
   = note: 1 redundant requirement hidden
   = note: required for `errlanes::Denied` to implement `Into<Fail<Child, Profile<false, false, true>>>`
