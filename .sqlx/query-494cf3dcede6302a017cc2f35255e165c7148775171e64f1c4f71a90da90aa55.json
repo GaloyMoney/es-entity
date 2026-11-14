@@ -6,8 +6,7 @@
       {
         "ordinal": 0,
         "name": "email",
-        "type_info": "Text",
-        "origin": "Expression"
+        "type_info": "Text"
       }
     ],
     "parameters": {

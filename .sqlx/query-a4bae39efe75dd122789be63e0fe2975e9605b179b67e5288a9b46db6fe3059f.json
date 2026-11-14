@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH updated AS (UPDATE ensure_soft_members SET email = $2, handle = $3, deleted = TRUE WHERE id = $1 RETURNING id) INSERT INTO ensure_soft_member_events (id, recorded_at, sequence, event_type, event) SELECT updated.id, COALESCE($4, NOW()), ROW_NUMBER() OVER () + $5, unnested.event_type, unnested.event FROM updated CROSS JOIN UNNEST($6::TEXT[], $7::JSONB[]) AS unnested(event_type, event) RETURNING recorded_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "recorded_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Varchar",
+        "Timestamptz",
+        "Int8",
+        "TextArray",
+        "JsonbArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a4bae39efe75dd122789be63e0fe2975e9605b179b67e5288a9b46db6fe3059f"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO orders (id, created_at) VALUES ($1, now())",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cb5d95024ed0dd4c1552e8b82680e5c24559263eff14ab051c8e229c1511cc46"
+}

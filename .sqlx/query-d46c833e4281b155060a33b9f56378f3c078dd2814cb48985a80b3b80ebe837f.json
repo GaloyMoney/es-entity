@@ -6,13 +6,7 @@
       {
         "ordinal": 0,
         "name": "fingerprint",
-        "type_info": "Int8",
-        "origin": {
-          "Table": {
-            "table": "meter_snapshots",
-            "name": "fingerprint"
-          }
-        }
+        "type_info": "Int8"
       }
     ],
     "parameters": {
