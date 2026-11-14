@@ -1,9 +1,11 @@
-error[E0271]: type mismatch resolving `<DbWrite as IntoLanes>::Rejected == Infallible`
+error[E0271]: type mismatch resolving `<DbWrite as IntoLanes>::Rejected == !`
   --> tests/coherence/classify_n_mixed_wrapper_into_bare_fatal.rs:19:6
    |
 19 |     r?;
-   |      ^ expected `Infallible`, found `Constraint`
+   |      ^ expected `!`, found `Constraint`
    |
+   = note: expected type `!`
+            found struct `Constraint`
    = note: required for `errlanes::Fatal` to implement `From<DbWrite>`
 
 error[E0271]: type mismatch resolving `<DbWrite as IntoLanes>::Lanes == Profile<false, false, true>`

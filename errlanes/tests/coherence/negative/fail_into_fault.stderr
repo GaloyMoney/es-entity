@@ -1,9 +1,11 @@
-error[E0271]: type mismatch resolving `<Fail<Closed, Profile<false, true, true>> as IntoLanes>::Rejected == Infallible`
+error[E0271]: type mismatch resolving `<Fail<Closed, Profile<false, true, true>> as IntoLanes>::Rejected == !`
   --> tests/coherence/negative/fail_into_fault.rs:10:6
    |
 10 |     r?;
-   |      ^ expected `Infallible`, found `Closed`
+   |      ^ expected `!`, found `Closed`
    |
+   = note: expected type `!`
+              found enum `Closed`
    = note: required for `Fault<Profile<false, true, true>>` to implement `From<Fail<Closed, Profile<false, true, true>>>`
 
 error[E0277]: `?` couldn't convert the error: `errlanes::kind::Fail: errlanes::kind::IntoFault` is not satisfied

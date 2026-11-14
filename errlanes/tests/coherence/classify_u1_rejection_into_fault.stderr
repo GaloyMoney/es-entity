@@ -1,7 +1,9 @@
-error[E0271]: type mismatch resolving `<Validation as IntoLanes>::Rejected == Infallible`
+error[E0271]: type mismatch resolving `<Validation as IntoLanes>::Rejected == !`
  --> tests/coherence/classify_u1_rejection_into_fault.rs:9:6
   |
 9 |     r?;
-  |      ^ expected `Infallible`, found `Validation`
+  |      ^ expected `!`, found `Validation`
   |
+  = note: expected type `!`
+           found struct `Validation`
   = note: required for `Fault<Profile<false, true, true>>` to implement `From<Validation>`
