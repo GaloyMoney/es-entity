@@ -106,6 +106,52 @@ The `list_for_filters` function matches on the sort column and intelligently del
 - **Exactly one filter set**: proxies to `list_for_{col}_by_{sort}` (single-column WHERE, full index usage)
 - **Two or more filters set**: uses the per-sort specialized query matching the exact filter combination when a composite index backs it (sargable), falling back to the COALESCE-based SQL for un-indexed combinations
 
+## ID-only filtered listings
+
+Batch workers often need matching IDs to schedule later work, not hydrated entities.
+Opt in with the repo-level `list_ids_for_filters` option:
+
+```rust,ignore
+#[derive(EsRepo)]
+#[es_repo(
+    entity = "User",
+    list_ids_for_filters,
+    columns(status(ty = "String", list_for))
+)]
+pub struct Users {
+    pool: PgPool,
+}
+```
+
+This generates `list_ids_for_filters_by_id` and
+`list_ids_for_filters_by_id_in_op`. They accept the same filters, ID cursor,
+and direction as `list_for_filters_by_id`, but return
+`PaginatedQueryRet<UserId, UserByIdCursor>`:
+
+```rust,ignore
+let page = users
+    .list_ids_for_filters_by_id(
+        UserFilters {
+            status: Some("active".to_owned()),
+        },
+        PaginatedQueryArgs {
+            first: 500,
+            after: None,
+        },
+        ListDirection::Ascending,
+    )
+    .await?;
+
+schedule(page.entities()).await?;
+```
+
+The ID-only query uses the same filter predicates, keyset pagination, and
+`first + 1` lookahead, but does not join the events table or hydrate entities.
+Scoped repositories also expose the method on their bound `scoped(...)` view;
+soft-delete repositories generate the corresponding `_include_deleted`
+variants. Other sort columns intentionally have no ID-only variant because
+their continuation cursor needs the sort value as well as the ID.
+
 ## Important Notes
 
 **Cursor and Sort Alignment**: The cursor type in `PaginatedQueryArgs` must match the sort field specified in the `Sort` parameter.

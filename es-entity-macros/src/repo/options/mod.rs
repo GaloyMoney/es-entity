@@ -136,6 +136,9 @@ pub struct RepositoryOptions {
     persist_event_context: Option<bool>,
     #[darling(default)]
     in_op_only: bool,
+    /// Generate ID-only variants of the ID-ordered filtered listing.
+    #[darling(default)]
+    list_ids_for_filters: bool,
     #[darling(default)]
     forgettable: bool,
     #[darling(default, rename = "forgettable_tbl")]
@@ -380,6 +383,10 @@ impl RepositoryOptions {
 
     pub fn in_op_only(&self) -> bool {
         self.in_op_only
+    }
+
+    pub fn list_ids_for_filters(&self) -> bool {
+        self.list_ids_for_filters
     }
 
     pub fn clock_field(&self) -> ClockFieldInfo<'_> {

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!: VfAccountId\" FROM ((SELECT id FROM vf_accounts WHERE (id > $2) AND ($2 IS NOT NULL) AND NOT (EXISTS (SELECT 1 FROM vf_account_flags f WHERE f.account_id = vf_accounts.id)) ORDER BY id ASC LIMIT $1) UNION ALL (SELECT id FROM vf_accounts WHERE ($2 IS NULL) AND NOT (EXISTS (SELECT 1 FROM vf_account_flags f WHERE f.account_id = vf_accounts.id)) ORDER BY id ASC LIMIT $1) ORDER BY id ASC LIMIT $1) __ids ORDER BY id ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!: VfAccountId",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "bd703d1a62f52a1d2c688f3295c49d99bf5d374a82f20c85f42975899b924a8f"
+}
