@@ -12,9 +12,10 @@
 //!
 //! 1. **Registration**: Hooks are registered using [`AtomicOperation::add_commit_hook()`]
 //! 2. **Merging**: Multiple hooks of the same type may be merged via [`CommitHook::merge()`]
-//! 3. **Pre-commit**: [`CommitHook::pre_commit()`] executes before the transaction commits
-//! 4. **Commit**: The underlying database transaction is committed
-//! 5. **Post-commit**: [`CommitHook::post_commit()`] executes after successful commit
+//! 3. **Pre-commit**: Ordinary hooks execute, including re-entrant generations
+//! 4. **Finalization**: [`CommitHook::is_finalizer()`] hooks seal accumulated work
+//! 5. **Commit**: The underlying database transaction is committed
+//! 6. **Post-commit**: [`CommitHook::post_commit()`] executes after successful commit
 //!
 //! If the commit **fails** instead — either a later hook's `pre_commit` errors (the
 //! transaction is rolled back first) or the `COMMIT` itself errors — then
@@ -86,6 +87,16 @@
 //!   into a consumer hook that declared `runs_after` the producer's type: the
 //!   consumer is waiting (deferred) rather than gone, so the staged instance merges
 //!   into it — one execution — instead of starting a fresh generation.
+//!
+//! # Finalization
+//!
+//! A hook opting into [`CommitHook::is_finalizer()`] waits until no ordinary
+//! hooks remain, including hooks registered dynamically during this commit.
+//! Pending finalizers still merge normally. Once a finalizer runs, registering
+//! any further hook is an error and rolls the transaction back: a sealed
+//! accumulator cannot silently miss a later contribution. `runs_after` still
+//! applies within each phase; an ordinary hook depending on a finalizer cannot
+//! make progress and fails with the dependency-cycle error.
 //!
 //! # Savepoints
 //!
@@ -322,6 +333,17 @@ pub trait CommitHook: Send + 'static + Sized {
         &[]
     }
 
+    /// Run only after all ordinary hooks, including re-entrant generations,
+    /// have finished. Finalizers may perform SQL but must not register further
+    /// hooks: attempting to do so fails and rolls back the entire commit.
+    ///
+    /// Finalizers remain merge targets until this phase starts. Use this for
+    /// sealing an operation-wide accumulator whose inputs arrive from other
+    /// hooks. Ordinary hooks must not depend on finalizers via `runs_after`.
+    fn is_finalizer(&self) -> bool {
+        false
+    }
+
     /// Execute the hook immediately, bypassing the hook system.
     ///
     /// Useful when [`AtomicOperation::add_commit_hook()`] returns `Err(hook)`.
@@ -471,6 +493,8 @@ pub trait DynHook: Send {
 
     fn runs_after(&self) -> &[TypeId];
 
+    fn is_finalizer(&self) -> bool;
+
     fn as_any(&self) -> &dyn Any;
 
     fn as_any_mut(&mut self) -> &mut dyn Any;
@@ -509,6 +533,10 @@ impl<H: CommitHook> DynHook for H {
         // UFCS is REQUIRED: `self.runs_after()` is ambiguous here because H
         // implements both CommitHook and (this very) DynHook.
         CommitHook::runs_after(self)
+    }
+
+    fn is_finalizer(&self) -> bool {
+        CommitHook::is_finalizer(self)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -616,10 +644,12 @@ impl CommitHooks {
             // dependency type exists. Evaluated dynamically on every pop, so it
             // composes with re-entrant staging (a dep staged mid-pass re-blocks
             // a hook that already deferred past it).
-            let blocked = hook
-                .runs_after()
-                .iter()
-                .any(|dep| pending.iter().any(|(t, _, _)| t == dep));
+            let finalizing = hook.is_finalizer();
+            let blocked = (finalizing && pending.iter().any(|(_, h, _)| !h.is_finalizer()))
+                || hook
+                    .runs_after()
+                    .iter()
+                    .any(|dep| pending.iter().any(|(t, _, _)| t == dep));
             if blocked {
                 pending.push_back((type_id, hook, generation));
                 deferred_streak += 1;
@@ -647,6 +677,14 @@ impl CommitHooks {
                     // same pass, through the same registration/merge path
                     // `absorb_staged` uses for released savepoints.
                     if let Some(staged) = new_op.drain_staged() {
+                        if finalizing && !staged.is_empty() {
+                            return Err((
+                                sqlx::Error::Protocol(
+                                    "commit finalizers cannot register further hooks".into(),
+                                ),
+                                PostCommitHooks { hooks: post_hooks },
+                            ));
+                        }
                         let next_generation = generation.saturating_add(1);
                         for (type_id, staged_hook) in staged.hooks {
                             if let Err(error) = push_or_merge_pending(
