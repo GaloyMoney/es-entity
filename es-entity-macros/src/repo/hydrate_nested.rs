@@ -14,6 +14,8 @@ pub struct HydrateNested<'a> {
     forgettable_table_name: Option<&'a str>,
     forgettable_columns: Vec<&'a syn::Ident>,
     snapshot_enabled: bool,
+    /// `RepositoryOptions::update_error_ty`, the error of `delete_all_in_op`.
+    update_error_ty: TokenStream,
 }
 
 impl<'a> HydrateNested<'a> {
@@ -28,6 +30,7 @@ impl<'a> HydrateNested<'a> {
             forgettable_table_name: opts.forgettable_table_name(),
             forgettable_columns: opts.columns.forgettable_column_names(),
             snapshot_enabled: opts.snapshot_table_name().is_some(),
+            update_error_ty: opts.update_error_ty(),
         }
     }
 }
@@ -134,6 +137,42 @@ impl ToTokens for HydrateNested<'_> {
                 }
             };
 
+            // Batch form of the cascade above: the same two statements with
+            // `= ANY($1)` over every deleted parent id. Runtime queries with
+            // bound parameters, like `update_all`.
+            let cascade_all = {
+                let cascade_query = format!(
+                    "UPDATE {} SET deleted = TRUE{} WHERE {} = ANY($1) AND deleted = FALSE",
+                    self.table_name,
+                    self.forgettable_columns
+                        .iter()
+                        .map(|c| format!(", {} = NULL", c))
+                        .collect::<String>(),
+                    column_name,
+                );
+                let payload_delete = self.forgettable_table_name.map(|forgettable_tbl| {
+                    let payload_delete_query = format!(
+                        "DELETE FROM {} WHERE entity_id IN (SELECT id FROM {} WHERE {} = ANY($1))",
+                        forgettable_tbl, self.table_name, column_name,
+                    );
+                    quote! {
+                        sqlx::query(#payload_delete_query)
+                            .bind(parent_ids)
+                            .execute(op.as_executor())
+                            .await?;
+                    }
+                });
+                quote! {
+                    #payload_delete
+                    sqlx::query(#cascade_query)
+                        .bind(parent_ids)
+                        .execute(op.as_executor())
+                        .await?;
+                }
+            };
+
+            let update_error_ty = &self.update_error_ty;
+
             tokens.append_all(quote! {
                 impl #impl_generics es_entity::CascadeDeleteNested<#ty> for #ident #ty_generics #where_clause {
                     async fn cascade_delete_in_op<OP>(
@@ -145,6 +184,32 @@ impl ToTokens for HydrateNested<'_> {
                     {
                         #cascade
                         Ok(())
+                    }
+
+                    async fn cascade_delete_all_in_op<OP>(
+                        op: &mut OP,
+                        parent_ids: &[#ty],
+                    ) -> Result<(), es_entity::RepoFault>
+                    where
+                        OP: es_entity::AtomicOperation + ?Sized,
+                    {
+                        #cascade_all
+                        Ok(())
+                    }
+                }
+
+                impl #impl_generics es_entity::DeleteNested for #ident #ty_generics #where_clause {
+                    type Error = #update_error_ty;
+
+                    async fn delete_removed_in_op<OP>(
+                        &self,
+                        op: &mut OP,
+                        entities: Vec<<Self as EsRepo>::Entity>,
+                    ) -> Result<(), Self::Error>
+                    where
+                        OP: es_entity::AtomicOperation + ?Sized,
+                    {
+                        self.delete_all_in_op(op, entities).await
                     }
                 }
             });
@@ -239,6 +304,73 @@ mod tests {
         ));
         assert!(!out.contains("DELETE FROM"));
         assert!(!out.contains("= NULL"));
+    }
+
+    #[test]
+    fn soft_repo_gets_delete_nested_and_batch_cascade() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "AccountHolder",
+                forgettable,
+                delete = "soft",
+                columns(
+                    account_id(ty = "AccountId", update(persist = false), parent),
+                    email(ty = "Forgettable<String>")
+                )
+            )]
+            struct AccountHolders {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = output(input);
+        assert!(out.contains("impl es_entity :: DeleteNested for AccountHolders"));
+        assert!(out.contains("self . delete_all_in_op (op , entities) . await"));
+        assert!(out.contains("fn cascade_delete_all_in_op"));
+        assert!(out.contains(
+            "DELETE FROM account_holders_forgettable_payloads WHERE entity_id IN (SELECT id FROM account_holders WHERE account_id = ANY($1))"
+        ));
+        assert!(out.contains(
+            "UPDATE account_holders SET deleted = TRUE, email = NULL WHERE account_id = ANY($1) AND deleted = FALSE"
+        ));
+        // The single-id cascade is left as it was.
+        assert!(out.contains(
+            "UPDATE account_holders SET deleted = TRUE, email = NULL WHERE account_id = $1 AND deleted = FALSE"
+        ));
+    }
+
+    #[test]
+    fn batch_cascade_without_forgettable_data_is_a_single_update() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "AccountHolder",
+                delete = "soft",
+                columns(account_id(ty = "AccountId", update(persist = false), parent))
+            )]
+            struct AccountHolders {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = output(input);
+        assert!(out.contains(
+            "UPDATE account_holders SET deleted = TRUE WHERE account_id = ANY($1) AND deleted = FALSE"
+        ));
+        assert!(!out.contains("entity_id IN"));
+    }
+
+    #[test]
+    fn non_soft_delete_repo_gets_no_delete_nested_impl() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "OrderItem",
+                columns(order_id(ty = "OrderId", update(persist = false), parent))
+            )]
+            struct OrderItems {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = output(input);
+        assert!(!out.contains("DeleteNested"));
+        assert!(!out.contains("ANY"));
     }
 
     #[test]

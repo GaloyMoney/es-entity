@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE ncd_hooked SET deleted = TRUE WHERE parent_id = $1 AND deleted = FALSE",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dfb508bf5fdae5462e7b46bc73029e063f44a0dffa9e0c7dff3c645c8b74c98c"
+}

@@ -275,8 +275,15 @@ impl ToTokens for EsEntity {
         let nested = self.nested_fields().into_iter().map(|f| {
             let field = &f.ident;
             let ty = f.extract_nested_entity_type();
+            let field_ty = &f.ty;
             quote! {
                 impl es_entity::Parent<#ty> for #ident {
+                    type Delete = <#field_ty as es_entity::NestedField>::Delete;
+
+                    fn take_removed_children(&mut self) -> Vec<#ty> {
+                        self.#field.take_removed()
+                    }
+
                     fn new_children_mut(&mut self) -> &mut Vec<<#ty as es_entity::EsEntity>::New> {
                         self.#field.new_entities_mut()
                     }
@@ -550,6 +557,12 @@ mod tests {
             }
 
             impl es_entity::Parent<ChildEntity> for User {
+                type Delete = <Nested<ChildEntity> as es_entity::NestedField>::Delete;
+
+                fn take_removed_children(&mut self) -> Vec<ChildEntity> {
+                    self.children.take_removed()
+                }
+
                 fn new_children_mut(&mut self) -> &mut Vec<<ChildEntity as es_entity::EsEntity>::New> {
                     self.children.new_entities_mut()
                 }
@@ -568,6 +581,35 @@ mod tests {
         };
 
         assert_eq!(output.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn test_derive_with_soft_delete_nested() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[derive(EsEntity)]
+            pub struct User {
+                pub id: UserId,
+                #[es_entity(nested)]
+                children: Nested<ChildEntity, SoftDelete>,
+                events: EntityEvents<UserEvent>
+            }
+        };
+
+        let output = derive(input).unwrap().to_string();
+        // The child entity is the first type argument; the mode is read from
+        // the field's full type.
+        let expected = quote! {
+            impl es_entity::Parent<ChildEntity> for User {
+                type Delete = <Nested<ChildEntity, SoftDelete> as es_entity::NestedField>::Delete;
+
+                fn take_removed_children(&mut self) -> Vec<ChildEntity> {
+                    self.children.take_removed()
+                }
+            }
+        }
+        .to_string();
+        let expected = expected.trim_end_matches(" }");
+        assert!(output.contains(expected), "{output}");
     }
 
     fn hydrator_section(input: syn::DeriveInput) -> String {

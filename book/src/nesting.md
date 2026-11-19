@@ -407,6 +407,10 @@ The key points to note:
 Under the hood the `EsEntity` macro will create an implementation of the `Parent` trait:
 ```rust,ignore
 pub trait Parent<T: EsEntity> {
+    /// `NoDelete` or `SoftDelete`, taken from the nested field's type.
+    type Delete;
+    /// Drain children removed with `delete_persisted`.
+    fn take_removed_children(&mut self) -> Vec<T>;
     fn new_children_mut(&mut self) -> &mut Vec<<T as EsEntity>::New>;
     fn iter_persisted_children_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut T>
     where
@@ -889,6 +893,55 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+## Removing children
+
+A plain `Nested<T>` only adds and mutates children.
+To let the parent remove one of its persisted children as a domain operation,
+give the field the `SoftDelete` mode as its second type argument and turn on the soft delete option on the child repo:
+
+```rust,ignore
+// child repo: the existing soft delete option, nothing new
+#[derive(EsRepo)]
+#[es_repo(
+    entity = "BillingPeriod",
+    delete = "soft",
+    columns(subscription_id(ty = "SubscriptionId", update(persist = false), parent))
+)]
+struct BillingPeriods { pool: sqlx::PgPool }
+
+// parent entity: the mode is the second type argument
+#[es_entity(nested)]
+billing_periods: Nested<BillingPeriod, SoftDelete>,
+
+// parent command
+self.billing_periods.delete_persisted(&billing_period_id);
+
+// service: unchanged
+subscriptions.update_in_op(op, &mut subscription).await?;
+```
+
+`delete_persisted` moves the child out of the persisted children and returns it (`None` if the id is not a persisted child),
+so a final event can still be pushed on it:
+
+```rust,ignore
+if let Some(period) = self.billing_periods.delete_persisted(&id) {
+    period.close();
+}
+```
+
+The parent repo's ordinary `update` (or `update_all`) then deletes every removed child with the child repo's
+[`delete_all_in_op`](./repo-delete.md#deleting-many-entities-at-once): any events staged on the removed children are persisted in the same statement
+that flags them as deleted, and their own nested children are flagged too.
+Removing any number of children adds one statement to the update.
+Soft delete also erases forgettable data, so removing a nested child erases its forgettable payloads.
+
+Both mistakes are compile errors:
+- calling `delete_persisted` on a plain `Nested<T>` (the method does not exist), and
+- using `Nested<T, SoftDelete>` when the child repo has no soft delete option (the parent repo derive fails, pointing at the child repo option).
+
+A soft-deleted row keeps its unique keys, so removing a child and adding a new child with the same key in one update still violates the constraint.
+As with every nested write, the children are drained before the write: if it fails, reload the parent.
 
 ## Benefits of the Nested Approach
 

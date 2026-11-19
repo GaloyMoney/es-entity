@@ -24,6 +24,7 @@ impl ToTokens for Nested<'_> {
         let update_fn_name = self.field.update_nested_fn_name();
         let hydrate_fn_name = self.field.hydrate_nested_fn_name();
         let delete_fn_name = self.field.delete_nested_fn_name();
+        let delete_all_fn_name = self.field.delete_all_nested_fn_name();
 
         tokens.append_all(quote! {
             // Batches every parent's new children into a single
@@ -74,11 +75,22 @@ impl ToTokens for Nested<'_> {
             // for the whole parent batch, not one per child per parent — then
             // batches new children via `#create_fn_name`. Returns the child
             // repo's own `ConstraintViolation`, unwidened.
+            //
+            // Children removed with `Nested::delete_persisted` are drained
+            // first (so they are no longer among the persisted children) and
+            // deleted by the child repo after its updates. The bound on
+            // `P::Delete` is where the entity's delete mode is checked
+            // against the child repo.
             async fn #update_fn_name<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), <<<#child_shapes>::Update as es_entity::WriteShape>::Or<<#child_shapes>::Create> as es_entity::WriteShape>::Error<<#nested_repo_ty as es_entity::EsRepo>::ConstraintViolation>>
                 where
                     P: es_entity::Parent<<#nested_repo_ty as EsRepo>::Entity>,
+                    P: es_entity::FlushNested<#nested_repo_ty, <<<#child_shapes>::Update as es_entity::WriteShape>::Or<<#child_shapes>::Create> as es_entity::WriteShape>::Error<<#nested_repo_ty as es_entity::EsRepo>::ConstraintViolation>>,
                     OP: es_entity::AtomicOperation + ?Sized
             {
+                let removed: Vec<_> = entities
+                    .iter_mut()
+                    .flat_map(|entity| entity.take_removed_children())
+                    .collect();
                 let persisted: Vec<_> = entities
                     .iter_mut()
                     .flat_map(|entity| entity.iter_persisted_children_mut())
@@ -87,6 +99,7 @@ impl ToTokens for Nested<'_> {
                     // See the comment in `#create_fn_name` above.
                     self.#repo_field.update_all_mut_in_op(&mut op, persisted).await?;
                 }
+                <P as es_entity::FlushNested<#nested_repo_ty, _>>::flush_removed(&self.#repo_field, &mut op, removed).await?;
                 self.#create_fn_name(op, entities).await?;
                 Ok(())
             }
@@ -111,6 +124,17 @@ impl ToTokens for Nested<'_> {
                     #nested_repo_ty: es_entity::CascadeDeleteNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
             {
                 <#nested_repo_ty>::cascade_delete_in_op(op, &entity.events().entity_id).await?;
+                Ok(())
+            }
+
+            // Batch form of `#delete_fn_name`: cascades once for every id in
+            // `ids` (the ids of all entities being deleted together).
+            async fn #delete_all_fn_name<OP, ID>(op: &mut OP, ids: &[ID]) -> Result<(), es_entity::RepoFault>
+                where
+                    OP: es_entity::AtomicOperation + ?Sized,
+                    #nested_repo_ty: es_entity::CascadeDeleteNested<ID>,
+            {
+                <#nested_repo_ty>::cascade_delete_all_in_op(op, ids).await?;
                 Ok(())
             }
         });
@@ -168,8 +192,13 @@ mod tests {
             async fn update_nested_users_in_op<OP, P>(&self, mut op: &mut OP, entities: &mut [&mut P]) -> Result<(), <<<UserConstraintViolation as es_entity::WriteShapes>::Update as es_entity::WriteShape>::Or<<UserConstraintViolation as es_entity::WriteShapes>::Create> as es_entity::WriteShape>::Error<<UserRepo as es_entity::EsRepo>::ConstraintViolation>>
                 where
                     P: es_entity::Parent<<UserRepo as EsRepo>::Entity>,
+                    P: es_entity::FlushNested<UserRepo, <<<UserConstraintViolation as es_entity::WriteShapes>::Update as es_entity::WriteShape>::Or<<UserConstraintViolation as es_entity::WriteShapes>::Create> as es_entity::WriteShape>::Error<<UserRepo as es_entity::EsRepo>::ConstraintViolation>>,
                     OP: es_entity::AtomicOperation + ?Sized
             {
+                let removed: Vec<_> = entities
+                    .iter_mut()
+                    .flat_map(|entity| entity.take_removed_children())
+                    .collect();
                 let persisted: Vec<_> = entities
                     .iter_mut()
                     .flat_map(|entity| entity.iter_persisted_children_mut())
@@ -177,6 +206,7 @@ mod tests {
                 if !persisted.is_empty() {
                     self.users.update_all_mut_in_op(&mut op, persisted).await?;
                 }
+                <P as es_entity::FlushNested<UserRepo, _>>::flush_removed(&self.users, &mut op, removed).await?;
                 self.create_nested_users_in_op(op, entities).await?;
                 Ok(())
             }
@@ -201,6 +231,15 @@ mod tests {
                     UserRepo: es_entity::CascadeDeleteNested<<<P as es_entity::EsEntity>::Event as es_entity::EsEvent>::EntityId>,
             {
                 <UserRepo>::cascade_delete_in_op(op, &entity.events().entity_id).await?;
+                Ok(())
+            }
+
+            async fn delete_all_nested_users_in_op<OP, ID>(op: &mut OP, ids: &[ID]) -> Result<(), es_entity::RepoFault>
+                where
+                    OP: es_entity::AtomicOperation + ?Sized,
+                    UserRepo: es_entity::CascadeDeleteNested<ID>,
+            {
+                <UserRepo>::cascade_delete_all_in_op(op, ids).await?;
                 Ok(())
             }
         };
