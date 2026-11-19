@@ -253,3 +253,39 @@ async fn update_all_mut_accepts_a_chained_iterator() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// A batch with no removals never reaches the child repo's `delete_all`: the
+/// children flush is a no-op for a parent that removed nothing, so the update
+/// issues the same statements it did before nested children could be deleted.
+#[tokio::test]
+async fn update_all_without_removals_never_calls_delete_all() -> anyhow::Result<()> {
+    let pool = init_pool().await?;
+    let orders = Orders::new(pool);
+
+    let mut order_ids = Vec::new();
+    for _ in 0..3 {
+        order_ids.push(create_order_with_items(&orders, 2).await?);
+    }
+    let mut loaded = orders.find_all::<Order>(&order_ids).await?;
+    let mut batch: Vec<Order> = order_ids
+        .iter()
+        .map(|id| loaded.remove(id).expect("order was loaded"))
+        .collect();
+    for order in batch.iter_mut() {
+        order
+            .update_item_quantity("item-0", 5)
+            .expect("item-0 exists");
+    }
+
+    let counts = SpanCounts::default();
+    let subscriber = tracing_subscriber::registry().with(counts.clone());
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    orders.update_all(&mut batch).await?;
+
+    assert_eq!(counts.count("order_items.update_all_mut"), 1);
+    assert_eq!(counts.count("order_items.create_all"), 0);
+    assert_eq!(counts.count("order_items.delete_all"), 0);
+
+    Ok(())
+}

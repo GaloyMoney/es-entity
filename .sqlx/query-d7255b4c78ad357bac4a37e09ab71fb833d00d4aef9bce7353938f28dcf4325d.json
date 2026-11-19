@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH updated AS (UPDATE ncd_secrets SET email = NULL, deleted = TRUE WHERE id = $1 RETURNING id) INSERT INTO ncd_secret_events (id, recorded_at, sequence, event_type, event) SELECT updated.id, COALESCE($2, NOW()), ROW_NUMBER() OVER () + $3, unnested.event_type, unnested.event FROM updated CROSS JOIN UNNEST($4::TEXT[], $5::JSONB[]) AS unnested(event_type, event) RETURNING recorded_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "recorded_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Int8",
+        "TextArray",
+        "JsonbArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d7255b4c78ad357bac4a37e09ab71fb833d00d4aef9bce7353938f28dcf4325d"
+}

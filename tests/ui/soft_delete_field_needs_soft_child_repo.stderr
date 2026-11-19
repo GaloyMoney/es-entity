@@ -1,0 +1,20 @@
+error[E0277]: `Children` cannot delete nested children
+   --> tests/ui/soft_delete_field_needs_soft_child_repo.rs:104:10
+    |
+104 | #[derive(EsRepo)]
+    |          ^^^^^^ unsatisfied trait bound
+    |
+help: the trait `DeleteNested` is not implemented for `Children`
+   --> tests/ui/soft_delete_field_needs_soft_child_repo.rs:100:1
+    |
+100 | pub struct Children {
+    | ^^^^^^^^^^^^^^^^^^^
+    = note: set the soft delete option on the child repo's `#[es_repo(...)]`, or use plain `Nested<T>` on the parent entity
+    = note: required for `es_entity::SoftDelete` to implement `es_entity::FlushRemoved<Children, Fault<Profile<false, true, true>>>`
+    = note: required for `Owner` to implement `es_entity::FlushNested<Children, Fault<Profile<false, true, true>>>`
+note: required by a bound in `Owners::update_nested_children_in_op`
+   --> tests/ui/soft_delete_field_needs_soft_child_repo.rs:104:10
+    |
+104 | #[derive(EsRepo)]
+    |          ^^^^^^ required by this bound in `Owners::update_nested_children_in_op`
+    = note: this error originates in the derive macro `EsRepo` (in Nightly builds, run with -Z macro-backtrace for more info)

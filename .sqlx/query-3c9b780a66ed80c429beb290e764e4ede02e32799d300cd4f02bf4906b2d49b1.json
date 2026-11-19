@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE ncd_secrets SET deleted = TRUE, email = NULL WHERE parent_id = $1 AND deleted = FALSE",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3c9b780a66ed80c429beb290e764e4ede02e32799d300cd4f02bf4906b2d49b1"
+}

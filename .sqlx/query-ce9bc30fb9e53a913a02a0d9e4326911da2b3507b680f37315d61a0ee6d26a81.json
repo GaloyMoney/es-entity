@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE ncd_children SET deleted = TRUE WHERE parent_id = $1 AND deleted = FALSE",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ce9bc30fb9e53a913a02a0d9e4326911da2b3507b680f37315d61a0ee6d26a81"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM ncd_secrets_forgettable_payloads WHERE entity_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "474c3492291d363867447920aad3dbbfbbec91583b52a43c0004d04df0265d90"
+}

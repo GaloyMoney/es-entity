@@ -832,3 +832,100 @@ async fn second_update_after_delete_issues_no_delete() -> anyhow::Result<()> {
     assert!(!parent.remove_child(&a));
     Ok(())
 }
+
+// ─── Statement counts ───────────────────────────────────────────────────
+//
+// Every generated bulk fn issues one combined statement per call, so counting
+// calls to the child repo's `delete_all` (one span per call) counts the
+// statements removals add. `NcdHookedRepo` has no grandchildren and nothing
+// forgettable, so its `delete_all` is exactly one statement.
+#[cfg(feature = "instrument")]
+mod statement_counts {
+    use std::collections::HashMap;
+
+    use tracing_subscriber::layer::SubscriberExt;
+
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct SpanCounts(Arc<Mutex<HashMap<String, usize>>>);
+
+    impl SpanCounts {
+        fn count(&self, name: &str) -> usize {
+            self.0.lock().unwrap().get(name).copied().unwrap_or(0)
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for SpanCounts {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _id: &tracing::span::Id,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            *self
+                .0
+                .lock()
+                .unwrap()
+                .entry(attrs.metadata().name().to_string())
+                .or_insert(0) += 1;
+        }
+    }
+
+    async fn parent_with_hooked(fx: &Fixture, n: usize) -> anyhow::Result<NcdParent> {
+        let mut parent = fx.parents.create(NewNcdParent::builder().build()).await?;
+        for _ in 0..n {
+            parent
+                .hooked
+                .add_new(NewNcdHooked::builder().parent_id(parent.id).build());
+        }
+        fx.parents.update(&mut parent).await?;
+        Ok(fx.parents.find_by_id(parent.id).await?)
+    }
+
+    #[tokio::test]
+    async fn removing_k_children_adds_one_delete_all_for_any_k() -> anyhow::Result<()> {
+        let fx = fixture().await?;
+        for k in [0usize, 1, 3] {
+            let mut parent = parent_with_hooked(&fx, 4).await?;
+            let ids: Vec<_> = parent.hooked.iter_persisted().map(|h| h.id).collect();
+            for id in &ids[..k] {
+                parent.remove_hooked(id);
+            }
+
+            let counts = SpanCounts::default();
+            let subscriber = tracing_subscriber::registry().with(counts.clone());
+            let _guard = tracing::subscriber::set_default(subscriber);
+            fx.parents.update(&mut parent).await?;
+
+            assert_eq!(
+                counts.count("ncd_hooked_repo.delete_all"),
+                usize::from(k > 0),
+                "k = {k}"
+            );
+            // Nothing else about the child repo's writes changes.
+            assert_eq!(counts.count("ncd_hooked_repo.update_all_mut"), 1, "k = {k}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_all_deleting_a_child_per_parent_is_one_delete_all() -> anyhow::Result<()> {
+        let fx = fixture().await?;
+        let mut batch = Vec::new();
+        for _ in 0..3 {
+            let mut parent = parent_with_hooked(&fx, 2).await?;
+            let id = parent.hooked.iter_persisted().next().unwrap().id;
+            parent.remove_hooked(&id);
+            batch.push(parent);
+        }
+
+        let counts = SpanCounts::default();
+        let subscriber = tracing_subscriber::registry().with(counts.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+        fx.parents.update_all(&mut batch).await?;
+
+        assert_eq!(counts.count("ncd_hooked_repo.delete_all"), 1);
+        Ok(())
+    }
+}

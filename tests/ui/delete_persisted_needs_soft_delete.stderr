@@ -1,0 +1,11 @@
+error[E0599]: no method named `delete_persisted` found for struct `es_entity::Nested<Child>` in the current scope
+  --> tests/ui/delete_persisted_needs_soft_delete.rs:95:23
+   |
+95 |         self.children.delete_persisted(id);
+   |                       ^^^^^^^^^^^^^^^^
+   |
+help: there is a method `get_persisted` with a similar name
+   |
+95 -         self.children.delete_persisted(id);
+95 +         self.children.get_persisted(id);
+   |

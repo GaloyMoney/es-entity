@@ -307,6 +307,73 @@ mod tests {
     }
 
     #[test]
+    fn soft_repo_gets_delete_nested_and_batch_cascade() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "AccountHolder",
+                forgettable,
+                delete = "soft",
+                columns(
+                    account_id(ty = "AccountId", update(persist = false), parent),
+                    email(ty = "Forgettable<String>")
+                )
+            )]
+            struct AccountHolders {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = output(input);
+        assert!(out.contains("impl es_entity :: DeleteNested for AccountHolders"));
+        assert!(out.contains("self . delete_all_in_op (op , entities) . await"));
+        assert!(out.contains("fn cascade_delete_all_in_op"));
+        assert!(out.contains(
+            "DELETE FROM account_holders_forgettable_payloads WHERE entity_id IN (SELECT id FROM account_holders WHERE account_id = ANY($1))"
+        ));
+        assert!(out.contains(
+            "UPDATE account_holders SET deleted = TRUE, email = NULL WHERE account_id = ANY($1) AND deleted = FALSE"
+        ));
+        // The single-id cascade is left as it was.
+        assert!(out.contains(
+            "UPDATE account_holders SET deleted = TRUE, email = NULL WHERE account_id = $1 AND deleted = FALSE"
+        ));
+    }
+
+    #[test]
+    fn batch_cascade_without_forgettable_data_is_a_single_update() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "AccountHolder",
+                delete = "soft",
+                columns(account_id(ty = "AccountId", update(persist = false), parent))
+            )]
+            struct AccountHolders {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = output(input);
+        assert!(out.contains(
+            "UPDATE account_holders SET deleted = TRUE WHERE account_id = ANY($1) AND deleted = FALSE"
+        ));
+        assert!(!out.contains("entity_id IN"));
+    }
+
+    #[test]
+    fn non_soft_delete_repo_gets_no_delete_nested_impl() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[es_repo(
+                entity = "OrderItem",
+                columns(order_id(ty = "OrderId", update(persist = false), parent))
+            )]
+            struct OrderItems {
+                pool: sqlx::PgPool,
+            }
+        };
+        let out = output(input);
+        assert!(!out.contains("DeleteNested"));
+        assert!(!out.contains("ANY"));
+    }
+
+    #[test]
     fn non_soft_delete_repo_gets_no_cascade_delete_impl() {
         let input: syn::DeriveInput = parse_quote! {
             #[es_repo(

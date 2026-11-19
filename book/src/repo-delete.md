@@ -128,3 +128,21 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+## Deleting many entities at once
+
+A soft delete repo also generates the batch form of `delete`:
+```rust,ignore
+pub async fn delete_all(&self, entities: Vec<User>) -> Result<(), UserWriteError>
+pub async fn delete_all_in_op<OP>(&self, op: &mut OP, entities: Vec<User>) -> Result<(), UserWriteError>
+```
+(`delete_all` is omitted for an `in_op_only` repo.)
+
+It is `delete` applied to every entity, in a fixed number of statements regardless of the batch size:
+events staged on the entities are persisted in the same statement that flags the rows,
+the entities' own nested children are flagged once for the whole batch,
+and forgettable data is erased like in `delete`.
+An empty `Vec` is a no-op. Like `delete`, it does not write a snapshot.
+
+This is what the parent repo uses to delete children removed with `Nested::delete_persisted`,
+see [Removing children](./nesting.md#removing-children).

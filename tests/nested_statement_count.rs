@@ -167,3 +167,29 @@ async fn nested_list_by_id_is_one_statement() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// An `update` that removes nothing issues exactly the statements it did
+/// before nested children could be deleted: the children flush is a no-op for
+/// a plain `Nested<T>` and for a `Nested<T, SoftDelete>` with nothing removed.
+#[tokio::test]
+async fn nested_update_without_removals_statement_count_is_unchanged() -> anyhow::Result<()> {
+    let pool = init_pool().await?;
+    let orders = Orders::new(pool);
+
+    let order_id = seed_order(&orders, &["Laptop", "Mouse", "Keyboard"]).await?;
+    let mut order = orders.find_by_id(order_id).await?;
+    order
+        .update_item_quantity("Laptop", 7)
+        .expect("Laptop exists");
+
+    let counter = QueryEventCount::default();
+    let subscriber = tracing_subscriber::registry().with(counter.clone());
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    orders.update(&mut order).await?;
+
+    // Measured on origin/main (5da252e1), before the removal support landed.
+    assert_eq!(counter.get(), 2);
+
+    Ok(())
+}
