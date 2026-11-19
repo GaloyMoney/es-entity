@@ -624,9 +624,36 @@ impl Columns {
         proc_macro2::TokenStream,
         Vec<proc_macro2::TokenStream>,
     ) {
+        self.bulk_arg_parts(ident, |c| c.opts.persist_on_update() || c.opts.is_id)
+    }
+
+    /// Batch form of [`Self::update_query_args_for_delete`]: the arrays bound
+    /// to the `UNNEST` of the soft-delete `UPDATE`, without forgettable columns.
+    pub fn delete_all_arg_parts(
+        &self,
+        ident: syn::Ident,
+    ) -> (
+        proc_macro2::TokenStream,
+        proc_macro2::TokenStream,
+        Vec<proc_macro2::TokenStream>,
+    ) {
+        self.bulk_arg_parts(ident, |c| {
+            (c.opts.persist_on_update() && !c.opts.forgettable) || c.opts.is_id
+        })
+    }
+
+    fn bulk_arg_parts(
+        &self,
+        ident: syn::Ident,
+        include: impl Fn(&Column) -> bool,
+    ) -> (
+        proc_macro2::TokenStream,
+        proc_macro2::TokenStream,
+        Vec<proc_macro2::TokenStream>,
+    ) {
         let assignments = {
             let assignments = self.all.iter().filter_map(|c| {
-                if c.opts.persist_on_update() || c.opts.is_id {
+                if include(c) {
                     Some(c.variable_assignment_for_update_all(&ident))
                 } else {
                     None
@@ -639,7 +666,7 @@ impl Columns {
         let (vecs, pushes, bindings) = self
             .all
             .iter()
-            .filter(|c| c.opts.persist_on_update() || c.opts.is_id)
+            .filter(|c| include(c))
             .map(|column| {
                 let vec_ident = syn::Ident::new(
                     &format!("{}_collection", column.name),
@@ -690,6 +717,33 @@ impl Columns {
         self.all
             .iter()
             .filter(|c| c.opts.persist_on_update() || c.opts.is_id)
+            .map(|c| c.name.to_string())
+            .collect()
+    }
+
+    /// Batch form of [`Self::sql_updates_for_delete`]: the `SET` parts (each
+    /// followed by `, `, so the caller appends `deleted = TRUE`) with
+    /// forgettable columns forced to `NULL` and the rest read from `unnested`.
+    pub fn sql_bulk_update_set_for_delete(&self) -> String {
+        self.all
+            .iter()
+            .filter(|c| c.opts.persist_on_update() && !c.opts.is_id)
+            .map(|column| {
+                if column.opts.forgettable {
+                    format!("{} = NULL, ", column.name)
+                } else {
+                    format!("{name} = unnested.{name}, ", name = column.name)
+                }
+            })
+            .collect()
+    }
+
+    /// Batch form of [`Self::update_query_args_for_delete`]: the id column
+    /// plus every non-forgettable column persisted on update.
+    pub fn delete_all_column_names(&self) -> Vec<String> {
+        self.all
+            .iter()
+            .filter(|c| (c.opts.persist_on_update() && !c.opts.forgettable) || c.opts.is_id)
             .map(|c| c.name.to_string())
             .collect()
     }

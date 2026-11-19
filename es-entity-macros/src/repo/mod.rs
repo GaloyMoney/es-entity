@@ -2,6 +2,7 @@ mod begin;
 mod combo_cursor;
 mod create_all_fn;
 mod create_fn;
+mod delete_all_fn;
 mod delete_fn;
 mod error_classifier;
 mod error_types;
@@ -59,6 +60,7 @@ pub struct EsRepo<'a> {
     create_fn: create_fn::CreateFn<'a>,
     create_all_fn: create_all_fn::CreateAllFn<'a>,
     delete_fn: delete_fn::DeleteFn<'a>,
+    delete_all_fn: delete_all_fn::DeleteAllFn<'a>,
     forget_fn: Option<forget_fn::ForgetFn<'a>>,
     find_by_fns: Vec<find_by_fn::FindByFn<'a>>,
     find_all_fn: find_all_fn::FindAllFn<'a>,
@@ -152,6 +154,7 @@ impl<'a> From<&'a RepositoryOptions> for EsRepo<'a> {
             create_fn: create_fn::CreateFn::from(opts),
             create_all_fn: create_all_fn::CreateAllFn::from(opts),
             delete_fn: delete_fn::DeleteFn::from(opts),
+            delete_all_fn: delete_all_fn::DeleteAllFn::from(opts),
             forget_fn,
             find_by_fns,
             find_all_fn: find_all_fn::FindAllFn::from(opts),
@@ -186,6 +189,7 @@ impl ToTokens for EsRepo<'_> {
         let create_fn = &self.create_fn;
         let create_all_fn = &self.create_all_fn;
         let delete_fn = &self.delete_fn;
+        let delete_all_fn = &self.delete_all_fn;
         let forget_fn = &self.forget_fn;
         let find_by_fns = &self.find_by_fns;
         let find_all_fn = &self.find_all_fn;
@@ -446,6 +450,7 @@ impl ToTokens for EsRepo<'_> {
                 #update_fn
                 #update_all_fn
                 #delete_fn
+                #delete_all_fn
                 #forget_fn
                 #(#find_by_fns)*
                 #find_all_fn

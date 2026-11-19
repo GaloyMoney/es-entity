@@ -14,6 +14,8 @@ pub struct HydrateNested<'a> {
     forgettable_table_name: Option<&'a str>,
     forgettable_columns: Vec<&'a syn::Ident>,
     snapshot_enabled: bool,
+    /// `RepositoryOptions::update_error_ty`, the error of `delete_all_in_op`.
+    update_error_ty: TokenStream,
 }
 
 impl<'a> HydrateNested<'a> {
@@ -28,6 +30,7 @@ impl<'a> HydrateNested<'a> {
             forgettable_table_name: opts.forgettable_table_name(),
             forgettable_columns: opts.columns.forgettable_column_names(),
             snapshot_enabled: opts.snapshot_table_name().is_some(),
+            update_error_ty: opts.update_error_ty(),
         }
     }
 }
@@ -134,6 +137,42 @@ impl ToTokens for HydrateNested<'_> {
                 }
             };
 
+            // Batch form of the cascade above: the same two statements with
+            // `= ANY($1)` over every deleted parent id. Runtime queries with
+            // bound parameters, like `update_all`.
+            let cascade_all = {
+                let cascade_query = format!(
+                    "UPDATE {} SET deleted = TRUE{} WHERE {} = ANY($1) AND deleted = FALSE",
+                    self.table_name,
+                    self.forgettable_columns
+                        .iter()
+                        .map(|c| format!(", {} = NULL", c))
+                        .collect::<String>(),
+                    column_name,
+                );
+                let payload_delete = self.forgettable_table_name.map(|forgettable_tbl| {
+                    let payload_delete_query = format!(
+                        "DELETE FROM {} WHERE entity_id IN (SELECT id FROM {} WHERE {} = ANY($1))",
+                        forgettable_tbl, self.table_name, column_name,
+                    );
+                    quote! {
+                        sqlx::query(#payload_delete_query)
+                            .bind(parent_ids)
+                            .execute(op.as_executor())
+                            .await?;
+                    }
+                });
+                quote! {
+                    #payload_delete
+                    sqlx::query(#cascade_query)
+                        .bind(parent_ids)
+                        .execute(op.as_executor())
+                        .await?;
+                }
+            };
+
+            let update_error_ty = &self.update_error_ty;
+
             tokens.append_all(quote! {
                 impl #impl_generics es_entity::CascadeDeleteNested<#ty> for #ident #ty_generics #where_clause {
                     async fn cascade_delete_in_op<OP>(
@@ -145,6 +184,32 @@ impl ToTokens for HydrateNested<'_> {
                     {
                         #cascade
                         Ok(())
+                    }
+
+                    async fn cascade_delete_all_in_op<OP>(
+                        op: &mut OP,
+                        parent_ids: &[#ty],
+                    ) -> Result<(), es_entity::RepoFault>
+                    where
+                        OP: es_entity::AtomicOperation + ?Sized,
+                    {
+                        #cascade_all
+                        Ok(())
+                    }
+                }
+
+                impl #impl_generics es_entity::DeleteNested for #ident #ty_generics #where_clause {
+                    type Error = #update_error_ty;
+
+                    async fn delete_removed_in_op<OP>(
+                        &self,
+                        op: &mut OP,
+                        entities: Vec<<Self as EsRepo>::Entity>,
+                    ) -> Result<(), Self::Error>
+                    where
+                        OP: es_entity::AtomicOperation + ?Sized,
+                    {
+                        self.delete_all_in_op(op, entities).await
                     }
                 }
             });
