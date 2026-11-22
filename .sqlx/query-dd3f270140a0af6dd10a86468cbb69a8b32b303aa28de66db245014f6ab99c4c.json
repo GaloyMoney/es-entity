@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!: ContactId\" FROM ((SELECT id FROM contacts WHERE (id > $3) AND ($3 IS NOT NULL) AND ((SELECT COUNT(*) FROM contact_flags f WHERE f.contact_id = contacts.id) >= $1) ORDER BY id ASC LIMIT $2) UNION ALL (SELECT id FROM contacts WHERE ($3 IS NULL) AND ((SELECT COUNT(*) FROM contact_flags f WHERE f.contact_id = contacts.id) >= $1) ORDER BY id ASC LIMIT $2) ORDER BY id ASC LIMIT $2) __ids ORDER BY id ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!: ContactId",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "dd3f270140a0af6dd10a86468cbb69a8b32b303aa28de66db245014f6ab99c4c"
+}
