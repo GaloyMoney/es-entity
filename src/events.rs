@@ -236,6 +236,29 @@ where
             .or_else(|| self.persisted_events.first().map(|e| e.recorded_at))
     }
 
+    /// The timestamp of the first persisted event: when the entity was created.
+    ///
+    /// The total form of [`entity_first_persisted_at`](Self::entity_first_persisted_at)
+    /// for the entities a repository hands out. A stream whose head is compacted
+    /// into a snapshot answers with the first event the snapshot folded, so a
+    /// compacted stream and a full one agree.
+    ///
+    /// Every entity a repository returned — `create_in_op`, `find_by_id`, any
+    /// `load_*` — has at least one persisted event, so an entity's `created_at`
+    /// accessor can be this method and nothing else.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the stream holds no persisted event: the events of a `New*`
+    /// value the repository has not inserted yet, or an empty stream. Read
+    /// [`entity_first_persisted_at`](Self::entity_first_persisted_at) instead
+    /// where that absence is itself the answer.
+    pub fn created_at(&self) -> DateTime<Utc> {
+        self.entity_first_persisted_at().expect(
+            "created_at is defined only for a persisted entity: this event stream holds no persisted event",
+        )
+    }
+
     /// Returns the timestamp of the last persisted event, indicating when the entity was last modified
     pub fn entity_last_modified_at(&self) -> Option<DateTime<Utc>> {
         self.persisted_events
