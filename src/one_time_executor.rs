@@ -27,7 +27,7 @@
 use async_stream::try_stream;
 use futures_core::stream::BoxStream;
 use futures_util::{TryStreamExt, future::BoxFuture};
-use sqlx::{Database, Describe, Error, Execute, Executor};
+use sqlx::{AssertSqlSafe, Database, Describe, Error, Execute, Executor, SqlStr};
 
 use std::borrow::Cow;
 
@@ -86,7 +86,7 @@ where
     where
         F: FnMut(db::Row) -> Result<O, sqlx::Error> + Send,
         O: Send + Unpin,
-        A: 'q + Send + sqlx::IntoArguments<'q, db::Db>,
+        A: 'q + Send + sqlx::IntoArguments<db::Db>,
     {
         query.fetch_one(self).await
     }
@@ -99,7 +99,7 @@ where
     where
         F: FnMut(sqlx::postgres::PgRow) -> Result<O, sqlx::Error> + Send,
         O: Send + Unpin,
-        A: 'q + Send + sqlx::IntoArguments<'q, sqlx::Postgres>,
+        A: 'q + Send + sqlx::IntoArguments<sqlx::Postgres>,
     {
         query.fetch_all(self).await
     }
@@ -112,19 +112,19 @@ where
     where
         F: FnMut(sqlx::postgres::PgRow) -> Result<O, sqlx::Error> + Send,
         O: Send + Unpin,
-        A: 'q + Send + sqlx::IntoArguments<'q, sqlx::Postgres>,
+        A: 'q + Send + sqlx::IntoArguments<sqlx::Postgres>,
     {
         query.fetch_optional(self).await
     }
 }
 
-/// Returns the annotated statement text, or `None` when there is no sampled
-/// span context (in which case the query should be delegated untouched).
-fn annotated_sql<'q>(query: &impl Execute<'q, db::Db>) -> Option<String> {
-    match sql_commenter::annotate_sql(query.sql()) {
-        Cow::Borrowed(_) => None,
-        Cow::Owned(sql) => Some(sql),
-    }
+/// Whether statements should currently be annotated, i.e. there is a sampled
+/// span context. When `false` the query is delegated untouched.
+///
+/// `Execute::sql` consumes the query in sqlx 0.9, so this must be decided
+/// before looking at the statement text.
+fn annotation_active() -> bool {
+    matches!(sql_commenter::annotate_sql(""), Cow::Owned(_))
 }
 
 /// Rebuilds a query with annotated SQL, moving out its bind arguments.
@@ -134,14 +134,17 @@ fn annotated_sql<'q>(query: &impl Execute<'q, db::Db>) -> Option<String> {
 /// statement cache, and caching it would evict useful entries. The trade-off
 /// is a server-side parse + plan per annotated execution.
 fn rebuild_annotated<'q>(
-    annotated: &str,
     mut query: impl Execute<'q, db::Db>,
-) -> Result<sqlx::query::Query<'_, db::Db, sqlx::postgres::PgArguments>, Error> {
+) -> Result<sqlx::query::Query<'static, db::Db, sqlx::postgres::PgArguments>, Error> {
     let args = query
         .take_arguments()
         .map_err(Error::Encode)?
         .unwrap_or_default();
-    Ok(sqlx::query_with::<db::Db, _>(annotated, args).persistent(false))
+    let sql = query.sql();
+    // The text originates from an already-vetted query; only the trace
+    // comment (hex ids) is appended.
+    let annotated = sql_commenter::annotate_sql(sql.as_str()).into_owned();
+    Ok(sqlx::query_with::<db::Db, _>(AssertSqlSafe(annotated), args).persistent(false))
 }
 
 impl<'c, E> Executor<'c> for OneTimeExecutor<'c, E>
@@ -158,11 +161,11 @@ where
         'c: 'e,
         Q: 'q + Execute<'q, db::Db>,
     {
-        let Some(annotated) = annotated_sql(&query) else {
+        if !annotation_active() {
             return self.executor.fetch_many(query);
-        };
+        }
         Box::pin(try_stream! {
-            let q = rebuild_annotated(annotated.as_str(), query)?;
+            let q = rebuild_annotated(query)?;
             let mut stream = self.executor.fetch_many(q);
             while let Some(step) = stream.try_next().await? {
                 yield step;
@@ -178,30 +181,28 @@ where
         'c: 'e,
         Q: 'q + Execute<'q, db::Db>,
     {
-        let Some(annotated) = annotated_sql(&query) else {
+        if !annotation_active() {
             return self.executor.fetch_optional(query);
-        };
+        }
         Box::pin(async move {
-            let q = rebuild_annotated(annotated.as_str(), query)?;
+            let q = rebuild_annotated(query)?;
             self.executor.fetch_optional(q).await
         })
     }
 
-    fn prepare_with<'e, 'q: 'e>(
+    fn prepare_with<'e>(
         self,
-        sql: &'q str,
+        sql: SqlStr,
         parameters: &'e [<db::Db as Database>::TypeInfo],
-    ) -> BoxFuture<'e, Result<<db::Db as Database>::Statement<'q>, Error>>
+    ) -> BoxFuture<'e, Result<<db::Db as Database>::Statement, Error>>
     where
         'c: 'e,
     {
-        // A prepared Statement<'q> may borrow `sql`; a locally allocated
-        // annotated string could not satisfy the 'q lifetime, so preparation
-        // is delegated unannotated.
+        // Explicit preparation is not an execution path; delegated unannotated.
         self.executor.prepare_with(sql, parameters)
     }
 
-    fn describe<'e, 'q: 'e>(self, sql: &'q str) -> BoxFuture<'e, Result<Describe<db::Db>, Error>>
+    fn describe<'e>(self, sql: SqlStr) -> BoxFuture<'e, Result<Describe<db::Db>, Error>>
     where
         'c: 'e,
     {

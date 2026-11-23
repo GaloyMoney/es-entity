@@ -6,17 +6,35 @@
       {
         "ordinal": 0,
         "name": "email",
-        "type_info": "Varchar"
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "subscribers",
+            "name": "email"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "plan",
-        "type_info": "Varchar"
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "subscribers",
+            "name": "plan"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "deleted",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "subscribers",
+            "name": "deleted"
+          }
+        }
       }
     ],
     "parameters": {

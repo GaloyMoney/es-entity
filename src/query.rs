@@ -69,7 +69,7 @@ where
     R: Into<HydrationRow<<<<Repo as EsRepo>::Entity as EsEntity>::Event as EsEvent>::EntityId>>
         + Send
         + Unpin,
-    A: 'q + Send + sqlx::IntoArguments<'q, db::Db>,
+    A: 'q + Send + sqlx::IntoArguments<db::Db>,
 {
     pub fn new(
         query: sqlx::query::Map<'q, db::Db, F, A>,
@@ -158,7 +158,7 @@ where
             sqlx::Arguments::add(&mut args, bind).map_err(sqlx::Error::Encode)?;
         }
 
-        let rows: Vec<db::Row> = sqlx::query_with::<db::Db, _>(&sql, args)
+        let rows: Vec<db::Row> = sqlx::query_with::<db::Db, _>(sqlx::AssertSqlSafe(sql), args)
             .fetch_all(executor)
             .await?;
         let mut by_tag = partition_by_tag(rows)?;
@@ -179,7 +179,7 @@ where
     R: Into<HydrationRow<<<<Repo as EsRepo>::Entity as EsEntity>::Event as EsEvent>::EntityId>>
         + Send
         + Unpin,
-    A: 'q + Send + sqlx::IntoArguments<'q, db::Db>,
+    A: 'q + Send + sqlx::IntoArguments<db::Db>,
 {
     /// Fetches at most one entity from the query results.
     ///
@@ -212,7 +212,7 @@ where
     R: Into<HydrationRow<<<<Repo as EsRepo>::Entity as EsEntity>::Event as EsEvent>::EntityId>>
         + Send
         + Unpin,
-    A: 'q + Send + sqlx::IntoArguments<'q, db::Db>,
+    A: 'q + Send + sqlx::IntoArguments<db::Db>,
 {
     /// Fetches at most one entity and loads all nested relationships.
     ///
