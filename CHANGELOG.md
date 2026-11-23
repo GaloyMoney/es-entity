@@ -1,3 +1,12 @@
+# [cala release v0.23.0](https://github.com/GaloyMoney/cala/releases/tag/0.23.0)
+
+
+
+### Miscellaneous Tasks
+
+- [**breaking**] Upgrade sqlx to 0.9.1 (#312)
+- Bump the all-dependencies group across 1 directory with 7 updates (#309)
+
 # [cala release v0.22.1](https://github.com/GaloyMoney/cala/releases/tag/0.22.1)
 
 
