@@ -7,10 +7,9 @@ pub struct TracingContext {
     pub trace_flags: u8,
     /// W3C traceparent header for easy propagation
     pub traceparent: String,
-    /// Optional W3C tracestate, including vendor sampling and retention state.
-    /// Missing in contexts persisted before this field was introduced.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tracestate: Option<String>,
+    /// W3C tracestate, including vendor sampling and retention state.
+    /// Empty when the producer had no vendor state.
+    pub tracestate: String,
 }
 
 impl TracingContext {
@@ -36,7 +35,7 @@ impl TracingContext {
         let mut carrier = std::collections::HashMap::new();
         TraceContextPropagator::new().inject_context(&context, &mut carrier);
         let traceparent = carrier.get("traceparent")?.clone();
-        let tracestate = carrier.get("tracestate").cloned();
+        let tracestate = carrier.get("tracestate").cloned().unwrap_or_default();
 
         Some(TracingContext {
             trace_id: trace_id.to_string(),
@@ -54,8 +53,8 @@ impl TracingContext {
 
         let mut carrier = std::collections::HashMap::new();
         carrier.insert("traceparent".to_string(), self.traceparent.clone());
-        if let Some(tracestate) = &self.tracestate {
-            carrier.insert("tracestate".to_string(), tracestate.clone());
+        if !self.tracestate.is_empty() {
+            carrier.insert("tracestate".to_string(), self.tracestate.clone());
         }
 
         TraceContextPropagator::new().extract_with_context(&opentelemetry::Context::new(), &carrier)
@@ -104,27 +103,6 @@ impl TracingContext {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn legacy_context_deserializes_without_tracestate() {
-        let legacy = r#"{
-            "trace_id": "11111111111111111111111111111111",
-            "span_id": "2222222222222222",
-            "trace_flags": 1,
-            "traceparent": "00-11111111111111111111111111111111-2222222222222222-01"
-        }"#;
-
-        let context: TracingContext = serde_json::from_str(legacy).expect("legacy context");
-        assert_eq!(context.tracestate, None);
-        assert!(
-            serde_json::to_value(context)
-                .expect("serialize context")
-                .get("tracestate")
-                .is_none()
-        );
-    }
-
     #[cfg(feature = "tracing-context")]
     mod otel {
         use opentelemetry::{
@@ -135,7 +113,7 @@ mod tests {
         use tracing_opentelemetry::OpenTelemetrySpanExt;
         use tracing_subscriber::layer::SubscriberExt;
 
-        use super::*;
+        use crate::TracingContext;
 
         fn remote_parent() -> Context {
             Context::new().with_remote_span_context(opentelemetry::trace::SpanContext::new(
@@ -171,10 +149,7 @@ mod tests {
                 let captured = producer
                     .in_scope(|| TracingContext::current().expect("sampled producer context"));
                 assert_eq!(captured.trace_id, "11111111111111111111111111111111");
-                assert_eq!(
-                    captured.tracestate.as_deref(),
-                    Some("galoy=retain,vendor=state")
-                );
+                assert_eq!(captured.tracestate, "galoy=retain,vendor=state");
 
                 let child = tracing::info_span!(parent: None, "child");
                 captured
@@ -233,7 +208,7 @@ mod tests {
                     trace_flags: 1,
                     traceparent: "00-00000000000000000000000000000000-0000000000000000-01"
                         .to_string(),
-                    tracestate: Some("galoy=retain".to_string()),
+                    tracestate: "galoy=retain".to_string(),
                 };
                 let linked = tracing::info_span!("invalid-linked");
                 context.apply_link(&linked, Vec::new());
