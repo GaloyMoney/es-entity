@@ -73,14 +73,6 @@ impl TracingContext {
         span.set_parent(self.extract())
     }
 
-    #[cfg(feature = "tracing-context")]
-    #[deprecated(
-        note = "create the consumer span first and call apply_parent before activating it"
-    )]
-    pub fn inject_as_parent(&self) {
-        let _ = self.apply_parent(&tracing::Span::current());
-    }
-
     /// Add this persisted context as a link on `span`. Unlike a parent, a
     /// link allows one batch span to name every producer whose job
     /// contributed work to that batch. Links may be added before or after
