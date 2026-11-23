@@ -74,6 +74,9 @@ impl TracingContext {
     }
 
     #[cfg(feature = "tracing-context")]
+    #[deprecated(
+        note = "create the consumer span first and call apply_parent before activating it"
+    )]
     pub fn inject_as_parent(&self) {
         let _ = self.apply_parent(&tracing::Span::current());
     }
