@@ -7,6 +7,11 @@
 # themselves are still needed, so collect them alongside the target libraries.
 set -euo pipefail
 
+# sqlx's query macros resolve the workspace (and the offline cache) through
+# `cargo metadata`, which reads $CARGO. `cargo test` sets it, but `mdbook test`
+# drives rustc directly, so the environment has to supply it.
+export CARGO="${CARGO:-$(command -v cargo)}"
+
 target_dir="${CARGO_TARGET_DIR:-./target}"
 host="$(rustc -vV | sed -n 's/^host: //p')"
 out="$target_dir/$host/mdbook-test"
