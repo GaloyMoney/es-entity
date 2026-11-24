@@ -1,3 +1,11 @@
+# [cala release v0.24.0](https://github.com/GaloyMoney/cala/releases/tag/0.24.0)
+
+
+
+### Features
+
+- [**breaking**] Persist tracestate and support span links (#311)
+
 # [cala release v0.23.0](https://github.com/GaloyMoney/cala/releases/tag/0.23.0)
 
 
