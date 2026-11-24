@@ -1,4 +1,7 @@
 [advisories]
 ignore = [
   "RUSTSEC-2023-0071",
+  # chrono is unmaintained (informational, no CVE); sqlx and the async-graphql
+  # ecosystem still require it. Remove when those dependencies move to jiff/time.
+  "RUSTSEC-2026-0543",
 ]

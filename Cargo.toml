@@ -73,6 +73,7 @@ trybuild = "1"
 async-trait = { workspace = true }
 futures = { workspace = true }
 tracing-subscriber = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 proptest = "1"
 errlanes = { workspace = true, features = ["classify-serde-json", "classify-sqlx", "derive"] }
