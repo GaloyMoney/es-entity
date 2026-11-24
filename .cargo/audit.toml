@@ -1,11 +1,6 @@
 [advisories]
 ignore = [
   "RUSTSEC-2023-0071",
-  # libsqlite3-sys < 0.39: only reachable via sqlx's optional `sqlite` feature,
-  # which es-entity never enables (absent from `cargo tree`). sqlx 0.8.6
-  # cannot resolve the patched libsqlite3-sys version.
-  # Drop once sqlx allows libsqlite3-sys >= 0.39.
-  "RUSTSEC-2026-0459",
   # chrono is unmaintained (informational, no CVE); sqlx and the async-graphql
   # ecosystem still require it. Remove when those dependencies move to jiff/time.
   "RUSTSEC-2026-0543",

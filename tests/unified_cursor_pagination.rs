@@ -237,9 +237,9 @@ async fn unified_cursor_query_prunes_dead_branches() -> anyhow::Result<()> {
     .execute(&mut *tx)
     .await?;
 
-    let plan = sqlx::raw_sql(&format!(
+    let plan = sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF) EXECUTE uq(5, '{mid_id}'::uuid, 151)"
-    ))
+    )))
     .fetch_all(&mut *tx)
     .await?
     .into_iter()
