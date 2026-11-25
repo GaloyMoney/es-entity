@@ -2,14 +2,16 @@ apiVersion: vendir.k14s.io/v1alpha1
 directories:
 - contents:
   - git:
-      commitTitle: 'Merge pull request #33 from GaloyMoney/feat--bump-shared-actions...'
-      sha: e70b475dc5f1bda2f33f22f9de59b35c534c419b
+      commitTitle: 'fix(fuzz): stop trusting a cached CARGO_HOME/bin for cargo-fuzz
+        (#35)...'
+      sha: 61032d4382639c2872d427fa2a395abdf3f132a0
     path: .
   path: ../.github/workflows/vendor
 - contents:
   - git:
-      commitTitle: 'Merge pull request #33 from GaloyMoney/feat--bump-shared-actions...'
-      sha: e70b475dc5f1bda2f33f22f9de59b35c534c419b
+      commitTitle: 'fix(fuzz): stop trusting a cached CARGO_HOME/bin for cargo-fuzz
+        (#35)...'
+      sha: 61032d4382639c2872d427fa2a395abdf3f132a0
     path: .
   path: vendor
 kind: LockConfig
